@@ -38,7 +38,7 @@ function mapDrug(item: PublicDrug) {
     insuranceCode,
     bioStatus: null as string | null,
     originalDrug: null as string | null,
-    notes: ediCodes.length > 1 ? ediCodes.slice(1).join(",") : (null as string | null),
+    notes: null as string | null,
     isSettlement: false,
     commissionRate: null as number | null,
     source: "PUBLIC_API" as const,
