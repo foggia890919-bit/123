@@ -102,16 +102,16 @@ export async function POST(req: NextRequest) {
         await prisma.medication.createMany({ data: toCreate, skipDuplicates: true }).catch(() => null);
       }
 
-      await Promise.all(toUpdate.map(({ id, data }) =>
-        prisma.medication.update({ where: { id }, data }).catch(() => null)
-      ));
+      for (const { id, data } of toUpdate) {
+        await prisma.medication.update({ where: { id }, data }).catch(() => null);
+      }
 
       synced += drugs.length;
     }
 
     await processPage(firstItems);
 
-    const CONCURRENT = 5;
+    const CONCURRENT = 2;
     for (let page = 2; page <= maxPages; page += CONCURRENT) {
       const batch = await Promise.all(
         Array.from({ length: Math.min(CONCURRENT, maxPages - page + 1) }, (_, i) =>
