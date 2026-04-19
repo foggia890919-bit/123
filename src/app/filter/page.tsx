@@ -34,10 +34,6 @@ export default function FilterPage() {
     setSelected((prev) => { const n = new Set(prev); n.has(name) ? n.delete(name) : n.add(name); return n; });
   }
 
-  function selectAll(list: Company[]) {
-    setSelected((prev) => { const n = new Set(prev); list.forEach((c) => n.add(c.name)); return n; });
-  }
-
   function formatBizNumber(v: string) {
     const d = v.replace(/\D/g, "");
     if (d.length <= 3) return d;
@@ -106,12 +102,6 @@ export default function FilterPage() {
                 )}
               </div>
               <Input value={companySearch} onChange={(e) => setCompanySearch(e.target.value)} placeholder="제약사 검색..." className="h-8 text-xs" />
-              <div className="flex gap-1">
-                <button onClick={() => selectAll(filteredCompanies.filter((c) => c.isSettlement))}
-                  className="text-xs text-green-700 bg-green-50 hover:bg-green-100 px-2 py-1 rounded">정산제약사 전체</button>
-                <button onClick={() => selectAll(filteredCompanies)}
-                  className="text-xs text-blue-600 bg-blue-50 hover:bg-blue-100 px-2 py-1 rounded">전체 선택</button>
-              </div>
             </div>
             <div className="overflow-y-auto max-h-[500px] divide-y divide-gray-50">
               {filteredCompanies.map((company) => (
@@ -141,7 +131,12 @@ export default function FilterPage() {
 
                 {selected.size > 0 && (
                   <div className="flex flex-wrap gap-1.5 p-3 bg-gray-50 rounded-lg">
-                    <span className="text-xs text-gray-500 w-full mb-1">선택된 제약사 ({selected.size}개)</span>
+                    <div className="flex items-center justify-between w-full mb-1">
+                    <span className="text-xs text-gray-500">선택된 제약사 ({selected.size}개)</span>
+                    <button type="button" onClick={() => setSelected(new Set())} className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1">
+                      <X className="w-3 h-3" />전체 제거
+                    </button>
+                  </div>
                     {Array.from(selected).map((name) => (
                       <span key={name} className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded-full">
                         <Building2 className="w-3 h-3" />{name}
