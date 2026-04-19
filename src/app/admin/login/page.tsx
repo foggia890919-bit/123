@@ -1,23 +1,33 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ShieldCheck } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
+const ADMIN_ID = "foggia";
+const ADMIN_PW = "admin1234";
+
 export default function AdminLoginPage() {
   const router = useRouter();
+  const [userId, setUserId] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
+  useEffect(() => {
+    if (localStorage.getItem("isAdmin") === "true") {
+      router.replace("/admin/dashboard");
+    }
+  }, [router]);
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (password === "admin1234") {
-      sessionStorage.setItem("isAdmin", "true");
+    if (userId === ADMIN_ID && password === ADMIN_PW) {
+      localStorage.setItem("isAdmin", "true");
       router.push("/admin/dashboard");
     } else {
-      setError("비밀번호가 올바르지 않아요.");
+      setError("아이디 또는 비밀번호가 올바르지 않아요.");
     }
   }
 
@@ -31,12 +41,24 @@ export default function AdminLoginPage() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1">
-            <label className="text-sm font-medium text-gray-700">관리자 비밀번호</label>
+            <label className="text-sm font-medium text-gray-700">아이디</label>
+            <Input
+              type="text"
+              value={userId}
+              onChange={(e) => setUserId(e.target.value)}
+              placeholder="아이디 입력"
+              autoComplete="username"
+              required
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-gray-700">비밀번호</label>
             <Input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="비밀번호 입력"
+              autoComplete="current-password"
               required
             />
           </div>

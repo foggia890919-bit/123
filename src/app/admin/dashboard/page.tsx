@@ -25,7 +25,7 @@ export default function AdminDashboardPage() {
   const [tab, setTab] = useState<Tab>("upload");
 
   useEffect(() => {
-    if (sessionStorage.getItem("isAdmin") !== "true") router.push("/admin/login");
+    if (localStorage.getItem("isAdmin") !== "true") router.push("/admin/login");
   }, [router]);
 
   return (
