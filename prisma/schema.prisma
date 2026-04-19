@@ -17,9 +17,10 @@ model User {
   carrier      String?
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
-  proposals    Proposal[]
-  companyRates MemberCompanyRate[]
-  documents    UserDocument[]
+  proposals      Proposal[]
+  companyRates   MemberCompanyRate[]
+  documents      UserDocument[]
+  filterRequests FilterRequest[]
 }
 
 enum Role {
@@ -114,4 +115,28 @@ model ClientCompany {
   address        String?
   representative String?
   createdAt      DateTime @default(now())
+}
+
+enum FilterStatus {
+  PENDING
+  REVIEWING
+  REJECTED
+  APPROVED
+}
+
+model FilterRequest {
+  id          String       @id @default(cuid())
+  userId      String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userName    String
+  clientName  String
+  bizNumber   String
+  bizDocument String?
+  bizFileName String?
+  companyName String
+  status      FilterStatus @default(PENDING)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([userId])
 }

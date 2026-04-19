@@ -2,11 +2,11 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet } from "lucide-react";
+import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
-type Tab = "upload" | "members" | "rates";
+type Tab = "upload" | "members" | "rates" | "filterReqs";
 
 interface UserDoc { id: string; docType: string; fileName: string; fileData: string; }
 interface User {
@@ -43,6 +43,7 @@ export default function AdminDashboardPage() {
           { key: "upload", label: "요율표 업로드", icon: Upload },
           { key: "members", label: "회원관리", icon: Users },
           { key: "rates", label: "추가수수료 관리", icon: Percent },
+          { key: "filterReqs", label: "영업사원 필터링요청", icon: Filter },
         ] as { key: Tab; label: string; icon: React.ElementType }[]).map(({ key, label, icon: Icon }) => (
           <button
             key={key}
@@ -61,6 +62,7 @@ export default function AdminDashboardPage() {
       {tab === "upload" && <UploadTab />}
       {tab === "members" && <MembersTab />}
       {tab === "rates" && <RatesTab />}
+      {tab === "filterReqs" && <FilterReqsTab />}
     </div>
   );
 }
@@ -355,6 +357,93 @@ function RatesTab() {
               : <><AlertCircle className="w-4 h-4 shrink-0" />{result.error}</>}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+interface FilterReq {
+  id: string; userName: string; clientName: string; bizNumber: string;
+  companyName: string; status: string; createdAt: string;
+  user: { name: string | null; email: string };
+}
+
+const statusOptions = [
+  { value: "PENDING", label: "대기", cls: "bg-yellow-50 text-yellow-700 border-yellow-200" },
+  { value: "REVIEWING", label: "확인중", cls: "bg-blue-50 text-blue-700 border-blue-200" },
+  { value: "REJECTED", label: "거래불가", cls: "bg-red-50 text-red-700 border-red-200" },
+  { value: "APPROVED", label: "거래가능", cls: "bg-green-50 text-green-700 border-green-200" },
+];
+
+function FilterReqsTab() {
+  const [reqs, setReqs] = useState<FilterReq[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { fetchReqs(); }, []);
+
+  async function fetchReqs() {
+    setLoading(true);
+    const res = await fetch("/api/filter-request");
+    setReqs(await res.json());
+    setLoading(false);
+  }
+
+  async function updateStatus(id: string, status: string) {
+    await fetch("/api/filter-request", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, status }),
+    });
+    setReqs((prev) => prev.map((r) => r.id === id ? { ...r, status } : r));
+  }
+
+  if (loading) return <div className="py-16 text-center text-gray-400 text-sm">불러오는 중...</div>;
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div className="px-5 py-4 border-b border-gray-100">
+        <h2 className="text-lg font-semibold text-gray-800">영업사원 필터링 요청 ({reqs.length}건)</h2>
+        <p className="text-xs text-gray-400 mt-0.5">영업사원이 요청한 제약사 거래 조회 현황입니다.</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-gray-50 text-xs text-gray-500 font-semibold">
+              <th className="px-4 py-3 text-left">영업사원명</th>
+              <th className="px-4 py-3 text-left">아이디(이메일)</th>
+              <th className="px-4 py-3 text-left">거래처명</th>
+              <th className="px-4 py-3 text-left">사업자번호</th>
+              <th className="px-4 py-3 text-left">요청 제약사</th>
+              <th className="px-4 py-3 text-center">요청일</th>
+              <th className="px-4 py-3 text-center">회신여부</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {reqs.map((req) => {
+              const statusOpt = statusOptions.find((s) => s.value === req.status) || statusOptions[0];
+              return (
+                <tr key={req.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3 font-medium text-gray-900">{req.user.name || req.userName}</td>
+                  <td className="px-4 py-3 text-gray-500 text-xs">{req.user.email}</td>
+                  <td className="px-4 py-3 text-gray-700">{req.clientName}</td>
+                  <td className="px-4 py-3 text-gray-500 text-xs font-mono">{req.bizNumber}</td>
+                  <td className="px-4 py-3 text-gray-800">{req.companyName}</td>
+                  <td className="px-4 py-3 text-center text-gray-400 text-xs">{new Date(req.createdAt).toLocaleDateString("ko-KR")}</td>
+                  <td className="px-4 py-3 text-center">
+                    <select
+                      value={req.status}
+                      onChange={(e) => updateStatus(req.id, e.target.value)}
+                      className={`text-xs px-2 py-1 rounded border font-medium ${statusOpt.cls} focus:outline-none cursor-pointer`}
+                    >
+                      {statusOptions.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                    </select>
+                  </td>
+                </tr>
+              );
+            })}
+            {reqs.length === 0 && <tr><td colSpan={7} className="py-12 text-center text-gray-400 text-sm">요청 내역이 없어요.</td></tr>}
+          </tbody>
+        </table>
       </div>
     </div>
   );
