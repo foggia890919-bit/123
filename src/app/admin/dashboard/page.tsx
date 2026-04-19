@@ -78,7 +78,7 @@ function UploadTab() {
 
   const [mapFile, setMapFile] = useState<File | null>(null);
   const [mapLoading, setMapLoading] = useState(false);
-  const [mapResult, setMapResult] = useState<{ success?: boolean; mapped?: number; updated?: number; total?: number; filled?: number; error?: string; sampleKeys?: string[] } | null>(null);
+  const [mapResult, setMapResult] = useState<{ success?: boolean; mapped?: number; updated?: number; total?: number; filled?: number; lastSync?: string | null; error?: string; sampleKeys?: string[] } | null>(null);
   const mapInputRef = useRef<HTMLInputElement>(null);
 
   async function handleMapUpload() {
@@ -111,7 +111,7 @@ function UploadTab() {
   }, []);
 
   const [syncLoading, setSyncLoading] = useState(false);
-  const [syncResult, setSyncResult] = useState<{ success?: boolean; synced?: number; totalPublic?: number; publicCount?: number; excelCount?: number; error?: string } | null>(null);
+  const [syncResult, setSyncResult] = useState<{ success?: boolean; synced?: number; totalPublic?: number; publicCount?: number; excelCount?: number; lastSync?: string | null; error?: string } | null>(null);
 
   useEffect(() => {
     fetch("/api/medications/sync").then((r) => r.json()).then(setSyncResult);
@@ -154,11 +154,16 @@ function UploadTab() {
           <p className="text-xs text-blue-700 mt-0.5">건강보험심사평가원 전체 약품 목록을 내려받아 DB에 저장합니다. 요율표 업로드 전에 먼저 실행하세요.</p>
         </div>
         {syncResult && !syncResult.error && (
-          <div className="text-xs text-blue-700 bg-white rounded p-2 border border-blue-200">
-            공공데이터: <strong>{(syncResult.publicCount ?? 0).toLocaleString()}건</strong> ·
-            요율표: <strong>{(syncResult.excelCount ?? 0).toLocaleString()}건</strong> ·
-            합계: <strong>{((syncResult.publicCount ?? 0) + (syncResult.excelCount ?? 0)).toLocaleString()}건</strong>
-            {syncResult.synced && <> · 이번 동기화: <strong>{syncResult.synced.toLocaleString()}건</strong></>}
+          <div className="text-xs text-blue-700 bg-white rounded p-2 border border-blue-200 space-y-0.5">
+            <div>
+              공공데이터: <strong>{(syncResult.publicCount ?? 0).toLocaleString()}건</strong> ·
+              요율표: <strong>{(syncResult.excelCount ?? 0).toLocaleString()}건</strong> ·
+              합계: <strong>{((syncResult.publicCount ?? 0) + (syncResult.excelCount ?? 0)).toLocaleString()}건</strong>
+              {syncResult.synced ? <> · 이번 동기화: <strong>{syncResult.synced.toLocaleString()}건</strong></> : null}
+            </div>
+            <div className="text-blue-500">
+              마지막 동기화: <strong>{syncResult.lastSync ? new Date(syncResult.lastSync).toLocaleString("ko-KR") : "기록 없음"}</strong>
+            </div>
           </div>
         )}
         {syncResult?.error && (
@@ -223,8 +228,11 @@ function UploadTab() {
           <p className="text-xs text-gray-500 mt-0.5">건강보험심사평가원 ATC코드 매핑 API에서 주성분코드를 가져와 보험코드 기준으로 자동 연결합니다.</p>
         </div>
         {mapResult && !mapResult.error && mapResult.filled !== undefined && (
-          <div className="text-xs text-purple-700 bg-purple-50 rounded p-2 border border-purple-200">
-            주성분코드 보유: <strong>{mapResult.filled?.toLocaleString()}건</strong> / 전체 <strong>{mapResult.total?.toLocaleString()}건</strong>
+          <div className="text-xs text-purple-700 bg-purple-50 rounded p-2 border border-purple-200 space-y-0.5">
+            <div>주성분코드 보유: <strong>{mapResult.filled?.toLocaleString()}건</strong> / 전체 <strong>{mapResult.total?.toLocaleString()}건</strong></div>
+            <div className="text-purple-500">
+              마지막 동기화: <strong>{mapResult.lastSync ? new Date(mapResult.lastSync).toLocaleString("ko-KR") : "기록 없음"}</strong>
+            </div>
           </div>
         )}
         {mapResult?.success && mapResult.mapped !== undefined && (

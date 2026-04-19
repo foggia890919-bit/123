@@ -33,7 +33,7 @@ function mapDrug(item: PublicDrug) {
   return {
     categoryA: (item.PRODUCT_TYPE ?? "").trim() || null,
     ingredientName: (item.ITEM_INGR_NAME ?? item.ITEM_NAME ?? "").trim(),
-    categoryB: (item.SPCLTY_PBLC ?? "").trim() || null,
+    categoryB: null as string | null, // 주성분코드는 ATC 동기화로만 채움
     companyName: (item.ENTP_NAME ?? "미상").trim(),
     productName: (item.ITEM_NAME ?? "").trim(),
     price: null as number | null,
@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
               ingredientName: drug.ingredientName,
               companyName: drug.companyName,
               categoryA: drug.categoryA,
-              categoryB: drug.categoryB,
+              // categoryB는 ATC 동기화가 관리하므로 덮어쓰지 않음
               updatedAt: new Date(),
             },
           });
@@ -123,9 +123,15 @@ export async function POST(req: NextRequest) {
       await Promise.all(batch.map(processPage));
     }
 
+    const now = new Date().toISOString();
     const [publicCount, excelCount] = await Promise.all([
       prisma.medication.count({ where: { source: "PUBLIC_API" } }),
       prisma.medication.count({ where: { source: "EXCEL" } }),
+      prisma.systemSetting.upsert({
+        where: { key: "lastMfdsSync" },
+        update: { value: now },
+        create: { key: "lastMfdsSync", value: now },
+      }),
     ]);
     return NextResponse.json({ success: true, synced, totalPublic: totalCount, publicCount, excelCount });
   } catch (err) {
@@ -134,9 +140,10 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET() {
-  const [publicCount, excelCount] = await Promise.all([
+  const [publicCount, excelCount, lastSync] = await Promise.all([
     prisma.medication.count({ where: { source: "PUBLIC_API" } }),
     prisma.medication.count({ where: { source: "EXCEL" } }),
+    prisma.systemSetting.findUnique({ where: { key: "lastMfdsSync" } }).catch(() => null),
   ]);
-  return NextResponse.json({ publicCount, excelCount, total: publicCount + excelCount });
+  return NextResponse.json({ publicCount, excelCount, total: publicCount + excelCount, lastSync: lastSync?.value ?? null });
 }

@@ -100,6 +100,12 @@ export async function POST() {
       }
     }
 
+    const now = new Date().toISOString();
+    await prisma.systemSetting.upsert({
+      where: { key: "lastAtcSync" },
+      update: { value: now },
+      create: { key: "lastAtcSync", value: now },
+    });
     return NextResponse.json({ success: true, total: totalCount, mapped: codeMap.size, updated });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
@@ -107,8 +113,10 @@ export async function POST() {
 }
 
 export async function GET() {
-  // 주성분코드 채워진 건수 조회
-  const filled = await prisma.medication.count({ where: { categoryB: { not: null } } });
-  const total = await prisma.medication.count();
-  return NextResponse.json({ filled, total });
+  const [filled, total, lastSync] = await Promise.all([
+    prisma.medication.count({ where: { categoryB: { not: null } } }),
+    prisma.medication.count(),
+    prisma.systemSetting.findUnique({ where: { key: "lastAtcSync" } }).catch(() => null),
+  ]);
+  return NextResponse.json({ filled, total, lastSync: lastSync?.value ?? null });
 }
