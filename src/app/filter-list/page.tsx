@@ -13,6 +13,7 @@ import * as XLSX from "xlsx";
 
 interface Company { name: string; isSettlement: boolean; count: number; }
 interface ProposalSummary { id: string; title: string; _count?: { items: number }; }
+type CompanyTab = "전체" | "원외" | "원내";
 
 function StatusBadge({ status }: { status: string }) {
   if (status === "APPROVED") return <span className="text-xs text-green-700 bg-green-50 border border-green-200 px-1.5 py-0.5 rounded shrink-0">거래가능</span>;
@@ -41,9 +42,10 @@ export default function FilterListPage() {
   const [proposals, setProposals] = useState<ProposalSummary[]>([]);
   const [showProposalMenu, setShowProposalMenu] = useState(false);
   const [companyStatuses, setCompanyStatuses] = useState<Record<string, string>>({});
+  const [companyTab, setCompanyTab] = useState<CompanyTab>("전체");
 
   useEffect(() => {
-    fetch("/api/medications/companies").then((r) => r.json()).then(setCompanies);
+    fetch("/api/medications/companies?filter=all").then((r) => r.json()).then(setCompanies);
   }, []);
 
   useEffect(() => {
@@ -81,7 +83,13 @@ export default function FilterListPage() {
     setResults([]);
   }
 
-  const filteredCompanies = companies.filter((c) =>
+  const tabCompanies = companies.filter((c) => {
+    if (companyTab === "원외") return c.isSettlement;
+    if (companyTab === "원내") return !c.isSettlement;
+    return true;
+  });
+
+  const filteredCompanies = tabCompanies.filter((c) =>
     c.name.toLowerCase().includes(companySearch.toLowerCase())
   );
 
@@ -133,8 +141,20 @@ export default function FilterListPage() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
           <div className="md:col-span-1 bg-white rounded-lg border border-gray-200 overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-100 space-y-2">
+              {/* 원외/원내/전체 탭 */}
+              <div className="flex gap-0.5 bg-gray-100 rounded-lg p-0.5 text-xs">
+                {(["전체", "원외", "원내"] as CompanyTab[]).map((tab) => {
+                  const count = tab === "전체" ? companies.length : tab === "원외" ? companies.filter(c => c.isSettlement).length : companies.filter(c => !c.isSettlement).length;
+                  return (
+                    <button key={tab} onClick={() => setCompanyTab(tab)}
+                      className={`flex-1 py-1 rounded-md font-medium transition-colors ${companyTab === tab ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+                      {tab} ({count})
+                    </button>
+                  );
+                })}
+              </div>
               <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-semibold text-gray-800 shrink-0">정산제약사 ({companies.length}개)</span>
+                <span className="text-sm font-semibold text-gray-800 shrink-0">{filteredCompanies.length}개 제약사</span>
                 <div className="flex items-center gap-1.5 ml-auto">
                   {/* 제안서 불러오기 */}
                   <div className="relative" ref={proposalMenuRef}>
