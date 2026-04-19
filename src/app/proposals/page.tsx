@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
-import { Plus, Trash2, FileSpreadsheet, FileDown, FileText, X, Edit2, Check, Building2, Search } from "lucide-react";
+import { Plus, Trash2, FileSpreadsheet, FileDown, FileText, X, Edit2, Check, Building2, Search, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatPrice } from "@/lib/utils";
@@ -47,6 +47,7 @@ function ProposalsContent() {
   const [companyStatuses, setCompanyStatuses] = useState<Record<string, string>>({});
   const [cols, setCols] = useState<ColumnVisibility>({ showRate: true, showInsuranceCode: true });
   const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null } | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const loadProposals = useCallback(async () => {
     if (!userId) return;
@@ -69,6 +70,7 @@ function ProposalsContent() {
     const res = await fetch(`/api/proposals/${p.id}`);
     const data = await res.json();
     setSelected(data);
+    setSidebarOpen(false); // 모바일에서 제안서 선택 시 목록 접기
   }
 
   useEffect(() => { if (userId) loadProposals(); }, [userId, loadProposals]);
@@ -148,10 +150,7 @@ function ProposalsContent() {
       const total = base != null ? base + (extra ?? 0) : null;
       const settlement = m?.price != null && total != null ? Math.round(m.price * total / 100) : null;
       const row: Record<string, string | number> = {
-        순번: i + 1,
-        품목명: m?.productName || "-",
-        성분명: m?.ingredientName || "-",
-        제약사: m?.companyName || "-",
+        순번: i + 1, 품목명: m?.productName || "-", 성분명: m?.ingredientName || "-", 제약사: m?.companyName || "-",
       };
       if (cols.showCategoryB) row["분류B"] = m?.categoryB || "-";
       if (cols.showBioStatus) row["생동/생산"] = m?.bioStatus || "-";
@@ -160,10 +159,8 @@ function ProposalsContent() {
       if (cols.showNotes) row["특이사항"] = m?.notes || "-";
       row["약가"] = m?.price ?? "-";
       if (withRate) {
-        row["기본수수료(%)"] = base ?? "-";
-        row["추가수수료(%)"] = extra ?? "-";
-        row["합계수수료(%)"] = total ?? "-";
-        row["정산금액"] = settlement ?? "-";
+        row["기본수수료(%)"] = base ?? "-"; row["추가수수료(%)"] = extra ?? "-";
+        row["합계수수료(%)"] = total ?? "-"; row["정산금액"] = settlement ?? "-";
       }
       return row;
     });
@@ -182,7 +179,6 @@ function ProposalsContent() {
     doc.text(selected.title, 14, 15);
     doc.setFontSize(9);
     doc.text(`작성일: ${new Date().toLocaleDateString("ko-KR")}`, 14, 22);
-
     const withRate = isSalesRep && cols.showRate;
     const head = ["순번", "품목명", "성분명", "제약사"];
     if (cols.showCategoryB) head.push("분류B");
@@ -192,19 +188,13 @@ function ProposalsContent() {
     if (cols.showNotes) head.push("특이사항");
     head.push("약가");
     if (withRate) head.push("기본수수료", "추가수수료", "합계수수료", "정산금액");
-
     const body = selected.items.map((item, i) => {
       const m = item.altMedication;
       const base = m?.commissionRate ?? null;
       const extra = m?.additionalRate ?? null;
       const total = base != null ? base + (extra ?? 0) : null;
       const settlement = m?.price != null && total != null ? Math.round(m.price * total / 100) : null;
-      const row: (string | number)[] = [
-        i + 1,
-        m?.productName || "-",
-        m?.ingredientName || "-",
-        m?.companyName || "-",
-      ];
+      const row: (string | number)[] = [i + 1, m?.productName || "-", m?.ingredientName || "-", m?.companyName || "-"];
       if (cols.showCategoryB) row.push(m?.categoryB || "-");
       if (cols.showBioStatus) row.push(m?.bioStatus || "-");
       if (cols.showOriginalDrug) row.push(m?.originalDrug || "-");
@@ -212,61 +202,125 @@ function ProposalsContent() {
       if (cols.showNotes) row.push(m?.notes || "-");
       row.push(m?.price ? `${m.price.toLocaleString()}원` : "-");
       if (withRate) {
-        row.push(
-          base != null ? `${base}%` : "-",
-          extra != null ? `${extra}%` : "-",
-          total != null ? `${total}%` : "-",
-          settlement != null ? `${settlement.toLocaleString()}원` : "-",
-        );
+        row.push(base != null ? `${base}%` : "-", extra != null ? `${extra}%` : "-",
+          total != null ? `${total}%` : "-", settlement != null ? `${settlement.toLocaleString()}원` : "-");
       }
       return row;
     });
-
-    autoTable(doc, {
-      startY: 28,
-      head: [head],
-      body,
-      styles: { fontSize: 8 },
-      headStyles: { fillColor: [37, 99, 235] },
-    });
+    autoTable(doc, { startY: 28, head: [head], body, styles: { fontSize: 8 }, headStyles: { fillColor: [37, 99, 235] } });
     doc.save(`${selected.title}_${new Date().toISOString().slice(0, 10)}.pdf`);
   }
 
   if (loading) return <div className="flex justify-center py-20 text-gray-400">불러오는 중...</div>;
 
   return (
-    <div className="flex gap-5 h-[calc(100vh-120px)]">
-      {/* 왼쪽(넓게): 선택된 제안서 내용 */}
-      <div className="flex-1 flex flex-col gap-4 min-w-0">
+    <div className="flex flex-col md:flex-row gap-4 md:gap-5 md:h-[calc(100vh-120px)]">
+
+      {/* ── 오른쪽 사이드바 (모바일에서는 상단에 배치) ── */}
+      <div className="w-full md:w-72 md:shrink-0 flex flex-col gap-3 order-1 md:order-2 md:min-h-0">
+
+        {/* 새 제안서 만들기 */}
+        <div className="space-y-1 shrink-0">
+          <Input value={newTitle} onChange={(e) => setNewTitle(e.target.value)}
+            placeholder="새 제안서 이름..." className="h-9 text-sm"
+            onKeyDown={(e) => e.key === "Enter" && createProposal()} />
+          <Button onClick={createProposal} disabled={creating} className="w-full h-9 text-sm">
+            <Plus className="w-3.5 h-3.5 mr-1" />{creating ? "생성 중..." : "새 제안서 만들기"}
+          </Button>
+        </div>
+
+        {/* 제안서 목록 (모바일: 접기/펼치기) */}
+        <div className="md:flex-1 md:overflow-y-auto md:min-h-0">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen((v) => !v)}
+            className="w-full flex items-center justify-between px-1 py-1 text-xs font-semibold text-gray-500 md:pointer-events-none"
+          >
+            <span>제안서 목록 ({proposals.length})</span>
+            <span className="md:hidden">{sidebarOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}</span>
+          </button>
+          <div className={`space-y-1 ${sidebarOpen ? "block" : "hidden md:block"}`}>
+            {proposals.length === 0 ? (
+              <p className="text-xs text-gray-400 text-center py-4">제안서가 없어요</p>
+            ) : proposals.map((p) => (
+              <div key={p.id}
+                onClick={() => loadProposal(p)}
+                className={`group flex items-center justify-between p-2.5 rounded-lg cursor-pointer transition-colors ${
+                  selected?.id === p.id ? "bg-blue-50 border border-blue-200" : "bg-white border border-gray-200 hover:bg-gray-50"
+                }`}>
+                <div className="flex items-center gap-2 min-w-0">
+                  <FileText className={`w-4 h-4 shrink-0 ${selected?.id === p.id ? "text-blue-600" : "text-gray-400"}`} />
+                  <div className="min-w-0">
+                    <p className={`text-sm font-medium truncate ${selected?.id === p.id ? "text-blue-700" : "text-gray-800"}`}>{p.title}</p>
+                    <p className="text-xs text-gray-400">{p._count?.items ?? 0}개 품목</p>
+                  </div>
+                </div>
+                <button onClick={(e) => { e.stopPropagation(); deleteProposal(p.id); }}
+                  className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 p-1 shrink-0">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* 제약사 현황 (모바일: 선택된 경우만) */}
+        {selected && companySummary.length > 0 && (
+          <div className="shrink-0 flex flex-col gap-2 md:max-h-[40%]">
+            <div className="flex items-center gap-2">
+              <Building2 className="w-4 h-4 text-gray-500" />
+              <h3 className="text-sm font-semibold text-gray-800">제약사 현황</h3>
+              <span className="text-xs text-gray-400 ml-auto">{companySummary.length}개사</span>
+            </div>
+            <div className="overflow-y-auto bg-white rounded-lg border border-gray-200 max-h-40 md:max-h-none md:flex-1 md:min-h-0">
+              <div className="divide-y divide-gray-50">
+                {companySummary.map(({ name, count }) => (
+                  <div key={name} className="px-3 py-2">
+                    <div className="flex items-center justify-between gap-1 mb-1">
+                      <p className="text-xs font-medium text-gray-800 truncate">{name}</p>
+                      <span className="text-xs text-gray-400 shrink-0">{count}개</span>
+                    </div>
+                    <StatusBadge status={companyStatuses[name] || ""} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── 왼쪽: 선택된 제안서 내용 (모바일에서는 하단) ── */}
+      <div className="flex-1 flex flex-col gap-3 min-w-0 order-2 md:order-1">
         {!selected ? (
-          <div className="flex-1 flex items-center justify-center text-gray-400 bg-white rounded-lg border border-gray-200">
+          <div className="flex items-center justify-center py-16 text-gray-400 bg-white rounded-lg border border-gray-200">
             <div className="text-center">
-              <FileText className="w-12 h-12 mx-auto mb-3 text-gray-300" />
-              <p>왼쪽에서 제안서를 선택하거나 새로 만들어요</p>
+              <FileText className="w-10 h-10 mx-auto mb-2 text-gray-300" />
+              <p className="text-sm">위에서 제안서를 선택하거나 새로 만들어요</p>
             </div>
           </div>
         ) : (
           <>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
+            {/* 제안서 헤더 */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
                 {editingTitle ? (
                   <>
                     <Input value={editTitle} onChange={(e) => setEditTitle(e.target.value)}
-                      className="h-9 text-lg font-bold w-72"
+                      className="h-9 text-base font-bold w-full max-w-xs"
                       onKeyDown={(e) => e.key === "Enter" && saveTitle()} autoFocus />
-                    <button onClick={saveTitle} className="text-green-600 hover:text-green-700"><Check className="w-4 h-4" /></button>
-                    <button onClick={() => setEditingTitle(false)} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
+                    <button onClick={saveTitle} className="text-green-600 hover:text-green-700 shrink-0"><Check className="w-4 h-4" /></button>
+                    <button onClick={() => setEditingTitle(false)} className="text-gray-400 hover:text-gray-600 shrink-0"><X className="w-4 h-4" /></button>
                   </>
                 ) : (
                   <>
-                    <h2 className="text-xl font-bold text-gray-900">{selected.title}</h2>
+                    <h2 className="text-lg font-bold text-gray-900 truncate">{selected.title}</h2>
                     <button onClick={() => { setEditTitle(selected.title); setEditingTitle(true); }}
-                      className="text-gray-400 hover:text-gray-600"><Edit2 className="w-4 h-4" /></button>
+                      className="text-gray-400 hover:text-gray-600 shrink-0"><Edit2 className="w-4 h-4" /></button>
+                    <span className="text-sm text-gray-400 shrink-0">{selected.items?.length ?? 0}개</span>
                   </>
                 )}
-                <span className="text-sm text-gray-400">{selected.items?.length ?? 0}개 품목</span>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 shrink-0">
                 <Button variant="outline" size="sm" onClick={exportExcel} disabled={!selected.items?.length}>
                   <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />엑셀
                 </Button>
@@ -277,7 +331,7 @@ function ProposalsContent() {
             </div>
 
             {!selected.items?.length ? (
-              <div className="flex-1 flex items-center justify-center text-gray-400 bg-white rounded-lg border border-gray-200">
+              <div className="flex items-center justify-center py-16 text-gray-400 bg-white rounded-lg border border-gray-200">
                 <p className="text-sm">검색 결과에서 품목을 추가해보세요</p>
               </div>
             ) : (
@@ -285,31 +339,31 @@ function ProposalsContent() {
                 <div className="flex justify-end">
                   <ColumnToggles cols={cols} setCols={setCols} isSalesRep={isSalesRep} />
                 </div>
-                <div className="flex-1 overflow-auto rounded-lg border border-gray-200 bg-white">
+                {/* 테이블: 모바일에서 가로 스크롤 */}
+                <div className="overflow-x-auto overflow-y-auto max-h-[60vh] md:flex-1 rounded-lg border border-gray-200 bg-white">
                   <table className="w-full text-sm">
                     <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
-                      <tr className="text-xs text-gray-500 font-semibold">
-                        <th className="px-4 py-3 text-left w-8">#</th>
-                        <th className="px-4 py-3 text-left">품목명</th>
-                        <th className="px-4 py-3 text-left">성분명</th>
-                        <th className="px-4 py-3 text-center w-28"></th>
-                        <th className="px-4 py-3 text-left">제약사</th>
-                        {cols.showCategoryB && <th className="px-4 py-3 text-center">분류B</th>}
-                        {cols.showBioStatus && <th className="px-4 py-3 text-center">생동/생산</th>}
-                        {cols.showOriginalDrug && <th className="px-4 py-3 text-center">오리지날</th>}
-                        {cols.showInsuranceCode && <th className="px-4 py-3 text-left">보험코드</th>}
-                        {cols.showNotes && <th className="px-4 py-3 text-left">특이사항</th>}
-                        {cols.showStock && <th className="px-4 py-3 text-center">재고</th>}
-                        <th className="px-4 py-3 text-right">약가</th>
+                      <tr className="text-xs text-gray-500 font-semibold whitespace-nowrap">
+                        <th className="px-3 py-2.5 text-left w-8">#</th>
+                        <th className="px-3 py-2.5 text-left min-w-[120px]">품목명</th>
+                        <th className="px-3 py-2.5 text-left min-w-[100px]">성분명</th>
+                        <th className="px-3 py-2.5 text-center w-24"></th>
+                        <th className="px-3 py-2.5 text-left min-w-[90px]">제약사</th>
+                        {cols.showCategoryB && <th className="px-3 py-2.5 text-center">분류B</th>}
+                        {cols.showBioStatus && <th className="px-3 py-2.5 text-center">생동/생산</th>}
+                        {cols.showOriginalDrug && <th className="px-3 py-2.5 text-center">오리지날</th>}
+                        {cols.showInsuranceCode && <th className="px-3 py-2.5 text-left">보험코드</th>}
+                        {cols.showNotes && <th className="px-3 py-2.5 text-left">특이사항</th>}
+                        <th className="px-3 py-2.5 text-right">약가</th>
                         {isSalesRep && cols.showRate && (
                           <>
-                            <th className="px-4 py-3 text-right">기본수수료</th>
-                            <th className="px-4 py-3 text-right">추가수수료</th>
-                            <th className="px-4 py-3 text-right">합계수수료</th>
-                            <th className="px-4 py-3 text-right">정산금액</th>
+                            <th className="px-3 py-2.5 text-right">기본수수료</th>
+                            <th className="px-3 py-2.5 text-right">추가수수료</th>
+                            <th className="px-3 py-2.5 text-right">합계수수료</th>
+                            <th className="px-3 py-2.5 text-right">정산금액</th>
                           </>
                         )}
-                        <th className="px-4 py-3 w-10"></th>
+                        <th className="px-3 py-2.5 w-8"></th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -321,9 +375,9 @@ function ProposalsContent() {
                         const settlement = m?.price != null && total != null ? Math.round(m.price * total / 100) : null;
                         return (
                           <tr key={item.id} className="hover:bg-gray-50">
-                            <td className="px-4 py-3 text-gray-400 text-xs">{i + 1}</td>
-                            <td className="px-4 py-3">
-                              <p className="font-medium text-gray-900 text-sm">
+                            <td className="px-3 py-2.5 text-gray-400 text-xs">{i + 1}</td>
+                            <td className="px-3 py-2.5">
+                              <p className="font-medium text-gray-900 text-sm whitespace-nowrap">
                                 {m?.productName || "-"}
                                 {m?.isSettlement && (m.settlementType === "원외" || m.settlementType === "원내") && (
                                   <span className={`inline-block text-[10px] border px-1 py-0.5 rounded ml-1 align-middle ${
@@ -332,32 +386,31 @@ function ProposalsContent() {
                                 )}
                               </p>
                             </td>
-                            <td className="px-4 py-3 text-xs text-gray-500 max-w-[160px] truncate">{m?.ingredientName || "-"}</td>
-                            <td className="px-4 py-3 text-center">
+                            <td className="px-3 py-2.5 text-xs text-gray-500 max-w-[140px] truncate">{m?.ingredientName || "-"}</td>
+                            <td className="px-3 py-2.5 text-center">
                               {m && (
                                 <button onClick={() => setIngredientModal({ name: m.ingredientName, categoryB: m.categoryB })}
-                                  className="text-xs text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 whitespace-nowrap transition-colors">
-                                  <Search className="w-3 h-3 inline mr-1" />동일성분
+                                  className="text-xs text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 whitespace-nowrap">
+                                  <Search className="w-3 h-3 inline mr-0.5" />동일성분
                                 </button>
                               )}
                             </td>
-                            <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{m?.companyName || "-"}</td>
-                            {cols.showCategoryB && <td className="px-4 py-3 text-center text-xs text-gray-500">{m?.categoryB || "-"}</td>}
-                            {cols.showBioStatus && <td className="px-4 py-3 text-center text-xs text-gray-500">{m?.bioStatus || "-"}</td>}
-                            {cols.showOriginalDrug && <td className="px-4 py-3 text-center text-xs text-gray-500">{m?.originalDrug || "-"}</td>}
-                            {cols.showInsuranceCode && <td className="px-4 py-3 text-xs font-mono text-gray-500">{m?.insuranceCode || "-"}</td>}
-                            {cols.showNotes && <td className="px-4 py-3 text-xs text-gray-500 max-w-[120px] truncate">{m?.notes || "-"}</td>}
-                            {cols.showStock && <td className="px-4 py-3 text-center text-xs text-gray-400">-</td>}
-                            <td className="px-4 py-3 text-right text-sm text-gray-700 whitespace-nowrap">{formatPrice(m?.price)}</td>
+                            <td className="px-3 py-2.5 text-xs text-gray-600 whitespace-nowrap">{m?.companyName || "-"}</td>
+                            {cols.showCategoryB && <td className="px-3 py-2.5 text-center text-xs text-gray-500">{m?.categoryB || "-"}</td>}
+                            {cols.showBioStatus && <td className="px-3 py-2.5 text-center text-xs text-gray-500">{m?.bioStatus || "-"}</td>}
+                            {cols.showOriginalDrug && <td className="px-3 py-2.5 text-center text-xs text-gray-500">{m?.originalDrug || "-"}</td>}
+                            {cols.showInsuranceCode && <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{m?.insuranceCode || "-"}</td>}
+                            {cols.showNotes && <td className="px-3 py-2.5 text-xs text-gray-500 max-w-[100px] truncate">{m?.notes || "-"}</td>}
+                            <td className="px-3 py-2.5 text-right text-sm text-gray-700 whitespace-nowrap">{formatPrice(m?.price)}</td>
                             {isSalesRep && cols.showRate && (
                               <>
-                                <td className="px-4 py-3 text-right text-sm text-blue-600 font-medium whitespace-nowrap">{base != null ? `${base}%` : "-"}</td>
-                                <td className="px-4 py-3 text-right text-sm text-gray-500 whitespace-nowrap">{extra != null ? `${extra}%` : "-"}</td>
-                                <td className="px-4 py-3 text-right text-sm font-semibold text-blue-700 whitespace-nowrap">{total != null ? `${total}%` : "-"}</td>
-                                <td className="px-4 py-3 text-right text-sm font-semibold text-green-700 whitespace-nowrap">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</td>
+                                <td className="px-3 py-2.5 text-right text-sm text-blue-600 font-medium whitespace-nowrap">{base != null ? `${base}%` : "-"}</td>
+                                <td className="px-3 py-2.5 text-right text-sm text-gray-500 whitespace-nowrap">{extra != null ? `${extra}%` : "-"}</td>
+                                <td className="px-3 py-2.5 text-right text-sm font-semibold text-blue-700 whitespace-nowrap">{total != null ? `${total}%` : "-"}</td>
+                                <td className="px-3 py-2.5 text-right text-sm font-semibold text-green-700 whitespace-nowrap">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</td>
                               </>
                             )}
-                            <td className="px-4 py-3">
+                            <td className="px-3 py-2.5">
                               <button onClick={() => removeItem(item.id)} className="text-red-400 hover:text-red-600 p-1">
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
@@ -381,76 +434,11 @@ function ProposalsContent() {
           userId={userId}
           onClose={() => { setIngredientModal(null); if (selected) loadProposal(selected); }}
           initialCols={{
-            categoryB: cols.showCategoryB,
-            bioStatus: cols.showBioStatus,
-            originalDrug: cols.showOriginalDrug,
-            insuranceCode: cols.showInsuranceCode,
-            notes: cols.showNotes,
+            categoryB: cols.showCategoryB, bioStatus: cols.showBioStatus,
+            originalDrug: cols.showOriginalDrug, insuranceCode: cols.showInsuranceCode, notes: cols.showNotes,
           }}
         />
       )}
-
-      {/* 오른쪽: 새 제안서 + 제안서 목록 + 제약사 현황 통합 */}
-      <div className="w-72 shrink-0 flex flex-col gap-3 min-h-0">
-        <div className="space-y-1 shrink-0">
-          <Input value={newTitle} onChange={(e) => setNewTitle(e.target.value)}
-            placeholder="새 제안서 이름..." className="h-9 text-sm"
-            onKeyDown={(e) => e.key === "Enter" && createProposal()} />
-          <Button onClick={createProposal} disabled={creating} className="w-full h-9 text-sm">
-            <Plus className="w-3.5 h-3.5 mr-1" />{creating ? "생성 중..." : "새 제안서 만들기"}
-          </Button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto space-y-1 min-h-0">
-          <p className="text-xs font-semibold text-gray-500 px-1">제안서 목록</p>
-          {proposals.length === 0 ? (
-            <p className="text-xs text-gray-400 text-center py-4">제안서가 없어요</p>
-          ) : proposals.map((p) => (
-            <div key={p.id}
-              onClick={() => loadProposal(p)}
-              className={`group flex items-center justify-between p-2.5 rounded-lg cursor-pointer transition-colors ${selected?.id === p.id ? "bg-blue-50 border border-blue-200" : "bg-white border border-gray-200 hover:bg-gray-50"}`}>
-              <div className="flex items-center gap-2 min-w-0">
-                <FileText className={`w-4 h-4 shrink-0 ${selected?.id === p.id ? "text-blue-600" : "text-gray-400"}`} />
-                <div className="min-w-0">
-                  <p className={`text-sm font-medium truncate ${selected?.id === p.id ? "text-blue-700" : "text-gray-800"}`}>{p.title}</p>
-                  <p className="text-xs text-gray-400">{p._count?.items ?? 0}개 품목</p>
-                </div>
-              </div>
-              <button onClick={(e) => { e.stopPropagation(); deleteProposal(p.id); }}
-                className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 p-1 shrink-0">
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          ))}
-        </div>
-
-        {selected && (
-          <div className="shrink-0 flex flex-col gap-2 max-h-[40%]">
-            <div className="flex items-center gap-2">
-              <Building2 className="w-4 h-4 text-gray-500" />
-              <h3 className="text-sm font-semibold text-gray-800">제약사 현황</h3>
-              <span className="text-xs text-gray-400 ml-auto">{companySummary.length}개사</span>
-            </div>
-            <div className="flex-1 overflow-y-auto bg-white rounded-lg border border-gray-200 min-h-0">
-              {companySummary.length === 0 ? (
-                <div className="flex items-center justify-center h-20 text-xs text-gray-400">품목을 추가하면 표시돼요</div>
-              ) : (
-                <div className="divide-y divide-gray-50">
-                  {companySummary.map(({ name, count }) => (
-                    <div key={name} className="px-3 py-2">
-                      <div className="flex items-center justify-between gap-1 mb-1">
-                        <p className="text-xs font-medium text-gray-800 truncate">{name}</p>
-                        <span className="text-xs text-gray-400 shrink-0">{count}개</span>
-                      </div>
-                      <StatusBadge status={companyStatuses[name] || ""} />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
