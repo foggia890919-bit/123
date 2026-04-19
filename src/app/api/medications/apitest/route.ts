@@ -4,6 +4,8 @@ const API_KEY = process.env.PUBLIC_DATA_API_KEY!;
 
 // 테스트할 후보 엔드포인트들
 const ENDPOINTS = {
+  hira_dgamt: "https://apis.data.go.kr/B551182/dgamtCrtrInfoService1.2/getDgamtList",
+  hira_dgamt_hanbang: "https://apis.data.go.kr/B551182/dgamtCrtrInfoService1.2/getCmdcDgamtList",
   hira_yakga: "https://apis.data.go.kr/B551182/MdcinGrnIdntfcInfoService01/getMdcinGrnIdntfcInfoList01",
   hira_presc: "https://apis.data.go.kr/B551182/prescDrugInfo1/getPrescDrugInfo1",
   mfds_permit: "https://apis.data.go.kr/1471000/DrugInfoService/getDrugObjectList",
