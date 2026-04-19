@@ -4,17 +4,16 @@ import { prisma } from "@/lib/prisma";
 export const maxDuration = 300;
 
 const API_KEY = process.env.PUBLIC_DATA_API_KEY!;
-// 건강보험심사평가원_ATC코드 매핑 목록 API (3개 엔드포인트 중 첫번째)
-const BASE_URL = "https://apis.data.go.kr/15118958/v1/uddi:efe7750b-59a5-4db3-aa90-b8974543d836";
+// 건강보험심사평가원_ATC코드 매핑 목록_20250630 (최신)
+const BASE_URL = "https://api.odcloud.kr/api/15118958/v1/uddi:6753c7f1-65ed-4bbe-9e98-cd6b7b156a92";
 
 interface AtcItem { [key: string]: string | undefined }
 
-async function fetchPage(pageNo: number): Promise<{ items: AtcItem[]; totalCount: number }> {
+async function fetchPage(page: number): Promise<{ items: AtcItem[]; totalCount: number }> {
   const url = new URL(BASE_URL);
+  url.searchParams.set("page", String(page));
+  url.searchParams.set("perPage", "1000");
   url.searchParams.set("serviceKey", API_KEY);
-  url.searchParams.set("pageNo", String(pageNo));
-  url.searchParams.set("numOfRows", "1000");
-  url.searchParams.set("type", "json");
 
   const res = await fetch(url.toString(), { cache: "no-store" });
   if (!res.ok) {
@@ -23,12 +22,9 @@ async function fetchPage(pageNo: number): Promise<{ items: AtcItem[]; totalCount
   }
 
   const json = await res.json();
-
-  // data.go.kr 응답 형식 처리
-  const body = json?.response?.body ?? json?.body ?? json;
-  const rawItems = body?.items?.item ?? body?.items ?? [];
-  const items: AtcItem[] = Array.isArray(rawItems) ? rawItems : rawItems ? [rawItems] : [];
-  const totalCount = parseInt(body?.totalCount ?? body?.total ?? "0");
+  // odcloud 응답 형식: { data: [...], totalCount: N }
+  const items: AtcItem[] = Array.isArray(json?.data) ? json.data : [];
+  const totalCount = parseInt(json?.totalCount ?? json?.matchCount ?? "0");
 
   return { items, totalCount };
 }
@@ -54,6 +50,7 @@ export async function POST() {
       return NextResponse.json({
         error: "ATC API에서 데이터를 가져오지 못했어요.",
         sampleKeys: Object.keys(firstItems[0] ?? {}),
+        sampleItem: firstItems[0] ?? null,
         totalCount,
       }, { status: 502 });
     }
