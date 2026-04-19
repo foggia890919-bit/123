@@ -122,6 +122,13 @@ export default function MedicationTable({ medications, loading, userId, showCate
           ingredientName={ingredientModal}
           userId={userId}
           onClose={() => setIngredientModal(null)}
+          initialCols={{
+            categoryB: showCategoryB,
+            bioStatus: showBioStatus,
+            originalDrug: showOriginalDrug,
+            insuranceCode: showInsuranceCode,
+            notes: showNotes,
+          }}
         />
       )}
 
