@@ -14,9 +14,7 @@ const TOGGLES: { key: keyof ColumnVisibility; label: string; salesRepOnly?: bool
   { key: "showCategoryB", label: "분류B" },
   { key: "showBioStatus", label: "생동/생산" },
   { key: "showOriginalDrug", label: "오리지날/대조약" },
-  { key: "showInsuranceCode", label: "보험코드" },
   { key: "showNotes", label: "특이사항" },
-  { key: "showStock", label: "재고현황" },
   { key: "showRate", label: "요율표", salesRepOnly: true },
 ];
 

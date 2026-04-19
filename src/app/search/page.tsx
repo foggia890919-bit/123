@@ -27,7 +27,7 @@ export default function SearchPage() {
     setLoading(true); setSearched(true); setDisplayedQuery(query);
     try {
       const userId = session?.user?.id ? `&userId=${session.user.id}` : "";
-      const res = await fetch(`/api/medications/search?q=${encodeURIComponent(query)}${userId}`);
+      const res = await fetch(`/api/medications/search?q=${encodeURIComponent(query)}${userId}&limit=500`);
       const data = await res.json();
       setResults(data.medications || []); setTotal(data.total || 0);
     } catch { setResults([]); }
