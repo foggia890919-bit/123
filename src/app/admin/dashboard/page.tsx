@@ -72,6 +72,7 @@ export default function AdminDashboardPage() {
 function UploadTab() {
   const [file, setFile] = useState<File | null>(null);
   const [isSettlement, setIsSettlement] = useState(true);
+  const [settlementType, setSettlementType] = useState<"원외" | "원내">("원외");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ success?: boolean; count?: number; updated?: number; created?: number; error?: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -201,6 +202,7 @@ function UploadTab() {
     const formData = new FormData();
     formData.append("file", file);
     formData.append("isSettlement", String(isSettlement));
+    if (isSettlement) formData.append("settlementType", settlementType);
     try {
       const res = await fetch("/api/medications/upload", { method: "POST", body: formData });
       const data = await res.json();
@@ -297,10 +299,25 @@ function UploadTab() {
         <input ref={inputRef} type="file" accept=".xlsx,.xls" className="hidden"
           onChange={(e) => { setFile(e.target.files?.[0] || null); setResult(null); }} />
       </div>
-      <div className="flex items-center gap-2">
-        <input type="checkbox" id="settlement" checked={isSettlement}
-          onChange={(e) => setIsSettlement(e.target.checked)} className="w-4 h-4 rounded border-gray-300" />
-        <label htmlFor="settlement" className="text-sm text-gray-700">정산 가능 제약사 요율표로 등록</label>
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <input type="checkbox" id="settlement" checked={isSettlement}
+            onChange={(e) => setIsSettlement(e.target.checked)} className="w-4 h-4 rounded border-gray-300" />
+          <label htmlFor="settlement" className="text-sm text-gray-700">정산 가능 제약사 요율표로 등록</label>
+        </div>
+        {isSettlement && (
+          <div className="flex items-center gap-4 pl-6 p-2 bg-gray-50 rounded">
+            <span className="text-xs text-gray-600 font-medium">정산 분류:</span>
+            {(["원외", "원내"] as const).map((t) => (
+              <label key={t} className="flex items-center gap-1.5 cursor-pointer text-sm">
+                <input type="radio" name="settlementType" checked={settlementType === t}
+                  onChange={() => setSettlementType(t)} className="w-4 h-4 text-blue-600" />
+                <span className={settlementType === t ? "font-semibold text-blue-700" : "text-gray-600"}>{t}</span>
+              </label>
+            ))}
+            <span className="text-xs text-gray-400">이 요율표의 약품들을 해당 분류로 저장합니다</span>
+          </div>
+        )}
       </div>
       <Button onClick={handleUpload} disabled={!file || loading} className="w-full bg-gray-800 hover:bg-gray-700">
         {loading ? "업로드 중..." : "업로드"}

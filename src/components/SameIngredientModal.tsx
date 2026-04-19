@@ -162,7 +162,18 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
                     return (
                       <tr key={med.id} className="hover:bg-gray-50">
                         <td className="px-4 py-2.5">
-                          <p className="font-medium text-gray-900 text-xs">{med.productName}</p>
+                          <p className="font-medium text-gray-900 text-xs">
+                            {med.productName}
+                            {med.isSettlement && (
+                              <span className={`inline-block text-[10px] border px-1 py-0.5 rounded ml-1 align-middle ${
+                                med.settlementType === "원외" ? "text-blue-700 bg-blue-50 border-blue-200" :
+                                med.settlementType === "원내" ? "text-indigo-700 bg-indigo-50 border-indigo-200" :
+                                "text-green-700 bg-green-50 border-green-200"
+                              }`}>
+                                {med.settlementType ? `정산·${med.settlementType}` : "정산"}
+                              </span>
+                            )}
+                          </p>
                         </td>
                         <td className="px-4 py-2.5 text-xs text-gray-500 max-w-[140px] truncate">{med.ingredientName}</td>
                         <td className="px-4 py-2.5 text-xs text-gray-600 whitespace-nowrap">{med.companyName}</td>

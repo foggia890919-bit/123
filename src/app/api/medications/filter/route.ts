@@ -5,6 +5,7 @@ export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q")?.trim() || "";
   const companiesParam = req.nextUrl.searchParams.get("companies") || "";
   const userId = req.nextUrl.searchParams.get("userId") || null;
+  const settlementType = req.nextUrl.searchParams.get("settlementType") || "";
 
   const companyList = companiesParam.split(",").map((s) => s.trim()).filter(Boolean);
   if (companyList.length === 0) return NextResponse.json({ medications: [], total: 0 });
@@ -12,6 +13,9 @@ export async function GET(req: NextRequest) {
   const where: Record<string, unknown> = {
     companyName: { in: companyList },
   };
+  if (settlementType === "원외" || settlementType === "원내") {
+    where.settlementType = settlementType;
+  }
 
   if (q && q.trim() !== " ") {
     where.OR = [

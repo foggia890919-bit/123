@@ -38,6 +38,14 @@ function IngredientName({ name }: { name: string }) {
   );
 }
 
+function SettlementBadge({ med }: { med: MedicationItem }) {
+  if (!med.isSettlement) return null;
+  const type = med.settlementType;
+  if (type === "원외") return <span className="inline-block text-[10px] text-blue-700 bg-blue-50 border border-blue-200 px-1 py-0.5 rounded ml-1 align-middle">정산·원외</span>;
+  if (type === "원내") return <span className="inline-block text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-200 px-1 py-0.5 rounded ml-1 align-middle">정산·원내</span>;
+  return <span className="inline-block text-[10px] text-green-700 bg-green-50 border border-green-200 px-1 py-0.5 rounded ml-1 align-middle">정산</span>;
+}
+
 export default function MedicationTable({ medications, loading, userId, showCategoryB, showBioStatus, showOriginalDrug, showInsuranceCode, showNotes, showStock, showRate }: Props) {
   const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null } | null>(null);
   const [proposalTarget, setProposalTarget] = useState<MedicationItem | null>(null);
@@ -78,7 +86,10 @@ export default function MedicationTable({ medications, loading, userId, showCate
               <tr key={med.id} className="hover:bg-gray-50 transition-colors">
                 <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{med.companyName}</td>
                 <td className="px-4 py-3">
-                  <p className="font-medium text-gray-900">{med.productName}</p>
+                  <p className="font-medium text-gray-900">
+                    {med.productName}
+                    <SettlementBadge med={med} />
+                  </p>
                 </td>
                 <td className="px-4 py-3 text-gray-500 text-xs">
                   <IngredientName name={med.ingredientName} />

@@ -14,6 +14,7 @@ export interface MedicationItem {
   insuranceCode: string | null;
   notes: string | null;
   isSettlement: boolean;
+  settlementType?: string | null;
   source: "EXCEL" | "PUBLIC_API";
   additionalRate?: number | null;
 }

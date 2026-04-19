@@ -7,8 +7,13 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
     const file = formData.get("file") as File;
     const isSettlement = formData.get("isSettlement") === "true";
+    const settlementTypeRaw = (formData.get("settlementType") as string | null)?.trim() || null;
+    const settlementType = settlementTypeRaw === "원외" || settlementTypeRaw === "원내" ? settlementTypeRaw : null;
 
     if (!file) return NextResponse.json({ error: "파일이 없어요." }, { status: 400 });
+    if (isSettlement && !settlementType) {
+      return NextResponse.json({ error: "정산 분류(원외/원내)를 선택해주세요." }, { status: 400 });
+    }
 
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: "buffer" });
@@ -33,6 +38,7 @@ export async function POST(req: NextRequest) {
           insuranceCode: String(row["보험코드"] || "").trim() || null,
           notes: String(row["특이사항"] || "").trim() || null,
           isSettlement,
+          settlementType,
         };
       })
       .filter((m) => m.ingredientName && m.productName);
@@ -64,6 +70,7 @@ export async function POST(req: NextRequest) {
           data: {
             commissionRate: row.commissionRate,
             isSettlement,
+            settlementType,
             // 엑셀에 있는 메타데이터도 보완
             bioStatus: row.bioStatus,
             originalDrug: row.originalDrug,

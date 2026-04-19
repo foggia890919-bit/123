@@ -67,6 +67,7 @@ model Medication {
   insuranceCode  String?
   notes          String?
   isSettlement   Boolean   @default(false)
+  settlementType String?   // "원외" | "원내" | null
   source         MedSource @default(EXCEL)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt

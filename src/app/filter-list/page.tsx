@@ -11,7 +11,7 @@ import { useSession } from "next-auth/react";
 import type { MedicationItem } from "@/types";
 import * as XLSX from "xlsx";
 
-interface Company { name: string; isSettlement: boolean; count: number; }
+interface Company { name: string; isSettlement: boolean; count: number; hasOutpatient?: boolean; hasInpatient?: boolean; }
 interface ProposalSummary { id: string; title: string; _count?: { items: number }; }
 type CompanyTab = "전체" | "원외" | "원내";
 
@@ -45,7 +45,7 @@ export default function FilterListPage() {
   const [companyTab, setCompanyTab] = useState<CompanyTab>("전체");
 
   useEffect(() => {
-    fetch("/api/medications/companies?filter=all").then((r) => r.json()).then(setCompanies);
+    fetch("/api/medications/companies?type=all").then((r) => r.json()).then(setCompanies);
   }, []);
 
   useEffect(() => {
@@ -84,8 +84,8 @@ export default function FilterListPage() {
   }
 
   const tabCompanies = companies.filter((c) => {
-    if (companyTab === "원외") return c.isSettlement;
-    if (companyTab === "원내") return !c.isSettlement;
+    if (companyTab === "원외") return c.hasOutpatient;
+    if (companyTab === "원내") return c.hasInpatient;
     return true;
   });
 
@@ -106,12 +106,13 @@ export default function FilterListPage() {
       params.set("q", productSearch.trim() || " ");
       params.set("companies", Array.from(selected).join(","));
       if (session?.user?.id) params.set("userId", session.user.id);
+      if (companyTab === "원외" || companyTab === "원내") params.set("settlementType", companyTab);
       const res = await fetch(`/api/medications/filter?${params.toString()}`);
       const data = await res.json();
       setResults(data.medications || []); setTotal(data.total || 0);
     } catch { setResults([]); }
     finally { setLoading(false); }
-  }, [selected, productSearch, session]);
+  }, [selected, productSearch, session, companyTab]);
 
   function exportExcel() {
     const rows = results.map((m) => ({
@@ -144,9 +145,11 @@ export default function FilterListPage() {
               {/* 원외/원내/전체 탭 */}
               <div className="flex gap-0.5 bg-gray-100 rounded-lg p-0.5 text-xs">
                 {(["전체", "원외", "원내"] as CompanyTab[]).map((tab) => {
-                  const count = tab === "전체" ? companies.length : tab === "원외" ? companies.filter(c => c.isSettlement).length : companies.filter(c => !c.isSettlement).length;
+                  const count = tab === "전체" ? companies.length
+                    : tab === "원외" ? companies.filter((c) => c.hasOutpatient).length
+                    : companies.filter((c) => c.hasInpatient).length;
                   return (
-                    <button key={tab} onClick={() => setCompanyTab(tab)}
+                    <button key={tab} onClick={() => { setCompanyTab(tab); setSearched(false); setResults([]); }}
                       className={`flex-1 py-1 rounded-md font-medium transition-colors ${companyTab === tab ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
                       {tab} ({count})
                     </button>
