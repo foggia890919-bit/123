@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
-import { Plus, Trash2, FileSpreadsheet, FileDown, FileText, X, Edit2, Check } from "lucide-react";
+import { Plus, Trash2, FileSpreadsheet, FileDown, FileText, X, Edit2, Check, Building2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatPrice } from "@/lib/utils";
@@ -18,6 +18,14 @@ interface Medication {
 interface ProposalItem { id: string; altMedication: Medication | null; order: number; }
 interface Proposal { id: string; title: string; _count?: { items: number }; items?: ProposalItem[]; createdAt: string; }
 
+function StatusBadge({ status }: { status: string }) {
+  if (status === "APPROVED") return <span className="text-xs text-green-700 bg-green-50 border border-green-200 px-1.5 py-0.5 rounded">거래가능</span>;
+  if (status === "REVIEWING") return <span className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 px-1.5 py-0.5 rounded">검토중</span>;
+  if (status === "PENDING") return <span className="text-xs text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded">요청됨</span>;
+  if (status === "REJECTED") return <span className="text-xs text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded">거부됨</span>;
+  return <span className="text-xs text-gray-400">-</span>;
+}
+
 function ProposalsContent() {
   const { data: session } = useSession();
   const searchParams = useSearchParams();
@@ -30,6 +38,7 @@ function ProposalsContent() {
   const [newTitle, setNewTitle] = useState("");
   const [editingTitle, setEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState("");
+  const [companyStatuses, setCompanyStatuses] = useState<Record<string, string>>({});
 
   const loadProposals = useCallback(async () => {
     if (!userId) return;
@@ -55,6 +64,25 @@ function ProposalsContent() {
   }
 
   useEffect(() => { if (userId) loadProposals(); }, [userId, loadProposals]);
+
+  useEffect(() => {
+    if (!userId) return;
+    fetch(`/api/filter-request/company-status?userId=${userId}`)
+      .then((r) => r.json())
+      .then(setCompanyStatuses);
+  }, [userId]);
+
+  const companySummary = useMemo(() => {
+    if (!selected?.items) return [];
+    const map = new Map<string, number>();
+    for (const item of selected.items) {
+      const name = item.altMedication?.companyName;
+      if (name) map.set(name, (map.get(name) || 0) + 1);
+    }
+    return Array.from(map.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count);
+  }, [selected]);
 
   async function createProposal() {
     if (!newTitle.trim()) return;
@@ -184,7 +212,7 @@ function ProposalsContent() {
         </div>
       </div>
 
-      {/* 오른쪽: 선택된 제안서 내용 */}
+      {/* 가운데: 선택된 제안서 내용 */}
       <div className="flex-1 flex flex-col gap-4 min-w-0">
         {!selected ? (
           <div className="flex-1 flex items-center justify-center text-gray-400 bg-white rounded-lg border border-gray-200">
@@ -271,6 +299,34 @@ function ProposalsContent() {
           </>
         )}
       </div>
+
+      {/* 오른쪽: 제약사 현황 */}
+      {selected && (
+        <div className="w-52 shrink-0 flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            <Building2 className="w-4 h-4 text-gray-500" />
+            <h3 className="text-sm font-semibold text-gray-800">제약사 현황</h3>
+            <span className="text-xs text-gray-400 ml-auto">{companySummary.length}개사</span>
+          </div>
+          <div className="flex-1 overflow-y-auto bg-white rounded-lg border border-gray-200">
+            {companySummary.length === 0 ? (
+              <div className="flex items-center justify-center h-24 text-xs text-gray-400">품목을 추가하면 표시돼요</div>
+            ) : (
+              <div className="divide-y divide-gray-50">
+                {companySummary.map(({ name, count }) => (
+                  <div key={name} className="px-3 py-2.5">
+                    <div className="flex items-center justify-between gap-1 mb-1">
+                      <p className="text-xs font-medium text-gray-800 truncate">{name}</p>
+                      <span className="text-xs text-gray-400 shrink-0">{count}개</span>
+                    </div>
+                    <StatusBadge status={companyStatuses[name] || ""} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
