@@ -101,11 +101,11 @@ export async function POST(req: NextRequest) {
       }
 
       if (toCreate.length > 0) {
-        await prisma.medication.createMany({ data: toCreate, skipDuplicates: true }).catch(() => null);
+        await prisma.medication.createMany({ data: toCreate, skipDuplicates: true });
       }
 
       for (const { id, data } of toUpdate) {
-        await prisma.medication.update({ where: { id }, data }).catch(() => null);
+        await prisma.medication.update({ where: { id }, data });
       }
 
       synced += drugs.length;
@@ -123,7 +123,11 @@ export async function POST(req: NextRequest) {
       await Promise.all(batch.map(processPage));
     }
 
-    return NextResponse.json({ success: true, synced, totalPublic: totalCount });
+    const [publicCount, excelCount] = await Promise.all([
+      prisma.medication.count({ where: { source: "PUBLIC_API" } }),
+      prisma.medication.count({ where: { source: "EXCEL" } }),
+    ]);
+    return NextResponse.json({ success: true, synced, totalPublic: totalCount, publicCount, excelCount });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
