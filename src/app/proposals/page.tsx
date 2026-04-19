@@ -1,173 +1,286 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Trash2, FileDown, FileSpreadsheet } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { useSession } from "next-auth/react";
+import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
+import { Plus, Trash2, FileSpreadsheet, FileDown, FileText, X, Edit2, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatPrice } from "@/lib/utils";
-import type { ProposalCartItem } from "@/types";
-import * as XLSX from "xlsx";
 import RequireAuth from "@/components/RequireAuth";
+import * as XLSX from "xlsx";
 
-export default function ProposalsPage() {
-  const [cart, setCart] = useState<ProposalCartItem[]>([]);
-  const [title, setTitle] = useState("제안서");
+interface Medication {
+  id: string; productName: string; companyName: string; ingredientName: string;
+  price: number | null; commissionRate: number | null; insuranceCode: string | null;
+}
+interface ProposalItem { id: string; altMedication: Medication | null; order: number; }
+interface Proposal { id: string; title: string; _count?: { items: number }; items?: ProposalItem[]; createdAt: string; }
 
-  useEffect(() => {
-    const stored = localStorage.getItem("proposalCart");
-    if (stored) setCart(JSON.parse(stored));
-  }, []);
+function ProposalsContent() {
+  const { data: session } = useSession();
+  const searchParams = useSearchParams();
+  const userId = session?.user?.id || "";
 
-  function removeItem(id: string) {
-    const updated = cart.filter((item) => item.id !== id);
-    setCart(updated);
-    localStorage.setItem("proposalCart", JSON.stringify(updated));
+  const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [selected, setSelected] = useState<Proposal | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [newTitle, setNewTitle] = useState("");
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+
+  const loadProposals = useCallback(async () => {
+    if (!userId) return;
+    const res = await fetch(`/api/proposals?userId=${userId}`);
+    const data = await res.json();
+    const list: Proposal[] = Array.isArray(data) ? data : [];
+    setProposals(list);
+    setLoading(false);
+
+    const idParam = searchParams.get("id");
+    if (idParam) {
+      const found = list.find((p) => p.id === idParam);
+      if (found) loadProposal(found);
+    } else if (list.length > 0 && !selected) {
+      loadProposal(list[0]);
+    }
+  }, [userId, searchParams]);
+
+  async function loadProposal(p: Proposal) {
+    const res = await fetch(`/api/proposals/${p.id}`);
+    const data = await res.json();
+    setSelected(data);
   }
 
-  function clearCart() {
-    setCart([]);
-    localStorage.removeItem("proposalCart");
+  useEffect(() => { if (userId) loadProposals(); }, [userId, loadProposals]);
+
+  async function createProposal() {
+    if (!newTitle.trim()) return;
+    setCreating(true);
+    const res = await fetch("/api/proposals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: newTitle.trim(), userId }),
+    });
+    if (res.ok) {
+      const p = await res.json();
+      setNewTitle("");
+      await loadProposals();
+      loadProposal(p);
+    }
+    setCreating(false);
   }
 
-  function exportToExcel() {
-    const rows = cart.map((item, index) => ({
-      순번: index + 1,
-      "기존 품목명": item.originalMedication?.productName || "-",
-      "기존 성분명": item.originalMedication?.ingredientName || "-",
-      "기존 약가": item.originalMedication?.price || "-",
-      "대체 품목명": item.altMedication?.productName || "-",
-      "대체 성분명": item.altMedication?.ingredientName || "-",
+  async function deleteProposal(id: string) {
+    if (!confirm("제안서를 삭제할까요?")) return;
+    await fetch(`/api/proposals/${id}`, { method: "DELETE" });
+    if (selected?.id === id) setSelected(null);
+    await loadProposals();
+  }
+
+  async function removeItem(itemId: string) {
+    if (!selected) return;
+    await fetch(`/api/proposals/${selected.id}/items`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ itemId }),
+    });
+    loadProposal(selected);
+  }
+
+  async function saveTitle() {
+    if (!selected || !editTitle.trim()) return;
+    await fetch(`/api/proposals/${selected.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: editTitle.trim() }),
+    });
+    setEditingTitle(false);
+    await loadProposals();
+    setSelected((prev) => prev ? { ...prev, title: editTitle.trim() } : prev);
+  }
+
+  function exportExcel() {
+    if (!selected?.items) return;
+    const rows = selected.items.map((item, i) => ({
+      순번: i + 1,
+      품목명: item.altMedication?.productName || "-",
+      성분명: item.altMedication?.ingredientName || "-",
       제약사: item.altMedication?.companyName || "-",
       약가: item.altMedication?.price || "-",
       "수수료율(%)": item.altMedication?.commissionRate || "-",
       보험코드: item.altMedication?.insuranceCode || "-",
-      수량: item.quantity,
-      비고: item.note || "",
     }));
-
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "제안서");
-    XLSX.writeFile(wb, `${title}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    XLSX.writeFile(wb, `${selected.title}_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
 
-  async function exportToPDF() {
+  async function exportPDF() {
+    if (!selected?.items) return;
     const { jsPDF } = await import("jspdf");
     const autoTable = (await import("jspdf-autotable")).default;
-
     const doc = new jsPDF({ orientation: "landscape" });
     doc.setFontSize(14);
-    doc.text(title, 14, 15);
+    doc.text(selected.title, 14, 15);
     doc.setFontSize(9);
     doc.text(`작성일: ${new Date().toLocaleDateString("ko-KR")}`, 14, 22);
-
     autoTable(doc, {
       startY: 28,
-      head: [["순번", "기존 품목명", "대체 품목명", "제약사", "약가", "수수료율", "보험코드", "수량"]],
-      body: cart.map((item, i) => [
+      head: [["순번", "품목명", "성분명", "제약사", "약가", "수수료율", "보험코드"]],
+      body: selected.items.map((item, i) => [
         i + 1,
-        item.originalMedication?.productName || "-",
         item.altMedication?.productName || "-",
+        item.altMedication?.ingredientName || "-",
         item.altMedication?.companyName || "-",
         item.altMedication?.price ? `${item.altMedication.price.toLocaleString()}원` : "-",
         item.altMedication?.commissionRate ? `${item.altMedication.commissionRate}%` : "-",
         item.altMedication?.insuranceCode || "-",
-        item.quantity,
       ]),
       styles: { fontSize: 8 },
       headStyles: { fillColor: [37, 99, 235] },
     });
-
-    doc.save(`${title}_${new Date().toISOString().slice(0, 10)}.pdf`);
+    doc.save(`${selected.title}_${new Date().toISOString().slice(0, 10)}.pdf`);
   }
 
+  if (loading) return <div className="flex justify-center py-20 text-gray-400">불러오는 중...</div>;
+
+  return (
+    <div className="flex gap-5 h-[calc(100vh-120px)]">
+      {/* 왼쪽: 제안서 목록 */}
+      <div className="w-64 shrink-0 flex flex-col gap-3">
+        <div className="space-y-1">
+          <Input value={newTitle} onChange={(e) => setNewTitle(e.target.value)}
+            placeholder="새 제안서 이름..." className="h-9 text-sm"
+            onKeyDown={(e) => e.key === "Enter" && createProposal()} />
+          <Button onClick={createProposal} disabled={!newTitle.trim() || creating} className="w-full h-9 text-sm">
+            <Plus className="w-3.5 h-3.5 mr-1" />{creating ? "생성 중..." : "새 제안서 만들기"}
+          </Button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto space-y-1">
+          {proposals.length === 0 ? (
+            <p className="text-xs text-gray-400 text-center py-8">제안서가 없어요</p>
+          ) : proposals.map((p) => (
+            <div key={p.id}
+              onClick={() => loadProposal(p)}
+              className={`group flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors ${selected?.id === p.id ? "bg-blue-50 border border-blue-200" : "bg-white border border-gray-200 hover:bg-gray-50"}`}>
+              <div className="flex items-center gap-2 min-w-0">
+                <FileText className={`w-4 h-4 shrink-0 ${selected?.id === p.id ? "text-blue-600" : "text-gray-400"}`} />
+                <div className="min-w-0">
+                  <p className={`text-sm font-medium truncate ${selected?.id === p.id ? "text-blue-700" : "text-gray-800"}`}>{p.title}</p>
+                  <p className="text-xs text-gray-400">{p._count?.items ?? 0}개 품목</p>
+                </div>
+              </div>
+              <button onClick={(e) => { e.stopPropagation(); deleteProposal(p.id); }}
+                className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 p-1 shrink-0">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 오른쪽: 선택된 제안서 내용 */}
+      <div className="flex-1 flex flex-col gap-4 min-w-0">
+        {!selected ? (
+          <div className="flex-1 flex items-center justify-center text-gray-400 bg-white rounded-lg border border-gray-200">
+            <div className="text-center">
+              <FileText className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+              <p>왼쪽에서 제안서를 선택하거나 새로 만들어요</p>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {editingTitle ? (
+                  <>
+                    <Input value={editTitle} onChange={(e) => setEditTitle(e.target.value)}
+                      className="h-9 text-lg font-bold w-72"
+                      onKeyDown={(e) => e.key === "Enter" && saveTitle()} autoFocus />
+                    <button onClick={saveTitle} className="text-green-600 hover:text-green-700"><Check className="w-4 h-4" /></button>
+                    <button onClick={() => setEditingTitle(false)} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
+                  </>
+                ) : (
+                  <>
+                    <h2 className="text-xl font-bold text-gray-900">{selected.title}</h2>
+                    <button onClick={() => { setEditTitle(selected.title); setEditingTitle(true); }}
+                      className="text-gray-400 hover:text-gray-600"><Edit2 className="w-4 h-4" /></button>
+                  </>
+                )}
+                <span className="text-sm text-gray-400">{selected.items?.length ?? 0}개 품목</span>
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={exportExcel} disabled={!selected.items?.length}>
+                  <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />엑셀
+                </Button>
+                <Button variant="outline" size="sm" onClick={exportPDF} disabled={!selected.items?.length}>
+                  <FileDown className="w-3.5 h-3.5 mr-1" />PDF
+                </Button>
+              </div>
+            </div>
+
+            {!selected.items?.length ? (
+              <div className="flex-1 flex items-center justify-center text-gray-400 bg-white rounded-lg border border-gray-200">
+                <p className="text-sm">검색 결과에서 품목을 추가해보세요</p>
+              </div>
+            ) : (
+              <div className="flex-1 overflow-auto rounded-lg border border-gray-200 bg-white">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
+                    <tr className="text-xs text-gray-500 font-semibold">
+                      <th className="px-4 py-3 text-left w-8">#</th>
+                      <th className="px-4 py-3 text-left">품목명</th>
+                      <th className="px-4 py-3 text-left">성분명</th>
+                      <th className="px-4 py-3 text-left">제약사</th>
+                      <th className="px-4 py-3 text-right">약가</th>
+                      <th className="px-4 py-3 text-right">수수료율</th>
+                      <th className="px-4 py-3 text-left">보험코드</th>
+                      <th className="px-4 py-3 w-10"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {selected.items.map((item, i) => (
+                      <tr key={item.id} className="hover:bg-gray-50">
+                        <td className="px-4 py-3 text-gray-400 text-xs">{i + 1}</td>
+                        <td className="px-4 py-3">
+                          <p className="font-medium text-gray-900 text-sm">{item.altMedication?.productName || "-"}</p>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-500 max-w-[160px] truncate">{item.altMedication?.ingredientName || "-"}</td>
+                        <td className="px-4 py-3 text-xs text-gray-600">{item.altMedication?.companyName || "-"}</td>
+                        <td className="px-4 py-3 text-right text-sm text-gray-700">{formatPrice(item.altMedication?.price)}</td>
+                        <td className="px-4 py-3 text-right text-sm text-blue-600 font-medium">
+                          {item.altMedication?.commissionRate != null ? `${item.altMedication.commissionRate}%` : "-"}
+                        </td>
+                        <td className="px-4 py-3 text-xs font-mono text-gray-500">{item.altMedication?.insuranceCode || "-"}</td>
+                        <td className="px-4 py-3">
+                          <button onClick={() => removeItem(item.id)} className="text-red-400 hover:text-red-600 p-1">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function ProposalsPage() {
   return (
     <RequireAuth>
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">제안서</h1>
-          <p className="text-gray-500 mt-1">담긴 품목: {cart.length}개</p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={exportToExcel} disabled={cart.length === 0}>
-            <FileSpreadsheet className="w-4 h-4 mr-2" />
-            엑셀 출력
-          </Button>
-          <Button variant="outline" onClick={exportToPDF} disabled={cart.length === 0}>
-            <FileDown className="w-4 h-4 mr-2" />
-            PDF 출력
-          </Button>
-          <Button variant="destructive" onClick={clearCart} disabled={cart.length === 0}>
-            전체 삭제
-          </Button>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2">
-        <label className="text-sm font-medium text-gray-700 whitespace-nowrap">제안서 제목</label>
-        <Input value={title} onChange={(e) => setTitle(e.target.value)} className="max-w-xs" />
-      </div>
-
-      {cart.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-gray-400 bg-white rounded-lg border border-gray-200">
-          <p>담긴 품목이 없어요.</p>
-          <p className="text-sm mt-1">검색 결과에서 장바구니 버튼을 눌러 추가하세요.</p>
-        </div>
-      ) : (
-        <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-gray-50 border-b border-gray-200">
-                <th className="px-4 py-3 text-left font-semibold text-gray-600 w-8">#</th>
-                <th className="px-4 py-3 text-left font-semibold text-gray-600">기존 품목</th>
-                <th className="px-4 py-3 text-left font-semibold text-gray-600">대체 품목명</th>
-                <th className="px-4 py-3 text-left font-semibold text-gray-600">제약사</th>
-                <th className="px-4 py-3 text-right font-semibold text-gray-600">약가</th>
-                <th className="px-4 py-3 text-right font-semibold text-gray-600">수수료율</th>
-                <th className="px-4 py-3 text-left font-semibold text-gray-600">보험코드</th>
-                <th className="px-4 py-3 text-right font-semibold text-gray-600">수량</th>
-                <th className="px-4 py-3"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {cart.map((item, index) => (
-                <tr key={item.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 text-gray-400">{index + 1}</td>
-                  <td className="px-4 py-3 text-gray-500 text-xs">
-                    {item.originalMedication?.productName || "-"}
-                  </td>
-                  <td className="px-4 py-3 font-medium text-gray-900">
-                    {item.altMedication?.productName || "-"}
-                  </td>
-                  <td className="px-4 py-3 text-gray-600">{item.altMedication?.companyName || "-"}</td>
-                  <td className="px-4 py-3 text-right text-gray-700">
-                    {formatPrice(item.altMedication?.price)}
-                  </td>
-                  <td className="px-4 py-3 text-right text-blue-600 font-medium">
-                    {item.altMedication?.commissionRate != null ? `${item.altMedication.commissionRate}%` : "-"}
-                  </td>
-                  <td className="px-4 py-3 text-gray-500 font-mono text-xs">
-                    {item.altMedication?.insuranceCode || "-"}
-                  </td>
-                  <td className="px-4 py-3 text-right text-gray-700">{item.quantity}</td>
-                  <td className="px-4 py-3">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => removeItem(item.id)}
-                      className="text-red-400 hover:text-red-600"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
+      <Suspense fallback={<div className="flex justify-center py-20 text-gray-400">불러오는 중...</div>}>
+        <ProposalsContent />
+      </Suspense>
     </RequireAuth>
   );
 }

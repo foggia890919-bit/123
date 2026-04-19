@@ -59,7 +59,7 @@ export default function SearchPage() {
               <p className="text-sm text-gray-500">검색 결과 <span className="font-semibold text-gray-900">{total.toLocaleString()}개</span></p>
               <ColumnToggles cols={cols} setCols={setCols} isSalesRep={isSalesRep} />
             </div>
-            <MedicationTable medications={results} loading={loading} {...cols} showRate={isSalesRep ? cols.showRate : false} />
+            <MedicationTable medications={results} loading={loading} {...cols} showRate={isSalesRep ? cols.showRate : false} userId={session?.user?.id} />
           </>
         )}
       </div>
