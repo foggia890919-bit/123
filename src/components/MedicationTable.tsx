@@ -49,7 +49,7 @@ function SettlementBadge({ med }: { med: MedicationItem }) {
   return null;
 }
 
-export default function MedicationTable({ medications, loading, userId, showCategoryB, showBioStatus, showOriginalDrug, showNotes, showRate }: Props) {
+export default function MedicationTable({ medications, loading, userId, showBioStatus, showOriginalDrug, showNotes, showRate }: Props) {
   const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null } | null>(null);
   const [proposalTarget, setProposalTarget] = useState<MedicationItem | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -167,9 +167,23 @@ export default function MedicationTable({ medications, loading, userId, showCate
     ? companies.filter(([n]) => n.toLowerCase().includes(companyQuery.toLowerCase().trim()))
     : companies;
 
+  function selectAllRows() {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      filteredMedications.forEach((m) => next.add(m.id));
+      return next;
+    });
+  }
+  function clearRows() { setSelectedIds(new Set()); }
+
   return (
     <>
       <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1">
+          <button onClick={selectAllRows} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded px-2 py-1.5">전체선택</button>
+          <button onClick={clearRows} className="text-xs bg-gray-50 hover:bg-gray-100 text-gray-700 border border-gray-200 rounded px-2 py-1.5">전체해제</button>
+          {selectedCount > 0 && <span className="text-xs text-gray-500 ml-1">{selectedCount}개 선택</span>}
+        </div>
         <div ref={companyMenuRef} className="relative">
           <button
             onClick={() => setCompanyMenuOpen((v) => !v)}
@@ -249,7 +263,6 @@ export default function MedicationTable({ medications, loading, userId, showCate
               </th>
               <SortTh label="제품명 / 제약사" k="productName" />
               <th className="px-4 py-3 text-left">성분명</th>
-              {showCategoryB && <th className="px-4 py-3 text-center">분류B</th>}
               {showBioStatus && <th className="px-4 py-3 text-center">생동/생산</th>}
               {showOriginalDrug && <th className="px-4 py-3 text-center">오리지날</th>}
               <th className="px-4 py-3 text-left">보험코드 / 동일성분</th>
@@ -298,7 +311,6 @@ export default function MedicationTable({ medications, loading, userId, showCate
                 <td className="px-4 py-3 text-gray-500 text-xs">
                   <IngredientName name={med.ingredientName} />
                 </td>
-                {showCategoryB && <td className="px-4 py-3 text-center text-xs text-gray-500">{med.categoryB || "-"}</td>}
                 {showBioStatus && <td className="px-4 py-3 text-center text-xs text-gray-500">{med.bioStatus || "-"}</td>}
                 {showOriginalDrug && <td className="px-4 py-3 text-center text-xs text-gray-500">{med.originalDrug || "-"}</td>}
                 <td className="px-4 py-3">
@@ -350,7 +362,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
           userId={userId}
           onClose={() => setIngredientModal(null)}
           initialCols={{
-            categoryB: showCategoryB,
+            categoryB: false,
             bioStatus: showBioStatus,
             originalDrug: showOriginalDrug,
             insuranceCode: true,

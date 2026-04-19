@@ -11,7 +11,6 @@ interface Props {
 }
 
 const TOGGLES: { key: keyof ColumnVisibility; label: string; salesRepOnly?: boolean }[] = [
-  { key: "showCategoryB", label: "분류B" },
   { key: "showBioStatus", label: "생동/생산" },
   { key: "showOriginalDrug", label: "오리지날/대조약" },
   { key: "showNotes", label: "특이사항" },
