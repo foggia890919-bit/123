@@ -131,7 +131,7 @@ export async function POST(req: NextRequest) {
         where: { key: "lastMfdsSync" },
         update: { value: now },
         create: { key: "lastMfdsSync", value: now },
-      }),
+      }).catch(() => null),
     ]);
     return NextResponse.json({ success: true, synced, totalPublic: totalCount, publicCount, excelCount });
   } catch (err) {

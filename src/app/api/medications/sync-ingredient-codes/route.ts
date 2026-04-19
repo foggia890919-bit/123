@@ -4,7 +4,6 @@ import { prisma } from "@/lib/prisma";
 export const maxDuration = 300;
 
 const API_KEY = process.env.PUBLIC_DATA_API_KEY!;
-// 건강보험심사평가원_ATC코드 매핑 목록_20250630 (최신)
 const BASE_URL = "https://api.odcloud.kr/api/15118958/v1/uddi:6753c7f1-65ed-4bbe-9e98-cd6b7b156a92";
 
 interface AtcItem { [key: string]: string | undefined }
@@ -22,10 +21,8 @@ async function fetchPage(page: number): Promise<{ items: AtcItem[]; totalCount: 
   }
 
   const json = await res.json();
-  // odcloud 응답 형식: { data: [...], totalCount: N }
   const items: AtcItem[] = Array.isArray(json?.data) ? json.data : [];
   const totalCount = parseInt(json?.totalCount ?? json?.matchCount ?? "0");
-
   return { items, totalCount };
 }
 
@@ -36,7 +33,6 @@ function extractCodes(item: AtcItem): { ingredientCode: string; productCode: str
   const productCode = String(
     item["제품코드"] ?? item["제품_코드"] ?? item["itemCode"] ?? item["ediCode"] ?? ""
   ).trim();
-
   if (!ingredientCode || !productCode) return null;
   return { ingredientCode, productCode };
 }
@@ -55,15 +51,12 @@ export async function POST() {
     }
 
     const totalPages = Math.ceil(totalCount / 1000);
-
-    // 전체 페이지 수집
     const allItems: AtcItem[] = [...firstItems];
     for (let page = 2; page <= totalPages; page++) {
       const { items } = await fetchPage(page);
       allItems.push(...items);
     }
 
-    // 제품코드 → 주성분코드 맵 생성
     const codeMap = new Map<string, string>();
     for (const item of allItems) {
       const codes = extractCodes(item);
@@ -77,35 +70,36 @@ export async function POST() {
       }, { status: 400 });
     }
 
-    // DB 배치 업데이트
-    const allCodes = Array.from(codeMap.keys());
+    // raw SQL로 배치 업데이트 (순차 update 대신 VALUES 테이블 조인)
     let updated = 0;
-    const BATCH = 1000;
+    const entries = Array.from(codeMap.entries());
+    const BATCH = 500;
 
-    for (let i = 0; i < allCodes.length; i += BATCH) {
-      const batch = allCodes.slice(i, i + BATCH);
-      const found = await prisma.medication.findMany({
-        where: { insuranceCode: { in: batch } },
-        select: { id: true, insuranceCode: true },
-      });
-      for (const med of found) {
-        if (!med.insuranceCode) continue;
-        const categoryB = codeMap.get(med.insuranceCode);
-        if (!categoryB) continue;
-        await prisma.medication.update({
-          where: { id: med.id },
-          data: { categoryB, updatedAt: new Date() },
-        });
-        updated++;
-      }
+    for (let i = 0; i < entries.length; i += BATCH) {
+      const batch = entries.slice(i, i + BATCH);
+      // VALUES (productCode, ingredientCode), ... 형태로 bulk update
+      const values = batch.map((_, j) => `($${j * 2 + 1}, $${j * 2 + 2})`).join(", ");
+      const params = batch.flatMap(([productCode, ingredientCode]) => [productCode, ingredientCode]);
+
+      const result = await prisma.$queryRawUnsafe<{ count: bigint }[]>(
+        `UPDATE "Medication" AS m
+         SET "categoryB" = v."categoryB", "updatedAt" = NOW()
+         FROM (VALUES ${values}) AS v("insuranceCode", "categoryB")
+         WHERE m."insuranceCode" = v."insuranceCode"
+         RETURNING m.id`,
+        ...params
+      );
+      updated += result.length;
     }
 
+    // SystemSetting 테이블이 없어도 동기화는 성공으로 처리
     const now = new Date().toISOString();
     await prisma.systemSetting.upsert({
       where: { key: "lastAtcSync" },
       update: { value: now },
       create: { key: "lastAtcSync", value: now },
-    });
+    }).catch(() => null);
+
     return NextResponse.json({ success: true, total: totalCount, mapped: codeMap.size, updated });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
