@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
+export const maxDuration = 300;
+
 const API_KEY = process.env.PUBLIC_DATA_API_KEY!;
 const BASE_URL = "https://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnInq07";
 
@@ -10,7 +12,7 @@ async function fetchPage(pageNo: number): Promise<{ items: PublicDrug[]; totalCo
   const url = new URL(BASE_URL);
   url.searchParams.set("serviceKey", API_KEY);
   url.searchParams.set("pageNo", String(pageNo));
-  url.searchParams.set("numOfRows", "100");
+  url.searchParams.set("numOfRows", "1000");
   url.searchParams.set("type", "json");
 
   const res = await fetch(url.toString(), { cache: "no-store" });
@@ -58,8 +60,8 @@ export async function POST(req: NextRequest) {
       }, { status: 502 });
     }
 
-    const totalPages = Math.ceil(totalCount / 100);
-    const maxPages = testMode ? 1 : Math.min(totalPages, 500);
+    const totalPages = Math.ceil(totalCount / 1000);
+    const maxPages = testMode ? 1 : totalPages;
 
     let synced = 0;
 

@@ -8,6 +8,7 @@ import type { MedicationItem } from "@/types";
 
 interface Props {
   ingredientName: string;
+  categoryBCode?: string;
   userId?: string;
   onClose: () => void;
   initialCols?: Partial<ColVis>;
@@ -21,7 +22,7 @@ interface ColVis {
   insuranceCode: boolean; notes: boolean;
 }
 
-export default function SameIngredientModal({ ingredientName, userId, onClose, initialCols }: Props) {
+export default function SameIngredientModal({ ingredientName, categoryBCode, userId, onClose, initialCols }: Props) {
   const [medications, setMedications] = useState<MedicationItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -38,11 +39,14 @@ export default function SameIngredientModal({ ingredientName, userId, onClose, i
 
   useEffect(() => {
     const uid = userId ? `&userId=${userId}` : "";
-    fetch(`/api/medications/search?q=${encodeURIComponent(ingredientName)}${uid}&limit=200`)
+    const searchParam = categoryBCode
+      ? `categoryBCode=${encodeURIComponent(categoryBCode)}`
+      : `q=${encodeURIComponent(ingredientName)}&ingredientOnly=true`;
+    fetch(`/api/medications/search?${searchParam}${uid}&limit=500`)
       .then((r) => r.json())
       .then((d) => { setMedications(d.medications || []); setTotal(d.total || 0); })
       .finally(() => setLoading(false));
-  }, [ingredientName, userId]);
+  }, [ingredientName, categoryBCode, userId]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => d === "asc" ? "desc" : "asc");
@@ -91,7 +95,9 @@ export default function SameIngredientModal({ ingredientName, userId, onClose, i
           <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
             <div>
               <h2 className="font-bold text-gray-900">동일성분 검색</h2>
-              <p className="text-xs text-gray-500 mt-0.5">{ingredientName} · 총 {total}개 품목</p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                {categoryBCode ? `주성분코드: ${categoryBCode}` : ingredientName} · 총 {total}개 품목
+              </p>
             </div>
             <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X className="w-5 h-5" /></button>
           </div>

@@ -24,7 +24,7 @@ interface Props extends ColumnVisibility {
 }
 
 export default function MedicationTable({ medications, loading, userId, showCategoryB, showBioStatus, showOriginalDrug, showInsuranceCode, showNotes, showStock, showRate }: Props) {
-  const [ingredientModal, setIngredientModal] = useState<string | null>(null);
+  const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null } | null>(null);
   const [proposalTarget, setProposalTarget] = useState<MedicationItem | null>(null);
 
   if (loading) return <div className="flex justify-center py-16 text-gray-400 text-sm">검색 중...</div>;
@@ -75,7 +75,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                 </td>
                 <td className="px-4 py-3 text-gray-500 text-xs max-w-[200px] truncate">{med.ingredientName}</td>
                 <td className="px-4 py-3 text-center">
-                  <button onClick={() => setIngredientModal(med.ingredientName)}
+                  <button onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.categoryB })}
                     className="text-xs text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 whitespace-nowrap transition-colors">
                     <Search className="w-3 h-3 inline mr-1" />동일성분
                   </button>
@@ -119,7 +119,8 @@ export default function MedicationTable({ medications, loading, userId, showCate
 
       {ingredientModal && (
         <SameIngredientModal
-          ingredientName={ingredientModal}
+          ingredientName={ingredientModal.name}
+          categoryBCode={ingredientModal.categoryB ?? undefined}
           userId={userId}
           onClose={() => setIngredientModal(null)}
           initialCols={{

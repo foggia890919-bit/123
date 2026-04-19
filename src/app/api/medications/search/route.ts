@@ -3,24 +3,30 @@ import { prisma } from "@/lib/prisma";
 
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q")?.trim() || "";
+  const categoryBCode = req.nextUrl.searchParams.get("categoryBCode")?.trim() || "";
   const settlementOnly = req.nextUrl.searchParams.get("settlement") === "true";
   const userId = req.nextUrl.searchParams.get("userId") || null;
   const page = parseInt(req.nextUrl.searchParams.get("page") || "1");
-  const limit = 50;
+  const limit = Math.min(parseInt(req.nextUrl.searchParams.get("limit") || "50"), 500);
+  const ingredientOnly = req.nextUrl.searchParams.get("ingredientOnly") === "true";
 
-  if (!q) return NextResponse.json({ medications: [], total: 0 });
+  if (!q && !categoryBCode) return NextResponse.json({ medications: [], total: 0 });
 
   const where = {
     AND: [
       settlementOnly ? { isSettlement: true } : {},
-      {
-        OR: [
-          { productName: { contains: q, mode: "insensitive" as const } },
-          { ingredientName: { contains: q, mode: "insensitive" as const } },
-          { companyName: { contains: q, mode: "insensitive" as const } },
-          { insuranceCode: { contains: q, mode: "insensitive" as const } },
-        ],
-      },
+      categoryBCode
+        ? { categoryB: categoryBCode }
+        : ingredientOnly
+          ? { ingredientName: { contains: q, mode: "insensitive" as const } }
+          : {
+              OR: [
+                { productName: { contains: q, mode: "insensitive" as const } },
+                { ingredientName: { contains: q, mode: "insensitive" as const } },
+                { companyName: { contains: q, mode: "insensitive" as const } },
+                { insuranceCode: { contains: q, mode: "insensitive" as const } },
+              ],
+            },
     ],
   };
 
