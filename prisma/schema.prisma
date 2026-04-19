@@ -25,15 +25,16 @@ model User {
 }
 
 model UserClient {
-  id          String   @id @default(cuid())
+  id          String     @id @default(cuid())
   userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   clientName  String
   bizNumber   String
   bizDocument String?
   bizFileName String?
-  approved    Boolean  @default(false)
-  createdAt   DateTime @default(now())
+  approved    Boolean    @default(false)
+  createdAt   DateTime   @default(now())
+  proposals   Proposal[]
 
   @@index([userId])
   @@unique([userId, bizNumber])
@@ -106,7 +107,9 @@ model Proposal {
   id        String         @id @default(cuid())
   title     String
   userId    String
+  clientId  String?
   user      User           @relation(fields: [userId], references: [id])
+  client    UserClient?    @relation(fields: [clientId], references: [id], onDelete: SetNull)
   items     ProposalItem[]
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
