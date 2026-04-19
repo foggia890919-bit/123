@@ -8,9 +8,12 @@ import { Badge } from "@/components/ui/badge";
 
 type Tab = "upload" | "members" | "rates";
 
+interface UserDoc { id: string; docType: string; fileName: string; fileData: string; }
 interface User {
   id: string; email: string; name: string | null;
   role: string; approved: boolean; createdAt: string;
+  phone?: string | null; carrier?: string | null;
+  documents?: UserDoc[];
 }
 
 const roleLabel: Record<string, string> = {
@@ -125,6 +128,10 @@ function UploadTab() {
 function MembersTab() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
+  const [resetUserId, setResetUserId] = useState<string | null>(null);
+  const [newPw, setNewPw] = useState("");
+  const [pwLoading, setPwLoading] = useState(false);
+  const [docUser, setDocUser] = useState<User | null>(null);
 
   useEffect(() => { fetchUsers(); }, []);
 
@@ -136,68 +143,125 @@ function MembersTab() {
   }
 
   async function toggleApproval(userId: string, approved: boolean) {
-    await fetch("/api/admin/users", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, approved }),
-    });
+    await fetch("/api/admin/users", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId, approved }) });
     setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, approved } : u));
+  }
+
+  async function resetPassword() {
+    if (!newPw || newPw.length < 4) return alert("4자 이상 입력해주세요.");
+    setPwLoading(true);
+    await fetch("/api/admin/users", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId: resetUserId, newPassword: newPw }) });
+    setPwLoading(false);
+    setResetUserId(null);
+    setNewPw("");
+    alert("비밀번호가 초기화됐어요.");
+  }
+
+  function downloadDoc(doc: UserDoc) {
+    const a = document.createElement("a");
+    a.href = doc.fileData;
+    a.download = doc.fileName;
+    a.click();
   }
 
   if (loading) return <div className="py-16 text-center text-gray-400 text-sm">불러오는 중...</div>;
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-      <div className="px-5 py-4 border-b border-gray-100">
-        <h2 className="text-lg font-semibold text-gray-800">회원 목록 ({users.length}명)</h2>
-        <p className="text-xs text-gray-400 mt-0.5">가입 승인 후 서비스를 이용할 수 있어요.</p>
-      </div>
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="bg-gray-50 text-xs text-gray-500 font-semibold">
-            <th className="px-5 py-3 text-left">이름</th>
-            <th className="px-5 py-3 text-left">이메일</th>
-            <th className="px-5 py-3 text-center">직업</th>
-            <th className="px-5 py-3 text-center">가입일</th>
-            <th className="px-5 py-3 text-center">상태</th>
-            <th className="px-5 py-3 text-center">승인</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-100">
-          {users.map((user) => (
-            <tr key={user.id} className="hover:bg-gray-50">
-              <td className="px-5 py-3 font-medium text-gray-900">{user.name || "-"}</td>
-              <td className="px-5 py-3 text-gray-500">{user.email}</td>
-              <td className="px-5 py-3 text-center">
-                <Badge variant="secondary">{roleLabel[user.role] || user.role}</Badge>
-              </td>
-              <td className="px-5 py-3 text-center text-gray-400 text-xs">
-                {new Date(user.createdAt).toLocaleDateString("ko-KR")}
-              </td>
-              <td className="px-5 py-3 text-center">
-                <Badge variant={user.approved ? "success" : "warning"}>
-                  {user.approved ? "승인됨" : "대기중"}
-                </Badge>
-              </td>
-              <td className="px-5 py-3 text-center">
-                <button
-                  onClick={() => toggleApproval(user.id, !user.approved)}
-                  className={`text-xs px-3 py-1.5 rounded font-medium transition-colors ${
-                    user.approved
-                      ? "bg-red-50 text-red-600 hover:bg-red-100"
-                      : "bg-green-50 text-green-700 hover:bg-green-100"
-                  }`}
-                >
-                  {user.approved ? "승인 취소" : "승인"}
-                </button>
-              </td>
+    <div className="space-y-4">
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100">
+          <h2 className="text-lg font-semibold text-gray-800">회원 목록 ({users.length}명)</h2>
+          <p className="text-xs text-gray-400 mt-0.5">가입 승인 후 서비스를 이용할 수 있어요.</p>
+        </div>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-gray-50 text-xs text-gray-500 font-semibold">
+              <th className="px-4 py-3 text-left">이름</th>
+              <th className="px-4 py-3 text-left">이메일</th>
+              <th className="px-4 py-3 text-left">연락처</th>
+              <th className="px-4 py-3 text-center">직업</th>
+              <th className="px-4 py-3 text-center">가입일</th>
+              <th className="px-4 py-3 text-center">상태</th>
+              <th className="px-4 py-3 text-center">서류</th>
+              <th className="px-4 py-3 text-center">승인</th>
+              <th className="px-4 py-3 text-center">비밀번호</th>
             </tr>
-          ))}
-          {users.length === 0 && (
-            <tr><td colSpan={6} className="py-12 text-center text-gray-400 text-sm">가입 회원이 없어요.</td></tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {users.map((user) => (
+              <tr key={user.id} className="hover:bg-gray-50">
+                <td className="px-4 py-3 font-medium text-gray-900">{user.name || "-"}</td>
+                <td className="px-4 py-3 text-gray-500 text-xs">{user.email}</td>
+                <td className="px-4 py-3 text-gray-500 text-xs">
+                  <div>{user.carrier || "-"}</div>
+                  <div>{user.phone || "-"}</div>
+                </td>
+                <td className="px-4 py-3 text-center"><Badge variant="secondary">{roleLabel[user.role] || user.role}</Badge></td>
+                <td className="px-4 py-3 text-center text-gray-400 text-xs">{new Date(user.createdAt).toLocaleDateString("ko-KR")}</td>
+                <td className="px-4 py-3 text-center">
+                  <Badge variant={user.approved ? "success" : "warning"}>{user.approved ? "승인됨" : "대기중"}</Badge>
+                </td>
+                <td className="px-4 py-3 text-center">
+                  {user.documents && user.documents.length > 0 ? (
+                    <button onClick={() => setDocUser(user)} className="text-xs text-blue-600 hover:underline">
+                      보기 ({user.documents.length})
+                    </button>
+                  ) : <span className="text-xs text-gray-300">없음</span>}
+                </td>
+                <td className="px-4 py-3 text-center">
+                  <button onClick={() => toggleApproval(user.id, !user.approved)}
+                    className={`text-xs px-2.5 py-1.5 rounded font-medium transition-colors ${user.approved ? "bg-red-50 text-red-600 hover:bg-red-100" : "bg-green-50 text-green-700 hover:bg-green-100"}`}>
+                    {user.approved ? "취소" : "승인"}
+                  </button>
+                </td>
+                <td className="px-4 py-3 text-center">
+                  <button onClick={() => { setResetUserId(user.id); setNewPw(""); }}
+                    className="text-xs px-2.5 py-1.5 rounded bg-gray-100 text-gray-600 hover:bg-gray-200">
+                    초기화
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {users.length === 0 && <tr><td colSpan={9} className="py-12 text-center text-gray-400 text-sm">가입 회원이 없어요.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      {/* 비밀번호 초기화 모달 */}
+      {resetUserId && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-80 space-y-4 shadow-xl">
+            <h3 className="font-semibold text-gray-900">임시 비밀번호 설정</h3>
+            <input value={newPw} onChange={(e) => setNewPw(e.target.value)} placeholder="새 비밀번호 입력"
+              className="w-full h-10 border border-gray-300 rounded-md px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <div className="flex gap-2">
+              <button onClick={() => setResetUserId(null)} className="flex-1 h-10 rounded-md border border-gray-300 text-sm text-gray-600 hover:bg-gray-50">취소</button>
+              <button onClick={resetPassword} disabled={pwLoading} className="flex-1 h-10 rounded-md bg-gray-800 text-white text-sm hover:bg-gray-700">
+                {pwLoading ? "처리 중..." : "변경"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 첨부서류 모달 */}
+      {docUser && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-96 space-y-4 shadow-xl">
+            <h3 className="font-semibold text-gray-900">{docUser.name} 첨부서류</h3>
+            {docUser.documents?.map((doc) => (
+              <div key={doc.id} className="flex items-center justify-between p-3 border border-gray-200 rounded-lg">
+                <div>
+                  <p className="text-sm font-medium text-gray-800">{doc.docType}</p>
+                  <p className="text-xs text-gray-400">{doc.fileName}</p>
+                </div>
+                <button onClick={() => downloadDoc(doc)} className="text-xs text-blue-600 border border-blue-200 rounded px-3 py-1.5 hover:bg-blue-50">다운로드</button>
+              </div>
+            ))}
+            <button onClick={() => setDocUser(null)} className="w-full h-10 rounded-md border border-gray-300 text-sm text-gray-600 hover:bg-gray-50">닫기</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

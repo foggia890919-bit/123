@@ -13,10 +13,13 @@ model User {
   password     String
   role         Role                 @default(SALES_REP)
   approved     Boolean              @default(false)
+  phone        String?
+  carrier      String?
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
   proposals    Proposal[]
   companyRates MemberCompanyRate[]
+  documents    UserDocument[]
 }
 
 enum Role {
@@ -37,6 +40,16 @@ model MemberCompanyRate {
 
   @@unique([userId, companyName])
   @@index([userId])
+}
+
+model UserDocument {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  docType   String
+  fileName  String
+  fileData  String
+  createdAt DateTime @default(now())
 }
 
 model Medication {
