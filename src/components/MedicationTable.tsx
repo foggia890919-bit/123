@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useMemo, useRef, useEffect } from "react";
-import { ShoppingCart, Search, ChevronUp, ChevronDown, ChevronsUpDown, Filter } from "lucide-react";
+import { useState } from "react";
+import { ShoppingCart, Search, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import { formatPrice } from "@/lib/utils";
 import type { MedicationItem } from "@/types";
 import SameIngredientModal from "./SameIngredientModal";
@@ -56,33 +56,9 @@ export default function MedicationTable({ medications, loading, userId, showBioS
   const [bulkTargets, setBulkTargets] = useState<MedicationItem[] | null>(null);
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
-  const [companyFilter, setCompanyFilter] = useState<Set<string>>(new Set());
-  const [companyMenuOpen, setCompanyMenuOpen] = useState(false);
-  const [companyQuery, setCompanyQuery] = useState("");
-  const companyMenuRef = useRef<HTMLDivElement>(null);
 
-  const companies = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const m of medications) counts.set(m.companyName, (counts.get(m.companyName) ?? 0) + 1);
-    return Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [medications]);
-
-  const filteredMedications = useMemo(() => {
-    if (companyFilter.size === 0) return medications;
-    return medications.filter((m) => companyFilter.has(m.companyName));
-  }, [medications, companyFilter]);
-
-  useEffect(() => {
-    if (!companyMenuOpen) return;
-    function onClick(e: MouseEvent) {
-      if (companyMenuRef.current && !companyMenuRef.current.contains(e.target as Node)) setCompanyMenuOpen(false);
-    }
-    document.addEventListener("mousedown", onClick);
-    return () => document.removeEventListener("mousedown", onClick);
-  }, [companyMenuOpen]);
-
-  const allSelected = filteredMedications.length > 0 && filteredMedications.every((m) => selectedIds.has(m.id));
-  const someSelected = filteredMedications.some((m) => selectedIds.has(m.id));
+  const allSelected = medications.length > 0 && medications.every((m) => selectedIds.has(m.id));
+  const someSelected = medications.some((m) => selectedIds.has(m.id));
 
   function toggleOne(id: string) {
     setSelectedIds((prev) => {
@@ -94,39 +70,25 @@ export default function MedicationTable({ medications, loading, userId, showBioS
 
   function toggleAll() {
     setSelectedIds((prev) => {
-      if (allSelected) {
-        const next = new Set(prev);
-        filteredMedications.forEach((m) => next.delete(m.id));
-        return next;
-      }
+      if (allSelected) return new Set();
       const next = new Set(prev);
-      filteredMedications.forEach((m) => next.add(m.id));
+      medications.forEach((m) => next.add(m.id));
       return next;
     });
   }
 
   function openBulkAdd() {
-    const selected = filteredMedications.filter((m) => selectedIds.has(m.id));
+    const selected = medications.filter((m) => selectedIds.has(m.id));
     if (selected.length === 0) return;
     setBulkTargets(selected);
   }
-
-  function toggleCompany(name: string) {
-    setCompanyFilter((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name); else next.add(name);
-      return next;
-    });
-  }
-  function selectAllCompanies() { setCompanyFilter(new Set(companies.map(([n]) => n))); }
-  function clearCompanies() { setCompanyFilter(new Set()); }
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => d === "asc" ? "desc" : "asc");
     else { setSortKey(key); setSortDir("asc"); }
   }
 
-  const sorted = [...filteredMedications].sort((a, b) => {
+  const sorted = [...medications].sort((a, b) => {
     if (!sortKey) return 0;
     const getVal = (m: MedicationItem): string | number => {
       const base = m.commissionRate ?? 0;
@@ -162,92 +124,11 @@ export default function MedicationTable({ medications, loading, userId, showBioS
   if (loading) return <div className="flex justify-center py-16 text-gray-400 text-sm">검색 중...</div>;
   if (medications.length === 0) return <div className="flex justify-center py-16 text-gray-400 text-sm">검색 결과가 없어요.</div>;
 
-  const selectedCount = filteredMedications.filter((m) => selectedIds.has(m.id)).length;
-  const filteredCompanyList = companyQuery.trim()
-    ? companies.filter(([n]) => n.toLowerCase().includes(companyQuery.toLowerCase().trim()))
-    : companies;
-
-  function selectAllRows() {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      filteredMedications.forEach((m) => next.add(m.id));
-      return next;
-    });
-  }
-  function clearRows() { setSelectedIds(new Set()); }
+  const selectedCount = medications.filter((m) => selectedIds.has(m.id)).length;
 
   return (
     <>
-      <div className="flex items-center gap-2 flex-wrap">
-        <div className="flex items-center gap-1">
-          <button onClick={selectAllRows} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded px-2 py-1.5">전체선택</button>
-          <button onClick={clearRows} className="text-xs bg-gray-50 hover:bg-gray-100 text-gray-700 border border-gray-200 rounded px-2 py-1.5">전체해제</button>
-          {selectedCount > 0 && <span className="text-xs text-gray-500 ml-1">{selectedCount}개 선택</span>}
-        </div>
-        <div ref={companyMenuRef} className="relative">
-          <button
-            onClick={() => setCompanyMenuOpen((v) => !v)}
-            className="text-xs border border-gray-300 bg-white hover:bg-gray-50 rounded px-2.5 py-1.5 inline-flex items-center gap-1.5 text-gray-700"
-          >
-            <Filter className="w-3 h-3" />
-            제약사 필터
-            {companyFilter.size > 0 && (
-              <span className="bg-blue-100 text-blue-700 rounded px-1.5 py-0.5 text-[10px] font-semibold">{companyFilter.size}</span>
-            )}
-            <ChevronDown className="w-3 h-3" />
-          </button>
-          {companyMenuOpen && (
-            <div className="absolute z-20 mt-1 w-72 bg-white border border-gray-200 rounded-lg shadow-lg">
-              <div className="p-2 border-b flex gap-1">
-                <button onClick={selectAllCompanies} className="flex-1 text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 rounded px-2 py-1">전체선택</button>
-                <button onClick={clearCompanies} className="flex-1 text-xs bg-gray-50 hover:bg-gray-100 text-gray-700 rounded px-2 py-1">전체해제</button>
-              </div>
-              <div className="p-2 border-b">
-                <input
-                  type="text"
-                  value={companyQuery}
-                  onChange={(e) => setCompanyQuery(e.target.value)}
-                  placeholder="제약사 검색..."
-                  className="w-full text-xs border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                />
-              </div>
-              <div className="max-h-64 overflow-y-auto py-1">
-                {filteredCompanyList.length === 0 ? (
-                  <p className="text-center text-xs text-gray-400 py-4">제약사가 없어요.</p>
-                ) : (
-                  filteredCompanyList.map(([name, count]) => (
-                    <label key={name} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer text-xs">
-                      <input
-                        type="checkbox"
-                        checked={companyFilter.has(name)}
-                        onChange={() => toggleCompany(name)}
-                        className="w-3.5 h-3.5 rounded border-gray-300"
-                      />
-                      <span className="flex-1 text-gray-700 truncate">{name}</span>
-                      <span className="text-gray-400">{count}</span>
-                    </label>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-        {companyFilter.size > 0 && (
-          <div className="flex items-center gap-1 flex-wrap">
-            {Array.from(companyFilter).map((name) => (
-              <span key={name} className="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded px-2 py-0.5 inline-flex items-center gap-1">
-                {name}
-                <button onClick={() => toggleCompany(name)} className="text-blue-400 hover:text-blue-700">×</button>
-              </span>
-            ))}
-            <button onClick={clearCompanies} className="text-xs text-gray-500 hover:text-gray-700 underline">모두 지우기</button>
-          </div>
-        )}
-        <div className="ml-auto text-xs text-gray-500">
-          {companyFilter.size > 0 ? `${filteredMedications.length} / ${medications.length}개 표시` : `${medications.length}개`}
-        </div>
-      </div>
-      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white mt-3">
+      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500 font-semibold">
@@ -258,14 +139,13 @@ export default function MedicationTable({ medications, loading, userId, showBioS
                   ref={(el) => { if (el) el.indeterminate = !allSelected && someSelected; }}
                   onChange={toggleAll}
                   className="w-4 h-4 rounded border-gray-300 cursor-pointer"
-                  aria-label="전체 선택"
+                  aria-label="전체 선택/해제"
+                  title="전체 선택 / 전체 해제"
                 />
               </th>
               <SortTh label="제품명 / 제약사" k="productName" />
               <th className="px-4 py-3 text-left">성분명</th>
-              {showBioStatus && <th className="px-4 py-3 text-center">생동/생산</th>}
-              {showOriginalDrug && <th className="px-4 py-3 text-center">오리지날</th>}
-              <th className="px-4 py-3 text-left">보험코드 / 동일성분</th>
+              <th className="px-4 py-3 text-left">정보</th>
               {showNotes && <th className="px-4 py-3 text-left">특이사항</th>}
               <th className="px-4 py-3 text-center">재고</th>
               <SortTh label="약가" k="price" right />
@@ -311,13 +191,17 @@ export default function MedicationTable({ medications, loading, userId, showBioS
                 <td className="px-4 py-3 text-gray-500 text-xs">
                   <IngredientName name={med.ingredientName} />
                 </td>
-                {showBioStatus && <td className="px-4 py-3 text-center text-xs text-gray-500">{med.bioStatus || "-"}</td>}
-                {showOriginalDrug && <td className="px-4 py-3 text-center text-xs text-gray-500">{med.originalDrug || "-"}</td>}
                 <td className="px-4 py-3">
-                  <div className="flex items-center gap-2 whitespace-nowrap">
-                    <span className="text-xs font-mono text-gray-500">{med.insuranceCode || "-"}</span>
+                  <div className="flex flex-col items-start gap-1 text-xs">
+                    {showBioStatus && (
+                      <span className="text-gray-500"><span className="text-gray-400 mr-1">생동/생산:</span>{med.bioStatus || "-"}</span>
+                    )}
+                    {showOriginalDrug && (
+                      <span className="text-gray-500"><span className="text-gray-400 mr-1">오리지날:</span>{med.originalDrug || "-"}</span>
+                    )}
+                    <span className="font-mono text-gray-500"><span className="font-sans text-gray-400 mr-1">보험코드:</span>{med.insuranceCode || "-"}</span>
                     <button onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.categoryB })}
-                      className="text-xs text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 transition-colors">
+                      className="text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 whitespace-nowrap transition-colors inline-flex items-center">
                       <Search className="w-3 h-3 inline mr-1" />동일성분
                     </button>
                   </div>

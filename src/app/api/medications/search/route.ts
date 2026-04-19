@@ -10,24 +10,29 @@ export async function GET(req: NextRequest) {
   const page = parseInt(req.nextUrl.searchParams.get("page") || "1");
   const limit = Math.min(parseInt(req.nextUrl.searchParams.get("limit") || "50"), 500);
   const ingredientOnly = req.nextUrl.searchParams.get("ingredientOnly") === "true";
+  const companiesRaw = req.nextUrl.searchParams.get("companies") || "";
+  const companyList = companiesRaw.split(",").map((s) => s.trim()).filter(Boolean);
 
-  if (!q && !categoryBCode) return NextResponse.json({ medications: [], total: 0 });
+  if (!q && !categoryBCode && companyList.length === 0) return NextResponse.json({ medications: [], total: 0 });
 
   const where = {
     AND: [
       settlementOnly ? { isSettlement: true } : {},
+      companyList.length > 0 ? { companyName: { in: companyList } } : {},
       categoryBCode
         ? { categoryB: categoryBCode }
-        : ingredientOnly
-          ? { ingredientName: { contains: q, mode: "insensitive" as const } }
-          : {
-              OR: [
-                { productName: { contains: q, mode: "insensitive" as const } },
-                { ingredientName: { contains: q, mode: "insensitive" as const } },
-                { companyName: { contains: q, mode: "insensitive" as const } },
-                { insuranceCode: { contains: q, mode: "insensitive" as const } },
-              ],
-            },
+        : q
+          ? ingredientOnly
+            ? { ingredientName: { contains: q, mode: "insensitive" as const } }
+            : {
+                OR: [
+                  { productName: { contains: q, mode: "insensitive" as const } },
+                  { ingredientName: { contains: q, mode: "insensitive" as const } },
+                  { companyName: { contains: q, mode: "insensitive" as const } },
+                  { insuranceCode: { contains: q, mode: "insensitive" as const } },
+                ],
+              }
+          : {},
     ],
   };
 
