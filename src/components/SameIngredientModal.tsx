@@ -38,15 +38,13 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
   });
 
   useEffect(() => {
+    if (!categoryBCode) { setLoading(false); return; }
     const uid = userId ? `&userId=${userId}` : "";
-    const searchParam = categoryBCode
-      ? `categoryBCode=${encodeURIComponent(categoryBCode)}`
-      : `q=${encodeURIComponent(ingredientName)}&ingredientOnly=true`;
-    fetch(`/api/medications/search?${searchParam}${uid}&limit=500`)
+    fetch(`/api/medications/search?categoryBCode=${encodeURIComponent(categoryBCode)}${uid}&limit=500`)
       .then((r) => r.json())
       .then((d) => { setMedications(d.medications || []); setTotal(d.total || 0); })
       .finally(() => setLoading(false));
-  }, [ingredientName, categoryBCode, userId]);
+  }, [categoryBCode, userId]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => d === "asc" ? "desc" : "asc");
@@ -121,7 +119,12 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
 
           {/* 테이블 */}
           <div className="overflow-auto flex-1">
-            {loading ? (
+            {!categoryBCode ? (
+              <div className="flex flex-col items-center justify-center py-16 gap-2 text-gray-400 text-sm">
+                <p>주성분코드 정보가 없어 동일성분 검색이 불가합니다.</p>
+                <p className="text-xs text-gray-300">요율표 엑셀에 분류(B) 주성분코드를 포함해 업로드하면 검색됩니다.</p>
+              </div>
+            ) : loading ? (
               <div className="flex justify-center py-16 text-gray-400 text-sm">검색 중...</div>
             ) : sorted.length === 0 ? (
               <div className="flex justify-center py-16 text-gray-400 text-sm">결과가 없어요.</div>
