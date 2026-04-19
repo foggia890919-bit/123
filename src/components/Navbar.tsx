@@ -2,9 +2,10 @@
 
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
-import { Pill, FileText, Building2, Search, LogOut, ShieldCheck, ChevronDown, Upload } from "lucide-react";
+import { Pill, FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, Upload, User, LogOut } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "통합검색", icon: Search },
@@ -19,17 +20,20 @@ const adminMenuItems = [
 
 export default function Navbar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const { data: session } = useSession();
   const [adminOpen, setAdminOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [userOpen, setUserOpen] = useState(false);
+  const adminRef = useRef<HTMLDivElement>(null);
+  const userRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setAdminOpen(false);
-      }
+    function handleClick(e: MouseEvent) {
+      if (adminRef.current && !adminRef.current.contains(e.target as Node)) setAdminOpen(false);
+      if (userRef.current && !userRef.current.contains(e.target as Node)) setUserOpen(false);
     }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
   return (
@@ -60,45 +64,58 @@ export default function Navbar() {
           </div>
 
           <div className="flex items-center gap-2">
-            <Link
-              href="/login"
-              className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-gray-600 hover:bg-gray-100"
-            >
-              <LogOut className="w-4 h-4" />
-              로그인
-            </Link>
+            {session ? (
+              <div className="relative" ref={userRef}>
+                <button
+                  onClick={() => setUserOpen((p) => !p)}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100"
+                >
+                  <User className="w-4 h-4" />
+                  {session.user.name || "마이페이지"}
+                  <ChevronDown className={cn("w-3.5 h-3.5 transition-transform", userOpen && "rotate-180")} />
+                </button>
+                {userOpen && (
+                  <div className="absolute right-0 mt-2 w-40 bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden">
+                    <Link href="/mypage" onClick={() => setUserOpen(false)}
+                      className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
+                      <User className="w-4 h-4 text-gray-400" />마이페이지
+                    </Link>
+                    <div className="border-t border-gray-100">
+                      <button onClick={() => { signOut({ callbackUrl: "/" }); setUserOpen(false); }}
+                        className="flex items-center gap-2 px-4 py-2.5 text-sm text-red-500 hover:bg-red-50 w-full">
+                        <LogOut className="w-4 h-4" />로그아웃
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <Link href="/login"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-gray-600 hover:bg-gray-100">
+                <LogIn className="w-4 h-4" />로그인
+              </Link>
+            )}
 
-            <div className="relative" ref={dropdownRef}>
+            <div className="relative" ref={adminRef}>
               <button
-                onClick={() => setAdminOpen((prev) => !prev)}
+                onClick={() => setAdminOpen((p) => !p)}
                 className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-white bg-gray-800 hover:bg-gray-700"
               >
-                <ShieldCheck className="w-4 h-4" />
-                관리자
+                <ShieldCheck className="w-4 h-4" />관리자
                 <ChevronDown className={cn("w-3.5 h-3.5 transition-transform", adminOpen && "rotate-180")} />
               </button>
-
               {adminOpen && (
                 <div className="absolute right-0 mt-2 w-44 bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden">
                   {adminMenuItems.map(({ href, label, icon: Icon }) => (
-                    <Link
-                      key={href}
-                      href={href}
-                      onClick={() => setAdminOpen(false)}
-                      className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
-                    >
-                      <Icon className="w-4 h-4 text-gray-500" />
-                      {label}
+                    <Link key={href} href={href} onClick={() => setAdminOpen(false)}
+                      className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
+                      <Icon className="w-4 h-4 text-gray-500" />{label}
                     </Link>
                   ))}
                   <div className="border-t border-gray-100">
-                    <Link
-                      href="/admin/login"
-                      onClick={() => setAdminOpen(false)}
-                      className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-500 hover:bg-gray-50"
-                    >
-                      <ShieldCheck className="w-4 h-4" />
-                      관리자 로그인
+                    <Link href="/admin/login" onClick={() => setAdminOpen(false)}
+                      className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-500 hover:bg-gray-50">
+                      <ShieldCheck className="w-4 h-4" />관리자 로그인
                     </Link>
                   </div>
                 </div>

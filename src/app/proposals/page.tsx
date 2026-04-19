@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { formatPrice } from "@/lib/utils";
 import type { ProposalCartItem } from "@/types";
 import * as XLSX from "xlsx";
+import RequireAuth from "@/components/RequireAuth";
 
 export default function ProposalsPage() {
   const [cart, setCart] = useState<ProposalCartItem[]>([]);
@@ -81,6 +82,7 @@ export default function ProposalsPage() {
   }
 
   return (
+    <RequireAuth>
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
@@ -166,5 +168,6 @@ export default function ProposalsPage() {
         </div>
       )}
     </div>
+    </RequireAuth>
   );
 }

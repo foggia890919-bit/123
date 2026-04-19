@@ -27,12 +27,24 @@ export default function RegisterPage() {
     setForm((prev) => ({ ...prev, [field]: value }));
   }
 
+  function formatPhone(value: string) {
+    const digits = value.replace(/\D/g, "");
+    if (digits.length <= 3) return digits;
+    if (digits.length <= 7) return `${digits.slice(0, 3)}-${digits.slice(3)}`;
+    return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7, 11)}`;
+  }
+
+  function isValidPhone(phone: string) {
+    return /^010-\d{4}-\d{4}$/.test(phone);
+  }
+
   const selectedRole = roles.find((r) => r.value === form.role);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!file) { setError("첨부파일을 업로드해주세요."); return; }
     if (!form.phone) { setError("전화번호를 입력해주세요."); return; }
+    if (!isValidPhone(form.phone)) { setError("올바른 전화번호 형식이 아니에요. (010-XXXX-XXXX)"); return; }
 
     setLoading(true);
     setError("");
@@ -98,7 +110,7 @@ export default function RegisterPage() {
             </div>
             <div className="space-y-1">
               <label className="text-sm font-medium text-gray-700">전화번호</label>
-              <Input value={form.phone} onChange={(e) => update("phone", e.target.value)} placeholder="010-0000-0000" required />
+              <Input value={form.phone} onChange={(e) => update("phone", formatPhone(e.target.value))} placeholder="010-0000-0000" maxLength={13} required />
             </div>
           </div>
 

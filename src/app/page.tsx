@@ -5,6 +5,7 @@ import { Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import MedicationTable from "@/components/MedicationTable";
+import RequireAuth from "@/components/RequireAuth";
 import type { MedicationItem } from "@/types";
 
 export default function HomePage() {
@@ -37,6 +38,7 @@ export default function HomePage() {
   }
 
   return (
+    <RequireAuth>
     <div className="space-y-5">
       {!searched && (
         <div className="text-center space-y-2 py-10">
@@ -101,5 +103,6 @@ export default function HomePage() {
         </>
       )}
     </div>
+    </RequireAuth>
   );
 }
