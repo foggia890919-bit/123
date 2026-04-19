@@ -4,8 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
-import Link from "next/link";
-import { Plus, Trash2, FileSpreadsheet, FileDown, FileText, X, Edit2, Check, Building2, Search, ChevronDown, ChevronUp, Filter } from "lucide-react";
+import { Plus, Trash2, FileSpreadsheet, FileDown, FileText, X, Edit2, Check, Building2, Search, ChevronDown, ChevronUp, Filter, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatPrice } from "@/lib/utils";
@@ -57,6 +56,7 @@ function ProposalsContent() {
   const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null } | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [expandedCompanies, setExpandedCompanies] = useState<Set<string>>(new Set());
+  const [requestingFilter, setRequestingFilter] = useState<Set<string>>(new Set());
 
   const loadProposals = useCallback(async () => {
     if (!userId) return;
@@ -160,6 +160,33 @@ function ProposalsContent() {
       n.has(name) ? n.delete(name) : n.add(name);
       return n;
     });
+  }
+
+  async function requestFilter(companyName: string) {
+    if (!selected?.client) {
+      alert("거래처가 연결된 제안서에서만 바로 요청할 수 있습니다.\n제안서에 거래처를 먼저 지정해주세요.");
+      return;
+    }
+    const existing = companyStatuses[companyName];
+    if (existing === "PENDING" || existing === "REVIEWING" || existing === "APPROVED") return;
+    setRequestingFilter((prev) => new Set(prev).add(companyName));
+    try {
+      await fetch("/api/filter-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          userName: session?.user?.name || "",
+          clientName: selected.client.clientName,
+          bizNumber: selected.client.bizNumber,
+          companies: [companyName],
+        }),
+      });
+      const res = await fetch(`/api/filter-request/company-status?userId=${userId}`);
+      setCompanyStatuses(await res.json());
+    } finally {
+      setRequestingFilter((prev) => { const n = new Set(prev); n.delete(companyName); return n; });
+    }
   }
 
   function exportExcel() {
@@ -327,10 +354,15 @@ function ProposalsContent() {
                       <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                         {status ? <StatusBadge status={status} /> : null}
                         {!isApproved && (
-                          <Link href="/filter"
-                            className="inline-flex items-center gap-0.5 text-[10px] text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5 hover:bg-blue-100 whitespace-nowrap">
-                            <Filter className="w-2.5 h-2.5" />필터링 요청
-                          </Link>
+                          <button
+                            onClick={() => requestFilter(name)}
+                            disabled={requestingFilter.has(name) || status === "PENDING" || status === "REVIEWING"}
+                            className="inline-flex items-center gap-0.5 text-[10px] text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5 hover:bg-blue-100 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
+                            {requestingFilter.has(name)
+                              ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                              : <Filter className="w-2.5 h-2.5" />}
+                            {status === "PENDING" ? "요청됨" : status === "REVIEWING" ? "검토중" : "필터링 요청"}
+                          </button>
                         )}
                       </div>
                       {/* 거래처 상세 (펼쳤을 때) */}
