@@ -163,7 +163,6 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
                       <tr key={med.id} className="hover:bg-gray-50">
                         <td className="px-4 py-2.5">
                           <p className="font-medium text-gray-900 text-xs">{med.productName}</p>
-                          {med.categoryA && <span className="text-xs text-gray-400">{med.categoryA}</span>}
                         </td>
                         <td className="px-4 py-2.5 text-xs text-gray-500 max-w-[140px] truncate">{med.ingredientName}</td>
                         <td className="px-4 py-2.5 text-xs text-gray-600 whitespace-nowrap">{med.companyName}</td>
