@@ -86,7 +86,7 @@ export default function FilterListPage() {
           <div className="md:col-span-1 bg-white rounded-lg border border-gray-200 overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-100 space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-semibold text-gray-800">제약사 목록 ({companies.length}개)</span>
+                <span className="text-sm font-semibold text-gray-800">정산제약사 목록 ({companies.length}개)</span>
                 {selected.size > 0 && (
                   <button onClick={() => { setSelected(new Set()); setResults([]); setSearched(false); }}
                     className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1">
@@ -102,7 +102,6 @@ export default function FilterListPage() {
                   <input type="checkbox" checked={selected.has(company.name)} onChange={() => toggleCompany(company.name)}
                     className="w-4 h-4 rounded border-gray-300 text-blue-600" />
                   <span className="flex-1 text-sm text-gray-800 truncate">{company.name}</span>
-                  {company.isSettlement && <span className="text-xs text-green-600 bg-green-50 px-1.5 py-0.5 rounded shrink-0">정산</span>}
                   <span className="text-xs text-gray-400 shrink-0">{company.count}</span>
                 </label>
               ))}

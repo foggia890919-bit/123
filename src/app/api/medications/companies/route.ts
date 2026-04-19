@@ -3,15 +3,16 @@ import { prisma } from "@/lib/prisma";
 
 export async function GET() {
   const companies = await prisma.medication.groupBy({
-    by: ["companyName", "isSettlement"],
+    by: ["companyName"],
+    where: { isSettlement: true },
     _count: { id: true },
-    orderBy: [{ isSettlement: "desc" }, { companyName: "asc" }],
+    orderBy: { companyName: "asc" },
   });
 
   return NextResponse.json(
     companies.map((c) => ({
       name: c.companyName,
-      isSettlement: c.isSettlement,
+      isSettlement: true,
       count: c._count.id,
     }))
   );
