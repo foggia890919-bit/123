@@ -30,11 +30,10 @@ async function fetchPage(page: number): Promise<{ items: AtcItem[]; totalCount: 
 }
 
 function extractCodes(item: AtcItem): { ingredientCode: string; productCode: string } | null {
-  // 가능한 필드명 변형 처리
-  const ingredientCode = (
+  const ingredientCode = String(
     item["주성분코드"] ?? item["주성분_코드"] ?? item["ingdtCode"] ?? item["mainIngdtCode"] ?? ""
   ).trim();
-  const productCode = (
+  const productCode = String(
     item["제품코드"] ?? item["제품_코드"] ?? item["itemCode"] ?? item["ediCode"] ?? ""
   ).trim();
 
