@@ -173,11 +173,20 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const done = endPage >= totalPages;
+    const done = !testMode && endPage >= totalPages;
+    const now = new Date().toISOString();
 
-    // 완료 시에만 lastMfdsSync 갱신
+    // 테스트 모드: lastMfdsTestSync만 갱신
+    if (testMode) {
+      await prisma.$executeRaw`
+        INSERT INTO "SystemSetting" ("key", "value", "updatedAt")
+        VALUES ('lastMfdsTestSync', ${now}, NOW())
+        ON CONFLICT ("key") DO UPDATE SET "value" = ${now}, "updatedAt" = NOW()
+      `.catch(() => null);
+    }
+
+    // 전체 동기화 완료: lastMfdsSync 갱신
     if (done) {
-      const now = new Date().toISOString();
       await prisma.$executeRaw`
         INSERT INTO "SystemSetting" ("key", "value", "updatedAt")
         VALUES ('lastMfdsSync', ${now}, NOW())
@@ -185,10 +194,14 @@ export async function POST(req: NextRequest) {
       `.catch(() => null);
     }
 
-    const [publicCount, excelCount] = await Promise.all([
+    const [publicCount, excelCount, syncRows] = await Promise.all([
       prisma.medication.count({ where: { source: "PUBLIC_API" } }),
       prisma.medication.count({ where: { source: "EXCEL" } }),
+      prisma.$queryRaw<{ key: string; value: string }[]>`
+        SELECT "key", "value" FROM "SystemSetting" WHERE "key" IN ('lastMfdsSync', 'lastMfdsTestSync')
+      `.catch(() => [] as { key: string; value: string }[]),
     ]);
+    const syncMap = Object.fromEntries(syncRows.map((r) => [r.key, r.value]));
 
     return NextResponse.json({
       success: true,
@@ -202,6 +215,8 @@ export async function POST(req: NextRequest) {
       done,
       publicCount,
       excelCount,
+      lastSync: syncMap.lastMfdsSync ?? null,
+      lastTestSync: syncMap.lastMfdsTestSync ?? null,
       pageErrors: pageErrors.length > 0 ? pageErrors : undefined,
     });
   } catch (err) {
@@ -216,13 +231,19 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET() {
-  const [publicCount, excelCount, lastSyncRows] = await Promise.all([
+  const [publicCount, excelCount, syncRows] = await Promise.all([
     prisma.medication.count({ where: { source: "PUBLIC_API" } }),
     prisma.medication.count({ where: { source: "EXCEL" } }),
-    prisma.$queryRaw<{ value: string }[]>`
-      SELECT "value" FROM "SystemSetting" WHERE "key" = 'lastMfdsSync'
-    `.catch(() => [] as { value: string }[]),
+    prisma.$queryRaw<{ key: string; value: string }[]>`
+      SELECT "key", "value" FROM "SystemSetting" WHERE "key" IN ('lastMfdsSync', 'lastMfdsTestSync')
+    `.catch(() => [] as { key: string; value: string }[]),
   ]);
-  const lastSync = lastSyncRows[0]?.value ?? null;
-  return NextResponse.json({ publicCount, excelCount, total: publicCount + excelCount, lastSync });
+  const syncMap = Object.fromEntries(syncRows.map((r) => [r.key, r.value]));
+  return NextResponse.json({
+    publicCount,
+    excelCount,
+    total: publicCount + excelCount,
+    lastSync: syncMap.lastMfdsSync ?? null,
+    lastTestSync: syncMap.lastMfdsTestSync ?? null,
+  });
 }

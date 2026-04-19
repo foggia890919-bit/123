@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw } from "lucide-react";
+import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
@@ -28,14 +28,28 @@ export default function AdminDashboardPage() {
     if (localStorage.getItem("isAdmin") !== "true") router.push("/admin/login");
   }, [router]);
 
+  function handleLogout() {
+    localStorage.removeItem("isAdmin");
+    router.push("/admin/login");
+  }
+
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      <div className="flex items-center gap-3">
-        <ShieldCheck className="w-7 h-7 text-gray-800" />
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">관리자 대시보드</h1>
-          <p className="text-gray-500 text-sm">데이터 및 회원 관리</p>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <ShieldCheck className="w-7 h-7 text-gray-800" />
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">관리자 대시보드</h1>
+            <p className="text-gray-500 text-sm">데이터 및 회원 관리</p>
+          </div>
         </div>
+        <button
+          onClick={handleLogout}
+          className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-red-600 border border-gray-200 hover:border-red-300 rounded-md px-3 py-1.5 transition-colors"
+        >
+          <LogOut className="w-4 h-4" />
+          로그아웃
+        </button>
       </div>
 
       <div className="flex gap-1 border-b border-gray-200">
@@ -113,7 +127,7 @@ function UploadTab() {
   }, []);
 
   const [syncLoading, setSyncLoading] = useState(false);
-  const [syncResult, setSyncResult] = useState<{ success?: boolean; synced?: number; totalPublic?: number; publicCount?: number; excelCount?: number; lastSync?: string | null; error?: string; pageErrors?: { page: number; error: string }[] } | null>(null);
+  const [syncResult, setSyncResult] = useState<{ success?: boolean; synced?: number; totalPublic?: number; publicCount?: number; excelCount?: number; lastSync?: string | null; lastTestSync?: string | null; error?: string; pageErrors?: { page: number; error: string }[] } | null>(null);
   const [syncProgress, setSyncProgress] = useState<{ current: number; total: number; synced: number; errors: number } | null>(null);
   const syncAbortRef = useRef<AbortController | null>(null);
 
@@ -138,7 +152,12 @@ function UploadTab() {
           body: JSON.stringify({ mode: "test" }),
           signal: abort.signal,
         });
-        setSyncResult(await res.json());
+        const data = await res.json();
+        setSyncResult(data);
+        // 테스트 모드여도 마지막 전체동기화 시각 보존되도록 GET 한 번 더
+        fetch("/api/medications/sync").then((r) => r.json()).then((d) => {
+          setSyncResult((prev) => ({ ...(prev || {}), ...d, synced: data.synced }));
+        });
         return;
       }
 
@@ -230,7 +249,10 @@ function UploadTab() {
               {syncResult.synced ? <> · 이번 동기화: <strong>{syncResult.synced.toLocaleString()}건</strong></> : null}
             </div>
             <div className="text-blue-500">
-              마지막 동기화: <strong>{syncResult.lastSync ? new Date(syncResult.lastSync).toLocaleString("ko-KR") : "기록 없음"}</strong>
+              마지막 전체 동기화: <strong>{syncResult.lastSync ? new Date(syncResult.lastSync).toLocaleString("ko-KR") : "기록 없음"}</strong>
+            </div>
+            <div className="text-blue-400">
+              마지막 테스트(100건) 동기화: <strong>{syncResult.lastTestSync ? new Date(syncResult.lastTestSync).toLocaleString("ko-KR") : "기록 없음"}</strong>
             </div>
           </div>
         )}
