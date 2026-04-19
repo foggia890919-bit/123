@@ -134,12 +134,22 @@ export default function SearchPage() {
             {companyMenuOpen && (
               <div className="absolute z-20 mt-1 right-0 w-80 bg-white border border-gray-200 rounded-lg shadow-lg">
                 <div className="p-2 border-b flex gap-1">
-                  <button type="button" onClick={() => setSelectedCompanies(new Set(filteredCompanies.map((c) => c.name)))}
+                  <button type="button" onClick={() => setSelectedCompanies((prev) => {
+                    const next = new Set(prev);
+                    filteredCompanies.forEach((c) => next.add(c.name));
+                    return next;
+                  })}
                     className="flex-1 text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 rounded px-2 py-1">
                     {companyQuery.trim() ? "검색결과 전체선택" : "전체선택"}
                   </button>
-                  <button type="button" onClick={clearCompanies}
-                    className="flex-1 text-xs bg-gray-50 hover:bg-gray-100 text-gray-700 rounded px-2 py-1">전체해제</button>
+                  <button type="button" onClick={() => setSelectedCompanies((prev) => {
+                    const next = new Set(prev);
+                    filteredCompanies.forEach((c) => next.delete(c.name));
+                    return next;
+                  })}
+                    className="flex-1 text-xs bg-gray-50 hover:bg-gray-100 text-gray-700 rounded px-2 py-1">
+                    {companyQuery.trim() ? "검색결과 해제" : "전체해제"}
+                  </button>
                 </div>
                 <div className="p-2 border-b">
                   <input
