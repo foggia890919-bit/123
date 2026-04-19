@@ -2,26 +2,22 @@ import { NextRequest, NextResponse } from "next/server";
 
 const API_KEY = process.env.PUBLIC_DATA_API_KEY!;
 
-// 테스트할 후보 엔드포인트들
-const ENDPOINTS = {
-  hira_dgamt: "https://apis.data.go.kr/B551182/dgamtCrtrInfoService1.2/getDgamtList",
-  hira_dgamt_hanbang: "https://apis.data.go.kr/B551182/dgamtCrtrInfoService1.2/getCmdcDgamtList",
-  hira_yakga: "https://apis.data.go.kr/B551182/MdcinGrnIdntfcInfoService01/getMdcinGrnIdntfcInfoList01",
-  hira_presc: "https://apis.data.go.kr/B551182/prescDrugInfo1/getPrescDrugInfo1",
-  mfds_permit: "https://apis.data.go.kr/1471000/DrugInfoService/getDrugObjectList",
-  mfds_bundle: "https://apis.data.go.kr/1471000/MdcinGrnIdntfcInfoService/getMdcinGrnIdntfcInfoList",
+const ENDPOINTS: Record<string, { url: string; useJson: boolean }> = {
+  hira_dgamt: { url: "https://apis.data.go.kr/B551182/dgamtCrtrInfoService1.2/getDgamtList", useJson: false },
+  mfds_bundle: { url: "https://apis.data.go.kr/1471000/DrbBundleInfoService02/getDrbBundleList02", useJson: true },
+  mfds_permit: { url: "https://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnInq07", useJson: true },
 };
 
 export async function GET(req: NextRequest) {
-  const target = req.nextUrl.searchParams.get("target") || "hira_yakga";
-  const url = ENDPOINTS[target as keyof typeof ENDPOINTS];
-  if (!url) return NextResponse.json({ error: "알 수 없는 target", available: Object.keys(ENDPOINTS) });
+  const target = req.nextUrl.searchParams.get("target") || "mfds_bundle";
+  const endpoint = ENDPOINTS[target];
+  if (!endpoint) return NextResponse.json({ error: "알 수 없는 target", available: Object.keys(ENDPOINTS) });
 
-  const apiUrl = new URL(url);
+  const apiUrl = new URL(endpoint.url);
   apiUrl.searchParams.set("serviceKey", API_KEY);
   apiUrl.searchParams.set("pageNo", "1");
   apiUrl.searchParams.set("numOfRows", "3");
-  apiUrl.searchParams.set("type", "json");
+  if (endpoint.useJson) apiUrl.searchParams.set("type", "json");
 
   try {
     const res = await fetch(apiUrl.toString(), { cache: "no-store" });
