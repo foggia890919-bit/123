@@ -63,23 +63,40 @@ interface AtcExtract {
   spec: string;
 }
 
+// 필드명 패턴 매칭으로 extract (정확한 키명을 몰라도 "주성분"·"규격" 포함된 키 찾음)
+function findValue(item: AtcItem, patterns: RegExp[]): string {
+  for (const key of Object.keys(item)) {
+    for (const pat of patterns) {
+      if (pat.test(key)) {
+        const val = item[key];
+        if (val != null) {
+          const s = String(val).trim();
+          if (s) return s;
+        }
+      }
+    }
+  }
+  return "";
+}
+
 function extractCodes(item: AtcItem): AtcExtract | null {
-  const ingredientCode = String(
-    item["주성분코드"] ?? item["주성분_코드"] ?? item["ingdtCode"] ?? item["mainIngdtCode"] ?? ""
-  ).trim();
-  const productCode = String(
-    item["제품코드"] ?? item["제품_코드"] ?? item["itemCode"] ?? item["ediCode"] ?? ""
-  ).trim();
+  const ingredientCode = findValue(item, [/주성분.*코드|^주성분_?코드$/i, /mainIngdtCode|ingdtCode/i]);
+  const productCode = findValue(item, [/제품.*코드|^제품_?코드$/i, /itemCode|ediCode/i]);
   if (!ingredientCode || !productCode) return null;
-  // 약가마스터 필드 변형 다수 대응
-  const ingredientName = String(
-    item["주성분명"] ?? item["성분명"] ?? item["주성분"] ?? item["성분"] ??
-    item["ingdtName"] ?? item["mainIngdtName"] ?? item["ingredientName"] ?? ""
-  ).trim();
-  const spec = String(
-    item["규격"] ?? item["규격단위"] ?? item["함량"] ?? item["용량"] ??
-    item["단위"] ?? item["spec"] ?? item["dosage"] ?? ""
-  ).trim();
+  // 주성분명 / 주성분 / 성분명 / 성분 (코드 제외)
+  const ingredientName = findValue(item, [
+    /^주성분명?$/,
+    /^성분명?$/,
+    /ingdtName|ingredientName|mainIngdtName/i,
+  ]);
+  // 규격 / 함량 / 용량 / strength / spec (단위 제외 — "정"·"캡슐" 같은 값은 부적합)
+  const spec = findValue(item, [
+    /^규격$/,
+    /^함량$/,
+    /^용량$/,
+    /strength|dosage/i,
+    /^spec$/i,
+  ]);
   return { ingredientCode, productCode, ingredientName, spec };
 }
 
@@ -124,18 +141,21 @@ export async function POST() {
       allItems.push(...items);
     }
 
-    const infoMap = new Map<string, { ingredientCode: string; ingredientDisplay: string }>();
+    const infoMap = new Map<string, { ingredientCode: string; apiName: string; apiSpec: string }>();
     let withName = 0, withSpec = 0, withEither = 0;
     for (const item of allItems) {
       const codes = extractCodes(item);
       if (!codes) continue;
-      if (codes.ingredientName) withName++;
-      if (codes.spec) withSpec++;
-      if (codes.ingredientName || codes.spec) withEither++;
-      const ingredientDisplay = combineIngredient(codes.ingredientName, codes.spec);
+      const apiName = codes.ingredientName;
+      const apiSpec = normalizeSpec(codes.spec);
+      if (apiName) withName++;
+      if (apiSpec) withSpec++;
+      if (apiName || apiSpec) withEither++;
       const prev = infoMap.get(codes.productCode);
-      if (!prev || (ingredientDisplay.length > prev.ingredientDisplay.length)) {
-        infoMap.set(codes.productCode, { ingredientCode: codes.ingredientCode, ingredientDisplay });
+      const prevLen = prev ? prev.apiName.length + prev.apiSpec.length : -1;
+      const curLen = apiName.length + apiSpec.length;
+      if (curLen > prevLen) {
+        infoMap.set(codes.productCode, { ingredientCode: codes.ingredientCode, apiName, apiSpec });
       }
     }
 
@@ -146,33 +166,49 @@ export async function POST() {
       }, { status: 400 });
     }
 
-    // raw SQL bulk UPDATE: categoryB + ingredientName(주성분명+규격) 동시 갱신
-    // ingredientName은 v.ingNew가 비어있지 않을 때만 덮어씀 (OTC 등 누락 품목 보호)
+    // bulk UPDATE:
+    //   - apiName+apiSpec 모두 있으면 "name spec"으로 교체
+    //   - apiName만 있으면 apiName으로 교체
+    //   - apiSpec만 있으면 기존 성분명에 이미 없는 경우 뒤에 이어붙임
+    //   - 둘 다 없으면 기존 성분명 유지
     let updated = 0;
-    let ingredientUpdated = 0;
+    let ingredientAttempted = 0;
+    let ingredientChanged = 0;
     const entries = Array.from(infoMap.entries());
     const BATCH = 500;
 
     for (let i = 0; i < entries.length; i += BATCH) {
       const batch = entries.slice(i, i + BATCH);
-      const values = batch.map((_, j) => `($${j * 3 + 1}, $${j * 3 + 2}, $${j * 3 + 3})`).join(", ");
+      const values = batch.map((_, j) => `($${j * 4 + 1}, $${j * 4 + 2}, $${j * 4 + 3}, $${j * 4 + 4})`).join(", ");
       const params: string[] = [];
       for (const [productCode, info] of batch) {
-        params.push(productCode, info.ingredientCode, info.ingredientDisplay);
+        params.push(productCode, info.ingredientCode, info.apiName, info.apiSpec);
       }
 
-      const result = await withDbRetry(() => prisma.$queryRawUnsafe<{ id: string; ingNew: string }[]>(
+      const result = await withDbRetry(() => prisma.$queryRawUnsafe<{ id: string; apiName: string; apiSpec: string; oldName: string; newName: string }[]>(
         `UPDATE "Medication" AS m
          SET "categoryB" = v."categoryB",
-             "ingredientName" = CASE WHEN v."ingNew" <> '' THEN v."ingNew" ELSE m."ingredientName" END,
+             "ingredientName" = CASE
+               WHEN v."apiName" <> '' AND v."apiSpec" <> '' THEN v."apiName" || ' ' || v."apiSpec"
+               WHEN v."apiName" <> '' THEN v."apiName"
+               WHEN v."apiSpec" <> '' AND position(v."apiSpec" in COALESCE(m."ingredientName", '')) = 0
+                 THEN COALESCE(NULLIF(m."ingredientName", ''), '') ||
+                      CASE WHEN COALESCE(m."ingredientName", '') = '' THEN '' ELSE ' ' END ||
+                      v."apiSpec"
+               ELSE m."ingredientName"
+             END,
              "updatedAt" = NOW()
-         FROM (VALUES ${values}) AS v("insuranceCode", "categoryB", "ingNew")
+         FROM (VALUES ${values}) AS v("insuranceCode", "categoryB", "apiName", "apiSpec")
          WHERE m."insuranceCode" = v."insuranceCode"
-         RETURNING m.id, v."ingNew" AS "ingNew"`,
+         RETURNING m.id, v."apiName" AS "apiName", v."apiSpec" AS "apiSpec",
+                   COALESCE(m."ingredientName", '') AS "newName"`,
         ...params
       ));
       updated += result.length;
-      ingredientUpdated += result.filter((r) => r.ingNew && r.ingNew.length > 0).length;
+      for (const r of result) {
+        if (r.apiName || r.apiSpec) ingredientAttempted++;
+        if (r.apiName || (r.apiSpec && r.newName.includes(r.apiSpec))) ingredientChanged++;
+      }
     }
 
     const now = new Date().toISOString();
@@ -188,12 +224,21 @@ export async function POST() {
       withDbRetry(() => prisma.medication.count()),
     ]);
 
+    // 샘플 3개 (실제 DB 반영 확인용)
+    const sampleRows = await withDbRetry(() => prisma.medication.findMany({
+      where: { categoryB: { not: null }, insuranceCode: { not: null } },
+      select: { productName: true, ingredientName: true, insuranceCode: true },
+      take: 5,
+      orderBy: { updatedAt: "desc" },
+    })).catch(() => []);
+
     return NextResponse.json({
       success: true,
       total: totalCount,
       mapped: infoMap.size,
       updated,
-      ingredientUpdated,
+      ingredientUpdated: ingredientChanged,
+      ingredientAttempted,
       filled,
       lastSync: now,
       totalInDb: total,
@@ -203,6 +248,7 @@ export async function POST() {
         withName,
         withSpec,
         withEither,
+        sampleRows,
       },
     });
   } catch (err) {
