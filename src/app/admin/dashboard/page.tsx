@@ -74,6 +74,25 @@ function UploadTab() {
   const [result, setResult] = useState<{ success?: boolean; count?: number; updated?: number; created?: number; error?: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const [mapFile, setMapFile] = useState<File | null>(null);
+  const [mapLoading, setMapLoading] = useState(false);
+  const [mapResult, setMapResult] = useState<{ success?: boolean; mapped?: number; updated?: number; error?: string } | null>(null);
+  const mapInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleMapUpload() {
+    if (!mapFile) return;
+    setMapLoading(true); setMapResult(null);
+    const formData = new FormData();
+    formData.append("file", mapFile);
+    try {
+      const res = await fetch("/api/medications/map-ingredient", { method: "POST", body: formData });
+      const data = await res.json();
+      setMapResult(data);
+      if (data.success) setMapFile(null);
+    } catch { setMapResult({ error: "업로드 중 오류가 발생했어요." }); }
+    finally { setMapLoading(false); }
+  }
+
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncResult, setSyncResult] = useState<{ success?: boolean; synced?: number; totalPublic?: number; publicCount?: number; excelCount?: number; error?: string } | null>(null);
 
@@ -176,6 +195,41 @@ function UploadTab() {
             {result.success
               ? <><CheckCircle className="w-4 h-4 shrink-0" />총 {result.count?.toLocaleString()}건 — 공공데이터 머지: {result.updated}건 / 신규생성: {result.created}건</>
               : <><AlertCircle className="w-4 h-4 shrink-0" />{result.error}</>}
+          </div>
+        )}
+      </div>
+
+      {/* 주성분코드 매핑 업로드 */}
+      <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
+        <div>
+          <h2 className="text-base font-semibold text-gray-800">③ 주성분코드 매핑 업로드</h2>
+          <p className="text-xs text-gray-500 mt-0.5">건강보험심사평가원 ATC코드 매핑 파일을 업로드하면 보험코드 기준으로 주성분코드가 자동으로 채워집니다.</p>
+        </div>
+        <div className="bg-gray-50 rounded p-3 text-xs text-gray-500 font-mono">
+          필요 컬럼: 주성분코드 | 제품코드 | 제품명 | 업체명 | ATC코드 | ATC코드 명칭
+        </div>
+        <div
+          className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${mapFile ? "border-purple-400 bg-purple-50" : "border-gray-300 hover:border-purple-400"}`}
+          onClick={() => mapInputRef.current?.click()}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) { setMapFile(f); setMapResult(null); } }}
+        >
+          <FileSpreadsheet className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+          <p className="text-sm text-gray-500">
+            {mapFile ? <span className="font-medium text-gray-800">{mapFile.name}</span> : <>클릭하거나 <span className="text-purple-500">드래그</span>해서 업로드</>}
+          </p>
+          <p className="text-xs text-gray-400 mt-1">.xlsx, .xls 지원</p>
+          <input ref={mapInputRef} type="file" accept=".xlsx,.xls" className="hidden"
+            onChange={(e) => { setMapFile(e.target.files?.[0] || null); setMapResult(null); }} />
+        </div>
+        <Button onClick={handleMapUpload} disabled={!mapFile || mapLoading} className="w-full bg-purple-600 hover:bg-purple-700">
+          {mapLoading ? "매핑 중..." : "주성분코드 매핑 시작"}
+        </Button>
+        {mapResult && (
+          <div className={`flex items-center gap-2 p-3 rounded-lg text-sm ${mapResult.success ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
+            {mapResult.success
+              ? <><CheckCircle className="w-4 h-4 shrink-0" />파일 내 매핑: {mapResult.mapped?.toLocaleString()}건 · DB 업데이트: {mapResult.updated?.toLocaleString()}건</>
+              : <><AlertCircle className="w-4 h-4 shrink-0" />{mapResult.error}</>}
           </div>
         )}
       </div>
