@@ -4,16 +4,21 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
-import { Plus, Trash2, FileSpreadsheet, FileDown, FileText, X, Edit2, Check, Building2 } from "lucide-react";
+import { Plus, Trash2, FileSpreadsheet, FileDown, FileText, X, Edit2, Check, Building2, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatPrice } from "@/lib/utils";
 import RequireAuth from "@/components/RequireAuth";
+import ColumnToggles from "@/components/ColumnToggles";
+import SameIngredientModal from "@/components/SameIngredientModal";
+import type { ColumnVisibility } from "@/components/MedicationTable";
 import * as XLSX from "xlsx";
 
 interface Medication {
   id: string; productName: string; companyName: string; ingredientName: string;
   price: number | null; commissionRate: number | null; insuranceCode: string | null;
+  categoryB: string | null; bioStatus: string | null; originalDrug: string | null; notes: string | null;
+  isSettlement: boolean; settlementType?: string | null; additionalRate?: number | null;
 }
 interface ProposalItem { id: string; altMedication: Medication | null; order: number; }
 interface Proposal { id: string; title: string; _count?: { items: number }; items?: ProposalItem[]; createdAt: string; }
@@ -30,6 +35,7 @@ function ProposalsContent() {
   const { data: session } = useSession();
   const searchParams = useSearchParams();
   const userId = session?.user?.id || "";
+  const isSalesRep = session?.user?.role === "SALES_REP";
 
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [selected, setSelected] = useState<Proposal | null>(null);
@@ -39,6 +45,8 @@ function ProposalsContent() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [companyStatuses, setCompanyStatuses] = useState<Record<string, string>>({});
+  const [cols, setCols] = useState<ColumnVisibility>({ showRate: true, showInsuranceCode: true });
+  const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null } | null>(null);
 
   const loadProposals = useCallback(async () => {
     if (!userId) return;
@@ -132,15 +140,33 @@ function ProposalsContent() {
 
   function exportExcel() {
     if (!selected?.items) return;
-    const rows = selected.items.map((item, i) => ({
-      순번: i + 1,
-      품목명: item.altMedication?.productName || "-",
-      성분명: item.altMedication?.ingredientName || "-",
-      제약사: item.altMedication?.companyName || "-",
-      약가: item.altMedication?.price || "-",
-      "수수료율(%)": item.altMedication?.commissionRate || "-",
-      보험코드: item.altMedication?.insuranceCode || "-",
-    }));
+    const withRate = isSalesRep && cols.showRate;
+    const rows = selected.items.map((item, i) => {
+      const m = item.altMedication;
+      const base = m?.commissionRate ?? null;
+      const extra = m?.additionalRate ?? null;
+      const total = base != null ? base + (extra ?? 0) : null;
+      const settlement = m?.price != null && total != null ? Math.round(m.price * total / 100) : null;
+      const row: Record<string, string | number> = {
+        순번: i + 1,
+        품목명: m?.productName || "-",
+        성분명: m?.ingredientName || "-",
+        제약사: m?.companyName || "-",
+      };
+      if (cols.showCategoryB) row["분류B"] = m?.categoryB || "-";
+      if (cols.showBioStatus) row["생동/생산"] = m?.bioStatus || "-";
+      if (cols.showOriginalDrug) row["오리지날"] = m?.originalDrug || "-";
+      if (cols.showInsuranceCode) row["보험코드"] = m?.insuranceCode || "-";
+      if (cols.showNotes) row["특이사항"] = m?.notes || "-";
+      row["약가"] = m?.price ?? "-";
+      if (withRate) {
+        row["기본수수료(%)"] = base ?? "-";
+        row["추가수수료(%)"] = extra ?? "-";
+        row["합계수수료(%)"] = total ?? "-";
+        row["정산금액"] = settlement ?? "-";
+      }
+      return row;
+    });
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "제안서");
@@ -156,18 +182,50 @@ function ProposalsContent() {
     doc.text(selected.title, 14, 15);
     doc.setFontSize(9);
     doc.text(`작성일: ${new Date().toLocaleDateString("ko-KR")}`, 14, 22);
+
+    const withRate = isSalesRep && cols.showRate;
+    const head = ["순번", "품목명", "성분명", "제약사"];
+    if (cols.showCategoryB) head.push("분류B");
+    if (cols.showBioStatus) head.push("생동/생산");
+    if (cols.showOriginalDrug) head.push("오리지날");
+    if (cols.showInsuranceCode) head.push("보험코드");
+    if (cols.showNotes) head.push("특이사항");
+    head.push("약가");
+    if (withRate) head.push("기본수수료", "추가수수료", "합계수수료", "정산금액");
+
+    const body = selected.items.map((item, i) => {
+      const m = item.altMedication;
+      const base = m?.commissionRate ?? null;
+      const extra = m?.additionalRate ?? null;
+      const total = base != null ? base + (extra ?? 0) : null;
+      const settlement = m?.price != null && total != null ? Math.round(m.price * total / 100) : null;
+      const row: (string | number)[] = [
+        i + 1,
+        m?.productName || "-",
+        m?.ingredientName || "-",
+        m?.companyName || "-",
+      ];
+      if (cols.showCategoryB) row.push(m?.categoryB || "-");
+      if (cols.showBioStatus) row.push(m?.bioStatus || "-");
+      if (cols.showOriginalDrug) row.push(m?.originalDrug || "-");
+      if (cols.showInsuranceCode) row.push(m?.insuranceCode || "-");
+      if (cols.showNotes) row.push(m?.notes || "-");
+      row.push(m?.price ? `${m.price.toLocaleString()}원` : "-");
+      if (withRate) {
+        row.push(
+          base != null ? `${base}%` : "-",
+          extra != null ? `${extra}%` : "-",
+          total != null ? `${total}%` : "-",
+          settlement != null ? `${settlement.toLocaleString()}원` : "-",
+        );
+      }
+      return row;
+    });
+
     autoTable(doc, {
       startY: 28,
-      head: [["순번", "품목명", "성분명", "제약사", "약가", "수수료율", "보험코드"]],
-      body: selected.items.map((item, i) => [
-        i + 1,
-        item.altMedication?.productName || "-",
-        item.altMedication?.ingredientName || "-",
-        item.altMedication?.companyName || "-",
-        item.altMedication?.price ? `${item.altMedication.price.toLocaleString()}원` : "-",
-        item.altMedication?.commissionRate ? `${item.altMedication.commissionRate}%` : "-",
-        item.altMedication?.insuranceCode || "-",
-      ]),
+      head: [head],
+      body,
       styles: { fontSize: 8 },
       headStyles: { fillColor: [37, 99, 235] },
     });
@@ -257,48 +315,116 @@ function ProposalsContent() {
                 <p className="text-sm">검색 결과에서 품목을 추가해보세요</p>
               </div>
             ) : (
-              <div className="flex-1 overflow-auto rounded-lg border border-gray-200 bg-white">
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
-                    <tr className="text-xs text-gray-500 font-semibold">
-                      <th className="px-4 py-3 text-left w-8">#</th>
-                      <th className="px-4 py-3 text-left">품목명</th>
-                      <th className="px-4 py-3 text-left">성분명</th>
-                      <th className="px-4 py-3 text-left">제약사</th>
-                      <th className="px-4 py-3 text-right">약가</th>
-                      <th className="px-4 py-3 text-right">수수료율</th>
-                      <th className="px-4 py-3 text-left">보험코드</th>
-                      <th className="px-4 py-3 w-10"></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {selected.items.map((item, i) => (
-                      <tr key={item.id} className="hover:bg-gray-50">
-                        <td className="px-4 py-3 text-gray-400 text-xs">{i + 1}</td>
-                        <td className="px-4 py-3">
-                          <p className="font-medium text-gray-900 text-sm">{item.altMedication?.productName || "-"}</p>
-                        </td>
-                        <td className="px-4 py-3 text-xs text-gray-500 max-w-[160px] truncate">{item.altMedication?.ingredientName || "-"}</td>
-                        <td className="px-4 py-3 text-xs text-gray-600">{item.altMedication?.companyName || "-"}</td>
-                        <td className="px-4 py-3 text-right text-sm text-gray-700">{formatPrice(item.altMedication?.price)}</td>
-                        <td className="px-4 py-3 text-right text-sm text-blue-600 font-medium">
-                          {item.altMedication?.commissionRate != null ? `${item.altMedication.commissionRate}%` : "-"}
-                        </td>
-                        <td className="px-4 py-3 text-xs font-mono text-gray-500">{item.altMedication?.insuranceCode || "-"}</td>
-                        <td className="px-4 py-3">
-                          <button onClick={() => removeItem(item.id)} className="text-red-400 hover:text-red-600 p-1">
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </td>
+              <>
+                <div className="flex justify-end">
+                  <ColumnToggles cols={cols} setCols={setCols} isSalesRep={isSalesRep} />
+                </div>
+                <div className="flex-1 overflow-auto rounded-lg border border-gray-200 bg-white">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
+                      <tr className="text-xs text-gray-500 font-semibold">
+                        <th className="px-4 py-3 text-left w-8">#</th>
+                        <th className="px-4 py-3 text-left">품목명</th>
+                        <th className="px-4 py-3 text-left">성분명</th>
+                        <th className="px-4 py-3 text-center w-28"></th>
+                        <th className="px-4 py-3 text-left">제약사</th>
+                        {cols.showCategoryB && <th className="px-4 py-3 text-center">분류B</th>}
+                        {cols.showBioStatus && <th className="px-4 py-3 text-center">생동/생산</th>}
+                        {cols.showOriginalDrug && <th className="px-4 py-3 text-center">오리지날</th>}
+                        {cols.showInsuranceCode && <th className="px-4 py-3 text-left">보험코드</th>}
+                        {cols.showNotes && <th className="px-4 py-3 text-left">특이사항</th>}
+                        {cols.showStock && <th className="px-4 py-3 text-center">재고</th>}
+                        <th className="px-4 py-3 text-right">약가</th>
+                        {isSalesRep && cols.showRate && (
+                          <>
+                            <th className="px-4 py-3 text-right">기본수수료</th>
+                            <th className="px-4 py-3 text-right">추가수수료</th>
+                            <th className="px-4 py-3 text-right">합계수수료</th>
+                            <th className="px-4 py-3 text-right">정산금액</th>
+                          </>
+                        )}
+                        <th className="px-4 py-3 w-10"></th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {selected.items.map((item, i) => {
+                        const m = item.altMedication;
+                        const base = m?.commissionRate ?? null;
+                        const extra = m?.additionalRate ?? null;
+                        const total = base != null ? base + (extra ?? 0) : null;
+                        const settlement = m?.price != null && total != null ? Math.round(m.price * total / 100) : null;
+                        return (
+                          <tr key={item.id} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 text-gray-400 text-xs">{i + 1}</td>
+                            <td className="px-4 py-3">
+                              <p className="font-medium text-gray-900 text-sm">
+                                {m?.productName || "-"}
+                                {m?.isSettlement && (
+                                  <span className={`inline-block text-[10px] border px-1 py-0.5 rounded ml-1 align-middle ${
+                                    m.settlementType === "원외" ? "text-blue-700 bg-blue-50 border-blue-200" :
+                                    m.settlementType === "원내" ? "text-indigo-700 bg-indigo-50 border-indigo-200" :
+                                    "text-green-700 bg-green-50 border-green-200"
+                                  }`}>{m.settlementType ? `정산·${m.settlementType}` : "정산"}</span>
+                                )}
+                              </p>
+                            </td>
+                            <td className="px-4 py-3 text-xs text-gray-500 max-w-[160px] truncate">{m?.ingredientName || "-"}</td>
+                            <td className="px-4 py-3 text-center">
+                              {m && (
+                                <button onClick={() => setIngredientModal({ name: m.ingredientName, categoryB: m.categoryB })}
+                                  className="text-xs text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 whitespace-nowrap transition-colors">
+                                  <Search className="w-3 h-3 inline mr-1" />동일성분
+                                </button>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{m?.companyName || "-"}</td>
+                            {cols.showCategoryB && <td className="px-4 py-3 text-center text-xs text-gray-500">{m?.categoryB || "-"}</td>}
+                            {cols.showBioStatus && <td className="px-4 py-3 text-center text-xs text-gray-500">{m?.bioStatus || "-"}</td>}
+                            {cols.showOriginalDrug && <td className="px-4 py-3 text-center text-xs text-gray-500">{m?.originalDrug || "-"}</td>}
+                            {cols.showInsuranceCode && <td className="px-4 py-3 text-xs font-mono text-gray-500">{m?.insuranceCode || "-"}</td>}
+                            {cols.showNotes && <td className="px-4 py-3 text-xs text-gray-500 max-w-[120px] truncate">{m?.notes || "-"}</td>}
+                            {cols.showStock && <td className="px-4 py-3 text-center text-xs text-gray-400">-</td>}
+                            <td className="px-4 py-3 text-right text-sm text-gray-700 whitespace-nowrap">{formatPrice(m?.price)}</td>
+                            {isSalesRep && cols.showRate && (
+                              <>
+                                <td className="px-4 py-3 text-right text-sm text-blue-600 font-medium whitespace-nowrap">{base != null ? `${base}%` : "-"}</td>
+                                <td className="px-4 py-3 text-right text-sm text-gray-500 whitespace-nowrap">{extra != null ? `${extra}%` : "-"}</td>
+                                <td className="px-4 py-3 text-right text-sm font-semibold text-blue-700 whitespace-nowrap">{total != null ? `${total}%` : "-"}</td>
+                                <td className="px-4 py-3 text-right text-sm font-semibold text-green-700 whitespace-nowrap">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</td>
+                              </>
+                            )}
+                            <td className="px-4 py-3">
+                              <button onClick={() => removeItem(item.id)} className="text-red-400 hover:text-red-600 p-1">
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </>
         )}
       </div>
+
+      {ingredientModal && (
+        <SameIngredientModal
+          ingredientName={ingredientModal.name}
+          categoryBCode={ingredientModal.categoryB ?? undefined}
+          userId={userId}
+          onClose={() => { setIngredientModal(null); if (selected) loadProposal(selected); }}
+          initialCols={{
+            categoryB: cols.showCategoryB,
+            bioStatus: cols.showBioStatus,
+            originalDrug: cols.showOriginalDrug,
+            insuranceCode: cols.showInsuranceCode,
+            notes: cols.showNotes,
+          }}
+        />
+      )}
 
       {/* 오른쪽: 제약사 현황 */}
       {selected && (

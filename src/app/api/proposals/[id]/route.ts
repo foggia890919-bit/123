@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { normalizeCompanyKey } from "@/lib/utils";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -13,7 +14,19 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     },
   });
   if (!proposal) return NextResponse.json({ error: "없음" }, { status: 404 });
-  return NextResponse.json(proposal);
+
+  const rateMap: Record<string, number> = {};
+  const rates = await prisma.memberCompanyRate.findMany({ where: { userId: proposal.userId } });
+  for (const r of rates) rateMap[normalizeCompanyKey(r.companyName)] = r.additionalRate;
+
+  const items = proposal.items.map((item) => ({
+    ...item,
+    altMedication: item.altMedication
+      ? { ...item.altMedication, additionalRate: rateMap[normalizeCompanyKey(item.altMedication.companyName)] ?? null }
+      : null,
+  }));
+
+  return NextResponse.json({ ...proposal, items });
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
