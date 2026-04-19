@@ -34,7 +34,7 @@ export default function MyPage() {
     const res = await fetch("/api/mypage", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: session.user.id, currentPassword: currentPw, newPassword: newPw }),
+      body: JSON.stringify({ userId: session!.user.id, currentPassword: currentPw, newPassword: newPw }),
     });
     const data = await res.json();
     if (!res.ok) { setError(data.error); }
