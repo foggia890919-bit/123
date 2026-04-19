@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback } from "react";
 import { Search, Building2, Filter, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import MedicationTable from "@/components/MedicationTable";
+import MedicationTable, { type ColumnVisibility } from "@/components/MedicationTable";
+import ColumnToggles from "@/components/ColumnToggles";
 import RequireAuth from "@/components/RequireAuth";
 import { useSession } from "next-auth/react";
 import type { MedicationItem } from "@/types";
@@ -17,6 +18,8 @@ interface Company {
 
 export default function FilterPage() {
   const { data: session } = useSession();
+  const isSalesRep = session?.user?.role === "SALES_REP";
+  const [cols, setCols] = useState<ColumnVisibility>({ showRate: true });
   const [companies, setCompanies] = useState<Company[]>([]);
   const [companySearch, setCompanySearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -170,10 +173,11 @@ export default function FilterPage() {
 
             {searched && (
               <>
-                <p className="text-sm text-gray-500">
-                  조회 결과 <span className="font-semibold text-gray-900">{total.toLocaleString()}개</span>
-                </p>
-                <MedicationTable medications={results} loading={loading} showRate={true} />
+                <div className="flex items-center justify-between flex-wrap gap-3">
+                  <p className="text-sm text-gray-500">조회 결과 <span className="font-semibold text-gray-900">{total.toLocaleString()}개</span></p>
+                  <ColumnToggles cols={cols} setCols={setCols} isSalesRep={isSalesRep} />
+                </div>
+                <MedicationTable medications={results} loading={loading} {...cols} showRate={isSalesRep ? cols.showRate : false} />
               </>
             )}
 
