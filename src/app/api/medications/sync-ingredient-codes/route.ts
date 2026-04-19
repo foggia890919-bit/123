@@ -71,11 +71,14 @@ function extractCodes(item: AtcItem): AtcExtract | null {
     item["제품코드"] ?? item["제품_코드"] ?? item["itemCode"] ?? item["ediCode"] ?? ""
   ).trim();
   if (!ingredientCode || !productCode) return null;
+  // 약가마스터 필드 변형 다수 대응
   const ingredientName = String(
-    item["주성분명"] ?? item["성분명"] ?? item["ingdtName"] ?? item["mainIngdtName"] ?? ""
+    item["주성분명"] ?? item["성분명"] ?? item["주성분"] ?? item["성분"] ??
+    item["ingdtName"] ?? item["mainIngdtName"] ?? item["ingredientName"] ?? ""
   ).trim();
   const spec = String(
-    item["규격"] ?? item["함량"] ?? item["spec"] ?? ""
+    item["규격"] ?? item["규격단위"] ?? item["함량"] ?? item["용량"] ??
+    item["단위"] ?? item["spec"] ?? item["dosage"] ?? ""
   ).trim();
   return { ingredientCode, productCode, ingredientName, spec };
 }
@@ -122,11 +125,14 @@ export async function POST() {
     }
 
     const infoMap = new Map<string, { ingredientCode: string; ingredientDisplay: string }>();
+    let withName = 0, withSpec = 0, withEither = 0;
     for (const item of allItems) {
       const codes = extractCodes(item);
       if (!codes) continue;
+      if (codes.ingredientName) withName++;
+      if (codes.spec) withSpec++;
+      if (codes.ingredientName || codes.spec) withEither++;
       const ingredientDisplay = combineIngredient(codes.ingredientName, codes.spec);
-      // 같은 제품코드가 여러 번 나오면 가장 정보가 많은 행을 사용
       const prev = infoMap.get(codes.productCode);
       if (!prev || (ingredientDisplay.length > prev.ingredientDisplay.length)) {
         infoMap.set(codes.productCode, { ingredientCode: codes.ingredientCode, ingredientDisplay });
@@ -191,6 +197,13 @@ export async function POST() {
       filled,
       lastSync: now,
       totalInDb: total,
+      diagnostics: {
+        sampleKeys: Object.keys(firstItems[0] ?? {}),
+        sampleItem: firstItems[0] ?? null,
+        withName,
+        withSpec,
+        withEither,
+      },
     });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
