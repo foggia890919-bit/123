@@ -1,9 +1,10 @@
 "use client";
 
+import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { Pill, FileText, Building2, Search, LogOut, ShieldCheck } from "lucide-react";
+import { Pill, FileText, Building2, Search, LogOut, ShieldCheck, ChevronDown, Upload } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "통합검색", icon: Search },
@@ -12,8 +13,24 @@ const navItems = [
   { href: "/proposals", label: "제안서", icon: FileText },
 ];
 
+const adminMenuItems = [
+  { href: "/admin/dashboard", label: "요율표 업로드", icon: Upload },
+];
+
 export default function Navbar() {
   const pathname = usePathname();
+  const [adminOpen, setAdminOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setAdminOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   return (
     <nav className="bg-white border-b border-gray-200 shadow-sm">
@@ -50,13 +67,43 @@ export default function Navbar() {
               <LogOut className="w-4 h-4" />
               로그인
             </Link>
-            <Link
-              href="/admin/login"
-              className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-white bg-gray-800 hover:bg-gray-700"
-            >
-              <ShieldCheck className="w-4 h-4" />
-              관리자로그인
-            </Link>
+
+            <div className="relative" ref={dropdownRef}>
+              <button
+                onClick={() => setAdminOpen((prev) => !prev)}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-white bg-gray-800 hover:bg-gray-700"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                관리자
+                <ChevronDown className={cn("w-3.5 h-3.5 transition-transform", adminOpen && "rotate-180")} />
+              </button>
+
+              {adminOpen && (
+                <div className="absolute right-0 mt-2 w-44 bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden">
+                  {adminMenuItems.map(({ href, label, icon: Icon }) => (
+                    <Link
+                      key={href}
+                      href={href}
+                      onClick={() => setAdminOpen(false)}
+                      className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      <Icon className="w-4 h-4 text-gray-500" />
+                      {label}
+                    </Link>
+                  ))}
+                  <div className="border-t border-gray-100">
+                    <Link
+                      href="/admin/login"
+                      onClick={() => setAdminOpen(false)}
+                      className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-500 hover:bg-gray-50"
+                    >
+                      <ShieldCheck className="w-4 h-4" />
+                      관리자 로그인
+                    </Link>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
