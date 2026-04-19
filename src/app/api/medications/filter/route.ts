@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { normalizeCompanyKey } from "@/lib/utils";
 
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q")?.trim() || "";
@@ -34,15 +35,17 @@ export async function GET(req: NextRequest) {
     prisma.medication.count({ where }),
   ]);
 
-  let rateMap: Record<string, number> = {};
+  const rateMap: Record<string, number> = {};
   if (userId) {
     const rates = await prisma.memberCompanyRate.findMany({ where: { userId } });
-    rateMap = Object.fromEntries(rates.map((r) => [r.companyName, r.additionalRate]));
+    for (const r of rates) {
+      rateMap[normalizeCompanyKey(r.companyName)] = r.additionalRate;
+    }
   }
 
   const result = medications.map((med) => ({
     ...med,
-    additionalRate: rateMap[med.companyName] ?? null,
+    additionalRate: rateMap[normalizeCompanyKey(med.companyName)] ?? null,
   }));
 
   return NextResponse.json({ medications: result, total });

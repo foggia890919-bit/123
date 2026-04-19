@@ -89,6 +89,21 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ success: true, count, saved, samples, parsedRows: rows.length });
 }
 
+// 단건 추가수수료 수정 (인라인 편집용)
+export async function PATCH(req: NextRequest) {
+  const { userId, companyName, additionalRate } = await req.json();
+  if (!userId || !companyName || additionalRate == null || isNaN(Number(additionalRate))) {
+    return NextResponse.json({ error: "필수 항목 누락" }, { status: 400 });
+  }
+  const rate = Number(additionalRate);
+  const saved = await prisma.memberCompanyRate.upsert({
+    where: { userId_companyName: { userId, companyName: String(companyName).trim() } },
+    update: { additionalRate: rate, updatedAt: new Date() },
+    create: { userId, companyName: String(companyName).trim(), additionalRate: rate, updatedAt: new Date() },
+  });
+  return NextResponse.json({ success: true, companyName: saved.companyName, additionalRate: saved.additionalRate });
+}
+
 // 제약사 목록 엑셀 다운로드
 export async function PUT(req: NextRequest) {
   const { userId } = await req.json();

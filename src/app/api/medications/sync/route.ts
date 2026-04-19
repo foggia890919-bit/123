@@ -123,9 +123,30 @@ async function processPage(pageItems: PublicDrug[]): Promise<number> {
     await withDbRetry(() => prisma.medication.createMany({ data: toCreate, skipDuplicates: true }));
   }
 
-  // 순차 업데이트 (pool 고갈 방지)
-  for (const { id, data } of toUpdate) {
-    await withDbRetry(() => prisma.medication.update({ where: { id }, data }));
+  // Bulk UPDATE via VALUES 조인: 100개 쿼리 → 1개로 (커넥션 점유시간 극단 단축)
+  if (toUpdate.length > 0) {
+    const CHUNK = 200;
+    for (let i = 0; i < toUpdate.length; i += CHUNK) {
+      const slice = toUpdate.slice(i, i + CHUNK);
+      const tuples: string[] = [];
+      const params: (string | null)[] = [];
+      let p = 1;
+      for (const { id, data } of slice) {
+        tuples.push(`($${p++}::text, $${p++}::text, $${p++}::text, $${p++}::text, $${p++})`);
+        params.push(id, data.productName ?? "", data.ingredientName ?? "", data.companyName ?? "", data.categoryA ?? null);
+      }
+      const sql = `
+        UPDATE "Medication" AS m
+        SET "productName" = v.pn,
+            "ingredientName" = v.ing,
+            "companyName" = v.cn,
+            "categoryA" = v.ca,
+            "updatedAt" = NOW()
+        FROM (VALUES ${tuples.join(", ")}) AS v(id, pn, ing, cn, ca)
+        WHERE m.id = v.id
+      `;
+      await withDbRetry(() => prisma.$executeRawUnsafe(sql, ...params));
+    }
   }
 
   return drugs.length;

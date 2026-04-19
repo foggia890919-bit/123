@@ -9,18 +9,22 @@ import type { MedicationItem } from "@/types";
 interface Proposal { id: string; title: string; _count: { items: number }; }
 
 interface Props {
-  medication: MedicationItem;
+  medication?: MedicationItem;
+  medications?: MedicationItem[];
   userId: string;
   onClose: () => void;
 }
 
-export default function AddToProposalDialog({ medication, userId, onClose }: Props) {
+export default function AddToProposalDialog({ medication, medications, userId, onClose }: Props) {
+  const meds: MedicationItem[] = medications && medications.length > 0 ? medications : medication ? [medication] : [];
+  const isBulk = meds.length > 1;
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState<"select" | "new" | "done">("select");
   const [newTitle, setNewTitle] = useState("");
   const [saving, setSaving] = useState(false);
   const [addedProposalId, setAddedProposalId] = useState("");
+  const [addedCount, setAddedCount] = useState(0);
 
   useEffect(() => {
     fetch(`/api/proposals?userId=${userId}`)
@@ -30,15 +34,19 @@ export default function AddToProposalDialog({ medication, userId, onClose }: Pro
 
   async function addToProposal(proposalId: string) {
     setSaving(true);
-    const res = await fetch(`/api/proposals/${proposalId}/items`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ medicationId: medication.id }),
-    });
-    if (res.ok || res.status === 409) {
-      setAddedProposalId(proposalId);
-      setMode("done");
+    let added = 0;
+    for (const m of meds) {
+      const res = await fetch(`/api/proposals/${proposalId}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ medicationId: m.id }),
+      });
+      if (res.ok) added++;
+      // 409 (이미 있음) 은 건너뜀
     }
+    setAddedProposalId(proposalId);
+    setAddedCount(added);
+    setMode("done");
     setSaving(false);
   }
 
@@ -66,8 +74,17 @@ export default function AddToProposalDialog({ medication, userId, onClose }: Pro
         </div>
 
         <div className="px-5 py-3 bg-blue-50 border-b">
-          <p className="text-xs text-blue-700 font-medium truncate">{medication.productName}</p>
-          <p className="text-xs text-blue-500">{medication.companyName}</p>
+          {isBulk ? (
+            <>
+              <p className="text-xs text-blue-700 font-medium">선택한 품목 {meds.length}개</p>
+              <p className="text-xs text-blue-500 truncate">{meds.slice(0, 3).map((m) => m.productName).join(", ")}{meds.length > 3 ? ` 외 ${meds.length - 3}개` : ""}</p>
+            </>
+          ) : (
+            <>
+              <p className="text-xs text-blue-700 font-medium truncate">{meds[0]?.productName}</p>
+              <p className="text-xs text-blue-500">{meds[0]?.companyName}</p>
+            </>
+          )}
         </div>
 
         {mode === "select" && (
@@ -121,7 +138,12 @@ export default function AddToProposalDialog({ medication, userId, onClose }: Pro
             <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto">
               <Check className="w-6 h-6 text-green-600" />
             </div>
-            <p className="text-sm font-medium text-gray-800">제안서에 추가됐어요!</p>
+            <p className="text-sm font-medium text-gray-800">
+              {isBulk ? `${addedCount}개 품목이 제안서에 추가됐어요!` : "제안서에 추가됐어요!"}
+              {isBulk && addedCount < meds.length && (
+                <span className="block text-xs text-gray-500 mt-1">({meds.length - addedCount}개는 이미 포함되어 있었어요)</span>
+              )}
+            </p>
             <div className="flex gap-2">
               <Button variant="outline" onClick={onClose} className="flex-1">창 닫기</Button>
               <Button onClick={() => window.open(`/proposals?id=${addedProposalId}`, "_self")} className="flex-1">
