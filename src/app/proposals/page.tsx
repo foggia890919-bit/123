@@ -325,12 +325,10 @@ function ProposalsContent() {
                             <td className="px-4 py-3">
                               <p className="font-medium text-gray-900 text-sm">
                                 {m?.productName || "-"}
-                                {m?.isSettlement && (
+                                {m?.isSettlement && (m.settlementType === "원외" || m.settlementType === "원내") && (
                                   <span className={`inline-block text-[10px] border px-1 py-0.5 rounded ml-1 align-middle ${
-                                    m.settlementType === "원외" ? "text-blue-700 bg-blue-50 border-blue-200" :
-                                    m.settlementType === "원내" ? "text-indigo-700 bg-indigo-50 border-indigo-200" :
-                                    "text-green-700 bg-green-50 border-green-200"
-                                  }`}>{m.settlementType ? `정산·${m.settlementType}` : "정산"}</span>
+                                    m.settlementType === "원외" ? "text-blue-700 bg-blue-50 border-blue-200" : "text-indigo-700 bg-indigo-50 border-indigo-200"
+                                  }`}>{m.settlementType === "원외" ? "cso" : "원내가능"}</span>
                                 )}
                               </p>
                             </td>

@@ -56,7 +56,14 @@ async function withDbRetry<T>(fn: () => Promise<T>, retries = 4): Promise<T> {
   throw lastErr;
 }
 
-function extractCodes(item: AtcItem): { ingredientCode: string; productCode: string } | null {
+interface AtcExtract {
+  ingredientCode: string;
+  productCode: string;
+  ingredientName: string;
+  spec: string;
+}
+
+function extractCodes(item: AtcItem): AtcExtract | null {
   const ingredientCode = String(
     item["주성분코드"] ?? item["주성분_코드"] ?? item["ingdtCode"] ?? item["mainIngdtCode"] ?? ""
   ).trim();
@@ -64,7 +71,34 @@ function extractCodes(item: AtcItem): { ingredientCode: string; productCode: str
     item["제품코드"] ?? item["제품_코드"] ?? item["itemCode"] ?? item["ediCode"] ?? ""
   ).trim();
   if (!ingredientCode || !productCode) return null;
-  return { ingredientCode, productCode };
+  const ingredientName = String(
+    item["주성분명"] ?? item["성분명"] ?? item["ingdtName"] ?? item["mainIngdtName"] ?? ""
+  ).trim();
+  const spec = String(
+    item["규격"] ?? item["함량"] ?? item["spec"] ?? ""
+  ).trim();
+  return { ingredientCode, productCode, ingredientName, spec };
+}
+
+// "10MG" → "10mg", "10 mg" → "10mg", "5ML" → "5ml"
+function normalizeSpec(spec: string): string {
+  if (!spec) return "";
+  return spec
+    .replace(/\s+/g, "")
+    .replace(/MG\b/gi, "mg")
+    .replace(/ML\b/gi, "ml")
+    .replace(/MCG\b/gi, "mcg")
+    .replace(/IU\b/gi, "IU")
+    .replace(/G\b/gi, "g")
+    .trim();
+}
+
+// "아토르바스타틴" + "10mg" → "아토르바스타틴 10mg"
+function combineIngredient(name: string, spec: string): string {
+  const n = name.trim();
+  const s = normalizeSpec(spec);
+  if (n && s) return `${n} ${s}`;
+  return n || s;
 }
 
 export async function POST() {
@@ -87,39 +121,52 @@ export async function POST() {
       allItems.push(...items);
     }
 
-    const codeMap = new Map<string, string>();
+    const infoMap = new Map<string, { ingredientCode: string; ingredientDisplay: string }>();
     for (const item of allItems) {
       const codes = extractCodes(item);
-      if (codes) codeMap.set(codes.productCode, codes.ingredientCode);
+      if (!codes) continue;
+      const ingredientDisplay = combineIngredient(codes.ingredientName, codes.spec);
+      // 같은 제품코드가 여러 번 나오면 가장 정보가 많은 행을 사용
+      const prev = infoMap.get(codes.productCode);
+      if (!prev || (ingredientDisplay.length > prev.ingredientDisplay.length)) {
+        infoMap.set(codes.productCode, { ingredientCode: codes.ingredientCode, ingredientDisplay });
+      }
     }
 
-    if (codeMap.size === 0) {
+    if (infoMap.size === 0) {
       return NextResponse.json({
         error: "주성분코드/제품코드 필드를 찾지 못했어요.",
         sampleKeys: Object.keys(firstItems[0] ?? {}),
       }, { status: 400 });
     }
 
-    // raw SQL로 배치 업데이트 (순차 update 대신 VALUES 테이블 조인)
+    // raw SQL bulk UPDATE: categoryB + ingredientName(주성분명+규격) 동시 갱신
+    // ingredientName은 v.ingNew가 비어있지 않을 때만 덮어씀 (OTC 등 누락 품목 보호)
     let updated = 0;
-    const entries = Array.from(codeMap.entries());
+    let ingredientUpdated = 0;
+    const entries = Array.from(infoMap.entries());
     const BATCH = 500;
 
     for (let i = 0; i < entries.length; i += BATCH) {
       const batch = entries.slice(i, i + BATCH);
-      // VALUES (productCode, ingredientCode), ... 형태로 bulk update
-      const values = batch.map((_, j) => `($${j * 2 + 1}, $${j * 2 + 2})`).join(", ");
-      const params = batch.flatMap(([productCode, ingredientCode]) => [productCode, ingredientCode]);
+      const values = batch.map((_, j) => `($${j * 3 + 1}, $${j * 3 + 2}, $${j * 3 + 3})`).join(", ");
+      const params: string[] = [];
+      for (const [productCode, info] of batch) {
+        params.push(productCode, info.ingredientCode, info.ingredientDisplay);
+      }
 
-      const result = await withDbRetry(() => prisma.$queryRawUnsafe<{ count: bigint }[]>(
+      const result = await withDbRetry(() => prisma.$queryRawUnsafe<{ id: string; ingNew: string }[]>(
         `UPDATE "Medication" AS m
-         SET "categoryB" = v."categoryB", "updatedAt" = NOW()
-         FROM (VALUES ${values}) AS v("insuranceCode", "categoryB")
+         SET "categoryB" = v."categoryB",
+             "ingredientName" = CASE WHEN v."ingNew" <> '' THEN v."ingNew" ELSE m."ingredientName" END,
+             "updatedAt" = NOW()
+         FROM (VALUES ${values}) AS v("insuranceCode", "categoryB", "ingNew")
          WHERE m."insuranceCode" = v."insuranceCode"
-         RETURNING m.id`,
+         RETURNING m.id, v."ingNew" AS "ingNew"`,
         ...params
       ));
       updated += result.length;
+      ingredientUpdated += result.filter((r) => r.ingNew && r.ingNew.length > 0).length;
     }
 
     const now = new Date().toISOString();
@@ -138,8 +185,9 @@ export async function POST() {
     return NextResponse.json({
       success: true,
       total: totalCount,
-      mapped: codeMap.size,
+      mapped: infoMap.size,
       updated,
+      ingredientUpdated,
       filled,
       lastSync: now,
       totalInDb: total,

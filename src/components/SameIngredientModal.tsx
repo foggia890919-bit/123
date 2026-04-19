@@ -164,13 +164,12 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
                         <td className="px-4 py-2.5">
                           <p className="font-medium text-gray-900 text-xs">
                             {med.productName}
-                            {med.isSettlement && (
+                            {med.isSettlement && (med.settlementType === "원외" || med.settlementType === "원내") && (
                               <span className={`inline-block text-[10px] border px-1 py-0.5 rounded ml-1 align-middle ${
                                 med.settlementType === "원외" ? "text-blue-700 bg-blue-50 border-blue-200" :
-                                med.settlementType === "원내" ? "text-indigo-700 bg-indigo-50 border-indigo-200" :
-                                "text-green-700 bg-green-50 border-green-200"
+                                "text-indigo-700 bg-indigo-50 border-indigo-200"
                               }`}>
-                                {med.settlementType ? `정산·${med.settlementType}` : "정산"}
+                                {med.settlementType === "원외" ? "cso" : "원내가능"}
                               </span>
                             )}
                           </p>
