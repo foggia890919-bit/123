@@ -93,12 +93,12 @@ function ProposalsContent() {
   }, [selected]);
 
   async function createProposal() {
-    if (!newTitle.trim()) return;
+    const title = newTitle.trim() || `새 제안서 ${new Date().toLocaleDateString("ko-KR")}`;
     setCreating(true);
     const res = await fetch("/api/proposals", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: newTitle.trim(), userId }),
+      body: JSON.stringify({ title, userId }),
     });
     if (res.ok) {
       const p = await res.json();
@@ -236,41 +236,7 @@ function ProposalsContent() {
 
   return (
     <div className="flex gap-5 h-[calc(100vh-120px)]">
-      {/* 왼쪽: 제안서 목록 */}
-      <div className="w-64 shrink-0 flex flex-col gap-3">
-        <div className="space-y-1">
-          <Input value={newTitle} onChange={(e) => setNewTitle(e.target.value)}
-            placeholder="새 제안서 이름..." className="h-9 text-sm"
-            onKeyDown={(e) => e.key === "Enter" && createProposal()} />
-          <Button onClick={createProposal} disabled={!newTitle.trim() || creating} className="w-full h-9 text-sm">
-            <Plus className="w-3.5 h-3.5 mr-1" />{creating ? "생성 중..." : "새 제안서 만들기"}
-          </Button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto space-y-1">
-          {proposals.length === 0 ? (
-            <p className="text-xs text-gray-400 text-center py-8">제안서가 없어요</p>
-          ) : proposals.map((p) => (
-            <div key={p.id}
-              onClick={() => loadProposal(p)}
-              className={`group flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors ${selected?.id === p.id ? "bg-blue-50 border border-blue-200" : "bg-white border border-gray-200 hover:bg-gray-50"}`}>
-              <div className="flex items-center gap-2 min-w-0">
-                <FileText className={`w-4 h-4 shrink-0 ${selected?.id === p.id ? "text-blue-600" : "text-gray-400"}`} />
-                <div className="min-w-0">
-                  <p className={`text-sm font-medium truncate ${selected?.id === p.id ? "text-blue-700" : "text-gray-800"}`}>{p.title}</p>
-                  <p className="text-xs text-gray-400">{p._count?.items ?? 0}개 품목</p>
-                </div>
-              </div>
-              <button onClick={(e) => { e.stopPropagation(); deleteProposal(p.id); }}
-                className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 p-1 shrink-0">
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* 가운데: 선택된 제안서 내용 */}
+      {/* 왼쪽(넓게): 선택된 제안서 내용 */}
       <div className="flex-1 flex flex-col gap-4 min-w-0">
         {!selected ? (
           <div className="flex-1 flex items-center justify-center text-gray-400 bg-white rounded-lg border border-gray-200">
@@ -426,33 +392,67 @@ function ProposalsContent() {
         />
       )}
 
-      {/* 오른쪽: 제약사 현황 */}
-      {selected && (
-        <div className="w-52 shrink-0 flex flex-col gap-3">
-          <div className="flex items-center gap-2">
-            <Building2 className="w-4 h-4 text-gray-500" />
-            <h3 className="text-sm font-semibold text-gray-800">제약사 현황</h3>
-            <span className="text-xs text-gray-400 ml-auto">{companySummary.length}개사</span>
-          </div>
-          <div className="flex-1 overflow-y-auto bg-white rounded-lg border border-gray-200">
-            {companySummary.length === 0 ? (
-              <div className="flex items-center justify-center h-24 text-xs text-gray-400">품목을 추가하면 표시돼요</div>
-            ) : (
-              <div className="divide-y divide-gray-50">
-                {companySummary.map(({ name, count }) => (
-                  <div key={name} className="px-3 py-2.5">
-                    <div className="flex items-center justify-between gap-1 mb-1">
-                      <p className="text-xs font-medium text-gray-800 truncate">{name}</p>
-                      <span className="text-xs text-gray-400 shrink-0">{count}개</span>
-                    </div>
-                    <StatusBadge status={companyStatuses[name] || ""} />
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+      {/* 오른쪽: 새 제안서 + 제안서 목록 + 제약사 현황 통합 */}
+      <div className="w-72 shrink-0 flex flex-col gap-3 min-h-0">
+        <div className="space-y-1 shrink-0">
+          <Input value={newTitle} onChange={(e) => setNewTitle(e.target.value)}
+            placeholder="새 제안서 이름..." className="h-9 text-sm"
+            onKeyDown={(e) => e.key === "Enter" && createProposal()} />
+          <Button onClick={createProposal} disabled={creating} className="w-full h-9 text-sm">
+            <Plus className="w-3.5 h-3.5 mr-1" />{creating ? "생성 중..." : "새 제안서 만들기"}
+          </Button>
         </div>
-      )}
+
+        <div className="flex-1 overflow-y-auto space-y-1 min-h-0">
+          <p className="text-xs font-semibold text-gray-500 px-1">제안서 목록</p>
+          {proposals.length === 0 ? (
+            <p className="text-xs text-gray-400 text-center py-4">제안서가 없어요</p>
+          ) : proposals.map((p) => (
+            <div key={p.id}
+              onClick={() => loadProposal(p)}
+              className={`group flex items-center justify-between p-2.5 rounded-lg cursor-pointer transition-colors ${selected?.id === p.id ? "bg-blue-50 border border-blue-200" : "bg-white border border-gray-200 hover:bg-gray-50"}`}>
+              <div className="flex items-center gap-2 min-w-0">
+                <FileText className={`w-4 h-4 shrink-0 ${selected?.id === p.id ? "text-blue-600" : "text-gray-400"}`} />
+                <div className="min-w-0">
+                  <p className={`text-sm font-medium truncate ${selected?.id === p.id ? "text-blue-700" : "text-gray-800"}`}>{p.title}</p>
+                  <p className="text-xs text-gray-400">{p._count?.items ?? 0}개 품목</p>
+                </div>
+              </div>
+              <button onClick={(e) => { e.stopPropagation(); deleteProposal(p.id); }}
+                className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 p-1 shrink-0">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {selected && (
+          <div className="shrink-0 flex flex-col gap-2 max-h-[40%]">
+            <div className="flex items-center gap-2">
+              <Building2 className="w-4 h-4 text-gray-500" />
+              <h3 className="text-sm font-semibold text-gray-800">제약사 현황</h3>
+              <span className="text-xs text-gray-400 ml-auto">{companySummary.length}개사</span>
+            </div>
+            <div className="flex-1 overflow-y-auto bg-white rounded-lg border border-gray-200 min-h-0">
+              {companySummary.length === 0 ? (
+                <div className="flex items-center justify-center h-20 text-xs text-gray-400">품목을 추가하면 표시돼요</div>
+              ) : (
+                <div className="divide-y divide-gray-50">
+                  {companySummary.map(({ name, count }) => (
+                    <div key={name} className="px-3 py-2">
+                      <div className="flex items-center justify-between gap-1 mb-1">
+                        <p className="text-xs font-medium text-gray-800 truncate">{name}</p>
+                        <span className="text-xs text-gray-400 shrink-0">{count}개</span>
+                      </div>
+                      <StatusBadge status={companyStatuses[name] || ""} />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
