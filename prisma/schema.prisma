@@ -21,6 +21,21 @@ model User {
   companyRates   MemberCompanyRate[]
   documents      UserDocument[]
   filterRequests FilterRequest[]
+  userClients    UserClient[]
+}
+
+model UserClient {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientName  String
+  bizNumber   String
+  bizDocument String?
+  bizFileName String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@unique([userId, bizNumber])
 }
 
 enum Role {

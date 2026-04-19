@@ -2,11 +2,11 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut } from "lucide-react";
+import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut, Building2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
-type Tab = "upload" | "members" | "rates" | "filterReqs" | "apiSources";
+type Tab = "upload" | "members" | "rates" | "filterReqs" | "userClients" | "apiSources";
 
 interface UserDoc { id: string; docType: string; fileName: string; fileData: string; }
 interface User {
@@ -59,6 +59,7 @@ export default function AdminDashboardPage() {
           { key: "members", label: "회원관리", icon: Users },
           { key: "rates", label: "추가수수료 관리", icon: Percent },
           { key: "filterReqs", label: "영업사원 필터링요청", icon: Filter },
+          { key: "userClients", label: "담당자별 거래처 등록 현황", icon: Building2 },
         ] as { key: Tab; label: string; icon: React.ElementType }[]).map(({ key, label, icon: Icon }) => (
           <button
             key={key}
@@ -78,6 +79,7 @@ export default function AdminDashboardPage() {
       {tab === "members" && <MembersTab />}
       {tab === "rates" && <RatesTab />}
       {tab === "filterReqs" && <FilterReqsTab />}
+      {tab === "userClients" && <UserClientsTab />}
       {tab === "apiSources" && <ApiSourcesTab />}
     </div>
   );
@@ -926,6 +928,138 @@ function FilterReqsTab() {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// 담당자별 거래처 등록 현황 탭
+// ─────────────────────────────────────────────
+
+interface AdminUserClient {
+  id: string;
+  clientName: string;
+  bizNumber: string;
+  bizDocument: string | null;
+  bizFileName: string | null;
+  createdAt: string;
+  userId: string;
+  user: { name: string | null; email: string };
+}
+
+function UserClientsTab() {
+  const [rows, setRows] = useState<AdminUserClient[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+
+  useEffect(() => { load(); }, []);
+
+  async function load() {
+    setLoading(true);
+    const res = await fetch("/api/user-clients?all=true");
+    const data = await res.json();
+    setRows(Array.isArray(data) ? data : []);
+    setLoading(false);
+  }
+
+  const filtered = rows.filter((r) => {
+    if (!query.trim()) return true;
+    const q = query.toLowerCase();
+    return (
+      (r.user.name || "").toLowerCase().includes(q) ||
+      r.user.email.toLowerCase().includes(q) ||
+      r.clientName.toLowerCase().includes(q) ||
+      r.bizNumber.includes(query)
+    );
+  });
+
+  const grouped = new Map<string, { user: AdminUserClient["user"]; clients: AdminUserClient[] }>();
+  for (const row of filtered) {
+    const prev = grouped.get(row.userId);
+    if (prev) prev.clients.push(row);
+    else grouped.set(row.userId, { user: row.user, clients: [row] });
+  }
+
+  function downloadDoc(row: AdminUserClient) {
+    if (!row.bizDocument) return;
+    const a = document.createElement("a");
+    a.href = row.bizDocument;
+    a.download = row.bizFileName || "bizDocument";
+    a.click();
+  }
+
+  if (loading) return <div className="py-16 text-center text-gray-400 text-sm">불러오는 중...</div>;
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-800">담당자별 거래처 등록 현황 ({rows.length}건)</h2>
+          <p className="text-xs text-gray-400 mt-0.5">영업사원이 등록한 거래처를 담당자별로 확인할 수 있어요.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="담당자 / 거래처명 / 사업자번호 검색"
+            className="h-9 w-64 border border-gray-200 rounded px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+          />
+          <button onClick={load} className="text-xs text-gray-500 hover:text-gray-800 border border-gray-200 rounded px-2 py-1.5 flex items-center gap-1">
+            <RefreshCw className="w-3 h-3" />새로고침
+          </button>
+        </div>
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="py-12 text-center text-gray-400 text-sm">등록된 거래처가 없어요.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 text-xs text-gray-500 font-semibold">
+                <th className="px-4 py-3 text-left">담당자</th>
+                <th className="px-4 py-3 text-left">아이디(이메일)</th>
+                <th className="px-4 py-3 text-left">거래처명</th>
+                <th className="px-4 py-3 text-left">사업자번호</th>
+                <th className="px-4 py-3 text-left">사업자등록증</th>
+                <th className="px-4 py-3 text-center">등록일</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {Array.from(grouped.values()).map(({ user, clients }) => (
+                clients.map((c, idx) => (
+                  <tr key={c.id} className="hover:bg-gray-50 align-top">
+                    {idx === 0 ? (
+                      <>
+                        <td rowSpan={clients.length} className="px-4 py-3 font-medium text-gray-900 border-r border-gray-100 bg-gray-50/40">
+                          {user.name || "-"}
+                          <div className="text-[10px] text-gray-400 font-normal mt-0.5">{clients.length}개 등록</div>
+                        </td>
+                        <td rowSpan={clients.length} className="px-4 py-3 text-gray-500 text-xs border-r border-gray-100 bg-gray-50/40">{user.email}</td>
+                      </>
+                    ) : null}
+                    <td className="px-4 py-3 text-gray-800">{c.clientName}</td>
+                    <td className="px-4 py-3 text-gray-600 text-xs font-mono">{c.bizNumber}</td>
+                    <td className="px-4 py-3 text-xs">
+                      {c.bizDocument ? (
+                        <button onClick={() => downloadDoc(c)} className="text-blue-600 hover:underline">
+                          {c.bizFileName || "다운로드"}
+                        </button>
+                      ) : <span className="text-gray-300">없음</span>}
+                    </td>
+                    <td className="px-4 py-3 text-center text-gray-400 text-xs whitespace-nowrap">
+                      {new Date(c.createdAt).toLocaleDateString("ko-KR")}
+                    </td>
+                  </tr>
+                ))
+              ))}
+              {filtered.length === 0 && query && (
+                <tr><td colSpan={6} className="py-12 text-center text-gray-400 text-sm">검색 결과가 없어요.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
