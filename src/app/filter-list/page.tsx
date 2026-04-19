@@ -41,10 +41,6 @@ export default function FilterListPage() {
     setSelected((prev) => { const n = new Set(prev); n.has(name) ? n.delete(name) : n.add(name); return n; });
   }
 
-  function selectAll(list: Company[]) {
-    setSelected((prev) => { const n = new Set(prev); list.forEach((c) => n.add(c.name)); return n; });
-  }
-
   const handleSearch = useCallback(async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (selected.size === 0) return alert("제약사를 1개 이상 선택해주세요.");
@@ -99,12 +95,6 @@ export default function FilterListPage() {
                 )}
               </div>
               <Input value={companySearch} onChange={(e) => setCompanySearch(e.target.value)} placeholder="제약사 검색..." className="h-8 text-xs" />
-              <div className="flex gap-1">
-                <button onClick={() => selectAll(filteredCompanies.filter((c) => c.isSettlement))}
-                  className="text-xs text-green-700 bg-green-50 hover:bg-green-100 px-2 py-1 rounded">정산제약사 전체</button>
-                <button onClick={() => selectAll(filteredCompanies)}
-                  className="text-xs text-blue-600 bg-blue-50 hover:bg-blue-100 px-2 py-1 rounded">전체 선택</button>
-              </div>
             </div>
             <div className="overflow-y-auto max-h-[500px] divide-y divide-gray-50">
               {filteredCompanies.map((company) => (
@@ -122,13 +112,22 @@ export default function FilterListPage() {
           <div className="md:col-span-2 space-y-4">
             <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
               {selected.size > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {Array.from(selected).map((name) => (
-                    <span key={name} className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded-full">
-                      <Building2 className="w-3 h-3" />{name}
-                      <button onClick={() => toggleCompany(name)} className="hover:text-red-500 ml-0.5">×</button>
-                    </span>
-                  ))}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-gray-500">선택된 제약사 ({selected.size}개)</span>
+                    <button type="button" onClick={() => { setSelected(new Set()); setResults([]); setSearched(false); }}
+                      className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1">
+                      <X className="w-3 h-3" />전체 제거
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {Array.from(selected).map((name) => (
+                      <span key={name} className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded-full">
+                        <Building2 className="w-3 h-3" />{name}
+                        <button onClick={() => toggleCompany(name)} className="hover:text-red-500 ml-0.5">×</button>
+                      </span>
+                    ))}
+                  </div>
                 </div>
               )}
               <form onSubmit={handleSearch} className="flex gap-2">
