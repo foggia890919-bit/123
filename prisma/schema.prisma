@@ -1,0 +1,89 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String     @id @default(cuid())
+  email     String     @unique
+  name      String?
+  password  String
+  role      Role       @default(SALES_REP)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  proposals Proposal[]
+}
+
+enum Role {
+  ADMIN
+  SALES_REP
+  DOCTOR
+  PHARMACIST
+}
+
+model Medication {
+  id             String   @id @default(cuid())
+  categoryA      String?
+  ingredientName String
+  categoryB      String?
+  commissionRate Float?
+  companyName    String
+  bioStatus      String?
+  productName    String
+  price          Int?
+  originalDrug   String?
+  insuranceCode  String?
+  notes          String?
+  isSettlement   Boolean  @default(false)
+  source         MedSource @default(EXCEL)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  proposalOriginalItems    ProposalItem[] @relation("OriginalMedication")
+  proposalAlternativeItems ProposalItem[] @relation("AlternativeMedication")
+
+  @@index([ingredientName])
+  @@index([productName])
+  @@index([insuranceCode])
+  @@index([companyName])
+}
+
+enum MedSource {
+  EXCEL
+  PUBLIC_API
+}
+
+model Proposal {
+  id        String         @id @default(cuid())
+  title     String
+  userId    String
+  user      User           @relation(fields: [userId], references: [id])
+  items     ProposalItem[]
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+}
+
+model ProposalItem {
+  id                   String      @id @default(cuid())
+  proposalId           String
+  proposal             Proposal    @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  originalMedicationId String?
+  originalMedication   Medication? @relation("OriginalMedication", fields: [originalMedicationId], references: [id])
+  altMedicationId      String?
+  altMedication        Medication? @relation("AlternativeMedication", fields: [altMedicationId], references: [id])
+  quantity             Int         @default(1)
+  note                 String?
+  order                Int         @default(0)
+}
+
+model ClientCompany {
+  id             String   @id @default(cuid())
+  businessNumber String   @unique
+  name           String
+  address        String?
+  representative String?
+  createdAt      DateTime @default(now())
+}
