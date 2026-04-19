@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { Pill, FileText, Building2, Search, LogOut } from "lucide-react";
+import { Pill, FileText, Building2, Search, LogOut, ShieldCheck } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "통합검색", icon: Search },
@@ -49,6 +49,13 @@ export default function Navbar() {
             >
               <LogOut className="w-4 h-4" />
               로그인
+            </Link>
+            <Link
+              href="/admin/login"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-white bg-gray-800 hover:bg-gray-700"
+            >
+              <ShieldCheck className="w-4 h-4" />
+              관리자로그인
             </Link>
           </div>
         </div>
