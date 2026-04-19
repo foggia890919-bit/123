@@ -116,6 +116,7 @@ export default function FilterPage() {
 
   async function loadFromProposal(proposalId: string) {
     setShowProposalMenu(false);
+    setCompanyMenuOpen(false);
     const res = await fetch(`/api/proposals/${proposalId}`);
     const data = await res.json();
     const names = new Set<string>(
@@ -396,6 +397,13 @@ export default function FilterPage() {
                           {companyStatuses[company.name] && <StatusBadge status={companyStatuses[company.name]} />}
                         </label>
                       ))}
+                    </div>
+                    {/* 완료 버튼 */}
+                    <div className="border-t border-gray-100 p-2">
+                      <button type="button" onClick={() => setCompanyMenuOpen(false)}
+                        className="w-full py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors">
+                        완료{selected.size > 0 ? ` (${selected.size}개 선택)` : ""}
+                      </button>
                     </div>
                   </div>
                 )}

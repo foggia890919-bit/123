@@ -1,27 +1,25 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
-import { Pill, FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Download } from "lucide-react";
+import { Pill, FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Download, Menu, X } from "lucide-react";
 
 const navItems = [
   { href: "/search", label: "통합검색", icon: Search },
   { href: "/search/settlement", label: "정산제약사 검색", icon: Building2 },
   { href: "/filter", label: "제약사 필터링", icon: Building2 },
-  { href: "/filter-list", label: "제약사별 리스트 다운", icon: Download },
+  { href: "/filter-list", label: "리스트 다운", icon: Download },
   { href: "/proposals", label: "제안서", icon: FileText },
 ];
 
-
 export default function Navbar() {
   const pathname = usePathname();
-  const router = useRouter();
   const { data: session } = useSession();
   const [userOpen, setUserOpen] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const userRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -32,42 +30,38 @@ export default function Navbar() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
+  useEffect(() => { setMobileOpen(false); }, [pathname]);
+
   return (
-    <nav className="bg-white border-b border-gray-200 shadow-sm">
+    <nav className="bg-white border-b border-gray-200 shadow-sm relative z-40">
       <div className="max-w-7xl mx-auto px-4">
-        <div className="flex items-center justify-between h-16">
-          <Link href="/" className="flex items-center gap-2 font-bold text-blue-600 text-lg">
-            <Pill className="w-6 h-6" />
-            MedAlt
+        <div className="flex items-center justify-between h-14">
+          {/* 로고 */}
+          <Link href="/" className="flex items-center gap-2 font-bold text-blue-600 text-lg shrink-0">
+            <Pill className="w-6 h-6" />MedAlt
           </Link>
 
-          <div className="flex items-center gap-1">
+          {/* 데스크탑 네비 */}
+          <div className="hidden md:flex items-center gap-1">
             {navItems.map(({ href, label, icon: Icon }) => (
-              <Link
-                key={href}
-                href={href}
+              <Link key={href} href={href}
                 className={cn(
                   "flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors",
-                  pathname === href
-                    ? "bg-blue-50 text-blue-600"
-                    : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                )}
-              >
-                <Icon className="w-4 h-4" />
-                {label}
+                  pathname === href ? "bg-blue-50 text-blue-600" : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+                )}>
+                <Icon className="w-4 h-4" />{label}
               </Link>
             ))}
           </div>
 
+          {/* 우측 버튼 */}
           <div className="flex items-center gap-2">
             {session ? (
               <div className="relative" ref={userRef}>
-                <button
-                  onClick={() => setUserOpen((p) => !p)}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100"
-                >
+                <button onClick={() => setUserOpen((p) => !p)}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100">
                   <User className="w-4 h-4" />
-                  {session.user.name || "마이페이지"}
+                  <span className="hidden sm:inline">{session.user.name || "마이페이지"}</span>
                   <ChevronDown className={cn("w-3.5 h-3.5 transition-transform", userOpen && "rotate-180")} />
                 </button>
                 {userOpen && (
@@ -88,17 +82,47 @@ export default function Navbar() {
             ) : (
               <Link href="/login"
                 className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-gray-600 hover:bg-gray-100">
-                <LogIn className="w-4 h-4" />로그인
+                <LogIn className="w-4 h-4" />
+                <span className="hidden sm:inline">로그인</span>
               </Link>
             )}
 
             <Link href="/admin/login"
-              className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-white bg-gray-800 hover:bg-gray-700">
+              className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-white bg-gray-800 hover:bg-gray-700">
               <ShieldCheck className="w-4 h-4" />관리자
             </Link>
+
+            {/* 햄버거 버튼 (모바일) */}
+            <button onClick={() => setMobileOpen((v) => !v)}
+              className="md:hidden p-2 rounded-md text-gray-600 hover:bg-gray-100">
+              {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </button>
           </div>
         </div>
       </div>
+
+      {/* 모바일 메뉴 */}
+      {mobileOpen && (
+        <div className="md:hidden border-t border-gray-100 bg-white shadow-lg">
+          <div className="px-4 py-2 space-y-0.5">
+            {navItems.map(({ href, label, icon: Icon }) => (
+              <Link key={href} href={href} onClick={() => setMobileOpen(false)}
+                className={cn(
+                  "flex items-center gap-3 px-3 py-3 rounded-md text-sm font-medium transition-colors",
+                  pathname === href ? "bg-blue-50 text-blue-600" : "text-gray-700 hover:bg-gray-50"
+                )}>
+                <Icon className="w-4 h-4 shrink-0" />{label}
+              </Link>
+            ))}
+            <div className="border-t border-gray-100 pt-2 pb-1">
+              <Link href="/admin/login" onClick={() => setMobileOpen(false)}
+                className="flex items-center gap-3 px-3 py-3 rounded-md text-sm font-medium text-white bg-gray-800">
+                <ShieldCheck className="w-4 h-4" />관리자
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
     </nav>
   );
 }
