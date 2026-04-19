@@ -61,8 +61,10 @@ export default function MedicationTable({ medications, loading, showStock, showR
             <th className="px-4 py-3 text-right">약가</th>
             {showRate && (
               <>
-                <th className="px-4 py-3 text-right">수수료율</th>
-                <th className="px-4 py-3 text-center">정산</th>
+                <th className="px-4 py-3 text-right">기본수수료</th>
+                <th className="px-4 py-3 text-right">추가수수료</th>
+                <th className="px-4 py-3 text-right">합계수수료</th>
+                <th className="px-4 py-3 text-right">정산금액</th>
               </>
             )}
             <th className="px-4 py-3 text-center w-24"></th>
@@ -104,19 +106,28 @@ export default function MedicationTable({ medications, loading, showStock, showR
               <td className="px-4 py-3 text-right text-gray-700 whitespace-nowrap">
                 {formatPrice(med.price)}
               </td>
-              {showRate && (
-                <>
-                  <td className="px-4 py-3 text-right font-semibold text-blue-600 whitespace-nowrap">
-                    {med.commissionRate != null ? `${med.commissionRate}%` : "-"}
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    {med.isSettlement
-                      ? <Badge variant="success">정산</Badge>
-                      : <Badge variant="secondary">비정산</Badge>
-                    }
-                  </td>
-                </>
-              )}
+              {showRate && (() => {
+                const base = med.commissionRate ?? null;
+                const extra = null; // 추후 한미몰 API 연동
+                const total = base != null ? base + (extra ?? 0) : null;
+                const settlement = med.price != null && total != null
+                  ? Math.round(med.price * total / 100)
+                  : null;
+                return (
+                  <>
+                    <td className="px-4 py-3 text-right text-blue-600 font-medium whitespace-nowrap">
+                      {base != null ? `${base}%` : "-"}
+                    </td>
+                    <td className="px-4 py-3 text-right text-gray-400 whitespace-nowrap">-</td>
+                    <td className="px-4 py-3 text-right font-semibold text-blue-700 whitespace-nowrap">
+                      {total != null ? `${total}%` : "-"}
+                    </td>
+                    <td className="px-4 py-3 text-right font-semibold text-green-700 whitespace-nowrap">
+                      {settlement != null ? `${settlement.toLocaleString()}원` : "-"}
+                    </td>
+                  </>
+                );
+              })()}
               <td className="px-4 py-3 text-center">
                 <button
                   onClick={() => addToProposal(med)}
