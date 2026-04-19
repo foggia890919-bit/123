@@ -92,13 +92,12 @@ export async function POST() {
       updated += result.length;
     }
 
-    // SystemSetting 테이블이 없어도 동기화는 성공으로 처리
     const now = new Date().toISOString();
-    await prisma.systemSetting.upsert({
-      where: { key: "lastAtcSync" },
-      update: { value: now },
-      create: { key: "lastAtcSync", value: now },
-    }).catch(() => null);
+    await prisma.$executeRaw`
+      INSERT INTO "SystemSetting" ("key", "value", "updatedAt")
+      VALUES ('lastAtcSync', ${now}, NOW())
+      ON CONFLICT ("key") DO UPDATE SET "value" = ${now}, "updatedAt" = NOW()
+    `.catch(() => null);
 
     return NextResponse.json({ success: true, total: totalCount, mapped: codeMap.size, updated });
   } catch (err) {
@@ -107,10 +106,12 @@ export async function POST() {
 }
 
 export async function GET() {
-  const [filled, total, lastSync] = await Promise.all([
+  const [filled, total, settingRows] = await Promise.all([
     prisma.medication.count({ where: { categoryB: { not: null } } }),
     prisma.medication.count(),
-    prisma.systemSetting.findUnique({ where: { key: "lastAtcSync" } }).catch(() => null),
+    prisma.$queryRaw<{ value: string }[]>`
+      SELECT "value" FROM "SystemSetting" WHERE "key" = 'lastAtcSync'
+    `.catch(() => [] as { value: string }[]),
   ]);
-  return NextResponse.json({ filled, total, lastSync: lastSync?.value ?? null });
+  return NextResponse.json({ filled, total, lastSync: settingRows[0]?.value ?? null });
 }

@@ -127,11 +127,11 @@ export async function POST(req: NextRequest) {
     const [publicCount, excelCount] = await Promise.all([
       prisma.medication.count({ where: { source: "PUBLIC_API" } }),
       prisma.medication.count({ where: { source: "EXCEL" } }),
-      prisma.systemSetting.upsert({
-        where: { key: "lastMfdsSync" },
-        update: { value: now },
-        create: { key: "lastMfdsSync", value: now },
-      }).catch(() => null),
+      prisma.$executeRaw`
+        INSERT INTO "SystemSetting" ("key", "value", "updatedAt")
+        VALUES ('lastMfdsSync', ${now}, NOW())
+        ON CONFLICT ("key") DO UPDATE SET "value" = ${now}, "updatedAt" = NOW()
+      `.catch(() => null),
     ]);
     return NextResponse.json({ success: true, synced, totalPublic: totalCount, publicCount, excelCount });
   } catch (err) {
@@ -140,10 +140,13 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET() {
-  const [publicCount, excelCount, lastSync] = await Promise.all([
+  const [publicCount, excelCount, lastSyncRows] = await Promise.all([
     prisma.medication.count({ where: { source: "PUBLIC_API" } }),
     prisma.medication.count({ where: { source: "EXCEL" } }),
-    prisma.systemSetting.findUnique({ where: { key: "lastMfdsSync" } }).catch(() => null),
+    prisma.$queryRaw<{ value: string }[]>`
+      SELECT "value" FROM "SystemSetting" WHERE "key" = 'lastMfdsSync'
+    `.catch(() => [] as { value: string }[]),
   ]);
-  return NextResponse.json({ publicCount, excelCount, total: publicCount + excelCount, lastSync: lastSync?.value ?? null });
+  const lastSync = lastSyncRows[0]?.value ?? null;
+  return NextResponse.json({ publicCount, excelCount, total: publicCount + excelCount, lastSync });
 }
