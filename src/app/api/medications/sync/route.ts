@@ -12,7 +12,7 @@ async function fetchPage(pageNo: number): Promise<{ items: PublicDrug[]; totalCo
   const url = new URL(BASE_URL);
   url.searchParams.set("serviceKey", API_KEY);
   url.searchParams.set("pageNo", String(pageNo));
-  url.searchParams.set("numOfRows", "1000");
+  url.searchParams.set("numOfRows", "100");
   url.searchParams.set("type", "json");
 
   const res = await fetch(url.toString(), { cache: "no-store" });
@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
       }, { status: 502 });
     }
 
-    const totalPages = Math.ceil(totalCount / 1000);
+    const totalPages = Math.ceil(totalCount / 100);
     const maxPages = testMode ? 1 : totalPages;
 
     let synced = 0;

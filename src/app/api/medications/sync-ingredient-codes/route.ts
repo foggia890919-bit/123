@@ -17,7 +17,10 @@ async function fetchPage(pageNo: number): Promise<{ items: AtcItem[]; totalCount
   url.searchParams.set("type", "json");
 
   const res = await fetch(url.toString(), { cache: "no-store" });
-  if (!res.ok) throw new Error(`API ${res.status}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`API ${res.status}: ${body.slice(0, 300)}`);
+  }
 
   const json = await res.json();
 
@@ -48,10 +51,10 @@ export async function POST() {
     const { items: firstItems, totalCount } = await fetchPage(1);
 
     if (totalCount === 0 || firstItems.length === 0) {
-      // 첫 페이지 아이템으로 필드명 진단
       return NextResponse.json({
-        error: "API에서 데이터를 가져오지 못했어요. 응답 형식을 확인해주세요.",
-        debug: firstItems.slice(0, 1),
+        error: "ATC API에서 데이터를 가져오지 못했어요.",
+        sampleKeys: Object.keys(firstItems[0] ?? {}),
+        totalCount,
       }, { status: 502 });
     }
 
