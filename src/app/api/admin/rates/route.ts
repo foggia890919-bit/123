@@ -27,8 +27,35 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(result);
 }
 
-// 엑셀 업로드로 추가수수료 일괄 등록
+// 엑셀 업로드 또는 일괄 설정으로 추가수수료 등록
 export async function POST(req: NextRequest) {
+  const contentType = req.headers.get("content-type") || "";
+
+  // JSON 요청 = 일괄 설정 { userId, bulkRate }
+  if (contentType.includes("application/json")) {
+    const { userId, bulkRate } = await req.json();
+    if (!userId || bulkRate == null || isNaN(Number(bulkRate))) {
+      return NextResponse.json({ error: "필수 항목 누락 (userId, bulkRate)" }, { status: 400 });
+    }
+    const rate = Number(bulkRate);
+    const companies = await prisma.medication.findMany({
+      where: { isSettlement: true },
+      select: { companyName: true },
+      distinct: ["companyName"],
+    });
+    let count = 0;
+    for (const { companyName } of companies) {
+      await prisma.memberCompanyRate.upsert({
+        where: { userId_companyName: { userId, companyName } },
+        update: { additionalRate: rate, updatedAt: new Date() },
+        create: { userId, companyName, additionalRate: rate, updatedAt: new Date() },
+      });
+      count++;
+    }
+    return NextResponse.json({ success: true, count, mode: "bulk", rate });
+  }
+
+  // FormData = 엑셀 업로드
   const formData = await req.formData();
   const userId = formData.get("userId") as string;
   const file = formData.get("file") as File;
@@ -38,25 +65,28 @@ export async function POST(req: NextRequest) {
   const buffer = await file.arrayBuffer();
   const workbook = XLSX.read(buffer, { type: "buffer" });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json<{ A: string; B: number }>(sheet, {
+  const rows = XLSX.utils.sheet_to_json<{ A: string; B: unknown }>(sheet, {
     header: ["A", "B"], range: 1,
   });
 
   const data = rows
-    .filter((r) => r.A && r.B != null && !isNaN(Number(r.B)))
+    .filter((r) => r.A && r.B != null && r.B !== "" && !isNaN(Number(r.B)))
     .map((r) => ({ companyName: String(r.A).trim(), additionalRate: Number(r.B) }));
 
   let count = 0;
+  const samples: { companyName: string; additionalRate: number }[] = [];
   for (const { companyName, additionalRate } of data) {
     await prisma.memberCompanyRate.upsert({
       where: { userId_companyName: { userId, companyName } },
       update: { additionalRate, updatedAt: new Date() },
       create: { userId, companyName, additionalRate, updatedAt: new Date() },
     });
+    if (samples.length < 5) samples.push({ companyName, additionalRate });
     count++;
   }
 
-  return NextResponse.json({ success: true, count });
+  const saved = await prisma.memberCompanyRate.count({ where: { userId } });
+  return NextResponse.json({ success: true, count, saved, samples, parsedRows: rows.length });
 }
 
 // 제약사 목록 엑셀 다운로드
