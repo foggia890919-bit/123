@@ -108,7 +108,7 @@ export default function MedicationTable({ medications, loading, showStock, showR
               </td>
               {showRate && (() => {
                 const base = med.commissionRate ?? null;
-                const extra = null; // 추후 한미몰 API 연동
+                const extra = med.additionalRate ?? null;
                 const total = base != null ? base + (extra ?? 0) : null;
                 const settlement = med.price != null && total != null
                   ? Math.round(med.price * total / 100)
@@ -118,7 +118,9 @@ export default function MedicationTable({ medications, loading, showStock, showR
                     <td className="px-4 py-3 text-right text-blue-600 font-medium whitespace-nowrap">
                       {base != null ? `${base}%` : "-"}
                     </td>
-                    <td className="px-4 py-3 text-right text-gray-400 whitespace-nowrap">-</td>
+                    <td className="px-4 py-3 text-right text-gray-500 whitespace-nowrap">
+                      {extra != null ? `${extra}%` : "-"}
+                    </td>
                     <td className="px-4 py-3 text-right font-semibold text-blue-700 whitespace-nowrap">
                       {total != null ? `${total}%` : "-"}
                     </td>

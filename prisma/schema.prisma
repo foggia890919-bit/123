@@ -7,14 +7,16 @@ datasource db {
 }
 
 model User {
-  id        String     @id @default(cuid())
-  email     String     @unique
-  name      String?
-  password  String
-  role      Role       @default(SALES_REP)
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
-  proposals Proposal[]
+  id           String               @id @default(cuid())
+  email        String               @unique
+  name         String?
+  password     String
+  role         Role                 @default(SALES_REP)
+  approved     Boolean              @default(false)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  proposals    Proposal[]
+  companyRates MemberCompanyRate[]
 }
 
 enum Role {
@@ -24,8 +26,21 @@ enum Role {
   PHARMACIST
 }
 
-model Medication {
+model MemberCompanyRate {
   id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyName    String
+  additionalRate Float    @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([userId, companyName])
+  @@index([userId])
+}
+
+model Medication {
+  id             String    @id @default(cuid())
   categoryA      String?
   ingredientName String
   categoryB      String?
@@ -37,10 +52,10 @@ model Medication {
   originalDrug   String?
   insuranceCode  String?
   notes          String?
-  isSettlement   Boolean  @default(false)
+  isSettlement   Boolean   @default(false)
   source         MedSource @default(EXCEL)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   proposalOriginalItems    ProposalItem[] @relation("OriginalMedication")
   proposalAlternativeItems ProposalItem[] @relation("AlternativeMedication")

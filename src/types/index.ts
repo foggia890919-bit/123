@@ -15,6 +15,7 @@ export interface MedicationItem {
   notes: string | null;
   isSettlement: boolean;
   source: "EXCEL" | "PUBLIC_API";
+  additionalRate?: number | null;
 }
 
 export interface ProposalCartItem {
