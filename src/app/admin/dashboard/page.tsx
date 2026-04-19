@@ -58,12 +58,21 @@ export default function AdminDashboardPage() {
         </div>
 
         <div
-          className="border-2 border-dashed border-gray-300 rounded-lg p-10 text-center cursor-pointer hover:border-blue-400 transition-colors"
+          className={`border-2 border-dashed rounded-lg p-10 text-center cursor-pointer transition-colors ${file ? "border-blue-400 bg-blue-50" : "border-gray-300 hover:border-blue-400"}`}
           onClick={() => inputRef.current?.click()}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            const dropped = e.dataTransfer.files?.[0];
+            if (dropped) { setFile(dropped); setResult(null); }
+          }}
         >
           <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
           <p className="text-sm text-gray-500">
-            {file ? <span className="font-medium text-gray-800">{file.name}</span> : "클릭해서 엑셀 파일 선택"}
+            {file
+              ? <span className="font-medium text-gray-800">{file.name}</span>
+              : <>클릭하거나 <span className="text-blue-500">파일을 여기에 드래그</span>해서 업로드</>
+            }
           </p>
           <p className="text-xs text-gray-400 mt-1">.xlsx, .xls 지원</p>
           <input
