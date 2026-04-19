@@ -19,7 +19,7 @@ export default function SearchPage() {
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [displayedQuery, setDisplayedQuery] = useState("");
-  const [cols, setCols] = useState<ColumnVisibility>({ showRate: true });
+  const [cols, setCols] = useState<ColumnVisibility>({ showRate: true, showInsuranceCode: true });
 
   async function handleSearch(e?: React.FormEvent) {
     e?.preventDefault();
