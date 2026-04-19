@@ -247,8 +247,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                   aria-label="전체 선택"
                 />
               </th>
-              <SortTh label="제약사" k="companyName" />
-              <SortTh label="제품명" k="productName" />
+              <SortTh label="제품명 / 제약사" k="productName" />
               <th className="px-4 py-3 text-left">성분명</th>
               {showCategoryB && <th className="px-4 py-3 text-center">분류B</th>}
               {showBioStatus && <th className="px-4 py-3 text-center">생동/생산</th>}
@@ -289,12 +288,12 @@ export default function MedicationTable({ medications, loading, userId, showCate
                     aria-label={`${med.productName} 선택`}
                   />
                 </td>
-                <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{med.companyName}</td>
                 <td className="px-4 py-3">
                   <p className="font-medium text-gray-900">
                     {med.productName}
                     <SettlementBadge med={med} />
                   </p>
+                  <p className="text-xs text-gray-500 mt-0.5">{med.companyName}</p>
                 </td>
                 <td className="px-4 py-3 text-gray-500 text-xs">
                   <IngredientName name={med.ingredientName} />
