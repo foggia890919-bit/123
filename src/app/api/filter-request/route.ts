@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@prisma/client";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const userId = req.nextUrl.searchParams.get("userId");
   const requests = await prisma.filterRequest.findMany({
+    where: userId ? { userId } : undefined,
     orderBy: { createdAt: "desc" },
     include: { user: { select: { name: true, email: true } } },
   });
@@ -34,10 +37,13 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
-  const { id, status } = await req.json();
-  const updated = await prisma.filterRequest.update({
-    where: { id },
-    data: { status, updatedAt: new Date() },
-  });
+  const { id, status, replyText } = await req.json();
+  const data: Prisma.FilterRequestUpdateInput = { updatedAt: new Date() };
+  if (status !== undefined) data.status = status;
+  if (replyText !== undefined) {
+    data.replyText = replyText || null;
+    data.repliedAt = new Date();
+  }
+  const updated = await prisma.filterRequest.update({ where: { id }, data });
   return NextResponse.json(updated);
 }

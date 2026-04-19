@@ -748,6 +748,7 @@ function RatesTab() {
 interface FilterReq {
   id: string; userName: string; clientName: string; bizNumber: string;
   companyName: string; status: string; createdAt: string;
+  replyText: string | null; repliedAt: string | null;
   user: { name: string | null; email: string };
 }
 
@@ -761,6 +762,8 @@ const statusOptions = [
 function FilterReqsTab() {
   const [reqs, setReqs] = useState<FilterReq[]>([]);
   const [loading, setLoading] = useState(true);
+  const [replyDraft, setReplyDraft] = useState<Record<string, string>>({});
+  const [savingId, setSavingId] = useState<string | null>(null);
 
   useEffect(() => { fetchReqs(); }, []);
 
@@ -778,6 +781,23 @@ function FilterReqsTab() {
       body: JSON.stringify({ id, status }),
     });
     setReqs((prev) => prev.map((r) => r.id === id ? { ...r, status } : r));
+  }
+
+  async function sendReply(id: string) {
+    const text = (replyDraft[id] ?? "").trim();
+    if (!text) return;
+    setSavingId(id);
+    const res = await fetch("/api/filter-request", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, replyText: text }),
+    });
+    if (res.ok) {
+      const updated = await res.json();
+      setReqs((prev) => prev.map((r) => r.id === id ? { ...r, replyText: updated.replyText, repliedAt: updated.repliedAt } : r));
+      setReplyDraft((prev) => { const n = { ...prev }; delete n[id]; return n; });
+    }
+    setSavingId(null);
   }
 
   if (loading) return <div className="py-16 text-center text-gray-400 text-sm">불러오는 중...</div>;
@@ -798,14 +818,16 @@ function FilterReqsTab() {
               <th className="px-4 py-3 text-left">사업자번호</th>
               <th className="px-4 py-3 text-left">요청 제약사</th>
               <th className="px-4 py-3 text-center">요청일</th>
-              <th className="px-4 py-3 text-center">회신여부</th>
+              <th className="px-4 py-3 text-center">상태</th>
+              <th className="px-4 py-3 text-left min-w-[280px]">회신</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {reqs.map((req) => {
               const statusOpt = statusOptions.find((s) => s.value === req.status) || statusOptions[0];
+              const draft = replyDraft[req.id] ?? "";
               return (
-                <tr key={req.id} className="hover:bg-gray-50">
+                <tr key={req.id} className="hover:bg-gray-50 align-top">
                   <td className="px-4 py-3 font-medium text-gray-900">{req.user.name || req.userName}</td>
                   <td className="px-4 py-3 text-gray-500 text-xs">{req.user.email}</td>
                   <td className="px-4 py-3 text-gray-700">{req.clientName}</td>
@@ -821,10 +843,63 @@ function FilterReqsTab() {
                       {statusOptions.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                     </select>
                   </td>
+                  <td className="px-4 py-3">
+                    {req.replyText ? (
+                      <div className="space-y-1">
+                        <p className="text-xs text-gray-700 whitespace-pre-wrap bg-blue-50 border border-blue-100 rounded px-2 py-1.5">{req.replyText}</p>
+                        <div className="flex items-center gap-2 text-[11px] text-gray-400">
+                          <span>{req.repliedAt ? new Date(req.repliedAt).toLocaleString("ko-KR") : ""}</span>
+                          <button
+                            type="button"
+                            onClick={() => setReplyDraft((p) => ({ ...p, [req.id]: req.replyText || "" }))}
+                            className="text-blue-500 hover:text-blue-700"
+                          >수정</button>
+                        </div>
+                        {replyDraft[req.id] !== undefined && (
+                          <div className="space-y-1">
+                            <textarea
+                              value={draft}
+                              onChange={(e) => setReplyDraft((p) => ({ ...p, [req.id]: e.target.value }))}
+                              placeholder="회신 내용"
+                              className="w-full text-xs border border-gray-200 rounded px-2 py-1.5 min-h-[56px] focus:outline-none focus:border-blue-400"
+                            />
+                            <div className="flex gap-1 justify-end">
+                              <button
+                                type="button"
+                                onClick={() => setReplyDraft((p) => { const n = { ...p }; delete n[req.id]; return n; })}
+                                className="text-[11px] text-gray-500 hover:text-gray-700 px-2 py-1"
+                              >취소</button>
+                              <button
+                                type="button"
+                                onClick={() => sendReply(req.id)}
+                                disabled={!draft.trim() || savingId === req.id}
+                                className="text-[11px] text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 rounded px-2 py-1"
+                              >{savingId === req.id ? "저장 중..." : "저장"}</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-1">
+                        <textarea
+                          value={draft}
+                          onChange={(e) => setReplyDraft((p) => ({ ...p, [req.id]: e.target.value }))}
+                          placeholder="회신 내용 (영업사원에게 표시됨)"
+                          className="w-full text-xs border border-gray-200 rounded px-2 py-1.5 min-h-[56px] focus:outline-none focus:border-blue-400"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => sendReply(req.id)}
+                          disabled={!draft.trim() || savingId === req.id}
+                          className="text-[11px] text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 rounded px-2 py-1 ml-auto block"
+                        >{savingId === req.id ? "저장 중..." : "회신 보내기"}</button>
+                      </div>
+                    )}
+                  </td>
                 </tr>
               );
             })}
-            {reqs.length === 0 && <tr><td colSpan={7} className="py-12 text-center text-gray-400 text-sm">요청 내역이 없어요.</td></tr>}
+            {reqs.length === 0 && <tr><td colSpan={8} className="py-12 text-center text-gray-400 text-sm">요청 내역이 없어요.</td></tr>}
           </tbody>
         </table>
       </div>

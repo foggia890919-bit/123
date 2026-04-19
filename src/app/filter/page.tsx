@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Fragment } from "react";
 import { Building2, Filter, X, Upload, Send, FileText, ChevronDown } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,10 @@ import { useSession } from "next-auth/react";
 
 interface Company { name: string; isSettlement: boolean; count: number; }
 interface ProposalSummary { id: string; title: string; _count?: { items: number }; }
+interface MyRequest {
+  id: string; clientName: string; bizNumber: string; companyName: string;
+  status: string; replyText: string | null; repliedAt: string | null; createdAt: string;
+}
 
 function StatusBadge({ status }: { status: string }) {
   if (status === "APPROVED") return <span className="text-xs text-green-700 bg-green-50 border border-green-200 px-1.5 py-0.5 rounded shrink-0">거래가능</span>;
@@ -34,10 +38,17 @@ export default function FilterPage() {
   const [proposals, setProposals] = useState<ProposalSummary[]>([]);
   const [showProposalMenu, setShowProposalMenu] = useState(false);
   const [companyStatuses, setCompanyStatuses] = useState<Record<string, string>>({});
+  const [myRequests, setMyRequests] = useState<MyRequest[]>([]);
 
   useEffect(() => {
     fetch("/api/medications/companies").then((r) => r.json()).then(setCompanies);
   }, []);
+
+  async function loadMyRequests(uid: string) {
+    const res = await fetch(`/api/filter-request?userId=${uid}`);
+    const data = await res.json();
+    setMyRequests(Array.isArray(data) ? data : []);
+  }
 
   useEffect(() => {
     if (!session?.user?.id) return;
@@ -47,6 +58,7 @@ export default function FilterPage() {
     fetch(`/api/filter-request/company-status?userId=${session.user.id}`)
       .then((r) => r.json())
       .then(setCompanyStatuses);
+    loadMyRequests(session.user.id);
   }, [session?.user?.id]);
 
   useEffect(() => {
@@ -118,9 +130,10 @@ export default function FilterPage() {
     if (res.ok) {
       setSuccess(true);
       setSelected(new Set()); setClientName(""); setBizNumber(""); setFile(null);
-      // Refresh statuses
+      // Refresh statuses + 내 요청 목록
       fetch(`/api/filter-request/company-status?userId=${session!.user.id}`)
         .then((r) => r.json()).then(setCompanyStatuses);
+      loadMyRequests(session!.user.id);
     } else {
       const d = await res.json();
       setError(d.error || "요청 중 오류가 발생했어요.");
@@ -190,13 +203,13 @@ export default function FilterPage() {
             </div>
           </div>
 
-          {/* 거래처 정보 입력 */}
+          {/* 거래처 정보 입력 + 내 요청 내역 */}
           <div className="md:col-span-2 space-y-4">
             {success ? (
-              <div className="bg-green-50 border border-green-200 rounded-xl p-8 text-center space-y-2">
-                <p className="text-green-700 font-semibold text-lg">조회 요청이 등록됐어요!</p>
+              <div className="bg-green-50 border border-green-200 rounded-xl p-6 text-center space-y-2">
+                <p className="text-green-700 font-semibold">조회 요청이 등록됐어요!</p>
                 <p className="text-green-600 text-sm">관리자가 확인 후 회신드릴게요.</p>
-                <button onClick={() => setSuccess(false)} className="mt-3 text-sm text-green-700 border border-green-300 px-4 py-2 rounded-lg hover:bg-green-100">
+                <button onClick={() => setSuccess(false)} className="mt-2 text-sm text-green-700 border border-green-300 px-4 py-2 rounded-lg hover:bg-green-100">
                   새 요청하기
                 </button>
               </div>
@@ -253,6 +266,57 @@ export default function FilterPage() {
                 </Button>
               </form>
             )}
+
+            {/* 내 요청 내역 */}
+            <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+              <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+                <h2 className="font-semibold text-gray-800 text-sm">내 조회 요청 내역 ({myRequests.length}건)</h2>
+                <button
+                  type="button"
+                  onClick={() => session?.user?.id && loadMyRequests(session.user.id)}
+                  className="text-xs text-gray-500 hover:text-gray-700"
+                >새로고침</button>
+              </div>
+              {myRequests.length === 0 ? (
+                <p className="text-center text-xs text-gray-400 py-8">아직 등록된 요청이 없어요</p>
+              ) : (
+                <div className="max-h-[420px] overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-gray-50 border-b border-gray-100">
+                      <tr className="text-xs text-gray-500 font-semibold">
+                        <th className="px-4 py-2.5 text-left">요청일</th>
+                        <th className="px-4 py-2.5 text-left">제약사</th>
+                        <th className="px-4 py-2.5 text-left">거래처</th>
+                        <th className="px-4 py-2.5 text-center">상태</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {myRequests.map((r) => (
+                        <Fragment key={r.id}>
+                          <tr className="hover:bg-gray-50">
+                            <td className="px-4 py-2.5 text-xs text-gray-400 whitespace-nowrap">{new Date(r.createdAt).toLocaleDateString("ko-KR")}</td>
+                            <td className="px-4 py-2.5 text-gray-800 text-xs">{r.companyName}</td>
+                            <td className="px-4 py-2.5 text-gray-600 text-xs">{r.clientName}</td>
+                            <td className="px-4 py-2.5 text-center"><StatusBadge status={r.status} /></td>
+                          </tr>
+                          {r.replyText && (
+                            <tr className="bg-blue-50/40">
+                              <td colSpan={4} className="px-4 py-2">
+                                <div className="text-xs text-blue-800">
+                                  <span className="font-semibold">관리자 회신</span>
+                                  {r.repliedAt && <span className="text-blue-400 ml-2">({new Date(r.repliedAt).toLocaleString("ko-KR")})</span>}
+                                </div>
+                                <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap">{r.replyText}</p>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
