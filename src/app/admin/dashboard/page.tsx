@@ -942,6 +942,7 @@ interface AdminUserClient {
   bizNumber: string;
   bizDocument: string | null;
   bizFileName: string | null;
+  approved: boolean;
   createdAt: string;
   userId: string;
   user: { name: string | null; email: string };
@@ -951,6 +952,7 @@ function UserClientsTab() {
   const [rows, setRows] = useState<AdminUserClient[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [approvingId, setApprovingId] = useState<string | null>(null);
 
   useEffect(() => { load(); }, []);
 
@@ -978,6 +980,17 @@ function UserClientsTab() {
     const prev = grouped.get(row.userId);
     if (prev) prev.clients.push(row);
     else grouped.set(row.userId, { user: row.user, clients: [row] });
+  }
+
+  async function toggleApproval(id: string, approved: boolean) {
+    setApprovingId(id);
+    await fetch(`/api/user-clients?id=${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approved }),
+    });
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, approved } : r));
+    setApprovingId(null);
   }
 
   function downloadDoc(row: AdminUserClient) {
@@ -1023,6 +1036,7 @@ function UserClientsTab() {
                 <th className="px-4 py-3 text-left">사업자번호</th>
                 <th className="px-4 py-3 text-left">사업자등록증</th>
                 <th className="px-4 py-3 text-center">등록일</th>
+                <th className="px-4 py-3 text-center">승인</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -1050,11 +1064,24 @@ function UserClientsTab() {
                     <td className="px-4 py-3 text-center text-gray-400 text-xs whitespace-nowrap">
                       {new Date(c.createdAt).toLocaleDateString("ko-KR")}
                     </td>
+                    <td className="px-4 py-3 text-center">
+                      <button
+                        onClick={() => toggleApproval(c.id, !c.approved)}
+                        disabled={approvingId === c.id}
+                        className={`text-xs px-2.5 py-1.5 rounded font-medium transition-colors ${
+                          c.approved
+                            ? "bg-red-50 text-red-600 hover:bg-red-100"
+                            : "bg-green-50 text-green-700 hover:bg-green-100"
+                        }`}
+                      >
+                        {approvingId === c.id ? "..." : c.approved ? "취소" : "승인"}
+                      </button>
+                    </td>
                   </tr>
                 ))
               ))}
               {filtered.length === 0 && query && (
-                <tr><td colSpan={6} className="py-12 text-center text-gray-400 text-sm">검색 결과가 없어요.</td></tr>
+                <tr><td colSpan={7} className="py-12 text-center text-gray-400 text-sm">검색 결과가 없어요.</td></tr>
               )}
             </tbody>
           </table>

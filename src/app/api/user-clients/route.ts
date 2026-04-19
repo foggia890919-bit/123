@@ -49,6 +49,14 @@ export async function POST(req: NextRequest) {
   }
 }
 
+export async function PATCH(req: NextRequest) {
+  const id = req.nextUrl.searchParams.get("id");
+  if (!id) return NextResponse.json({ error: "id 필요" }, { status: 400 });
+  const { approved } = await req.json();
+  const row = await prisma.userClient.update({ where: { id }, data: { approved: Boolean(approved) } });
+  return NextResponse.json(row);
+}
+
 export async function DELETE(req: NextRequest) {
   const id = req.nextUrl.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id 필요" }, { status: 400 });

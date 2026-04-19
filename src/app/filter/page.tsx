@@ -15,7 +15,7 @@ interface MyRequest {
 }
 interface UserClient {
   id: string; clientName: string; bizNumber: string;
-  bizFileName: string | null; createdAt: string;
+  bizFileName: string | null; approved: boolean; createdAt: string;
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -279,7 +279,11 @@ export default function FilterPage() {
                 <button type="button" onClick={() => setClientMenuOpen((v) => !v)}
                   className="w-full h-10 px-3 border border-gray-300 rounded-md bg-white hover:bg-gray-50 text-left text-sm flex items-center justify-between">
                   {selectedClient ? (
-                    <span className="text-gray-800"><span className="font-medium">{selectedClient.clientName}</span> <span className="text-gray-400">· {selectedClient.bizNumber}</span></span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="font-medium text-gray-800">{selectedClient.clientName}</span>
+                      <span className="text-gray-400 text-xs">· {selectedClient.bizNumber}</span>
+                      {!selectedClient.approved && <span className="text-[10px] text-orange-600 bg-orange-50 border border-orange-200 px-1.5 py-0.5 rounded">승인전</span>}
+                    </span>
                   ) : (
                     <span className="text-gray-400">거래처를 선택해주세요</span>
                   )}
@@ -303,7 +307,10 @@ export default function FilterPage() {
                         <div key={c.id} className="flex items-center hover:bg-gray-50 group">
                           <button type="button" onClick={() => { setSelectedClientId(c.id); setClientMenuOpen(false); }}
                             className="flex-1 text-left px-3 py-2.5 text-xs">
-                            <p className="font-medium text-gray-800">{c.clientName}</p>
+                            <p className="font-medium text-gray-800 flex items-center gap-1.5">
+                              {c.clientName}
+                              {!c.approved && <span className="text-[10px] text-orange-600 bg-orange-50 border border-orange-200 px-1.5 py-0.5 rounded">승인전</span>}
+                            </p>
                             <p className="text-gray-400">{c.bizNumber}{c.bizFileName ? ` · ${c.bizFileName}` : ""}</p>
                           </button>
                           <button type="button" onClick={() => handleDeleteClient(c.id)}
