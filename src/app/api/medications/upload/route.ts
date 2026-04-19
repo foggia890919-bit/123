@@ -19,32 +19,44 @@ export async function POST(req: NextRequest) {
 
     const medications = rows
       .filter((row) => row["성분명"] || row["품목명"])
-      .map((row) => ({
-        categoryA: String(row["분류(A)"] || row["분류A"] || "").trim() || null,
-        ingredientName: String(row["성분명"] || "").trim(),
-        categoryB: String(row["분류(B)"] || row["분류B"] || "").trim() || null,
-        commissionRate: parseFloat(String(row["코드"] || "")) || null,
-        companyName: String(row["제약사명"] || "").trim(),
-        bioStatus: String(row["생동/생산"] || "").trim() || null,
-        productName: String(row["품목명"] || "").trim(),
-        price: parseInt(String(row["약가"] || "")) || null,
-        originalDrug: String(row["오리지날/대조약"] || "").trim() || null,
-        insuranceCode: String(row["보험코드"] || "").trim() || null,
-        notes: String(row["특이사항"] || "").trim() || null,
-        isSettlement,
-        source: "EXCEL" as const,
-      }))
+      .map((row) => {
+        const commissionRaw = parseFloat(String(row["코드"] || ""));
+        const priceRaw = parseInt(String(row["약가"] || ""));
+        return {
+          categoryA: String(row["분류(A)"] || row["분류A"] || "").trim() || null,
+          ingredientName: String(row["성분명"] || "").trim(),
+          categoryB: String(row["분류(B)"] || row["분류B"] || "").trim() || null,
+          commissionRate: isNaN(commissionRaw) ? null : commissionRaw,
+          companyName: String(row["제약사명"] || "").trim() || "미상",
+          bioStatus: String(row["생동/생산"] || "").trim() || null,
+          productName: String(row["품목명"] || "").trim(),
+          price: isNaN(priceRaw) ? null : priceRaw,
+          originalDrug: String(row["오리지날/대조약"] || "").trim() || null,
+          insuranceCode: String(row["보험코드"] || "").trim() || null,
+          notes: String(row["특이사항"] || "").trim() || null,
+          isSettlement,
+          source: "EXCEL" as const,
+          updatedAt: new Date(),
+        };
+      })
       .filter((m) => m.ingredientName && m.productName);
 
     if (medications.length === 0) {
       return NextResponse.json({ error: "유효한 데이터가 없어요. 컬럼명을 확인해주세요." }, { status: 400 });
     }
 
-    await prisma.medication.createMany({ data: medications, skipDuplicates: false });
+    const BATCH = 500;
+    let total = 0;
+    for (let i = 0; i < medications.length; i += BATCH) {
+      const batch = medications.slice(i, i + BATCH);
+      await prisma.medication.createMany({ data: batch });
+      total += batch.length;
+    }
 
-    return NextResponse.json({ success: true, count: medications.length });
+    return NextResponse.json({ success: true, count: total });
   } catch (error) {
-    console.error("Upload error:", error);
-    return NextResponse.json({ error: "업로드 중 오류가 발생했어요." }, { status: 500 });
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("Upload error:", msg);
+    return NextResponse.json({ error: `업로드 오류: ${msg}` }, { status: 500 });
   }
 }
