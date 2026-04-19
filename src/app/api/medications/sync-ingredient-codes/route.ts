@@ -26,6 +26,36 @@ async function fetchPage(page: number): Promise<{ items: AtcItem[]; totalCount: 
   return { items, totalCount };
 }
 
+async function fetchPageWithRetry(page: number, retries = 3): Promise<{ items: AtcItem[]; totalCount: number }> {
+  let lastError: unknown = null;
+  for (let i = 0; i < retries; i++) {
+    try { return await fetchPage(page); }
+    catch (e) {
+      lastError = e;
+      if (i < retries - 1) await new Promise((r) => setTimeout(r, 800 * Math.pow(2, i)));
+    }
+  }
+  throw new Error(`ATC 페이지 ${page} 실패: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+}
+
+function isTransientDbError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /max clients|EMAXCONN|connection|ECONNREFUSED|ETIMEDOUT|pool/i.test(msg);
+}
+
+async function withDbRetry<T>(fn: () => Promise<T>, retries = 4): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < retries; i++) {
+    try { return await fn(); }
+    catch (e) {
+      lastErr = e;
+      if (!isTransientDbError(e) || i === retries - 1) throw e;
+      await new Promise((r) => setTimeout(r, 600 * Math.pow(2, i)));
+    }
+  }
+  throw lastErr;
+}
+
 function extractCodes(item: AtcItem): { ingredientCode: string; productCode: string } | null {
   const ingredientCode = String(
     item["주성분코드"] ?? item["주성분_코드"] ?? item["ingdtCode"] ?? item["mainIngdtCode"] ?? ""
@@ -39,7 +69,7 @@ function extractCodes(item: AtcItem): { ingredientCode: string; productCode: str
 
 export async function POST() {
   try {
-    const { items: firstItems, totalCount } = await fetchPage(1);
+    const { items: firstItems, totalCount } = await fetchPageWithRetry(1);
 
     if (totalCount === 0 || firstItems.length === 0) {
       return NextResponse.json({
@@ -53,7 +83,7 @@ export async function POST() {
     const totalPages = Math.ceil(totalCount / 1000);
     const allItems: AtcItem[] = [...firstItems];
     for (let page = 2; page <= totalPages; page++) {
-      const { items } = await fetchPage(page);
+      const { items } = await fetchPageWithRetry(page);
       allItems.push(...items);
     }
 
@@ -81,25 +111,39 @@ export async function POST() {
       const values = batch.map((_, j) => `($${j * 2 + 1}, $${j * 2 + 2})`).join(", ");
       const params = batch.flatMap(([productCode, ingredientCode]) => [productCode, ingredientCode]);
 
-      const result = await prisma.$queryRawUnsafe<{ count: bigint }[]>(
+      const result = await withDbRetry(() => prisma.$queryRawUnsafe<{ count: bigint }[]>(
         `UPDATE "Medication" AS m
          SET "categoryB" = v."categoryB", "updatedAt" = NOW()
          FROM (VALUES ${values}) AS v("insuranceCode", "categoryB")
          WHERE m."insuranceCode" = v."insuranceCode"
          RETURNING m.id`,
         ...params
-      );
+      ));
       updated += result.length;
     }
 
     const now = new Date().toISOString();
-    await prisma.$executeRaw`
+    await withDbRetry(() => prisma.$executeRaw`
       INSERT INTO "SystemSetting" ("key", "value", "updatedAt")
       VALUES ('lastAtcSync', ${now}, NOW())
       ON CONFLICT ("key") DO UPDATE SET "value" = ${now}, "updatedAt" = NOW()
-    `.catch(() => null);
+    `).catch(() => null);
 
-    return NextResponse.json({ success: true, total: totalCount, mapped: codeMap.size, updated });
+    // 최종 카운트 포함 응답 (프론트에서 바로 박스 갱신 가능하게)
+    const [filled, total] = await Promise.all([
+      withDbRetry(() => prisma.medication.count({ where: { categoryB: { not: null } } })),
+      withDbRetry(() => prisma.medication.count()),
+    ]);
+
+    return NextResponse.json({
+      success: true,
+      total: totalCount,
+      mapped: codeMap.size,
+      updated,
+      filled,
+      lastSync: now,
+      totalInDb: total,
+    });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }

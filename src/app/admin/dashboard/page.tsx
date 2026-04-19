@@ -106,9 +106,10 @@ function UploadTab() {
   }
 
   useEffect(() => {
-    fetch("/api/medications/sync-ingredient-codes").then((r) => r.json()).then((d) => {
-      if (d.filled !== undefined) setMapResult(d);
-    });
+    fetch("/api/medications/sync-ingredient-codes")
+      .then((r) => r.json())
+      .then((d) => setMapResult(d))
+      .catch(() => null);
   }, []);
 
   const [syncLoading, setSyncLoading] = useState(false);
@@ -337,9 +338,11 @@ function UploadTab() {
           <h2 className="text-base font-semibold text-gray-800">③ 주성분코드(ATC) 동기화</h2>
           <p className="text-xs text-gray-500 mt-0.5">건강보험심사평가원 ATC코드 매핑 API에서 주성분코드를 가져와 보험코드 기준으로 자동 연결합니다.</p>
         </div>
-        {mapResult && !mapResult.error && mapResult.filled !== undefined && (
+        {mapResult && !mapResult.error && (mapResult.filled !== undefined || mapResult.lastSync !== undefined) && (
           <div className="text-xs text-purple-700 bg-purple-50 rounded p-2 border border-purple-200 space-y-0.5">
-            <div>주성분코드 보유: <strong>{mapResult.filled?.toLocaleString()}건</strong> / 전체 <strong>{mapResult.total?.toLocaleString()}건</strong></div>
+            {mapResult.filled !== undefined && (
+              <div>주성분코드 보유: <strong>{mapResult.filled?.toLocaleString()}건</strong> / 전체 <strong>{mapResult.total?.toLocaleString()}건</strong></div>
+            )}
             <div className="text-purple-500">
               마지막 동기화: <strong>{mapResult.lastSync ? new Date(mapResult.lastSync).toLocaleString("ko-KR") : "기록 없음"}</strong>
             </div>

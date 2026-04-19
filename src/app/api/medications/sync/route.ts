@@ -63,6 +63,25 @@ function mapDrug(item: PublicDrug) {
   };
 }
 
+function isTransientDbError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /max clients|EMAXCONN|connection|ECONNREFUSED|ETIMEDOUT|pool/i.test(msg);
+}
+
+async function withDbRetry<T>(fn: () => Promise<T>, retries = 4): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (!isTransientDbError(e) || i === retries - 1) throw e;
+      await new Promise((r) => setTimeout(r, 600 * Math.pow(2, i)));
+    }
+  }
+  throw lastErr;
+}
+
 async function processPage(pageItems: PublicDrug[]): Promise<number> {
   const drugs = pageItems
     .map(mapDrug)
@@ -72,10 +91,10 @@ async function processPage(pageItems: PublicDrug[]): Promise<number> {
   const codes = drugs.map((d) => d.insuranceCode).filter(Boolean) as string[];
 
   const existing = codes.length > 0
-    ? await prisma.medication.findMany({
+    ? await withDbRetry(() => prisma.medication.findMany({
         where: { insuranceCode: { in: codes } },
         select: { id: true, insuranceCode: true },
-      })
+      }))
     : [];
   const existingMap = new Map(existing.map((e) => [e.insuranceCode, e]));
 
@@ -101,16 +120,12 @@ async function processPage(pageItems: PublicDrug[]): Promise<number> {
   }
 
   if (toCreate.length > 0) {
-    await prisma.medication.createMany({ data: toCreate, skipDuplicates: true });
+    await withDbRetry(() => prisma.medication.createMany({ data: toCreate, skipDuplicates: true }));
   }
 
-  // 병렬 업데이트 (pool max=3, 과부하 방지용 청크)
-  const CHUNK = 6;
-  for (let i = 0; i < toUpdate.length; i += CHUNK) {
-    const slice = toUpdate.slice(i, i + CHUNK);
-    await Promise.all(
-      slice.map(({ id, data }) => prisma.medication.update({ where: { id }, data }))
-    );
+  // 순차 업데이트 (pool 고갈 방지)
+  for (const { id, data } of toUpdate) {
+    await withDbRetry(() => prisma.medication.update({ where: { id }, data }));
   }
 
   return drugs.length;
@@ -148,30 +163,13 @@ export async function POST(req: NextRequest) {
       pageErrors.push({ page: startPage, error: e instanceof Error ? e.message : String(e) });
     }
 
-    // 나머지 페이지 (동시 3개씩 fetch, 처리는 순차)
-    const CONCURRENT = 3;
-    for (let page = startPage + 1; page <= endPage; page += CONCURRENT) {
-      const pagesToFetch = Array.from(
-        { length: Math.min(CONCURRENT, endPage - page + 1) },
-        (_, i) => page + i
-      );
-
-      const fetchResults = await Promise.allSettled(
-        pagesToFetch.map((p) => fetchPageWithRetry(p))
-      );
-
-      for (let i = 0; i < fetchResults.length; i++) {
-        const p = pagesToFetch[i];
-        const r = fetchResults[i];
-        if (r.status === "fulfilled") {
-          try {
-            synced += await processPage(r.value.items);
-          } catch (e) {
-            pageErrors.push({ page: p, error: e instanceof Error ? e.message : String(e) });
-          }
-        } else {
-          pageErrors.push({ page: p, error: r.reason instanceof Error ? r.reason.message : String(r.reason) });
-        }
+    // 나머지 페이지: 완전 순차 처리 (pool 고갈 방지)
+    for (let p = startPage + 1; p <= endPage; p++) {
+      try {
+        const { items } = await fetchPageWithRetry(p);
+        synced += await processPage(items);
+      } catch (e) {
+        pageErrors.push({ page: p, error: e instanceof Error ? e.message : String(e) });
       }
     }
 
