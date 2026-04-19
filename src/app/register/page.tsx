@@ -145,6 +145,10 @@ export default function RegisterPage() {
 
           {error && <p className="text-sm text-red-600 bg-red-50 p-3 rounded-lg">{error}</p>}
 
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700">
+            ⚠️ 실제 사용하는 이메일로 가입해주세요. 등록한 이메일이 없으면 비밀번호 찾기 서비스를 이용할 수 없어요.
+          </div>
+
           <Button type="submit" className="w-full" disabled={loading}>
             {loading ? "처리 중..." : "회원가입 신청"}
           </Button>

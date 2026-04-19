@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { Pill, FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut } from "lucide-react";
 
 const navItems = [
-  { href: "/", label: "통합검색", icon: Search },
+  { href: "/search", label: "통합검색", icon: Search },
   { href: "/search/settlement", label: "정산제약사 검색", icon: Building2 },
   { href: "/filter", label: "제약사 필터링", icon: Building2 },
   { href: "/proposals", label: "제안서", icon: FileText },
