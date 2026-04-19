@@ -111,23 +111,88 @@ function UploadTab() {
   }, []);
 
   const [syncLoading, setSyncLoading] = useState(false);
-  const [syncResult, setSyncResult] = useState<{ success?: boolean; synced?: number; totalPublic?: number; publicCount?: number; excelCount?: number; lastSync?: string | null; error?: string } | null>(null);
+  const [syncResult, setSyncResult] = useState<{ success?: boolean; synced?: number; totalPublic?: number; publicCount?: number; excelCount?: number; lastSync?: string | null; error?: string; pageErrors?: { page: number; error: string }[] } | null>(null);
+  const [syncProgress, setSyncProgress] = useState<{ current: number; total: number; synced: number; errors: number } | null>(null);
+  const syncAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     fetch("/api/medications/sync").then((r) => r.json()).then(setSyncResult);
   }, []);
 
+  function stopSync() {
+    syncAbortRef.current?.abort();
+  }
+
   async function handleSync(testMode = false) {
-    setSyncLoading(true); setSyncResult(null);
+    setSyncLoading(true); setSyncResult(null); setSyncProgress(null);
+    const abort = new AbortController();
+    syncAbortRef.current = abort;
+
     try {
-      const res = await fetch("/api/medications/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: testMode ? "test" : "full" }),
+      if (testMode) {
+        const res = await fetch("/api/medications/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: "test" }),
+          signal: abort.signal,
+        });
+        setSyncResult(await res.json());
+        return;
+      }
+
+      // 전체 동기화: 청크 단위로 루프
+      let nextPage: number | null = 1;
+      let totalSynced = 0;
+      const allErrors: { page: number; error: string }[] = [];
+      let lastResp: { publicCount?: number; excelCount?: number; totalCount?: number; totalPages?: number } = {};
+
+      while (nextPage !== null) {
+        if (abort.signal.aborted) throw new Error("사용자가 중단했습니다.");
+
+        const res: Response = await fetch("/api/medications/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ startPage: nextPage, batchSize: 10 }),
+          signal: abort.signal,
+        });
+        const data = await res.json();
+
+        if (!res.ok || data.error) {
+          throw new Error(`페이지 ${nextPage} 구간 오류: ${data.error || res.status}`);
+        }
+
+        totalSynced += data.synced || 0;
+        if (Array.isArray(data.pageErrors)) allErrors.push(...data.pageErrors);
+        lastResp = data;
+
+        setSyncProgress({
+          current: data.endPage || 0,
+          total: data.totalPages || 0,
+          synced: totalSynced,
+          errors: allErrors.length,
+        });
+
+        nextPage = data.nextPage;
+      }
+
+      setSyncResult({
+        success: true,
+        synced: totalSynced,
+        totalPublic: lastResp.totalCount,
+        publicCount: lastResp.publicCount,
+        excelCount: lastResp.excelCount,
+        pageErrors: allErrors.length > 0 ? allErrors : undefined,
       });
-      setSyncResult(await res.json());
-    } catch { setSyncResult({ error: "동기화 중 오류가 발생했어요." }); }
-    finally { setSyncLoading(false); }
+      // 최종 카운트/lastSync 다시 불러오기
+      fetch("/api/medications/sync").then((r) => r.json()).then((d) => {
+        setSyncResult((prev) => ({ ...(prev || {}), ...d }));
+      });
+    } catch (e) {
+      setSyncResult({ error: e instanceof Error ? e.message : "동기화 중 오류가 발생했어요." });
+    } finally {
+      setSyncLoading(false);
+      syncAbortRef.current = null;
+    }
   }
 
   async function handleUpload() {
@@ -171,13 +236,41 @@ function UploadTab() {
             {syncResult.error}
           </div>
         )}
+        {syncProgress && syncLoading && (
+          <div className="bg-white rounded p-3 border border-blue-200 space-y-2">
+            <div className="flex items-center justify-between text-xs text-blue-800">
+              <span>진행률: {syncProgress.current}/{syncProgress.total} 페이지</span>
+              <span>{syncProgress.synced.toLocaleString()}건 처리 {syncProgress.errors > 0 && <span className="text-red-600">· 실패 {syncProgress.errors}</span>}</span>
+            </div>
+            <div className="h-1.5 bg-blue-100 rounded-full overflow-hidden">
+              <div className="h-full bg-blue-600 transition-all"
+                style={{ width: `${syncProgress.total > 0 ? (syncProgress.current / syncProgress.total) * 100 : 0}%` }} />
+            </div>
+          </div>
+        )}
+        {syncResult?.pageErrors && syncResult.pageErrors.length > 0 && (
+          <details className="text-xs bg-yellow-50 border border-yellow-200 rounded p-2">
+            <summary className="cursor-pointer text-yellow-800 font-medium">일부 페이지 실패: {syncResult.pageErrors.length}건 (클릭해서 상세보기)</summary>
+            <ul className="mt-2 space-y-0.5 max-h-32 overflow-y-auto">
+              {syncResult.pageErrors.slice(0, 20).map((e, i) => (
+                <li key={i} className="text-yellow-700 font-mono">페이지 {e.page}: {e.error}</li>
+              ))}
+              {syncResult.pageErrors.length > 20 && <li className="text-yellow-600">... 외 {syncResult.pageErrors.length - 20}건</li>}
+            </ul>
+          </details>
+        )}
         <div className="flex gap-2">
           <Button onClick={() => handleSync(true)} disabled={syncLoading} variant="outline" className="border-blue-300 text-blue-700 hover:bg-blue-100">
             {syncLoading ? "동기화 중..." : "테스트 (100건)"}
           </Button>
           <Button onClick={() => handleSync(false)} disabled={syncLoading} className="bg-blue-600 hover:bg-blue-700">
-            {syncLoading ? "동기화 중... (수 분 소요)" : "전체 동기화 시작"}
+            {syncLoading ? "동기화 중... (자동 진행)" : "전체 동기화 시작"}
           </Button>
+          {syncLoading && (
+            <Button onClick={stopSync} variant="outline" className="border-red-300 text-red-700 hover:bg-red-50">
+              중단
+            </Button>
+          )}
         </div>
       </div>
 

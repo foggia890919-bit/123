@@ -25,6 +25,21 @@ async function fetchPage(pageNo: number): Promise<{ items: PublicDrug[]; totalCo
   return { items, totalCount: parseInt(body?.totalCount ?? "0") };
 }
 
+async function fetchPageWithRetry(pageNo: number, retries = 3): Promise<{ items: PublicDrug[]; totalCount: number }> {
+  let lastError: unknown = null;
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fetchPage(pageNo);
+    } catch (e) {
+      lastError = e;
+      if (i < retries - 1) {
+        await new Promise((r) => setTimeout(r, 800 * Math.pow(2, i)));
+      }
+    }
+  }
+  throw new Error(`페이지 ${pageNo} 실패 (${retries}회 재시도): ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+}
+
 function mapDrug(item: PublicDrug) {
   const ediRaw = (item.EDI_CODE ?? "").trim();
   const ediCodes = ediRaw ? ediRaw.split(",").map((s) => s.trim()).filter(Boolean) : [];
@@ -33,7 +48,7 @@ function mapDrug(item: PublicDrug) {
   return {
     categoryA: (item.PRODUCT_TYPE ?? "").trim() || null,
     ingredientName: (item.ITEM_INGR_NAME ?? item.ITEM_NAME ?? "").trim(),
-    categoryB: null as string | null, // 주성분코드는 ATC 동기화로만 채움
+    categoryB: null as string | null,
     companyName: (item.ENTP_NAME ?? "미상").trim(),
     productName: (item.ITEM_NAME ?? "").trim(),
     price: null as number | null,
@@ -48,94 +63,157 @@ function mapDrug(item: PublicDrug) {
   };
 }
 
+async function processPage(pageItems: PublicDrug[]): Promise<number> {
+  const drugs = pageItems
+    .map(mapDrug)
+    .filter((d) => d.productName && d.ingredientName);
+  if (drugs.length === 0) return 0;
+
+  const codes = drugs.map((d) => d.insuranceCode).filter(Boolean) as string[];
+
+  const existing = codes.length > 0
+    ? await prisma.medication.findMany({
+        where: { insuranceCode: { in: codes } },
+        select: { id: true, insuranceCode: true },
+      })
+    : [];
+  const existingMap = new Map(existing.map((e) => [e.insuranceCode, e]));
+
+  const toCreate: typeof drugs = [];
+  const toUpdate: { id: string; data: Partial<ReturnType<typeof mapDrug>> }[] = [];
+
+  for (const drug of drugs) {
+    const found = drug.insuranceCode ? existingMap.get(drug.insuranceCode) : null;
+    if (found) {
+      toUpdate.push({
+        id: found.id,
+        data: {
+          productName: drug.productName,
+          ingredientName: drug.ingredientName,
+          companyName: drug.companyName,
+          categoryA: drug.categoryA,
+          updatedAt: new Date(),
+        },
+      });
+    } else {
+      toCreate.push(drug);
+    }
+  }
+
+  if (toCreate.length > 0) {
+    await prisma.medication.createMany({ data: toCreate, skipDuplicates: true });
+  }
+
+  // 병렬 업데이트 (pool max=3, 과부하 방지용 청크)
+  const CHUNK = 6;
+  for (let i = 0; i < toUpdate.length; i += CHUNK) {
+    const slice = toUpdate.slice(i, i + CHUNK);
+    await Promise.all(
+      slice.map(({ id, data }) => prisma.medication.update({ where: { id }, data }))
+    );
+  }
+
+  return drugs.length;
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const testMode = body?.mode === "test";
+  const startPage = Math.max(1, parseInt(body?.startPage) || 1);
+  const rawBatch = parseInt(body?.batchSize);
+  const batchSize = testMode ? 1 : Math.max(1, Math.min(30, Number.isFinite(rawBatch) ? rawBatch : 10));
+
+  const pageErrors: { page: number; error: string }[] = [];
+  let synced = 0;
+  let totalPages = 0;
+  let totalCount = 0;
+  let endPage = startPage;
 
   try {
-    const { items: firstItems, totalCount } = await fetchPage(1);
-    if (totalCount === 0 || firstItems.length === 0) {
+    // 첫 페이지로 totalCount 파악
+    const first = await fetchPageWithRetry(startPage);
+    totalCount = first.totalCount;
+    if (totalCount === 0) {
       return NextResponse.json({
-        error: "공공 API에서 데이터를 가져오지 못했어요. API 키 또는 응답 형식을 확인해주세요.",
+        error: "공공 API에서 데이터를 가져오지 못했어요. API 키를 확인해주세요.",
       }, { status: 502 });
     }
+    totalPages = Math.ceil(totalCount / 100);
+    endPage = Math.min(startPage + batchSize - 1, totalPages);
 
-    const totalPages = Math.ceil(totalCount / 100);
-    const maxPages = testMode ? 1 : totalPages;
+    // 첫 페이지 처리
+    try {
+      synced += await processPage(first.items);
+    } catch (e) {
+      pageErrors.push({ page: startPage, error: e instanceof Error ? e.message : String(e) });
+    }
 
-    let synced = 0;
+    // 나머지 페이지 (동시 3개씩 fetch, 처리는 순차)
+    const CONCURRENT = 3;
+    for (let page = startPage + 1; page <= endPage; page += CONCURRENT) {
+      const pagesToFetch = Array.from(
+        { length: Math.min(CONCURRENT, endPage - page + 1) },
+        (_, i) => page + i
+      );
 
-    async function processPage(pageItems: PublicDrug[]) {
-      const drugs = pageItems
-        .map(mapDrug)
-        .filter((d) => d.productName && d.ingredientName);
+      const fetchResults = await Promise.allSettled(
+        pagesToFetch.map((p) => fetchPageWithRetry(p))
+      );
 
-      const codes = drugs.map((d) => d.insuranceCode).filter(Boolean) as string[];
-
-      const existing = await prisma.medication.findMany({
-        where: { insuranceCode: { in: codes } },
-        select: { id: true, insuranceCode: true, commissionRate: true },
-      });
-      const existingMap = new Map(existing.map((e) => [e.insuranceCode, e]));
-
-      const toCreate: typeof drugs = [];
-      const toUpdate: { id: string; data: Partial<ReturnType<typeof mapDrug>> }[] = [];
-
-      for (const drug of drugs) {
-        const found = drug.insuranceCode ? existingMap.get(drug.insuranceCode) : null;
-        if (found) {
-          toUpdate.push({
-            id: found.id,
-            data: {
-              productName: drug.productName,
-              ingredientName: drug.ingredientName,
-              companyName: drug.companyName,
-              categoryA: drug.categoryA,
-              // categoryB는 ATC 동기화가 관리하므로 덮어쓰지 않음
-              updatedAt: new Date(),
-            },
-          });
+      for (let i = 0; i < fetchResults.length; i++) {
+        const p = pagesToFetch[i];
+        const r = fetchResults[i];
+        if (r.status === "fulfilled") {
+          try {
+            synced += await processPage(r.value.items);
+          } catch (e) {
+            pageErrors.push({ page: p, error: e instanceof Error ? e.message : String(e) });
+          }
         } else {
-          toCreate.push(drug);
+          pageErrors.push({ page: p, error: r.reason instanceof Error ? r.reason.message : String(r.reason) });
         }
       }
-
-      if (toCreate.length > 0) {
-        await prisma.medication.createMany({ data: toCreate, skipDuplicates: true });
-      }
-
-      for (const { id, data } of toUpdate) {
-        await prisma.medication.update({ where: { id }, data });
-      }
-
-      synced += drugs.length;
     }
 
-    await processPage(firstItems);
+    const done = endPage >= totalPages;
 
-    const CONCURRENT = 2;
-    for (let page = 2; page <= maxPages; page += CONCURRENT) {
-      const batch = await Promise.all(
-        Array.from({ length: Math.min(CONCURRENT, maxPages - page + 1) }, (_, i) =>
-          fetchPage(page + i).then((r) => r.items)
-        )
-      );
-      await Promise.all(batch.map(processPage));
-    }
-
-    const now = new Date().toISOString();
-    const [publicCount, excelCount] = await Promise.all([
-      prisma.medication.count({ where: { source: "PUBLIC_API" } }),
-      prisma.medication.count({ where: { source: "EXCEL" } }),
-      prisma.$executeRaw`
+    // 완료 시에만 lastMfdsSync 갱신
+    if (done) {
+      const now = new Date().toISOString();
+      await prisma.$executeRaw`
         INSERT INTO "SystemSetting" ("key", "value", "updatedAt")
         VALUES ('lastMfdsSync', ${now}, NOW())
         ON CONFLICT ("key") DO UPDATE SET "value" = ${now}, "updatedAt" = NOW()
-      `.catch(() => null),
+      `.catch(() => null);
+    }
+
+    const [publicCount, excelCount] = await Promise.all([
+      prisma.medication.count({ where: { source: "PUBLIC_API" } }),
+      prisma.medication.count({ where: { source: "EXCEL" } }),
     ]);
-    return NextResponse.json({ success: true, synced, totalPublic: totalCount, publicCount, excelCount });
+
+    return NextResponse.json({
+      success: true,
+      synced,
+      startPage,
+      endPage,
+      nextPage: done ? null : endPage + 1,
+      totalPages,
+      totalCount,
+      totalPublic: totalCount,
+      done,
+      publicCount,
+      excelCount,
+      pageErrors: pageErrors.length > 0 ? pageErrors : undefined,
+    });
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+    return NextResponse.json({
+      error: err instanceof Error ? err.message : String(err),
+      startPage,
+      endPage,
+      synced,
+      pageErrors: pageErrors.length > 0 ? pageErrors : undefined,
+    }, { status: 500 });
   }
 }
 
