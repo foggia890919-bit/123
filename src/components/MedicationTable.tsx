@@ -23,6 +23,21 @@ interface Props extends ColumnVisibility {
   userId?: string;
 }
 
+function IngredientName({ name }: { name: string }) {
+  const parts = name.split("/").map((p) => p.trim());
+  if (parts.length <= 1) return <span>{name}</span>;
+  return (
+    <span>
+      {parts.map((part, i) => (
+        <span key={i}>
+          {part}{i < parts.length - 1 ? " /" : ""}
+          {i < parts.length - 1 && <br />}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 export default function MedicationTable({ medications, loading, userId, showCategoryB, showBioStatus, showOriginalDrug, showInsuranceCode, showNotes, showStock, showRate }: Props) {
   const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null } | null>(null);
   const [proposalTarget, setProposalTarget] = useState<MedicationItem | null>(null);
@@ -36,6 +51,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500 font-semibold">
+              <th className="px-4 py-3 text-left">제약사</th>
               <th className="px-4 py-3 text-left">제품명</th>
               <th className="px-4 py-3 text-left">성분명</th>
               <th className="px-4 py-3 text-center w-28"></th>
@@ -60,20 +76,13 @@ export default function MedicationTable({ medications, loading, userId, showCate
           <tbody className="divide-y divide-gray-100">
             {medications.map((med) => (
               <tr key={med.id} className="hover:bg-gray-50 transition-colors">
+                <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{med.companyName}</td>
                 <td className="px-4 py-3">
-                  <div className="flex items-start gap-2">
-                    {med.categoryA && (
-                      <span className="mt-0.5 shrink-0 text-xs border border-gray-300 text-gray-500 rounded px-1.5 py-0.5 whitespace-nowrap">
-                        {med.categoryA}
-                      </span>
-                    )}
-                    <div>
-                      <p className="font-medium text-gray-900">{med.productName}</p>
-                      <p className="text-xs text-gray-400 mt-0.5">{med.companyName}</p>
-                    </div>
-                  </div>
+                  <p className="font-medium text-gray-900">{med.productName}</p>
                 </td>
-                <td className="px-4 py-3 text-gray-500 text-xs max-w-[200px] truncate">{med.ingredientName}</td>
+                <td className="px-4 py-3 text-gray-500 text-xs">
+                  <IngredientName name={med.ingredientName} />
+                </td>
                 <td className="px-4 py-3 text-center">
                   <button onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.categoryB })}
                     className="text-xs text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 whitespace-nowrap transition-colors">
