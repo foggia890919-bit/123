@@ -71,8 +71,28 @@ function UploadTab() {
   const [file, setFile] = useState<File | null>(null);
   const [isSettlement, setIsSettlement] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ success?: boolean; count?: number; error?: string } | null>(null);
+  const [result, setResult] = useState<{ success?: boolean; count?: number; updated?: number; created?: number; error?: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [syncResult, setSyncResult] = useState<{ success?: boolean; synced?: number; totalPublic?: number; publicCount?: number; excelCount?: number; error?: string } | null>(null);
+
+  useEffect(() => {
+    fetch("/api/medications/sync").then((r) => r.json()).then(setSyncResult);
+  }, []);
+
+  async function handleSync(testMode = false) {
+    setSyncLoading(true); setSyncResult(null);
+    try {
+      const res = await fetch("/api/medications/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: testMode ? "test" : "full" }),
+      });
+      setSyncResult(await res.json());
+    } catch { setSyncResult({ error: "동기화 중 오류가 발생했어요." }); }
+    finally { setSyncLoading(false); }
+  }
 
   async function handleUpload() {
     if (!file) return;
@@ -90,11 +110,45 @@ function UploadTab() {
   }
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-5">
-      <h2 className="text-lg font-semibold text-gray-800">요율표 엑셀 업로드</h2>
-      <div className="bg-gray-50 rounded p-3 text-xs text-gray-500 font-mono leading-relaxed">
-        필요 컬럼: 분류(A) | 성분명 | 분류(B) | 코드(수수료율) | 제약사명 | 생동/생산 | 품목명 | 약가 | 오리지날/대조약 | 보험코드 | 특이사항
+    <div className="space-y-5">
+      {/* 공공데이터 동기화 */}
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-5 space-y-3">
+        <div>
+          <h2 className="text-base font-semibold text-blue-900">① 공공데이터 약품 DB 동기화</h2>
+          <p className="text-xs text-blue-700 mt-0.5">건강보험심사평가원 전체 약품 목록을 내려받아 DB에 저장합니다. 요율표 업로드 전에 먼저 실행하세요.</p>
+        </div>
+        {syncResult && !syncResult.error && (
+          <div className="text-xs text-blue-700 bg-white rounded p-2 border border-blue-200">
+            공공데이터: <strong>{(syncResult.publicCount ?? 0).toLocaleString()}건</strong> ·
+            요율표: <strong>{(syncResult.excelCount ?? 0).toLocaleString()}건</strong> ·
+            합계: <strong>{((syncResult.publicCount ?? 0) + (syncResult.excelCount ?? 0)).toLocaleString()}건</strong>
+            {syncResult.synced && <> · 이번 동기화: <strong>{syncResult.synced.toLocaleString()}건</strong></>}
+          </div>
+        )}
+        {syncResult?.error && (
+          <div className="text-xs text-red-700 bg-red-50 rounded p-2 border border-red-200">
+            {syncResult.error}
+          </div>
+        )}
+        <div className="flex gap-2">
+          <Button onClick={() => handleSync(true)} disabled={syncLoading} variant="outline" className="border-blue-300 text-blue-700 hover:bg-blue-100">
+            {syncLoading ? "동기화 중..." : "테스트 (100건)"}
+          </Button>
+          <Button onClick={() => handleSync(false)} disabled={syncLoading} className="bg-blue-600 hover:bg-blue-700">
+            {syncLoading ? "동기화 중... (수 분 소요)" : "전체 동기화 시작"}
+          </Button>
+        </div>
       </div>
+
+      {/* 요율표 업로드 */}
+      <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-5">
+        <div>
+          <h2 className="text-base font-semibold text-gray-800">② 요율표 엑셀 업로드</h2>
+          <p className="text-xs text-gray-500 mt-0.5">보험코드가 일치하면 공공데이터 레코드에 수수료율이 자동 연결됩니다.</p>
+        </div>
+        <div className="bg-gray-50 rounded p-3 text-xs text-gray-500 font-mono leading-relaxed">
+          필요 컬럼: 분류(A) | 성분명 | 분류(B) | 코드(수수료율) | 제약사명 | 생동/생산 | 품목명 | 약가 | 오리지날/대조약 | 보험코드 | 특이사항
+        </div>
       <div
         className={`border-2 border-dashed rounded-lg p-10 text-center cursor-pointer transition-colors ${file ? "border-blue-400 bg-blue-50" : "border-gray-300 hover:border-blue-400"}`}
         onClick={() => inputRef.current?.click()}
@@ -117,12 +171,14 @@ function UploadTab() {
       <Button onClick={handleUpload} disabled={!file || loading} className="w-full bg-gray-800 hover:bg-gray-700">
         {loading ? "업로드 중..." : "업로드"}
       </Button>
-      {result && (
-        <div className={`flex items-center gap-2 p-3 rounded-lg text-sm ${result.success ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
-          {result.success ? <><CheckCircle className="w-4 h-4 shrink-0" />{result.count?.toLocaleString()}개 품목 등록 완료!</>
-            : <><AlertCircle className="w-4 h-4 shrink-0" />{result.error}</>}
-        </div>
-      )}
+        {result && (
+          <div className={`flex items-center gap-2 p-3 rounded-lg text-sm ${result.success ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
+            {result.success
+              ? <><CheckCircle className="w-4 h-4 shrink-0" />총 {result.count?.toLocaleString()}건 — 공공데이터 머지: {result.updated}건 / 신규생성: {result.created}건</>
+              : <><AlertCircle className="w-4 h-4 shrink-0" />{result.error}</>}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
