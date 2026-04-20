@@ -226,8 +226,10 @@ export default function StatsPage() {
   }
 
   const totalFee = editOcr?.drugs.reduce((sum, d) => {
-    const qty = parseInt(d.quantity.value) || 0;
-    const price = parseInt(d.price.value.replace(/[^0-9]/g, "")) || 0;
+    const qty = parseFloat(d.quantity.value) || 0;
+    const priceRaw = d.price.value.replace(/[^0-9]/g, "");
+    // 9자리 보험코드가 price로 잘못 들어온 경우 제외
+    const price = priceRaw.length === 9 ? 0 : (parseInt(priceRaw) || 0);
     return sum + qty * price;
   }, 0) ?? 0;
 

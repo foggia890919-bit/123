@@ -147,22 +147,27 @@ const HEADER_WORDS = [
 
 // 약품명: 의미있는 한글 약품명 + 제형 힌트(정/캡슐/시럽 등) 또는 영숫자 조합
 // 순수 영문 코드(pregaba75) 약품도 허용
-const DRUG_NAME_RE = /([가-힣A-Za-z]{2,}[가-힣A-Za-z0-9./\s()-]*?(?:정|캡슐|시럽|주사|주|액|크림|연고|산|환|겔|패취|포|정제|캅셀))/;
-const DRUG_NAME_EN_RE = /\b([A-Z][A-Za-z0-9]{4,})\b/; // ATOEZE1010, CLARITH500 등
-
-// 보험코드: 9자리 숫자 또는 영문 대문자 + 숫자 (ATOEZE1010, FAMCICL025, EMPAGL110 등)
+// 보험코드: 9자리 숫자 또는 영문 대문자 + 숫자
 const CODE_NUM_RE = /\b(\d{9})\b/;
 const CODE_ALNUM_RE = /\b([A-Z][A-Z0-9]{5,})\b/;
 
+// 약품명: 한글+제형 패턴. 단, (주) 앞의 주는 제형이 아님
+// "(주)" = 주식회사 약어이므로 "X(주" 또는 "X주)" 패턴이면 제외
+const DRUG_FORM = "(?:정제|캅셀|캡슐|시럽|주사액|주사|연고|크림|겔|패취|포|산제|환제|정|액|주)";
+const DRUG_NAME_RE = new RegExp(
+  `([가-힣A-Za-z][가-힣A-Za-z0-9./()\\s-]{2,}?${DRUG_FORM})(?!\\))`
+);
+const DRUG_NAME_EN_RE = /\b([A-Z][A-Za-z0-9]{4,})\b/;
+
+// 제약회사명 패턴 (약품명으로 오인 방지)
+const COMPANY_RE = /[가-힣]+(?:제약|바이오|파마|팜|헬스케어|케미칼|사이언스|신약|약품|생명|의약)/;
+
 function isHeaderLine(text: string): boolean {
-  // 한글 글자가 하나도 없으면 약품 아닐 가능성 높음(코드성 영문은 아래에서 따로 허용)
   const stripped = text.trim();
   if (stripped.length < 3) return true;
-  // 헤더 단어만 있는 라인
   for (const w of HEADER_WORDS) {
     if (stripped === w || stripped.startsWith(w + " ") || stripped.endsWith(" " + w)) return true;
   }
-  // 숫자 하나도 없으면 약품 아님 (약품엔 수량/단가 최소 1개는 있어야 함)
   if (!/\d/.test(stripped)) return true;
   return false;
 }
@@ -179,45 +184,55 @@ function extractDrugs(
     price: { value: string; confidence: number };
   }[] = [];
 
-  // 숫자 토큰 (수량/단가/금액)
   const numRe = /[\d,]+(?:\.\d+)?/g;
 
   for (const line of lines) {
     const text = line.text.trim();
     if (isHeaderLine(text)) continue;
 
-    // 코드 추출 (숫자 9자리 또는 영문+숫자 조합)
+    // ── 코드 추출 ──────────────────────────────────────────
     const codeNumMatch = text.match(CODE_NUM_RE);
     const codeAlnumMatch = text.match(CODE_ALNUM_RE);
     const code = codeNumMatch?.[1] ?? codeAlnumMatch?.[1] ?? "";
 
-    // 약품명 추출 (한글+제형 우선, 없으면 영문 코드성 약품)
-    const nameKoMatch = text.match(DRUG_NAME_RE);
-    const nameEnMatch = text.match(DRUG_NAME_EN_RE);
+    // ── 약품명 추출 ────────────────────────────────────────
+    // 9자리 코드가 있으면 코드 뒤 텍스트에서 약품명 탐색 (제약사명은 코드 앞에 있음)
+    let searchText = text;
+    if (codeNumMatch) {
+      const codeIdx = text.indexOf(codeNumMatch[1]);
+      searchText = text.slice(codeIdx + codeNumMatch[1].length);
+    }
+
+    const nameKoMatch = searchText.match(DRUG_NAME_RE);
+    const nameEnMatch = searchText.match(DRUG_NAME_EN_RE);
     let name = "";
-    if (nameKoMatch) name = nameKoMatch[1].trim();
-    else if (nameEnMatch && !codeAlnumMatch) name = nameEnMatch[1].trim();
+    if (nameKoMatch) {
+      name = nameKoMatch[1].trim();
+      // 제약회사명이 약품명으로 잡힌 경우 제거
+      if (COMPANY_RE.test(name)) name = "";
+    }
+    if (!name && nameEnMatch && !codeAlnumMatch) name = nameEnMatch[1].trim();
 
-    // 약품명과 코드 중 하나는 반드시 있어야 하고, 숫자 필드(수량/단가)도 최소 1개
-    const allNums = text.match(numRe) || [];
-    const numericCount = allNums.filter((n) => n.replace(/[,.]/g, "").length >= 1).length;
-
+    // 약품명 또는 코드 중 하나는 필수
     if (!name && !code) continue;
-    if (numericCount < 1) continue;
 
-    // 숫자 중 큰 값 순으로 price/quantity 추정
+    // ── 숫자 필드 추출 (9자리 보험코드 제외) ──────────────
+    const allNums = (text.match(numRe) || []).filter((n) => {
+      const digits = n.replace(/[,.]/g, "");
+      return digits.length !== 9; // 보험코드(9자리)는 금액/수량에서 제외
+    });
+
+    if (allNums.length < 1) continue;
+
     const numericValues = allNums
       .map((n) => ({ raw: n, num: parseFloat(n.replace(/,/g, "")) }))
       .filter((x) => !isNaN(x.num) && x.num > 0);
 
-    // 가장 큰 수 = 총금액 or 총사용량, 중간 = 단가, 작은 = 수량
     numericValues.sort((a, b) => b.num - a.num);
+    // 가장 큰 값=총금액, 가장 작은 값=수량(투여량)
     const price = numericValues[0]?.raw?.replace(/,/g, "") ?? "";
     const quantity = numericValues[numericValues.length - 1]?.raw ?? "";
 
-    // name이 있는데 헤더 단어만 있으면 스킵
-    if (name && HEADER_WORDS.some((w) => name === w)) continue;
-    // 약품명이 의미없는 짧은 토큰이면 스킵
     if (name && name.length < 2) continue;
 
     drugs.push({
