@@ -53,6 +53,7 @@ function ProposalsContent() {
   const [editTitle, setEditTitle] = useState("");
   const [editingClient, setEditingClient] = useState(false);
   const [editClientId, setEditClientId] = useState("");
+  const [confirmClientId, setConfirmClientId] = useState<string | null>(null);
   const [companyStatuses, setCompanyStatuses] = useState<Record<string, string>>({});
   const [cols, setCols] = useState<ColumnVisibility>({ showRate: true, showInsuranceCode: true });
   const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null } | null>(null);
@@ -166,10 +167,10 @@ function ProposalsContent() {
     await fetch(`/api/proposals/${selected.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId: editClientId || null }),
+      body: JSON.stringify({ clientId: confirmClientId || null }),
     });
+    setConfirmClientId(null);
     setEditingClient(false);
-    // 제안서 + 목록 + 거래처필터 상태 모두 갱신
     const [detail] = await Promise.all([
       fetch(`/api/proposals/${selected.id}`).then((r) => r.json()),
       loadProposals(),
@@ -456,7 +457,7 @@ function ProposalsContent() {
                               </option>
                             ))}
                           </select>
-                          <button onClick={saveClient} className="h-7 px-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">완료</button>
+                          <button onClick={() => setConfirmClientId(editClientId)} className="h-7 px-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">완료</button>
                           <button onClick={() => setEditingClient(false)} className="text-gray-400 hover:text-gray-600"><X className="w-3.5 h-3.5" /></button>
                         </div>
                       ) : (
@@ -584,6 +585,30 @@ function ProposalsContent() {
           </>
         )}
       </div>
+
+      {/* 거래처 매핑 확인 모달 */}
+      {confirmClientId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl p-6 w-80 space-y-4">
+            <h3 className="text-base font-bold text-gray-900">거래처 매핑</h3>
+            <p className="text-sm text-gray-600">
+              {confirmClientId
+                ? <>이 제안서를 <span className="font-semibold text-gray-900">{userClients.find((c) => c.id === confirmClientId)?.clientName}</span> 거래처로 매핑할까요?</>
+                : "거래처 연결을 해제할까요?"}
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setConfirmClientId(null)}
+                className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">
+                아니오
+              </button>
+              <button onClick={saveClient}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg">
+                예
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {ingredientModal && (
         <SameIngredientModal
