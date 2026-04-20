@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 interface ClovaField {
   inferText: string;
   inferConfidence: number;
@@ -46,17 +49,22 @@ export async function POST(req: NextRequest) {
     const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
     const format = ["png", "gif", "bmp", "tiff"].includes(ext) ? ext : "jpg";
 
-    const clovaRes = await fetch(clovaUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-OCR-SECRET": clovaSecret },
-      body: JSON.stringify({
-        version: "V2",
-        requestId: crypto.randomUUID(),
-        timestamp: Date.now(),
-        lang: "ko",
-        images: [{ format, name: "prescription", data: base64 }],
-      }),
-    });
+    let clovaRes: Response;
+    try {
+      clovaRes = await fetch(clovaUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-OCR-SECRET": clovaSecret },
+        body: JSON.stringify({
+          version: "V2",
+          requestId: crypto.randomUUID(),
+          timestamp: Date.now(),
+          lang: "ko",
+          images: [{ format, name: "prescription", data: base64 }],
+        }),
+      });
+    } catch (fetchErr) {
+      return NextResponse.json({ error: `CLOVA 연결 실패: ${String(fetchErr)}. URL을 확인하세요.` }, { status: 500 });
+    }
 
     if (!clovaRes.ok) {
       const errText = await clovaRes.text();

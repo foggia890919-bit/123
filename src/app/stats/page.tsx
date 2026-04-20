@@ -156,14 +156,42 @@ export default function StatsPage() {
     if (file && file.type.startsWith("image/")) handleFile(file);
   }
 
+  async function compressImage(file: File, maxDim = 2000, quality = 0.82): Promise<Blob> {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = reject;
+        el.src = url;
+      });
+      const ratio = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const w = Math.round(img.width * ratio);
+      const h = Math.round(img.height * ratio);
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0, w, h);
+      return await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("압축 실패"))), "image/jpeg", quality);
+      });
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
   async function runOcr() {
     if (!imageFile) return;
     setOcrLoading(true); setOcrError("");
     try {
+      const compressed = await compressImage(imageFile);
       const fd = new FormData();
-      fd.append("image", imageFile);
+      fd.append("image", compressed, "prescription.jpg");
       const res = await fetch("/api/stats/ocr", { method: "POST", body: fd });
-      const data = await res.json();
+      const text = await res.text();
+      let data: { error?: string } & OcrResult;
+      try { data = JSON.parse(text); }
+      catch { throw new Error(`서버 응답 오류 (${res.status}): ${text.slice(0, 200)}`); }
       if (data.error) throw new Error(data.error);
       setOcr(data);
       setEditOcr(JSON.parse(JSON.stringify(data)));
