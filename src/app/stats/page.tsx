@@ -15,6 +15,8 @@ interface OcrResult {
   hospitalName: OcrField; institutionCode: OcrField;
   prescriptionDate: OcrField; patientName: OcrField;
   drugs: DrugItem[]; avgConfidence: number;
+  rawText?: string;
+  source?: string;
 }
 interface UserClient {
   id: string; clientName: string; bizNumber: string; approved: boolean;
@@ -78,6 +80,7 @@ export default function StatsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [submitError, setSubmitError] = useState("");
+  const [rightTab, setRightTab] = useState<"edit" | "raw">("edit");
 
   // 거래처 목록 불러오기
   useEffect(() => {
@@ -415,19 +418,46 @@ export default function StatsPage() {
               </div>
             ) : (
               <>
+                {/* 요약 헤더 */}
                 <div className="border-b border-gray-100 px-4 py-3 flex items-center gap-3 flex-wrap">
                   <span className="text-xs font-semibold bg-yellow-100 text-yellow-700 border border-yellow-300 px-2 py-0.5 rounded">PENDING_REVIEW</span>
                   <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">평균 신뢰도 <strong>{editOcr.avgConfidence}%</strong></span>
+                  {editOcr.source && <span className="text-xs bg-blue-50 text-blue-600 border border-blue-200 px-2 py-0.5 rounded">CLOVA OCR</span>}
                   {isClientUnnapproved && (
                     <span className="text-xs bg-yellow-100 text-yellow-700 border border-yellow-300 px-2 py-0.5 rounded font-semibold">정산서 미반영</span>
                   )}
                   <span className="ml-auto text-sm font-semibold text-gray-700">수수료 합계 <span className="text-blue-600">{totalFee.toLocaleString()}원</span></span>
                 </div>
-                <div className="px-4 py-2 flex items-center gap-2 text-[10px] border-b border-gray-50">
-                  <span className="px-1.5 py-0.5 rounded border bg-green-100 text-green-700 border-green-300">90%+ 안전</span>
-                  <span className="px-1.5 py-0.5 rounded border bg-yellow-100 text-yellow-700 border-yellow-300">75~89% 주의</span>
-                  <span className="px-1.5 py-0.5 rounded border bg-red-100 text-red-700 border-red-300">75% 미만 필수검토</span>
+
+                {/* 탭 */}
+                <div className="flex border-b border-gray-100 px-4 gap-4">
+                  <button onClick={() => setRightTab("edit")}
+                    className={`py-2 text-xs font-medium border-b-2 transition-colors ${rightTab === "edit" ? "border-blue-500 text-blue-600" : "border-transparent text-gray-400 hover:text-gray-600"}`}>
+                    편집
+                  </button>
+                  <button onClick={() => setRightTab("raw")}
+                    className={`py-2 text-xs font-medium border-b-2 transition-colors ${rightTab === "raw" ? "border-blue-500 text-blue-600" : "border-transparent text-gray-400 hover:text-gray-600"}`}>
+                    원본 OCR 텍스트
+                  </button>
                 </div>
+
+                {rightTab === "edit" && (
+                  <div className="px-4 py-2 flex items-center gap-2 text-[10px] border-b border-gray-50">
+                    <span className="px-1.5 py-0.5 rounded border bg-green-100 text-green-700 border-green-300">90%+ 안전</span>
+                    <span className="px-1.5 py-0.5 rounded border bg-yellow-100 text-yellow-700 border-yellow-300">75~89% 주의</span>
+                    <span className="px-1.5 py-0.5 rounded border bg-red-100 text-red-700 border-red-300">75% 미만 필수검토</span>
+                  </div>
+                )}
+
+                {rightTab === "raw" ? (
+                  <div className="flex-1 overflow-y-auto p-4">
+                    <p className="text-[10px] text-gray-400 mb-2">CLOVA가 인식한 원본 텍스트입니다. 왼쪽 이미지와 대조하여 편집 탭에서 수정하세요.</p>
+                    <pre className="text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-lg p-3 whitespace-pre-wrap font-mono leading-relaxed">
+                      {editOcr.rawText || "(원본 텍스트 없음)"}
+                    </pre>
+                  </div>
+                ) : (
+
                 <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
                   <div>
                     <p className="text-xs font-semibold text-gray-500 mb-2">기본 정보</p>
@@ -487,11 +517,13 @@ export default function StatsPage() {
                       <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
                       <p className="text-xs text-red-700">
                         <span className="font-semibold">빨간색 항목은 OCR 신뢰도 75% 미만입니다.</span>
-                        {" "}{lowConfItems.map((d, i) => `${d.name.value}(${d.code.confidence}%)`).join(", ")}를 원본 이미지와 반드시 대조하세요.
+                        {" "}{lowConfItems.map((d) => `${d.name.value}(${d.code.confidence}%)`).join(", ")}를 원본 이미지와 반드시 대조하세요.
+                        {" "}<button onClick={() => setRightTab("raw")} className="underline font-semibold">원본 텍스트 확인 →</button>
                       </p>
                     </div>
                   )}
                 </div>
+                )}
                 <div className="border-t border-gray-100 px-4 py-3 flex items-center justify-between">
                   <div>
                     <p className="text-[10px] text-gray-400">예상 총 수수료</p>
