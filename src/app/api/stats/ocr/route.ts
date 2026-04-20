@@ -23,7 +23,9 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const clovaUrl = process.env.CLOVA_OCR_INVOKE_URL?.trim();
+    const rawUrl = process.env.CLOVA_OCR_INVOKE_URL?.trim();
+    // Vercel은 http:// 아웃바운드를 차단하므로 https:// 로 강제 변환
+    const clovaUrl = rawUrl?.replace(/^http:\/\//, "https://");
     const clovaSecret = process.env.CLOVA_OCR_SECRET_KEY?.trim();
     if (!clovaUrl && !clovaSecret) {
       return NextResponse.json({ error: "CLOVA_OCR_INVOKE_URL 과 CLOVA_OCR_SECRET_KEY 둘 다 설정되지 않았습니다. Vercel → Settings → Environment Variables 에 추가 후 Redeploy 하세요." }, { status: 500 });
