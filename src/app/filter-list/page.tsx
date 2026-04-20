@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import MedicationTable, { type ColumnVisibility } from "@/components/MedicationTable";
 import ColumnToggles from "@/components/ColumnToggles";
-import RequireAuth from "@/components/RequireAuth";
+import RequireRole from "@/components/RequireRole";
 import { useSession } from "next-auth/react";
 import type { MedicationItem } from "@/types";
 import * as XLSX from "xlsx";
@@ -143,7 +143,7 @@ export default function FilterListPage() {
   }
 
   return (
-    <RequireAuth>
+    <RequireRole minRole="SALES_REP">
       <div className="space-y-5">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
@@ -304,6 +304,6 @@ export default function FilterListPage() {
           </div>
         )}
       </div>
-    </RequireAuth>
+    </RequireRole>
   );
 }

@@ -6,19 +6,22 @@ import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
 import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Download, Menu, X, Filter, BarChart3 } from "lucide-react";
+import { hasRole, type UserRole } from "@/lib/roles";
 
-const navItems = [
-  { href: "/search", label: "통합검색", icon: Search },
-  { href: "/search/settlement", label: "정산제약사 검색", icon: Building2 },
-  { href: "/filter", label: "제약사 필터링", icon: Filter },
-  { href: "/filter-list", label: "리스트 다운", icon: Download },
-  { href: "/proposals", label: "제안서", icon: FileText },
-  { href: "/stats", label: "처방통계", icon: BarChart3 },
+const navItems: { href: string; label: string; icon: React.ElementType; minRole: UserRole }[] = [
+  { href: "/search",            label: "통합검색",       icon: Search,    minRole: "BASIC"    },
+  { href: "/search/settlement", label: "정산제약사 검색", icon: Building2, minRole: "SALES_REP" },
+  { href: "/filter",            label: "제약사 필터링",   icon: Filter,    minRole: "BIZ"      },
+  { href: "/filter-list",       label: "리스트 다운",     icon: Download,  minRole: "SALES_REP" },
+  { href: "/proposals",         label: "제안서",          icon: FileText,  minRole: "SALES_REP" },
+  { href: "/stats",             label: "처방통계",        icon: BarChart3, minRole: "BIZ"      },
 ];
 
 export default function Navbar() {
   const pathname = usePathname();
   const { data: session } = useSession();
+  const userRole = (session?.user?.role as UserRole | undefined) ?? "BASIC";
+  const visibleNavItems = navItems.filter((item) => hasRole(userRole, item.minRole));
   const [userOpen, setUserOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const userRef = useRef<HTMLDivElement>(null);
@@ -48,7 +51,7 @@ export default function Navbar() {
 
           {/* 데스크탑 네비 */}
           <div className="hidden md:flex items-center gap-1">
-            {navItems.map(({ href, label, icon: Icon }) => (
+            {visibleNavItems.map(({ href, label, icon: Icon }) => (
               <Link key={href} href={href}
                 className={cn(
                   "flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors",
@@ -110,7 +113,7 @@ export default function Navbar() {
       {mobileOpen && (
         <div className="md:hidden border-t border-gray-100 bg-white shadow-lg">
           <div className="px-4 py-2 space-y-0.5">
-            {navItems.map(({ href, label, icon: Icon }) => (
+            {visibleNavItems.map(({ href, label, icon: Icon }) => (
               <Link key={href} href={href} onClick={() => setMobileOpen(false)}
                 className={cn(
                   "flex items-center gap-3 px-3 py-3 rounded-md text-sm font-medium transition-colors",

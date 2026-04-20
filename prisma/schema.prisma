@@ -45,6 +45,8 @@ model UserClient {
 enum Role {
   ADMIN
   SALES_REP
+  BIZ
+  BASIC
   DOCTOR
   PHARMACIST
 }

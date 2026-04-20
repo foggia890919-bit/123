@@ -9,12 +9,13 @@ import ColumnToggles from "@/components/ColumnToggles";
 import RequireAuth from "@/components/RequireAuth";
 import { useSession } from "next-auth/react";
 import type { MedicationItem } from "@/types";
+import { hasRole } from "@/lib/roles";
 
 interface CompanyOpt { name: string; count: number }
 
 export default function SearchPage() {
   const { data: session } = useSession();
-  const isSalesRep = session?.user?.role === "SALES_REP";
+  const isSalesRep = hasRole(session?.user?.role, "SALES_REP");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<MedicationItem[]>([]);
   const [total, setTotal] = useState(0);

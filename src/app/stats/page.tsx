@@ -5,7 +5,7 @@ import { useSession } from "next-auth/react";
 import { Upload, ZoomIn, ZoomOut, Maximize2, Minimize2, AlertTriangle, CheckCircle, BarChart3, UserPlus, X, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import RequireAuth from "@/components/RequireAuth";
+import RequireRole from "@/components/RequireRole";
 
 interface OcrField { value: string; confidence: number }
 interface DrugItem {
@@ -235,7 +235,7 @@ export default function StatsPage() {
   }
 
   return (
-    <RequireAuth>
+    <RequireRole minRole="BIZ">
       <div className="space-y-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">처방통계 등록</h1>
@@ -580,6 +580,6 @@ export default function StatsPage() {
           </div>
         </div>
       )}
-    </RequireAuth>
+    </RequireRole>
   );
 }

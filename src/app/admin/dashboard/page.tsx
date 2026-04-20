@@ -17,7 +17,15 @@ interface User {
 }
 
 const roleLabel: Record<string, string> = {
-  ADMIN: "관리자", SALES_REP: "영업사원", DOCTOR: "의사", PHARMACIST: "약사",
+  ADMIN: "관리자", SALES_REP: "영맨회원", BIZ: "비즈회원", BASIC: "일반회원", DOCTOR: "의사", PHARMACIST: "약사",
+};
+const roleColor: Record<string, string> = {
+  BASIC: "bg-gray-100 text-gray-600",
+  SALES_REP: "bg-blue-100 text-blue-700",
+  BIZ: "bg-purple-100 text-purple-700",
+  ADMIN: "bg-red-100 text-red-700",
+  DOCTOR: "bg-green-100 text-green-700",
+  PHARMACIST: "bg-teal-100 text-teal-700",
 };
 
 export default function AdminDashboardPage() {
@@ -447,6 +455,11 @@ function MembersTab() {
     setLoading(false);
   }
 
+  async function changeRole(userId: string, role: string) {
+    await fetch("/api/admin/users", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId, role }) });
+    setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, role } : u));
+  }
+
   async function toggleApproval(userId: string, approved: boolean) {
     await fetch("/api/admin/users", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId, approved }) });
     setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, approved } : u));
@@ -501,7 +514,20 @@ function MembersTab() {
                   <div>{user.carrier || "-"}</div>
                   <div>{user.phone || "-"}</div>
                 </td>
-                <td className="px-4 py-3 text-center"><Badge variant="secondary">{roleLabel[user.role] || user.role}</Badge></td>
+                <td className="px-4 py-3 text-center">
+                  <select
+                    value={user.role}
+                    onChange={(e) => changeRole(user.id, e.target.value)}
+                    className={`text-xs font-medium rounded px-2 py-1 border-0 cursor-pointer ${roleColor[user.role] || "bg-gray-100 text-gray-600"}`}
+                  >
+                    <option value="BASIC">일반회원</option>
+                    <option value="SALES_REP">영맨회원</option>
+                    <option value="BIZ">비즈회원</option>
+                    <option value="ADMIN">관리자</option>
+                    <option value="DOCTOR">의사</option>
+                    <option value="PHARMACIST">약사</option>
+                  </select>
+                </td>
                 <td className="px-4 py-3 text-center text-gray-400 text-xs">{new Date(user.createdAt).toLocaleDateString("ko-KR")}</td>
                 <td className="px-4 py-3 text-center">
                   <Badge variant={user.approved ? "success" : "warning"}>{user.approved ? "승인됨" : "대기중"}</Badge>

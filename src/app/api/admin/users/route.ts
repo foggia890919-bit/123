@@ -27,6 +27,16 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json(user);
   }
 
+  // 역할 변경
+  if ("role" in body) {
+    const user = await prisma.user.update({
+      where: { id: body.userId },
+      data: { role: body.role, updatedAt: new Date() },
+      select: { id: true, role: true },
+    });
+    return NextResponse.json(user);
+  }
+
   // 비밀번호 초기화
   if ("newPassword" in body) {
     const hashed = await bcrypt.hash(body.newPassword, 10);

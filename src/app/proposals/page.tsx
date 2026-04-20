@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatPrice } from "@/lib/utils";
 import RequireAuth from "@/components/RequireAuth";
+import { hasRole } from "@/lib/roles";
 import ColumnToggles from "@/components/ColumnToggles";
 import SameIngredientModal from "@/components/SameIngredientModal";
 import type { ColumnVisibility } from "@/components/MedicationTable";
@@ -40,7 +41,8 @@ function ProposalsContent() {
   const { data: session } = useSession();
   const searchParams = useSearchParams();
   const userId = session?.user?.id || "";
-  const isSalesRep = session?.user?.role === "SALES_REP";
+  const isSalesRep = hasRole(session?.user?.role, "SALES_REP");
+  const isBiz = hasRole(session?.user?.role, "BIZ");
 
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [selected, setSelected] = useState<Proposal | null>(null);
@@ -344,11 +346,13 @@ function ProposalsContent() {
                 </option>
               ))}
             </select>
-            <button type="button" onClick={() => { setRegOpen(true); setRegError(""); }}
-              title="새 거래처 등록"
-              className="h-9 w-9 shrink-0 flex items-center justify-center border border-gray-300 rounded-md hover:bg-gray-50 text-gray-500 hover:text-blue-600">
-              <UserPlus className="w-4 h-4" />
-            </button>
+            {isBiz && (
+              <button type="button" onClick={() => { setRegOpen(true); setRegError(""); }}
+                title="새 거래처 등록"
+                className="h-9 w-9 shrink-0 flex items-center justify-center border border-gray-300 rounded-md hover:bg-gray-50 text-gray-500 hover:text-blue-600">
+                <UserPlus className="w-4 h-4" />
+              </button>
+            )}
           </div>
           <Button onClick={createProposal} disabled={creating} className="w-full h-9 text-sm">
             <Plus className="w-3.5 h-3.5 mr-1" />{creating ? "생성 중..." : "새 제안서 만들기"}
@@ -417,19 +421,21 @@ function ProposalsContent() {
                       </div>
                       <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                         {status ? <StatusBadge status={status} /> : null}
-                        <button
-                          onClick={() => requestFilter(name)}
-                          disabled={requestingFilter.has(name) || status === "PENDING" || status === "REVIEWING"}
-                          className={`inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed ${
-                            isApproved
-                              ? "text-gray-500 bg-gray-50 border border-gray-200 hover:bg-gray-100"
-                              : "text-blue-600 bg-blue-50 border border-blue-200 hover:bg-blue-100"
-                          }`}>
-                          {requestingFilter.has(name)
-                            ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                            : <Filter className="w-2.5 h-2.5" />}
-                          {status === "PENDING" ? "요청됨" : status === "REVIEWING" ? "검토중" : "필터링 요청"}
-                        </button>
+                        {isBiz && (
+                          <button
+                            onClick={() => requestFilter(name)}
+                            disabled={requestingFilter.has(name) || status === "PENDING" || status === "REVIEWING"}
+                            className={`inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed ${
+                              isApproved
+                                ? "text-gray-500 bg-gray-50 border border-gray-200 hover:bg-gray-100"
+                                : "text-blue-600 bg-blue-50 border border-blue-200 hover:bg-blue-100"
+                            }`}>
+                            {requestingFilter.has(name)
+                              ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                              : <Filter className="w-2.5 h-2.5" />}
+                            {status === "PENDING" ? "요청됨" : status === "REVIEWING" ? "검토중" : "필터링 요청"}
+                          </button>
+                        )}
                       </div>
                       {/* 거래처 상세 (펼쳤을 때) */}
                       {isExpanded && (
@@ -498,10 +504,12 @@ function ProposalsContent() {
                               </option>
                             ))}
                           </select>
-                          <button type="button" onClick={() => { setRegOpen(true); setRegError(""); }}
-                            title="새 거래처 등록" className="h-7 w-7 flex items-center justify-center border border-gray-300 rounded hover:bg-gray-50 text-gray-500 hover:text-blue-600">
-                            <UserPlus className="w-3.5 h-3.5" />
-                          </button>
+                          {isBiz && (
+                            <button type="button" onClick={() => { setRegOpen(true); setRegError(""); }}
+                              title="새 거래처 등록" className="h-7 w-7 flex items-center justify-center border border-gray-300 rounded hover:bg-gray-50 text-gray-500 hover:text-blue-600">
+                              <UserPlus className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           <button onClick={() => setConfirmClientId(editClientId)} className="h-7 px-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">완료</button>
                           <button onClick={() => setEditingClient(false)} className="text-gray-400 hover:text-gray-600"><X className="w-3.5 h-3.5" /></button>
                         </div>
