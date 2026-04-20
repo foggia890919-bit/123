@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import type { ScrapeResult, WholesaleAdapter } from "./types";
 
@@ -21,7 +22,7 @@ export async function saveResults(results: ScrapeResult[]): Promise<number> {
         manufacturer: item.manufacturer,
         unitPrice: item.unitPrice,
         stock: item.stock,
-        raw: item.raw as Record<string, unknown> | undefined,
+        raw: (item.raw ?? Prisma.JsonNull) as Prisma.InputJsonValue | typeof Prisma.JsonNull,
       }))
     );
   if (rows.length === 0) return 0;
