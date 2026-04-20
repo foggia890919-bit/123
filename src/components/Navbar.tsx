@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
 import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Download, Menu, X, Filter, BarChart3 } from "lucide-react";
-import { hasRole, type UserRole } from "@/lib/roles";
+import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
 const navItems: { href: string; label: string; icon: React.ElementType; minRole: UserRole }[] = [
   { href: "/search",            label: "통합검색",       icon: Search,    minRole: "BASIC"    },
@@ -71,7 +71,14 @@ export default function Navbar() {
                   <ChevronDown className={cn("w-3.5 h-3.5 transition-transform", userOpen && "rotate-180")} />
                 </button>
                 {userOpen && (
-                  <div className="absolute right-0 mt-2 w-40 bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden">
+                  <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden">
+                    {/* 이름 + 등급 */}
+                    <div className="px-4 py-3 border-b border-gray-100">
+                      <p className="text-sm font-semibold text-gray-800 truncate">{session.user.name || "사용자"}</p>
+                      <span className={`inline-block mt-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${ROLE_COLORS[session.user.role as UserRole] ?? "bg-gray-100 text-gray-600"}`}>
+                        {ROLE_LABELS[session.user.role as UserRole] ?? session.user.role}
+                      </span>
+                    </div>
                     <Link href="/mypage" onClick={() => setUserOpen(false)}
                       className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
                       <User className="w-4 h-4 text-gray-400" />마이페이지
