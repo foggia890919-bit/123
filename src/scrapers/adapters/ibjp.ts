@@ -1,17 +1,42 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import type { Credentials, InventoryItem, WholesaleAdapter } from "../core/types";
 
-// Selectors are best-effort from visual inspection of the order page.
-// Run PoC first, log raw cells, then tighten these if layout differs.
+// /dist/login path + SPA bundling suggests Vue/React build. Selectors below
+// assume client-rendered form — we wait for inputs to appear rather than
+// relying on immediate DOM. Tighten after running `npm run scrape:inspect`.
 const SEL = {
-  idInput: 'input[name="id"], input[name="userId"], input[type="text"]',
-  pwInput: 'input[name="pw"], input[name="password"], input[type="password"]',
-  loginBtn: 'button:has-text("로그인"), button[type="submit"]',
-  orderUrl: "https://ibjp.co.kr/dist/order",
-  searchInput: 'input[placeholder*="품목명"], input[placeholder*="보험코드"]',
+  idInput: [
+    'input[name="id"]',
+    'input[name="userId"]',
+    'input[placeholder*="아이디"]',
+    'input[placeholder*="ID"]',
+    'input[type="text"]:not([readonly]):not([disabled])',
+  ].join(", "),
+  pwInput: [
+    'input[name="pw"]',
+    'input[name="password"]',
+    'input[type="password"]',
+  ].join(", "),
+  loginBtn: [
+    'button:has-text("로그인")',
+    'a:has-text("로그인")',
+    'input[type="submit"][value*="로그인"]',
+    'button[type="submit"]',
+  ].join(", "),
+  orderPath: "/dist/order",
+  searchInput: [
+    'input[placeholder*="품목명"]',
+    'input[placeholder*="보험코드"]',
+    'input[type="search"]',
+  ].join(", "),
   searchBtn: 'button:has-text("검색")',
-  resultRows: "table tbody tr",
+  resultRows: "table tbody tr, table tr:has(td)",
 };
+
+async function waitAny(page: Page, selector: string, timeout = 15_000): Promise<Locator> {
+  await page.waitForSelector(selector, { timeout, state: "visible" });
+  return page.locator(selector).first();
+}
 
 export const ibjp: WholesaleAdapter = {
   key: "ibjp",
@@ -21,15 +46,28 @@ export const ibjp: WholesaleAdapter = {
 
   async login(page: Page, creds: Credentials) {
     await page.goto(this.loginUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    await page.locator(SEL.idInput).first().fill(creds.id);
-    await page.locator(SEL.pwInput).first().fill(creds.pw);
+    // SPA: wait for form to render
+    const idInput = await waitAny(page, SEL.idInput);
+    const pwInput = await waitAny(page, SEL.pwInput);
+
+    await idInput.fill(creds.id);
+    await pwInput.fill(creds.pw);
+
+    const btn = page.locator(SEL.loginBtn).first();
     await Promise.all([
-      page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {}),
-      page.locator(SEL.loginBtn).first().click(),
+      page.waitForURL(u => !u.toString().includes("/login"), { timeout: 15_000 }).catch(() => {}),
+      btn.click(),
     ]);
-    await page.waitForTimeout(500);
+
+    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+
     if (page.url().includes("/login")) {
-      throw new Error("ibjp login failed (still on /login)");
+      // Some sites post via Enter instead; retry once with keyboard
+      await pwInput.press("Enter");
+      await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+    }
+    if (page.url().includes("/login")) {
+      throw new Error("ibjp login failed — still on /login after submit");
     }
   },
 
@@ -38,17 +76,21 @@ export const ibjp: WholesaleAdapter = {
   },
 
   async searchByCode(page: Page, insuranceCode: string): Promise<InventoryItem[]> {
-    if (!page.url().includes("/order")) {
-      await page.goto(SEL.orderUrl, { waitUntil: "domcontentloaded", timeout: 20_000 });
+    if (!page.url().includes(SEL.orderPath)) {
+      await page.goto(this.baseUrl + SEL.orderPath, { waitUntil: "domcontentloaded", timeout: 20_000 });
     }
 
-    const input = page.locator(SEL.searchInput).first();
+    const input = await waitAny(page, SEL.searchInput);
     await input.click();
     await input.fill("");
     await input.fill(insuranceCode);
     await page.keyboard.press("Enter");
 
-    await page.waitForTimeout(800);
+    // Wait for either rows to appear or "no result" text; fall back to timeout
+    await page
+      .waitForSelector(SEL.resultRows, { timeout: 8_000, state: "attached" })
+      .catch(() => {});
+    await page.waitForTimeout(600);
 
     const rows = await page.locator(SEL.resultRows).all();
     const items: InventoryItem[] = [];
@@ -60,14 +102,13 @@ export const ibjp: WholesaleAdapter = {
       const code = cells.find(c => /^\d{9,12}$/.test(c));
       if (!code) continue;
 
-      const numericIdx = cells.findIndex(c => /^[\d,]+$/.test(c.replace(/\s/g, "")) && c !== code);
-      const priceStr = cells[numericIdx]?.replace(/[^\d]/g, "") ?? "";
-      const stockStr = cells[numericIdx + 1]?.replace(/[^\d]/g, "") ?? "";
+      const numericCells = cells.filter(c => c !== code && /^[\d,]+$/.test(c.replace(/\s/g, "")));
+      const [priceRaw, stockRaw] = numericCells;
+      const priceStr = priceRaw?.replace(/[^\d]/g, "") ?? "";
+      const stockStr = stockRaw?.replace(/[^\d]/g, "") ?? "";
 
-      const nameCandidates = cells.filter(c =>
-        c !== code &&
-        !/^(전문|일반|급여|비급여)$/.test(c) &&
-        !/^[\d,\s]+$/.test(c)
+      const nameCandidates = cells.filter(
+        c => c !== code && !/^(전문|일반|급여|비급여)$/.test(c) && !/^[\d,\s]+$/.test(c)
       );
       const productName = nameCandidates[0] ?? "";
       const spec = nameCandidates[1] ?? null;

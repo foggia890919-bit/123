@@ -7,19 +7,27 @@ interface SiteSession {
   lastLoginAt: number;
 }
 
+const DEFAULT_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
 export class Session {
   private browser?: Browser;
   private sessions = new Map<string, SiteSession>();
   private readonly reloginAfterMs: number;
   private readonly headless: boolean;
+  private readonly userAgent: string;
 
-  constructor(opts: { reloginAfterMs?: number; headless?: boolean } = {}) {
+  constructor(opts: { reloginAfterMs?: number; headless?: boolean; userAgent?: string } = {}) {
     this.reloginAfterMs = opts.reloginAfterMs ?? 20 * 60 * 1000;
     this.headless = opts.headless ?? true;
+    this.userAgent = opts.userAgent ?? DEFAULT_UA;
   }
 
   async start() {
-    this.browser = await chromium.launch({ headless: this.headless });
+    this.browser = await chromium.launch({
+      headless: this.headless,
+      args: ["--disable-blink-features=AutomationControlled"],
+    });
   }
 
   async stop() {
@@ -49,6 +57,9 @@ export class Session {
 
     const ctx = await this.browser.newContext({
       viewport: { width: 1440, height: 900 },
+      userAgent: this.userAgent,
+      locale: "ko-KR",
+      timezoneId: "Asia/Seoul",
     });
     const page = await ctx.newPage();
     await adapter.login(page, creds);

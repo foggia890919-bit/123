@@ -42,3 +42,6 @@ yarn-error.log*
 next-env.d.ts
 
 /src/generated/prisma
+
+# scraper debug dumps (screenshots + HTML from inspect harness)
+/debug
