@@ -51,6 +51,8 @@ function ProposalsContent() {
   const [userClients, setUserClients] = useState<UserClient[]>([]);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState("");
+  const [editingClient, setEditingClient] = useState(false);
+  const [editClientId, setEditClientId] = useState("");
   const [companyStatuses, setCompanyStatuses] = useState<Record<string, string>>({});
   const [cols, setCols] = useState<ColumnVisibility>({ showRate: true, showInsuranceCode: true });
   const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null } | null>(null);
@@ -157,6 +159,23 @@ function ProposalsContent() {
     setEditingTitle(false);
     await loadProposals();
     setSelected((prev) => prev ? { ...prev, title: editTitle.trim() } : prev);
+  }
+
+  async function saveClient() {
+    if (!selected) return;
+    await fetch(`/api/proposals/${selected.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clientId: editClientId || null }),
+    });
+    setEditingClient(false);
+    // 제안서 + 목록 + 거래처필터 상태 모두 갱신
+    const [detail] = await Promise.all([
+      fetch(`/api/proposals/${selected.id}`).then((r) => r.json()),
+      loadProposals(),
+      fetch(`/api/filter-request/company-status?userId=${userId}`).then((r) => r.json()).then(setCompanyStatuses),
+    ]);
+    setSelected(detail);
   }
 
   function toggleCompanyExpand(name: string) {
@@ -419,12 +438,39 @@ function ProposalsContent() {
                   </>
                 ) : (
                   <>
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <h2 className="text-lg font-bold text-gray-900 truncate">{selected.title}</h2>
-                      {selected.client ? (
-                        <p className="text-xs text-gray-400">{selected.client.clientName} · {selected.client.bizNumber}</p>
+                      {/* 거래처 인라인 편집 */}
+                      {editingClient ? (
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <select
+                            value={editClientId}
+                            onChange={(e) => setEditClientId(e.target.value)}
+                            className="h-7 rounded border border-gray-300 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            autoFocus
+                          >
+                            <option value="">거래처 미지정</option>
+                            {userClients.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.clientName} · {c.bizNumber}{!c.approved ? " (승인전)" : ""}
+                              </option>
+                            ))}
+                          </select>
+                          <button onClick={saveClient} className="h-7 px-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">완료</button>
+                          <button onClick={() => setEditingClient(false)} className="text-gray-400 hover:text-gray-600"><X className="w-3.5 h-3.5" /></button>
+                        </div>
                       ) : (
-                        <p className="text-xs text-gray-300">거래처 미지정</p>
+                        <button
+                          onClick={() => { setEditClientId(selected.clientId || ""); setEditingClient(true); }}
+                          className="flex items-center gap-1 mt-0.5 group"
+                        >
+                          {selected.client ? (
+                            <span className="text-xs text-gray-400 group-hover:text-blue-500">{selected.client.clientName} · {selected.client.bizNumber}</span>
+                          ) : (
+                            <span className="text-xs text-gray-300 group-hover:text-blue-400">거래처 미지정 (클릭해서 설정)</span>
+                          )}
+                          <Edit2 className="w-3 h-3 text-gray-300 group-hover:text-blue-400 opacity-0 group-hover:opacity-100" />
+                        </button>
                       )}
                     </div>
                     <button onClick={() => { setEditTitle(selected.title); setEditingTitle(true); }}
