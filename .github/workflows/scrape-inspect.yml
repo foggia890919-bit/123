@@ -1,0 +1,68 @@
+name: Scraper - Inspect (manual)
+
+# Manually-triggered debug run: logs into one wholesale site, searches ONE
+# insurance code, and uploads screenshots + HTML dumps as artifacts so we
+# can verify selectors work before running the full PoC.
+
+on:
+  workflow_dispatch:
+    inputs:
+      siteKey:
+        description: "Adapter key (e.g. ibjp)"
+        required: true
+        default: "ibjp"
+      insuranceCode:
+        description: "Insurance code to test (e.g. 643703630)"
+        required: true
+        default: "643703630"
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Run inspector
+        env:
+          SCRAPER_IBJP_ID: ${{ secrets.SCRAPER_IBJP_ID }}
+          SCRAPER_IBJP_PW: ${{ secrets.SCRAPER_IBJP_PW }}
+          # Add more site secrets here as adapters are added:
+          # SCRAPER_SITE2_ID: ${{ secrets.SCRAPER_SITE2_ID }}
+          # SCRAPER_SITE2_PW: ${{ secrets.SCRAPER_SITE2_PW }}
+        run: npm run scrape:inspect -- "${{ inputs.siteKey }}" "${{ inputs.insuranceCode }}"
+
+      - name: Upload debug output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inspect-${{ inputs.siteKey }}-${{ inputs.insuranceCode }}
+          path: debug/
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Inspect run complete"
+            echo ""
+            echo "- Site: \`${{ inputs.siteKey }}\`"
+            echo "- Insurance code: \`${{ inputs.insuranceCode }}\`"
+            echo ""
+            echo "Download the **inspect-${{ inputs.siteKey }}-${{ inputs.insuranceCode }}** artifact above to view screenshots and parsed results."
+          } >> "$GITHUB_STEP_SUMMARY"

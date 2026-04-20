@@ -1,0 +1,78 @@
+name: Scraper - PoC (manual)
+
+# Manually-triggered PoC run: scrapes the codes listed in
+# src/scrapers/codes/sample.txt and saves results into Supabase via Prisma.
+# Only run this AFTER `Scraper - Inspect` has confirmed selectors work.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sites:
+        description: "Comma-separated adapter keys"
+        required: true
+        default: "ibjp"
+      intervalMs:
+        description: "Delay between requests per site (ms)"
+        required: true
+        default: "2000"
+      distribution:
+        description: "round-robin | cross"
+        required: true
+        default: "round-robin"
+      limit:
+        description: "Max codes to scrape (blank = all sample codes)"
+        required: false
+        default: ""
+
+jobs:
+  poc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Prisma generate
+        run: npx prisma generate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Run PoC scrape
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SCRAPER_SITES: ${{ inputs.sites }}
+          SCRAPE_INTERVAL_MS: ${{ inputs.intervalMs }}
+          SCRAPE_DISTRIBUTION: ${{ inputs.distribution }}
+          SCRAPE_LIMIT: ${{ inputs.limit }}
+          SCRAPER_IBJP_ID: ${{ secrets.SCRAPER_IBJP_ID }}
+          SCRAPER_IBJP_PW: ${{ secrets.SCRAPER_IBJP_PW }}
+          # SCRAPER_SITE2_ID: ${{ secrets.SCRAPER_SITE2_ID }}
+          # SCRAPER_SITE2_PW: ${{ secrets.SCRAPER_SITE2_PW }}
+        run: npm run scrape:poc
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### PoC run complete"
+            echo ""
+            echo "- Sites: \`${{ inputs.sites }}\`"
+            echo "- Interval: \`${{ inputs.intervalMs }}ms\`"
+            echo "- Distribution: \`${{ inputs.distribution }}\`"
+            echo ""
+            echo "Results saved to Supabase \`InventorySnapshot\` table."
+            echo "Check Supabase dashboard → Table Editor → InventorySnapshot."
+          } >> "$GITHUB_STEP_SUMMARY"
