@@ -30,10 +30,19 @@ export const authOptions: NextAuthOptions = {
     }),
   ],
   callbacks: {
-    jwt({ token, user }) {
+    async jwt({ token, user }) {
       if (user) {
-        token.role = (user as { role?: string }).role;
         token.id = user.id;
+      }
+      // 매번 DB에서 최신 역할 조회 (관리자가 변경해도 즉시 반영)
+      if (token.id) {
+        try {
+          const dbUser = await prisma.user.findUnique({
+            where: { id: token.id as string },
+            select: { role: true, approved: true },
+          });
+          if (dbUser) token.role = dbUser.role;
+        } catch {}
       }
       return token;
     },
