@@ -99,6 +99,7 @@ function UploadTab() {
   const [settlementType, setSettlementType] = useState<"원외" | "원내">("원외");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ success?: boolean; count?: number; updated?: number; created?: number; skipped?: number; error?: string } | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [mapFile, setMapFile] = useState<File | null>(null);
@@ -334,28 +335,80 @@ function UploadTab() {
           onChange={(e) => { setFile(e.target.files?.[0] || null); setResult(null); }} />
       </div>
       <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <input type="checkbox" id="settlement" checked={isSettlement}
-            onChange={(e) => setIsSettlement(e.target.checked)} className="w-4 h-4 rounded border-gray-300" />
-          <label htmlFor="settlement" className="text-sm text-gray-700">정산 가능 제약사 요율표로 등록</label>
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2">
+            <input type="checkbox" id="settlement" checked={isSettlement}
+              onChange={(e) => setIsSettlement(e.target.checked)} className="w-4 h-4 rounded border-gray-300" />
+            <label htmlFor="settlement" className="text-sm text-gray-700">정산 가능 제약사 요율표로 등록</label>
+          </div>
+          {isSettlement && (
+            <select
+              value={settlementType}
+              onChange={(e) => setSettlementType(e.target.value as "원외" | "원내")}
+              className="text-sm border border-gray-300 rounded-md px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 font-medium text-gray-700"
+            >
+              <option value="원외">원외</option>
+              <option value="원내">원내</option>
+            </select>
+          )}
         </div>
         {isSettlement && (
-          <div className="flex items-center gap-4 pl-6 p-2 bg-gray-50 rounded">
-            <span className="text-xs text-gray-600 font-medium">정산 분류:</span>
-            {(["원외", "원내"] as const).map((t) => (
-              <label key={t} className="flex items-center gap-1.5 cursor-pointer text-sm">
-                <input type="radio" name="settlementType" checked={settlementType === t}
-                  onChange={() => setSettlementType(t)} className="w-4 h-4 text-blue-600" />
-                <span className={settlementType === t ? "font-semibold text-blue-700" : "text-gray-600"}>{t}</span>
-              </label>
-            ))}
-            <span className="text-xs text-gray-400">이 요율표의 약품들을 해당 분류로 저장합니다</span>
-          </div>
+          <p className="text-xs text-gray-400 pl-6">이 요율표의 약품들을 <strong className="text-gray-600">{settlementType}</strong> 정산 분류로 저장합니다</p>
         )}
       </div>
-      <Button onClick={handleUpload} disabled={!file || loading} className="w-full bg-gray-800 hover:bg-gray-700">
+      <Button onClick={() => { if (!file) return; setConfirmOpen(true); }} disabled={!file || loading} className="w-full bg-gray-800 hover:bg-gray-700">
         {loading ? "업로드 중..." : "업로드"}
       </Button>
+
+      {/* 업로드 확인 팝업 */}
+      {confirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-sm mx-4">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-yellow-100 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-5 h-5 text-yellow-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-900 text-base">업로드 전 최종 확인</h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  파일: <span className="font-medium text-gray-700">{file?.name}</span>
+                </p>
+              </div>
+            </div>
+            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-5 space-y-1.5 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-500">정산 여부</span>
+                <span className="font-semibold text-gray-800">{isSettlement ? "정산 가능 요율표" : "일반 요율표"}</span>
+              </div>
+              {isSettlement && (
+                <div className="flex justify-between">
+                  <span className="text-gray-500">정산 분류</span>
+                  <span className={`font-bold text-base ${settlementType === "원외" ? "text-blue-700" : "text-green-700"}`}>
+                    {settlementType}
+                  </span>
+                </div>
+              )}
+            </div>
+            {isSettlement && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 mb-4 text-xs text-yellow-800">
+                <strong>{settlementType}</strong> 요율표로 업로드하시겠습니까? 잘못된 분류로 등록하면 정산 데이터가 오염됩니다.
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setConfirmOpen(false); handleUpload(); }}
+                className="flex-1 py-2.5 rounded-lg bg-gray-900 hover:bg-gray-700 text-white text-sm font-semibold">
+                확인, 업로드합니다
+              </button>
+              <button
+                onClick={() => setConfirmOpen(false)}
+                className="flex-1 py-2.5 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 text-sm font-medium">
+                취소
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
         {result && (
           <div className={`flex items-center gap-2 p-3 rounded-lg text-sm ${result.success ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
             {result.success

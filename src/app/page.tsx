@@ -1,9 +1,21 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Search, Building2, FileText, Filter } from "lucide-react";
+import { Search, Building2, FileText, Filter, Users, Eye } from "lucide-react";
 
 export default function LandingPage() {
+  const [visits, setVisits] = useState<{ today: number; total: number } | null>(null);
+
+  useEffect(() => {
+    // 방문 카운트 증가 후 최신값 조회
+    fetch("/api/visits", { method: "POST" })
+      .then(() => fetch("/api/visits"))
+      .then((r) => r.json())
+      .then(setVisits)
+      .catch(() => null);
+  }, []);
+
   return (
     <div className="min-h-[80vh] flex flex-col items-center justify-center space-y-12">
       {/* 로고 & 슬로건 */}
@@ -20,6 +32,21 @@ export default function LandingPage() {
         </div>
         <p className="text-gray-500 text-lg">의약품 영업사원을 위한 대체의약품 검색 플랫폼</p>
         <p className="text-gray-400 text-sm">와이케이메디 | 공지사항 및 서비스 안내</p>
+
+        {/* 방문자 카운터 */}
+        {visits !== null && (
+          <div className="flex items-center justify-center gap-4 mt-2">
+            <div className="flex items-center gap-1.5 text-xs text-gray-400">
+              <Eye className="w-3.5 h-3.5" />
+              <span>오늘 <span className="font-semibold text-gray-600">{visits.today.toLocaleString()}</span></span>
+            </div>
+            <span className="text-gray-200">|</span>
+            <div className="flex items-center gap-1.5 text-xs text-gray-400">
+              <Users className="w-3.5 h-3.5" />
+              <span>전체 <span className="font-semibold text-gray-600">{visits.total.toLocaleString()}</span></span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 메뉴 바로가기 */}
