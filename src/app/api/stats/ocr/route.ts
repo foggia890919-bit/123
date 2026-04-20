@@ -5,6 +5,9 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export async function POST(req: NextRequest) {
   try {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return NextResponse.json({ error: "ANTHROPIC_API_KEY가 설정되지 않았습니다. .env 파일에 키를 추가하세요." }, { status: 500 });
+    }
     const formData = await req.formData();
     const file = formData.get("image") as File | null;
     if (!file) return NextResponse.json({ error: "이미지가 없습니다" }, { status: 400 });

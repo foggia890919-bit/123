@@ -35,7 +35,8 @@ model UserClient {
   bizFileName String?
   approved    Boolean    @default(false)
   createdAt   DateTime   @default(now())
-  proposals   Proposal[]
+  proposals             Proposal[]
+  prescriptionReports   PrescriptionReport[]
 
   @@index([userId])
   @@unique([userId, bizNumber])
@@ -152,21 +153,25 @@ enum FilterStatus {
 }
 
 model PrescriptionReport {
-  id           String   @id @default(cuid())
-  userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  year         Int
-  month        Int
-  hospitalName String?
-  companyName  String?
-  imageData    String?
-  ocrData      Json?
-  status       String   @default("PENDING_REVIEW")
-  totalFee     Float?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                   String      @id @default(cuid())
+  userId               String
+  clientId             String?
+  user                 User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  client               UserClient? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  year                 Int
+  month                Int
+  hospitalName         String?
+  companyName          String?
+  imageData            String?
+  ocrData              Json?
+  status               String      @default("PENDING_REVIEW")
+  totalFee             Float?
+  clientApprovedAtSave Boolean     @default(false)
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
 
   @@index([userId])
+  @@index([clientId])
 }
 
 model FilterRequest {
