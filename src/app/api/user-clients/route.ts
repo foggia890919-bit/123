@@ -17,6 +17,23 @@ export async function GET(req: NextRequest) {
 
   if (!userId) return NextResponse.json([], { status: 200 });
 
+  // 기존 FilterRequest에서 거래처 정보를 UserClient로 자동 가져오기
+  const pastRequests = await prisma.filterRequest.findMany({
+    where: { userId },
+    select: { clientName: true, bizNumber: true },
+    distinct: ["bizNumber"],
+  });
+  if (pastRequests.length > 0) {
+    await prisma.userClient.createMany({
+      data: pastRequests.map((r) => ({
+        userId,
+        clientName: r.clientName,
+        bizNumber: r.bizNumber,
+      })),
+      skipDuplicates: true,
+    });
+  }
+
   const rows = await prisma.userClient.findMany({
     where: { userId },
     orderBy: { createdAt: "desc" },
