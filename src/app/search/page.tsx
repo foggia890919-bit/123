@@ -118,11 +118,11 @@ export default function SearchPage() {
         <form onSubmit={handleSearch} className="flex gap-2 max-w-2xl items-start">
           <Input value={query} onChange={(e) => setQuery(e.target.value)}
             placeholder="예: 리피토, atorvastatin, 아스피린..." className="h-11 text-base" />
-          <div ref={companyMenuRef} className="relative">
+          <div ref={companyMenuRef} className="relative shrink-0">
             <button
               type="button"
               onClick={() => setCompanyMenuOpen((v) => !v)}
-              className="h-11 text-sm border border-gray-300 bg-white hover:bg-gray-50 rounded-md px-3 inline-flex items-center gap-1.5 text-gray-700"
+              className="h-11 text-sm border border-gray-300 bg-white hover:bg-gray-50 rounded-md px-3 inline-flex items-center gap-1.5 text-gray-700 whitespace-nowrap"
             >
               <Filter className="w-4 h-4" />
               제약사
@@ -181,7 +181,7 @@ export default function SearchPage() {
               </div>
             )}
           </div>
-          <Button type="submit" size="lg" disabled={loading}><Search className="w-4 h-4 mr-2" />검색</Button>
+          <Button type="submit" size="lg" disabled={loading} className="shrink-0 whitespace-nowrap"><Search className="w-4 h-4 mr-2" />검색</Button>
         </form>
         {selectedCompanies.size > 0 && (
           <div className="flex items-center gap-1.5 flex-wrap">

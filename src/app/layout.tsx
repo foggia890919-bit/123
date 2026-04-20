@@ -7,7 +7,7 @@ import Providers from "@/components/Providers";
 const geist = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "MedAlt - 대체의약품 검색 플랫폼",
+  title: "KMD - Korea Medicine Data",
   description: "의약품 영업사원을 위한 대체의약품 검색 및 제안서 서비스",
 };
 
