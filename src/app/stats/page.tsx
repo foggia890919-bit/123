@@ -488,29 +488,6 @@ export default function StatsPage() {
 
                 <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
                   <div>
-                    <p className="text-xs font-semibold text-gray-500 mb-2">기본 정보</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      {([
-                        { label: "병원명", key: "hospitalName" as const },
-                        { label: "요양기관번호", key: "institutionCode" as const },
-                        { label: "처방일", key: "prescriptionDate" as const },
-                        { label: "환자명", key: "patientName" as const },
-                      ]).map(({ label, key }) => {
-                        const field = editOcr[key] as OcrField;
-                        return (
-                          <div key={key}>
-                            <div className="flex items-center gap-1 mb-1">
-                              <span className="text-[10px] text-gray-500">{label}</span>
-                              <span className={`text-[10px] px-1 py-0.5 rounded border font-medium ${confColor(field.confidence)}`}>{field.confidence}%</span>
-                            </div>
-                            <input value={field.value} onChange={(e) => updateField(key, e.target.value)}
-                              className={`w-full text-sm border rounded px-2 py-1.5 focus:outline-none focus:ring-1 ${inputColor(field.confidence)}`} />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <div>
                     <p className="text-xs font-semibold text-gray-500 mb-2">처방 의약품</p>
                     <div className="overflow-x-auto">
                       <table className="w-full text-xs">
