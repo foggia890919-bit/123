@@ -90,7 +90,7 @@ function UploadTab() {
   const [isSettlement, setIsSettlement] = useState(true);
   const [settlementType, setSettlementType] = useState<"원외" | "원내">("원외");
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ success?: boolean; count?: number; updated?: number; created?: number; error?: string } | null>(null);
+  const [result, setResult] = useState<{ success?: boolean; count?: number; updated?: number; created?: number; skipped?: number; error?: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [mapFile, setMapFile] = useState<File | null>(null);
@@ -305,10 +305,11 @@ function UploadTab() {
       <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-5">
         <div>
           <h2 className="text-base font-semibold text-gray-800">② 요율표 엑셀 업로드</h2>
-          <p className="text-xs text-gray-500 mt-0.5">보험코드가 일치하면 공공데이터 레코드에 수수료율이 자동 연결됩니다.</p>
+          <p className="text-xs text-gray-500 mt-0.5">급여코드(보험코드) 기준으로 공공데이터 레코드에 수수료율이 자동 연결됩니다. 공공데이터 sync 먼저 실행하세요.</p>
         </div>
-        <div className="bg-gray-50 rounded p-3 text-xs text-gray-500 font-mono leading-relaxed">
-          필요 컬럼: 분류(A) | 성분명 | 분류(B) | 코드(수수료율) | 제약사명 | 생동/생산 | 품목명 | 약가 | 오리지날/대조약 | 보험코드 | 특이사항
+        <div className="bg-gray-50 rounded p-3 text-xs text-gray-500 font-mono leading-relaxed space-y-1">
+          <p><span className="text-blue-600 font-semibold">최소 필수:</span> 급여코드(또는 보험코드) | 수수료율(또는 코드)</p>
+          <p><span className="text-gray-400">추가 선택:</span> 분류(A) | 성분명 | 분류(B) | 제약사명 | 생동/생산 | 품목명 | 약가 | 오리지날/대조약 | 특이사항</p>
         </div>
       <div
         className={`border-2 border-dashed rounded-lg p-10 text-center cursor-pointer transition-colors ${file ? "border-blue-400 bg-blue-50" : "border-gray-300 hover:border-blue-400"}`}
@@ -350,7 +351,7 @@ function UploadTab() {
         {result && (
           <div className={`flex items-center gap-2 p-3 rounded-lg text-sm ${result.success ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
             {result.success
-              ? <><CheckCircle className="w-4 h-4 shrink-0" />총 {result.count?.toLocaleString()}건 — 공공데이터 머지: {result.updated}건 / 신규생성: {result.created}건</>
+              ? <><CheckCircle className="w-4 h-4 shrink-0" />총 {result.count?.toLocaleString()}건 — 공공데이터 머지: {result.updated}건 / 신규생성: {result.created}건{(result.skipped ?? 0) > 0 ? ` / 미매칭 스킵: ${result.skipped}건` : ""}</>
               : <><AlertCircle className="w-4 h-4 shrink-0" />{result.error}</>}
           </div>
         )}
