@@ -39,6 +39,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const data: { title?: string; clientId?: string | null; updatedAt: Date } = { updatedAt: new Date() };
   if (title !== undefined) data.title = title;
   if (clientId !== undefined) data.clientId = clientId || null;
-  const proposal = await prisma.proposal.update({ where: { id }, data });
-  return NextResponse.json(proposal);
+  try {
+    const proposal = await prisma.proposal.update({ where: { id }, data });
+    return NextResponse.json(proposal);
+  } catch (e) {
+    return NextResponse.json({ error: String(e) }, { status: 500 });
+  }
 }

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
-import { Plus, Trash2, FileSpreadsheet, FileDown, FileText, X, Edit2, Check, Building2, Search, ChevronDown, ChevronUp, Filter, Loader2 } from "lucide-react";
+import { Plus, Trash2, FileSpreadsheet, FileDown, FileText, X, Edit2, Check, Building2, Search, ChevronDown, ChevronUp, Filter, Loader2, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatPrice } from "@/lib/utils";
@@ -60,6 +60,13 @@ function ProposalsContent() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [expandedCompanies, setExpandedCompanies] = useState<Set<string>>(new Set());
   const [requestingFilter, setRequestingFilter] = useState<Set<string>>(new Set());
+  const [saveClientError, setSaveClientError] = useState("");
+  // 거래처 신규 등록 모달
+  const [regOpen, setRegOpen] = useState(false);
+  const [regName, setRegName] = useState("");
+  const [regBizNum, setRegBizNum] = useState("");
+  const [regLoading, setRegLoading] = useState(false);
+  const [regError, setRegError] = useState("");
 
   const loadProposals = useCallback(async () => {
     if (!userId) return;
@@ -164,11 +171,17 @@ function ProposalsContent() {
 
   async function saveClient() {
     if (!selected) return;
-    await fetch(`/api/proposals/${selected.id}`, {
+    setSaveClientError("");
+    const res = await fetch(`/api/proposals/${selected.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ clientId: confirmClientId || null }),
     });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      setSaveClientError(d.error?.includes("column") ? "DB 마이그레이션이 필요합니다. 관리자에게 문의하세요." : "저장에 실패했습니다.");
+      return;
+    }
     setConfirmClientId(null);
     setEditingClient(false);
     const [detail] = await Promise.all([
@@ -177,6 +190,24 @@ function ProposalsContent() {
       fetch(`/api/filter-request/company-status?userId=${userId}`).then((r) => r.json()).then(setCompanyStatuses),
     ]);
     setSelected(detail);
+  }
+
+  async function registerClient() {
+    if (!regName.trim() || !regBizNum.trim()) { setRegError("거래처명과 사업자번호를 입력해주세요."); return; }
+    setRegLoading(true); setRegError("");
+    const res = await fetch("/api/user-clients", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, clientName: regName.trim(), bizNumber: regBizNum.trim() }),
+    });
+    const data = await res.json();
+    if (!res.ok) { setRegError(data.error || "등록 실패"); setRegLoading(false); return; }
+    const updated = await fetch(`/api/user-clients?userId=${userId}`).then((r) => r.json());
+    setUserClients(Array.isArray(updated) ? updated : []);
+    setEditClientId(data.id);
+    setRegOpen(false); setRegName(""); setRegBizNum("");
+    setRegLoading(false);
+    if (!editingClient) { setEditingClient(true); }
   }
 
   function toggleCompanyExpand(name: string) {
@@ -189,11 +220,12 @@ function ProposalsContent() {
 
   async function requestFilter(companyName: string) {
     if (!selected?.client) {
-      alert("거래처가 연결된 제안서에서만 바로 요청할 수 있습니다.\n제안서에 거래처를 먼저 지정해주세요.");
+      setEditingClient(true);
+      setEditClientId("");
       return;
     }
     const existing = companyStatuses[companyName];
-    if (existing === "PENDING" || existing === "REVIEWING" || existing === "APPROVED") return;
+    if (existing === "PENDING" || existing === "REVIEWING") return;
     setRequestingFilter((prev) => new Set(prev).add(companyName));
     try {
       await fetch("/api/filter-request", {
@@ -299,18 +331,25 @@ function ProposalsContent() {
             placeholder="새 제안서 이름..." className="h-9 text-sm"
             onKeyDown={(e) => e.key === "Enter" && createProposal()} />
           {/* 거래처 선택 드롭다운 */}
-          <select
-            value={newClientId}
-            onChange={(e) => setNewClientId(e.target.value)}
-            className="w-full h-9 rounded-md border border-gray-300 bg-white px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
-          >
-            <option value="">거래처 미지정</option>
-            {userClients.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.clientName}{!c.approved ? " (승인전)" : ""}
-              </option>
-            ))}
-          </select>
+          <div className="flex gap-1">
+            <select
+              value={newClientId}
+              onChange={(e) => setNewClientId(e.target.value)}
+              className="flex-1 h-9 rounded-md border border-gray-300 bg-white px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
+            >
+              <option value="">거래처 미지정</option>
+              {userClients.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.clientName}{!c.approved ? " (승인전)" : ""}
+                </option>
+              ))}
+            </select>
+            <button type="button" onClick={() => { setRegOpen(true); setRegError(""); }}
+              title="새 거래처 등록"
+              className="h-9 w-9 shrink-0 flex items-center justify-center border border-gray-300 rounded-md hover:bg-gray-50 text-gray-500 hover:text-blue-600">
+              <UserPlus className="w-4 h-4" />
+            </button>
+          </div>
           <Button onClick={createProposal} disabled={creating} className="w-full h-9 text-sm">
             <Plus className="w-3.5 h-3.5 mr-1" />{creating ? "생성 중..." : "새 제안서 만들기"}
           </Button>
@@ -378,17 +417,19 @@ function ProposalsContent() {
                       </div>
                       <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                         {status ? <StatusBadge status={status} /> : null}
-                        {!isApproved && (
-                          <button
-                            onClick={() => requestFilter(name)}
-                            disabled={requestingFilter.has(name) || status === "PENDING" || status === "REVIEWING"}
-                            className="inline-flex items-center gap-0.5 text-[10px] text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5 hover:bg-blue-100 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
-                            {requestingFilter.has(name)
-                              ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                              : <Filter className="w-2.5 h-2.5" />}
-                            {status === "PENDING" ? "요청됨" : status === "REVIEWING" ? "검토중" : "필터링 요청"}
-                          </button>
-                        )}
+                        <button
+                          onClick={() => requestFilter(name)}
+                          disabled={requestingFilter.has(name) || status === "PENDING" || status === "REVIEWING"}
+                          className={`inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed ${
+                            isApproved
+                              ? "text-gray-500 bg-gray-50 border border-gray-200 hover:bg-gray-100"
+                              : "text-blue-600 bg-blue-50 border border-blue-200 hover:bg-blue-100"
+                          }`}>
+                          {requestingFilter.has(name)
+                            ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                            : <Filter className="w-2.5 h-2.5" />}
+                          {status === "PENDING" ? "요청됨" : status === "REVIEWING" ? "검토중" : "필터링 요청"}
+                        </button>
                       </div>
                       {/* 거래처 상세 (펼쳤을 때) */}
                       {isExpanded && (
@@ -443,7 +484,7 @@ function ProposalsContent() {
                       <h2 className="text-lg font-bold text-gray-900 truncate">{selected.title}</h2>
                       {/* 거래처 인라인 편집 */}
                       {editingClient ? (
-                        <div className="flex items-center gap-1.5 mt-0.5">
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                           <select
                             value={editClientId}
                             onChange={(e) => setEditClientId(e.target.value)}
@@ -457,6 +498,10 @@ function ProposalsContent() {
                               </option>
                             ))}
                           </select>
+                          <button type="button" onClick={() => { setRegOpen(true); setRegError(""); }}
+                            title="새 거래처 등록" className="h-7 w-7 flex items-center justify-center border border-gray-300 rounded hover:bg-gray-50 text-gray-500 hover:text-blue-600">
+                            <UserPlus className="w-3.5 h-3.5" />
+                          </button>
                           <button onClick={() => setConfirmClientId(editClientId)} className="h-7 px-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">완료</button>
                           <button onClick={() => setEditingClient(false)} className="text-gray-400 hover:text-gray-600"><X className="w-3.5 h-3.5" /></button>
                         </div>
@@ -596,14 +641,54 @@ function ProposalsContent() {
                 ? <>이 제안서를 <span className="font-semibold text-gray-900">{userClients.find((c) => c.id === confirmClientId)?.clientName}</span> 거래처로 매핑할까요?</>
                 : "거래처 연결을 해제할까요?"}
             </p>
+            {saveClientError && <p className="text-xs text-red-600 bg-red-50 p-2 rounded">{saveClientError}</p>}
             <div className="flex gap-2 justify-end">
-              <button onClick={() => setConfirmClientId(null)}
+              <button onClick={() => { setConfirmClientId(null); setSaveClientError(""); }}
                 className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">
                 아니오
               </button>
               <button onClick={saveClient}
                 className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg">
                 예
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 거래처 신규 등록 모달 */}
+      {regOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl p-6 w-80 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-gray-900">새 거래처 등록</h3>
+              <button onClick={() => setRegOpen(false)} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-medium text-gray-600">거래처명 *</label>
+                <Input value={regName} onChange={(e) => setRegName(e.target.value)}
+                  placeholder="거래처 상호명" className="h-9 mt-1" autoFocus />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600">사업자번호 *</label>
+                <Input value={regBizNum}
+                  onChange={(e) => {
+                    const d = e.target.value.replace(/\D/g, "");
+                    setRegBizNum(d.length <= 3 ? d : d.length <= 5 ? `${d.slice(0,3)}-${d.slice(3)}` : `${d.slice(0,3)}-${d.slice(3,5)}-${d.slice(5,10)}`);
+                  }}
+                  placeholder="000-00-00000" maxLength={12} className="h-9 mt-1" />
+              </div>
+            </div>
+            {regError && <p className="text-xs text-red-600 bg-red-50 p-2 rounded">{regError}</p>}
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setRegOpen(false)}
+                className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">
+                취소
+              </button>
+              <button onClick={registerClient} disabled={regLoading}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-50">
+                {regLoading ? "등록 중..." : "등록"}
               </button>
             </div>
           </div>
