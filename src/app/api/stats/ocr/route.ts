@@ -7,12 +7,32 @@ interface ClovaField {
   boundingPoly?: { vertices: { x: number; y: number }[] };
 }
 
+export async function GET() {
+  // 환경변수 진단용 (값은 노출하지 않고 존재 여부와 길이만)
+  const url = process.env.CLOVA_OCR_INVOKE_URL ?? "";
+  const secret = process.env.CLOVA_OCR_SECRET_KEY ?? "";
+  return NextResponse.json({
+    hasUrl: !!url,
+    urlLength: url.length,
+    urlStartsWith: url.slice(0, 20),
+    hasSecret: !!secret,
+    secretLength: secret.length,
+    runtime: process.env.VERCEL ? "vercel" : "local",
+  });
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const clovaUrl = process.env.CLOVA_OCR_INVOKE_URL;
-    const clovaSecret = process.env.CLOVA_OCR_SECRET_KEY;
-    if (!clovaUrl || !clovaSecret) {
-      return NextResponse.json({ error: "CLOVA_OCR_INVOKE_URL 또는 CLOVA_OCR_SECRET_KEY가 설정되지 않았습니다." }, { status: 500 });
+    const clovaUrl = process.env.CLOVA_OCR_INVOKE_URL?.trim();
+    const clovaSecret = process.env.CLOVA_OCR_SECRET_KEY?.trim();
+    if (!clovaUrl && !clovaSecret) {
+      return NextResponse.json({ error: "CLOVA_OCR_INVOKE_URL 과 CLOVA_OCR_SECRET_KEY 둘 다 설정되지 않았습니다. Vercel → Settings → Environment Variables 에 추가 후 Redeploy 하세요." }, { status: 500 });
+    }
+    if (!clovaUrl) {
+      return NextResponse.json({ error: "CLOVA_OCR_INVOKE_URL 이 설정되지 않았습니다." }, { status: 500 });
+    }
+    if (!clovaSecret) {
+      return NextResponse.json({ error: "CLOVA_OCR_SECRET_KEY 가 설정되지 않았습니다." }, { status: 500 });
     }
 
     const formData = await req.formData();
