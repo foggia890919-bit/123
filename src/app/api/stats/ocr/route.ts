@@ -120,51 +120,51 @@ function parsePrescription(fields: ClovaField[]) {
     ? Math.round(fields.reduce((s, f) => s + f.inferConfidence * 100, 0) / fields.length)
     : 0;
 
-  // 병원명
-  const hospitalRe = /([가-힣a-zA-Z0-9\s]{2,20}(?:의원|병원|클리닉|의료원|한의원|요양병원|치과|내과|외과|소아과|산부인과|안과|이비인후과|피부과|정형외과|신경과|정신건강의학과))/;
-  const hospitalMatch = fullText.match(hospitalRe);
-  const hospitalVal = hospitalMatch?.[1]?.trim() ?? "";
-  const hospitalConf = hospitalVal ? (confForToken(hospitalVal, fields) || avgConf) : 0;
-
-  // 요양기관번호
-  const instRe = /(?:요양기관(?:기호|번호)|기관기호|기관번호)[^\d]*(\d{8,10})/;
-  const instMatch = fullText.match(instRe);
-  const instVal = instMatch?.[1] ?? "";
-  const instConf = instVal ? (confForToken(instVal, fields) || avgConf) : 0;
-
-  // 처방일
-  const dateRe = /(\d{4})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/g;
-  let dateMatch: RegExpExecArray | null;
-  let prescDate = "";
-  let dateConf = 0;
-  while ((dateMatch = dateRe.exec(fullText)) !== null) {
-    const y = parseInt(dateMatch[1]);
-    if (y >= 2000 && y <= 2100) {
-      prescDate = `${dateMatch[1]}-${dateMatch[2].padStart(2, "0")}-${dateMatch[3].padStart(2, "0")}`;
-      dateConf = confForToken(dateMatch[0], fields) || avgConf;
-      break;
-    }
-  }
-
-  // 환자명
-  const patientRe = /(?:성명|환자명|환자)[:\s]*([가-힣]{2,5})/;
-  const patientMatch = fullText.match(patientRe);
-  const patientVal = patientMatch?.[1]?.trim() ?? "";
-  const patientConf = patientVal ? (confForToken(patientVal, fields) || avgConf) : 0;
-
-  // 약품 추출
+  // 폼에서 이미 처방년월/병원/제약사를 받으므로 OCR은 약품만 추출
   const drugs = extractDrugs(lines, fields, avgConf);
 
   return {
     source: "clova",
-    hospitalName: { value: hospitalVal, confidence: hospitalConf },
-    institutionCode: { value: instVal, confidence: instConf },
-    prescriptionDate: { value: prescDate, confidence: dateConf },
-    patientName: { value: patientVal, confidence: patientConf },
+    hospitalName: { value: "", confidence: 0 },
+    institutionCode: { value: "", confidence: 0 },
+    prescriptionDate: { value: "", confidence: 0 },
+    patientName: { value: "", confidence: 0 },
     drugs,
     avgConfidence: avgConf,
     rawText: fullText,
   };
+}
+
+// UI 헤더/라벨/합계 등 약품이 아닌 라인
+const HEADER_WORDS = [
+  "처방", "의약품", "약품명", "약품코드", "보험코드", "청구코드", "사용자코드",
+  "수가코드", "코드명", "명령", "명칭", "단위", "수량", "단가", "금액", "총금액",
+  "총수량", "총사용량", "총투여량", "내원구분", "급여구분", "급비구분", "원내", "원외",
+  "제약회사", "제약사", "진료과", "진료실", "합계", "소계", "총계", "작업일자",
+  "검색기간", "검색조건", "처방일자", "환자명", "환자번호", "성명", "성별", "나이",
+  "통계", "항목", "필드", "드래그", "그룹", "기준", "약제", "약국자료", "원무자료",
+];
+
+// 약품명: 의미있는 한글 약품명 + 제형 힌트(정/캡슐/시럽 등) 또는 영숫자 조합
+// 순수 영문 코드(pregaba75) 약품도 허용
+const DRUG_NAME_RE = /([가-힣A-Za-z]{2,}[가-힣A-Za-z0-9./\s()-]*?(?:정|캡슐|시럽|주사|주|액|크림|연고|산|환|겔|패취|포|정제|캅셀))/;
+const DRUG_NAME_EN_RE = /\b([A-Z][A-Za-z0-9]{4,})\b/; // ATOEZE1010, CLARITH500 등
+
+// 보험코드: 9자리 숫자 또는 영문 대문자 + 숫자 (ATOEZE1010, FAMCICL025, EMPAGL110 등)
+const CODE_NUM_RE = /\b(\d{9})\b/;
+const CODE_ALNUM_RE = /\b([A-Z][A-Z0-9]{5,})\b/;
+
+function isHeaderLine(text: string): boolean {
+  // 한글 글자가 하나도 없으면 약품 아닐 가능성 높음(코드성 영문은 아래에서 따로 허용)
+  const stripped = text.trim();
+  if (stripped.length < 3) return true;
+  // 헤더 단어만 있는 라인
+  for (const w of HEADER_WORDS) {
+    if (stripped === w || stripped.startsWith(w + " ") || stripped.endsWith(" " + w)) return true;
+  }
+  // 숫자 하나도 없으면 약품 아님 (약품엔 수량/단가 최소 1개는 있어야 함)
+  if (!/\d/.test(stripped)) return true;
+  return false;
 }
 
 function extractDrugs(
@@ -179,32 +179,52 @@ function extractDrugs(
     price: { value: string; confidence: number };
   }[] = [];
 
-  // 의약품 라인 감지: 한글 약품명(정/캡슐/주/액 포함 가능) + 숫자들
-  const drugLineRe = /[가-힣]{2,}(?:\s*[a-zA-Z0-9]+)?(?:\s*(?:정|캡슐|주사|주|액|시럽|크림|연고))?/;
-  const codeRe = /\b(\d{9})\b/; // 보험코드 9자리
-  const qtyRe = /(\d+(?:\.\d+)?)\s*(?:정|캡슐|개|일)/;
-  const priceRe = /(\d[\d,]+)\s*원?/;
+  // 숫자 토큰 (수량/단가/금액)
+  const numRe = /[\d,]+(?:\.\d+)?/g;
 
   for (const line of lines) {
-    if (!drugLineRe.test(line.text)) continue;
-    // 너무 짧거나 헤더성 텍스트 제외
-    if (line.text.length < 4) continue;
-    if (/처방|의약품|약품명|코드|수량|단가|금액/.test(line.text)) continue;
+    const text = line.text.trim();
+    if (isHeaderLine(text)) continue;
 
-    const nameMatch = line.text.match(drugLineRe);
-    if (!nameMatch) continue;
-    const name = nameMatch[0].trim();
-    if (name.length < 2) continue;
+    // 코드 추출 (숫자 9자리 또는 영문+숫자 조합)
+    const codeNumMatch = text.match(CODE_NUM_RE);
+    const codeAlnumMatch = text.match(CODE_ALNUM_RE);
+    const code = codeNumMatch?.[1] ?? codeAlnumMatch?.[1] ?? "";
 
-    const codeMatch = line.text.match(codeRe);
-    const qtyMatch = line.text.match(qtyRe);
-    const priceMatch = line.text.match(priceRe);
+    // 약품명 추출 (한글+제형 우선, 없으면 영문 코드성 약품)
+    const nameKoMatch = text.match(DRUG_NAME_RE);
+    const nameEnMatch = text.match(DRUG_NAME_EN_RE);
+    let name = "";
+    if (nameKoMatch) name = nameKoMatch[1].trim();
+    else if (nameEnMatch && !codeAlnumMatch) name = nameEnMatch[1].trim();
+
+    // 약품명과 코드 중 하나는 반드시 있어야 하고, 숫자 필드(수량/단가)도 최소 1개
+    const allNums = text.match(numRe) || [];
+    const numericCount = allNums.filter((n) => n.replace(/[,.]/g, "").length >= 1).length;
+
+    if (!name && !code) continue;
+    if (numericCount < 1) continue;
+
+    // 숫자 중 큰 값 순으로 price/quantity 추정
+    const numericValues = allNums
+      .map((n) => ({ raw: n, num: parseFloat(n.replace(/,/g, "")) }))
+      .filter((x) => !isNaN(x.num) && x.num > 0);
+
+    // 가장 큰 수 = 총금액 or 총사용량, 중간 = 단가, 작은 = 수량
+    numericValues.sort((a, b) => b.num - a.num);
+    const price = numericValues[0]?.raw?.replace(/,/g, "") ?? "";
+    const quantity = numericValues[numericValues.length - 1]?.raw ?? "";
+
+    // name이 있는데 헤더 단어만 있으면 스킵
+    if (name && HEADER_WORDS.some((w) => name === w)) continue;
+    // 약품명이 의미없는 짧은 토큰이면 스킵
+    if (name && name.length < 2) continue;
 
     drugs.push({
-      name: { value: name, confidence: confForToken(name, fields) || line.conf || avgConf },
-      code: { value: codeMatch?.[1] ?? "", confidence: codeMatch ? (confForToken(codeMatch[1], fields) || line.conf) : 50 },
-      quantity: { value: qtyMatch?.[1] ?? "", confidence: qtyMatch ? (confForToken(qtyMatch[1], fields) || line.conf) : 55 },
-      price: { value: priceMatch?.[1]?.replace(/,/g, "") ?? "", confidence: priceMatch ? (confForToken(priceMatch[1], fields) || line.conf) : 50 },
+      name: { value: name, confidence: name ? (confForToken(name, fields) || line.conf || avgConf) : 0 },
+      code: { value: code, confidence: code ? (confForToken(code, fields) || line.conf || avgConf) : 0 },
+      quantity: { value: quantity, confidence: quantity ? (confForToken(quantity, fields) || line.conf) : 0 },
+      price: { value: price, confidence: price ? (confForToken(price, fields) || line.conf) : 0 },
     });
   }
 
