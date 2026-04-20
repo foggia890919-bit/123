@@ -60,18 +60,23 @@ function ProposalsContent() {
 
   const loadProposals = useCallback(async () => {
     if (!userId) return;
-    const res = await fetch(`/api/proposals?userId=${userId}`);
-    const data = await res.json();
-    const list: Proposal[] = Array.isArray(data) ? data : [];
-    setProposals(list);
-    setLoading(false);
+    try {
+      const res = await fetch(`/api/proposals?userId=${userId}`);
+      const data = await res.json();
+      const list: Proposal[] = Array.isArray(data) ? data : [];
+      setProposals(list);
 
-    const idParam = searchParams.get("id");
-    if (idParam) {
-      const found = list.find((p) => p.id === idParam);
-      if (found) loadProposal(found);
-    } else if (list.length > 0 && !selected) {
-      loadProposal(list[0]);
+      const idParam = searchParams.get("id");
+      if (idParam) {
+        const found = list.find((p) => p.id === idParam);
+        if (found) loadProposal(found);
+      } else if (list.length > 0 && !selected) {
+        loadProposal(list[0]);
+      }
+    } catch {
+      setProposals([]);
+    } finally {
+      setLoading(false);
     }
   }, [userId, searchParams]);
 

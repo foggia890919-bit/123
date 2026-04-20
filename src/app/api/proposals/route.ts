@@ -18,13 +18,17 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   const userId = req.nextUrl.searchParams.get("userId");
   if (!userId) return NextResponse.json({ error: "userId 필요" }, { status: 400 });
-  const proposals = await prisma.proposal.findMany({
-    where: { userId },
-    orderBy: { createdAt: "desc" },
-    include: {
-      _count: { select: { items: true } },
-      client: { select: { id: true, clientName: true, bizNumber: true, approved: true } },
-    },
-  });
-  return NextResponse.json(proposals);
+  try {
+    const proposals = await prisma.proposal.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      include: {
+        _count: { select: { items: true } },
+        client: { select: { id: true, clientName: true, bizNumber: true, approved: true } },
+      },
+    });
+    return NextResponse.json(proposals);
+  } catch (e) {
+    return NextResponse.json({ error: String(e) }, { status: 500 });
+  }
 }
