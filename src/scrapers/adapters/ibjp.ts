@@ -45,7 +45,8 @@ export const ibjp: WholesaleAdapter = {
   loginUrl: "https://ibjp.co.kr/dist/login",
 
   async login(page: Page, creds: Credentials) {
-    await page.goto(this.loginUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    await page.goto(this.loginUrl, { waitUntil: "commit", timeout: 60_000 });
+    await page.waitForLoadState("domcontentloaded", { timeout: 30_000 }).catch(() => {});
     // SPA: wait for form to render
     const idInput = await waitAny(page, SEL.idInput);
     const pwInput = await waitAny(page, SEL.pwInput);
