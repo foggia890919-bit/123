@@ -20,8 +20,6 @@ const navItems: { href: string; label: string; icon: React.ElementType; minRole:
 export default function Navbar() {
   const pathname = usePathname();
   const { data: session } = useSession();
-  const userRole = (session?.user?.role as UserRole | undefined) ?? "BASIC";
-  const visibleNavItems = navItems.filter((item) => hasRole(userRole, item.minRole));
   const [userOpen, setUserOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const userRef = useRef<HTMLDivElement>(null);
@@ -51,7 +49,7 @@ export default function Navbar() {
 
           {/* 데스크탑 네비 */}
           <div className="hidden md:flex items-center gap-1">
-            {visibleNavItems.map(({ href, label, icon: Icon }) => (
+            {navItems.map(({ href, label, icon: Icon }) => (
               <Link key={href} href={href}
                 className={cn(
                   "flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors",
@@ -113,7 +111,7 @@ export default function Navbar() {
       {mobileOpen && (
         <div className="md:hidden border-t border-gray-100 bg-white shadow-lg">
           <div className="px-4 py-2 space-y-0.5">
-            {visibleNavItems.map(({ href, label, icon: Icon }) => (
+            {navItems.map(({ href, label, icon: Icon }) => (
               <Link key={href} href={href} onClick={() => setMobileOpen(false)}
                 className={cn(
                   "flex items-center gap-3 px-3 py-3 rounded-md text-sm font-medium transition-colors",
