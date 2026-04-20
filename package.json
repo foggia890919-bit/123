@@ -6,7 +6,11 @@
     "dev": "next dev",
     "build": "prisma generate && next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "scrape": "tsx src/scrapers/run.ts",
+    "scrape:poc": "tsx src/scrapers/run.ts poc",
+    "scrape:frequent": "tsx src/scrapers/run.ts frequent",
+    "scrape:full": "tsx src/scrapers/run.ts full"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.90.0",
@@ -41,7 +45,9 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
+    "playwright": "^1.48.0",
     "tailwindcss": "^4",
+    "tsx": "^4.19.2",
     "typescript": "^5"
   }
 }
