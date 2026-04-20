@@ -17,11 +17,12 @@ model User {
   carrier      String?
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
-  proposals      Proposal[]
-  companyRates   MemberCompanyRate[]
-  documents      UserDocument[]
-  filterRequests FilterRequest[]
-  userClients    UserClient[]
+  proposals             Proposal[]
+  companyRates          MemberCompanyRate[]
+  documents             UserDocument[]
+  filterRequests        FilterRequest[]
+  userClients           UserClient[]
+  prescriptionReports   PrescriptionReport[]
 }
 
 model UserClient {
@@ -148,6 +149,24 @@ enum FilterStatus {
   REVIEWING
   REJECTED
   APPROVED
+}
+
+model PrescriptionReport {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  year         Int
+  month        Int
+  hospitalName String?
+  companyName  String?
+  imageData    String?
+  ocrData      Json?
+  status       String   @default("PENDING_REVIEW")
+  totalFee     Float?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
 }
 
 model FilterRequest {

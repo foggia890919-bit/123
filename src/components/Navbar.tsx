@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
-import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Download, Menu, X, Filter } from "lucide-react";
+import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Download, Menu, X, Filter, BarChart3 } from "lucide-react";
 
 const navItems = [
   { href: "/search", label: "통합검색", icon: Search },
@@ -13,6 +13,7 @@ const navItems = [
   { href: "/filter", label: "제약사 필터링", icon: Filter },
   { href: "/filter-list", label: "리스트 다운", icon: Download },
   { href: "/proposals", label: "제안서", icon: FileText },
+  { href: "/stats", label: "처방통계", icon: BarChart3 },
 ];
 
 export default function Navbar() {
