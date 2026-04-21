@@ -6,7 +6,7 @@ import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
-type Tab = "upload" | "members" | "rates" | "filterReqs" | "userClients" | "apiSources";
+type Tab = "upload" | "members" | "rates" | "filterReqs" | "userClients" | "apiSources" | "notices";
 
 interface UserDoc { id: string; docType: string; fileName: string; fileData: string; }
 interface User {
@@ -63,6 +63,7 @@ export default function AdminDashboardPage() {
       <div className="flex gap-1 border-b border-gray-200">
         {([
           { key: "upload", label: "요율표 업로드", icon: Upload },
+          { key: "notices", label: "공지사항 관리", icon: FileSpreadsheet },
           { key: "apiSources", label: "API 연동관리", icon: Database },
           { key: "members", label: "회원관리", icon: Users },
           { key: "rates", label: "추가수수료 관리", icon: Percent },
@@ -84,6 +85,7 @@ export default function AdminDashboardPage() {
       </div>
 
       {tab === "upload" && <UploadTab />}
+      {tab === "notices" && <NoticesTab />}
       {tab === "members" && <MembersTab />}
       {tab === "rates" && <RatesTab />}
       {tab === "filterReqs" && <FilterReqsTab />}
@@ -1477,6 +1479,107 @@ function ApiSourcesTab() {
               </>
             )}
           </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── 공지사항 관리 탭 ──────────────────────────────────────────────────────────
+interface Notice { id: string; title: string; content: string; category: string; isPinned: boolean; createdAt: string; }
+
+function NoticesTab() {
+  const [notices, setNotices] = useState<Notice[]>([]);
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [category, setCategory] = useState("공지");
+  const [isPinned, setIsPinned] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function load() {
+    const r = await fetch("/api/notices");
+    const d = await r.json();
+    setNotices(Array.isArray(d) ? d : []);
+  }
+  useEffect(() => { load(); }, []);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!title.trim() || !content.trim()) { setError("제목과 내용을 입력하세요"); return; }
+    setLoading(true); setError("");
+    const r = await fetch("/api/notices", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, content, category, isPinned }),
+    });
+    if (r.ok) {
+      setTitle(""); setContent(""); setIsPinned(false); setCategory("공지");
+      await load();
+    } else {
+      const d = await r.json();
+      setError(d.error || "등록 실패");
+    }
+    setLoading(false);
+  }
+
+  async function remove(id: string) {
+    if (!confirm("삭제하시겠습니까?")) return;
+    await fetch("/api/notices", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+    await load();
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* 등록 폼 */}
+      <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+        <h3 className="font-semibold text-gray-800 mb-4">공지사항 등록</h3>
+        <form onSubmit={submit} className="space-y-3">
+          <div className="flex gap-3">
+            <select value={category} onChange={(e) => setCategory(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-28">
+              {["공지", "업데이트", "안내", "이벤트"].map((c) => <option key={c}>{c}</option>)}
+            </select>
+            <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="제목"
+              className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+            <label className="flex items-center gap-1.5 text-sm text-gray-600 whitespace-nowrap cursor-pointer">
+              <input type="checkbox" checked={isPinned} onChange={(e) => setIsPinned(e.target.checked)} className="rounded" />
+              필독 고정
+            </label>
+          </div>
+          <textarea value={content} onChange={(e) => setContent(e.target.value)} placeholder="내용"
+            rows={4} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm resize-none" />
+          {error && <p className="text-red-500 text-xs">{error}</p>}
+          <Button type="submit" disabled={loading} className="w-full">
+            {loading ? "등록 중..." : "공지 등록"}
+          </Button>
+        </form>
+      </div>
+
+      {/* 목록 */}
+      <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+        <div className="px-5 py-3 border-b border-gray-100 bg-gray-50">
+          <span className="text-sm font-semibold text-gray-700">등록된 공지사항 ({notices.length}건)</span>
+        </div>
+        {notices.length === 0 ? (
+          <p className="text-center text-gray-400 text-sm py-8">등록된 공지사항이 없습니다.</p>
+        ) : (
+          notices.map((n) => (
+            <div key={n.id} className="border-b border-gray-100 last:border-0 px-5 py-3 flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">{n.category}</span>
+                  {n.isPinned && <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-600 font-medium">필독</span>}
+                  <span className="text-sm font-medium text-gray-800 truncate">{n.title}</span>
+                </div>
+                <p className="text-xs text-gray-400">{new Date(n.createdAt).toLocaleDateString("ko-KR")}</p>
+              </div>
+              <button onClick={() => remove(n.id)}
+                className="text-xs text-red-500 hover:text-red-700 border border-red-200 hover:border-red-400 rounded px-2 py-1 flex-shrink-0">
+                삭제
+              </button>
+            </div>
+          ))
         )}
       </div>
     </div>

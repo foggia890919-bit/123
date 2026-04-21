@@ -238,3 +238,13 @@ model ScrapeJob {
 
   @@index([siteKey, startedAt])
 }
+
+model Notice {
+  id        String   @id @default(cuid())
+  title     String
+  content   String
+  category  String   @default("공지")
+  isPinned  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
