@@ -2,6 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import * as XLSX from "xlsx";
 
+function normalizeCode(code: string): string {
+  return code.replace(/[\s\-]/g, "").toUpperCase();
+}
+
+function normalizeProductKey(name: string, company: string): string {
+  return `${name.trim().toLowerCase()}||${company.trim().toLowerCase()}`;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
@@ -48,43 +56,109 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "유효한 데이터가 없어요. 컬럼명을 확인해주세요." }, { status: 400 });
     }
 
-    // 보험코드 있는 것: 기존 레코드(PUBLIC_API) 수수료율 업데이트 시도
+    // 1차 매칭: 보험코드(정규화) → 기존 레코드 id 맵
     const codes = rateRows.map((r) => r.insuranceCode).filter(Boolean) as string[];
-    const existingMap = new Map<string, string>();
+    const existingByCode = new Map<string, string>(); // normalizedCode → id
 
     if (codes.length > 0) {
       const existing = await prisma.medication.findMany({
         where: { insuranceCode: { in: codes } },
         select: { id: true, insuranceCode: true },
       });
-      existing.forEach((e) => { if (e.insuranceCode) existingMap.set(e.insuranceCode, e.id); });
+      existing.forEach((e) => {
+        if (e.insuranceCode) existingByCode.set(normalizeCode(e.insuranceCode), e.id);
+      });
+    }
+
+    // 2차 매칭 준비: 코드 미매칭 품목들의 productName+companyName으로 PUBLIC_API 레코드 조회
+    const noCodeMatch = rateRows.filter((r) => {
+      if (!r.insuranceCode) return r.productName && r.ingredientName;
+      return !existingByCode.has(normalizeCode(r.insuranceCode));
+    });
+
+    const existingByProductKey = new Map<string, string>(); // productKey → id
+    if (noCodeMatch.length > 0) {
+      const nameConditions = noCodeMatch
+        .filter((r) => r.productName && r.companyName)
+        .map((r) => ({ productName: r.productName, companyName: r.companyName }));
+
+      if (nameConditions.length > 0) {
+        const fallbackRecords = await prisma.medication.findMany({
+          where: {
+            OR: nameConditions.map((c) => ({
+              AND: [
+                { productName: { equals: c.productName, mode: "insensitive" as const } },
+                { companyName: { equals: c.companyName, mode: "insensitive" as const } },
+              ],
+            })),
+          },
+          select: { id: true, productName: true, companyName: true },
+        });
+        fallbackRecords.forEach((r) => {
+          existingByProductKey.set(normalizeProductKey(r.productName, r.companyName), r.id);
+        });
+      }
     }
 
     let updated = 0;
     const toCreate: typeof rateRows = [];
+    const skippedItems: { code: string; productName: string }[] = [];
 
     for (const row of rateRows) {
-      if (row.insuranceCode && existingMap.has(row.insuranceCode)) {
-        // 기존 공공데이터 레코드에 수수료율 업데이트
+      // 1차: 보험코드 매칭
+      const codeKey = row.insuranceCode ? normalizeCode(row.insuranceCode) : null;
+      const idByCode = codeKey ? existingByCode.get(codeKey) : undefined;
+
+      if (idByCode) {
         const updateData: Record<string, unknown> = {
           commissionRate: row.commissionRate,
           isSettlement,
           settlementType,
           updatedAt: new Date(),
         };
-        // 엑셀에 추가 메타 있으면 보완 (공공데이터에 없는 정보)
         if (row.bioStatus) updateData.bioStatus = row.bioStatus;
         if (row.originalDrug) updateData.originalDrug = row.originalDrug;
         if (row.notes) updateData.notes = row.notes;
         if (row.categoryA) updateData.categoryA = row.categoryA;
         if (row.categoryB) updateData.categoryB = row.categoryB;
-        await prisma.medication.update({ where: { id: existingMap.get(row.insuranceCode)! }, data: updateData });
+        await prisma.medication.update({ where: { id: idByCode }, data: updateData });
         updated++;
-      } else if (row.productName && row.ingredientName) {
-        // 공공데이터 매칭 없고 품목명/성분명 있으면 EXCEL 레코드로 신규 생성
-        toCreate.push(row);
+        continue;
       }
-      // 보험코드만 있고 공공데이터에 없으면 스킵 (공공데이터 sync 후 재업로드 필요)
+
+      // 2차: 품목명+제약사명 매칭
+      const productKey = row.productName && row.companyName
+        ? normalizeProductKey(row.productName, row.companyName)
+        : null;
+      const idByProduct = productKey ? existingByProductKey.get(productKey) : undefined;
+
+      if (idByProduct) {
+        const updateData: Record<string, unknown> = {
+          commissionRate: row.commissionRate,
+          isSettlement,
+          settlementType,
+          updatedAt: new Date(),
+        };
+        if (row.insuranceCode) updateData.insuranceCode = row.insuranceCode;
+        if (row.bioStatus) updateData.bioStatus = row.bioStatus;
+        if (row.originalDrug) updateData.originalDrug = row.originalDrug;
+        if (row.notes) updateData.notes = row.notes;
+        if (row.categoryA) updateData.categoryA = row.categoryA;
+        if (row.categoryB) updateData.categoryB = row.categoryB;
+        await prisma.medication.update({ where: { id: idByProduct }, data: updateData });
+        updated++;
+        continue;
+      }
+
+      // 매칭 없음: 품목명+성분명 있으면 신규 생성, 보험코드만 있으면 스킵
+      if (row.productName && row.ingredientName) {
+        toCreate.push(row);
+      } else {
+        skippedItems.push({
+          code: row.insuranceCode ?? "",
+          productName: row.productName,
+        });
+      }
     }
 
     let created = 0;
@@ -99,13 +173,13 @@ export async function POST(req: NextRequest) {
       created += batch.length;
     }
 
-    const skipped = rateRows.length - updated - toCreate.length;
     return NextResponse.json({
       success: true,
       count: rateRows.length,
-      updated,   // 공공데이터와 머지된 건수
-      created,   // 새로 생성된 건수
-      skipped,   // 보험코드만 있고 공공데이터 미매칭 (공공데이터 sync 후 재시도 필요)
+      updated,
+      created,
+      skipped: skippedItems.length,
+      skippedItems: skippedItems.length > 0 ? skippedItems : undefined,
     });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
