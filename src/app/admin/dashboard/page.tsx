@@ -2,10 +2,27 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut, Building2, Search, X, Mail, Phone, Send, Inbox, Copy } from "lucide-react";
+import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut, Building2, Search, X, Mail, Phone, Send, Inbox, Copy, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import * as XLSX from "xlsx";
+
+declare global {
+  interface Window {
+    Kakao: {
+      isInitialized(): boolean;
+      init(key: string): void;
+      Share: {
+        sendDefault(params: {
+          objectType: string;
+          text?: string;
+          link: { webUrl: string; mobileWebUrl: string };
+          buttonTitle?: string;
+        }): void;
+      };
+    };
+  }
+}
 
 type Tab = "upload" | "submissionUpload" | "members" | "rates" | "filterReqs" | "userClients" | "apiSources" | "notices" | "companySubmissions" | "bulkSubmit";
 
@@ -1783,8 +1800,25 @@ function BulkSubmissionTab() {
   const [savingSub, setSavingSub] = useState(false);
   const [bulkingName, setBulkingName] = useState<string | null>(null);
   const [copiedName, setCopiedName] = useState<string | null>(null);
+  const [kakaoReady, setKakaoReady] = useState(false);
+  const [kakaoModal, setKakaoModal] = useState<{ companyName: string; rows: FilterReq[]; sub: CompanySubmission } | null>(null);
 
   useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    const KAKAO_APP_KEY = process.env.NEXT_PUBLIC_KAKAO_APP_KEY;
+    if (!KAKAO_APP_KEY) return;
+    const initKakao = () => {
+      if (window.Kakao && !window.Kakao.isInitialized()) window.Kakao.init(KAKAO_APP_KEY);
+      setKakaoReady(true);
+    };
+    if (typeof window !== "undefined" && window.Kakao) { initKakao(); return; }
+    const script = document.createElement("script");
+    script.src = "https://t1.kakaocdn.net/kakao_js_sdk/2.7.2/kakao.min.js";
+    script.async = true;
+    script.onload = initKakao;
+    document.head.appendChild(script);
+  }, []);
 
   async function load() {
     setLoading(true);
@@ -1913,6 +1947,28 @@ function BulkSubmissionTab() {
     setSavingSub(false);
   }
 
+  function sendKakao() {
+    if (!kakaoModal) return;
+    const { companyName, rows, sub } = kakaoModal;
+    if (!window.Kakao?.Share) { alert("카카오 SDK가 아직 로드되지 않았어요. 잠시 후 다시 시도해 주세요."); return; }
+    const listText = rows.slice(0, 6).map((r, i) => `${i + 1}. ${r.clientName} (${r.bizNumber})`).join("\n");
+    const suffix = rows.length > 6 ? `\n...외 ${rows.length - 6}건` : "";
+    const text = `[필터링 요청] ${companyName}\n${rows.length}개 거래처 거래가능 여부 확인 요청드립니다.\n\n${listText}${suffix}`.slice(0, 200);
+    window.Kakao.Share.sendDefault({
+      objectType: "text",
+      text,
+      link: { webUrl: window.location.href, mobileWebUrl: window.location.href },
+      buttonTitle: "확인하기",
+    });
+    setKakaoModal(null);
+  }
+
+  function buildKakaoPreview(companyName: string, rows: FilterReq[]) {
+    const listText = rows.slice(0, 6).map((r, i) => `${i + 1}. ${r.clientName} (${r.bizNumber})`).join("\n");
+    const suffix = rows.length > 6 ? `\n...외 ${rows.length - 6}건` : "";
+    return `[필터링 요청] ${companyName}\n${rows.length}개 거래처 거래가능 여부 확인 요청드립니다.\n\n${listText}${suffix}`.slice(0, 200);
+  }
+
   return (
     <div className="space-y-4">
       <div className="bg-white rounded-lg border border-gray-200 p-5">
@@ -2004,6 +2060,15 @@ function BulkSubmissionTab() {
                     <Mail className="w-3 h-3" />이메일 작성
                   </button>
                 )}
+                {kakaoReady && sub && (
+                  <button
+                    onClick={() => setKakaoModal({ companyName, rows, sub })}
+                    className="text-xs rounded px-2.5 py-1.5 flex items-center gap-1 font-medium"
+                    style={{ background: "#FEE500", color: "#3C1E1E" }}
+                  >
+                    <MessageCircle className="w-3 h-3" />카카오톡
+                  </button>
+                )}
                 <button onClick={() => copyList(companyName, rows)} className="text-xs bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 rounded px-2.5 py-1.5 flex items-center gap-1">
                   <Copy className="w-3 h-3" />{copiedName === companyName ? "복사됨!" : "목록 복사"}
                 </button>
@@ -2074,6 +2139,50 @@ function BulkSubmissionTab() {
           </div>
         );
       })}
+
+      {kakaoModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm">
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                <span className="inline-flex items-center justify-center w-6 h-6 rounded-full" style={{ background: "#FEE500" }}>
+                  <MessageCircle className="w-3.5 h-3.5" style={{ color: "#3C1E1E" }} />
+                </span>
+                카카오톡으로 보내기
+              </h3>
+              <button onClick={() => setKakaoModal(null)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <div>
+                <div className="text-xs font-semibold text-gray-500 mb-1.5">전송 대상 (등록된 제출처)</div>
+                <div className="border border-gray-200 rounded-lg p-3 bg-gray-50 space-y-1">
+                  <div className="text-sm font-medium text-gray-800">{kakaoModal.sub.contactName || <span className="text-gray-400 font-normal">담당자명 미등록</span>}</div>
+                  {kakaoModal.sub.phone && <div className="text-xs text-gray-600"><span className="text-gray-400">전화:</span> {kakaoModal.sub.phone}</div>}
+                  {kakaoModal.sub.email && <div className="text-xs text-gray-600"><span className="text-gray-400">이메일:</span> {kakaoModal.sub.email}</div>}
+                  {kakaoModal.sub.submissionEntity && <div className="text-xs text-gray-600"><span className="text-gray-400">제출처:</span> {kakaoModal.sub.submissionEntity}</div>}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold text-gray-500 mb-1.5">메시지 미리보기</div>
+                <pre className="text-xs text-gray-700 whitespace-pre-wrap font-sans border border-gray-200 rounded-lg p-3 bg-gray-50 leading-relaxed">
+                  {buildKakaoPreview(kakaoModal.companyName, kakaoModal.rows)}
+                </pre>
+              </div>
+              <p className="text-[11px] text-gray-400">카카오톡 공유 화면이 열리면 보낼 대화방 또는 친구를 선택해 주세요.</p>
+            </div>
+            <div className="px-5 py-4 border-t border-gray-100 flex justify-end gap-2">
+              <button onClick={() => setKakaoModal(null)} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded hover:bg-gray-50">취소</button>
+              <button
+                onClick={sendKakao}
+                className="px-4 py-2 text-sm font-semibold rounded flex items-center gap-2 hover:opacity-90"
+                style={{ background: "#FEE500", color: "#3C1E1E" }}
+              >
+                <MessageCircle className="w-4 h-4" />카카오톡으로 전송
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {editSub && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
