@@ -227,11 +227,7 @@ function ProposalsContent() {
   }
 
   async function requestFilter(companyName: string) {
-    if (!selected?.client) {
-      setEditingClient(true);
-      setEditClientId("");
-      return;
-    }
+    if (!selected?.client) return; // 버튼 자체가 disabled라 여기 도달 안 함
     const existing = companyStatuses[companyName];
     if (existing === "PENDING" || existing === "REVIEWING") return;
     setRequestingFilter((prev) => new Set(prev).add(companyName));
@@ -444,6 +440,12 @@ function ProposalsContent() {
               <h3 className="text-sm font-semibold text-gray-800">제약사 현황</h3>
               <span className="text-xs text-gray-400 ml-auto">{companySummary.length}개사</span>
             </div>
+            {isBiz && !selected?.client && (
+              <div className="flex items-center gap-1.5 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 text-xs text-orange-700">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                거래처를 지정해야 필터링 요청이 가능합니다
+              </div>
+            )}
             <div className="overflow-y-auto bg-white rounded-lg border border-gray-200 max-h-48 md:max-h-none md:flex-1 md:min-h-0">
               <div className="divide-y divide-gray-50">
                 {companySummary.map(({ name, count }) => {
@@ -466,8 +468,9 @@ function ProposalsContent() {
                         {isBiz && (
                           <button
                             onClick={() => requestFilter(name)}
-                            disabled={requestingFilter.has(name) || status === "PENDING" || status === "REVIEWING"}
-                            className={`inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed ${
+                            disabled={!selected?.client || requestingFilter.has(name) || status === "PENDING" || status === "REVIEWING"}
+                            title={!selected?.client ? "거래처를 먼저 지정해야 필터링 요청이 가능합니다" : undefined}
+                            className={`inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5 whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed ${
                               isApproved
                                 ? "text-gray-500 bg-gray-50 border border-gray-200 hover:bg-gray-100"
                                 : "text-blue-600 bg-blue-50 border border-blue-200 hover:bg-blue-100"
