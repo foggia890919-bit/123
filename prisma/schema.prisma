@@ -248,3 +248,14 @@ model Notice {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model CompanySubmission {
+  companyName String   @id
+  contactName String?
+  email       String?
+  phone       String?
+  fax         String?
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}

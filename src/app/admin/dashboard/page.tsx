@@ -2,11 +2,11 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut, Building2 } from "lucide-react";
+import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut, Building2, Search, X, Mail, Phone, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
-type Tab = "upload" | "members" | "rates" | "filterReqs" | "userClients" | "apiSources" | "notices";
+type Tab = "upload" | "members" | "rates" | "filterReqs" | "userClients" | "apiSources" | "notices" | "companySubmissions";
 
 interface UserDoc { id: string; docType: string; fileName: string; fileData: string; }
 interface User {
@@ -68,6 +68,7 @@ export default function AdminDashboardPage() {
           { key: "members", label: "회원관리", icon: Users },
           { key: "rates", label: "추가수수료 관리", icon: Percent },
           { key: "filterReqs", label: "영업사원 필터링요청", icon: Filter },
+          { key: "companySubmissions", label: "제약사 제출처 관리", icon: Send },
           { key: "userClients", label: "담당자별 거래처 등록 현황", icon: Building2 },
         ] as { key: Tab; label: string; icon: React.ElementType }[]).map(({ key, label, icon: Icon }) => (
           <button
@@ -89,6 +90,7 @@ export default function AdminDashboardPage() {
       {tab === "members" && <MembersTab />}
       {tab === "rates" && <RatesTab />}
       {tab === "filterReqs" && <FilterReqsTab />}
+      {tab === "companySubmissions" && <CompanySubmissionsTab />}
       {tab === "userClients" && <UserClientsTab />}
       {tab === "apiSources" && <ApiSourcesTab />}
     </div>
@@ -871,6 +873,9 @@ function FilterReqsTab() {
   const [loading, setLoading] = useState(true);
   const [replyDraft, setReplyDraft] = useState<Record<string, string>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [pageSize, setPageSize] = useState(20);
+  const [page, setPage] = useState(1);
 
   useEffect(() => { fetchReqs(); }, []);
 
@@ -907,13 +912,60 @@ function FilterReqsTab() {
     setSavingId(null);
   }
 
+  const filtered = reqs.filter((r) => {
+    if (!query.trim()) return true;
+    const q = query.toLowerCase();
+    return (
+      (r.user.name || r.userName || "").toLowerCase().includes(q) ||
+      r.user.email.toLowerCase().includes(q) ||
+      r.clientName.toLowerCase().includes(q) ||
+      r.bizNumber.includes(query) ||
+      r.companyName.toLowerCase().includes(q)
+    );
+  });
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  function handleQueryChange(v: string) { setQuery(v); setPage(1); }
+  function handlePageSizeChange(v: number) { setPageSize(v); setPage(1); }
+
   if (loading) return <div className="py-16 text-center text-gray-400 text-sm">불러오는 중...</div>;
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-      <div className="px-5 py-4 border-b border-gray-100">
-        <h2 className="text-lg font-semibold text-gray-800">영업사원 필터링 요청 ({reqs.length}건)</h2>
-        <p className="text-xs text-gray-400 mt-0.5">영업사원이 요청한 제약사 거래 조회 현황입니다.</p>
+      <div className="px-5 py-4 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-800">영업사원 필터링 요청 ({filtered.length}/{reqs.length}건)</h2>
+          <p className="text-xs text-gray-400 mt-0.5">영업사원이 요청한 제약사 거래 조회 현황입니다.</p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+            <input
+              value={query}
+              onChange={(e) => handleQueryChange(e.target.value)}
+              placeholder="영업사원·거래처·사업자번호·제약사 검색"
+              className="h-9 w-72 border border-gray-200 rounded pl-8 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+            />
+            {query && (
+              <button onClick={() => handleQueryChange("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+          <select
+            value={pageSize}
+            onChange={(e) => handlePageSizeChange(Number(e.target.value))}
+            className="h-9 border border-gray-200 rounded px-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
+          >
+            {[10, 20, 30, 50, 100].map((n) => <option key={n} value={n}>{n}개씩</option>)}
+          </select>
+          <button onClick={fetchReqs} className="text-xs text-gray-500 hover:text-gray-800 border border-gray-200 rounded px-2 py-1.5 flex items-center gap-1">
+            <RefreshCw className="w-3 h-3" />새로고침
+          </button>
+        </div>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -930,7 +982,7 @@ function FilterReqsTab() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {reqs.map((req) => {
+            {pageRows.map((req) => {
               const statusOpt = statusOptions.find((s) => s.value === req.status) || statusOptions[0];
               const draft = replyDraft[req.id] ?? "";
               return (
@@ -1006,10 +1058,299 @@ function FilterReqsTab() {
                 </tr>
               );
             })}
-            {reqs.length === 0 && <tr><td colSpan={8} className="py-12 text-center text-gray-400 text-sm">요청 내역이 없어요.</td></tr>}
+            {pageRows.length === 0 && (
+              <tr><td colSpan={8} className="py-12 text-center text-gray-400 text-sm">
+                {query ? "검색 결과가 없어요." : "요청 내역이 없어요."}
+              </td></tr>
+            )}
           </tbody>
         </table>
       </div>
+      {totalPages > 1 && (
+        <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between text-sm text-gray-600">
+          <span className="text-xs text-gray-400">{(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filtered.length)} / {filtered.length}건</span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage(1)} disabled={safePage === 1}
+              className="px-2 py-1 rounded text-xs border border-gray-200 disabled:opacity-40 hover:bg-gray-50"
+            >«</button>
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}
+              className="px-2 py-1 rounded text-xs border border-gray-200 disabled:opacity-40 hover:bg-gray-50"
+            >‹</button>
+            {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
+              const start = Math.max(1, Math.min(safePage - 3, totalPages - 6));
+              return start + i;
+            }).map((n) => (
+              <button
+                key={n} onClick={() => setPage(n)}
+                className={`px-2.5 py-1 rounded text-xs border ${n === safePage ? "bg-blue-600 text-white border-blue-600" : "border-gray-200 hover:bg-gray-50"}`}
+              >{n}</button>
+            ))}
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}
+              className="px-2 py-1 rounded text-xs border border-gray-200 disabled:opacity-40 hover:bg-gray-50"
+            >›</button>
+            <button
+              onClick={() => setPage(totalPages)} disabled={safePage === totalPages}
+              className="px-2 py-1 rounded text-xs border border-gray-200 disabled:opacity-40 hover:bg-gray-50"
+            >»</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// 제약사 제출처 관리 탭
+// ─────────────────────────────────────────────
+
+interface CompanySubmission {
+  companyName: string;
+  contactName: string | null;
+  email: string | null;
+  phone: string | null;
+  fax: string | null;
+  notes: string | null;
+}
+
+const emptySubmission = (): Omit<CompanySubmission, "companyName"> & { companyName: string } => ({
+  companyName: "", contactName: "", email: "", phone: "", fax: "", notes: "",
+});
+
+function CompanySubmissionsTab() {
+  const [rows, setRows] = useState<CompanySubmission[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  const [editRow, setEditRow] = useState<(CompanySubmission & { isNew?: boolean }) | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [deletingName, setDeletingName] = useState<string | null>(null);
+
+  useEffect(() => { load(); }, []);
+
+  async function load() {
+    setLoading(true);
+    const res = await fetch("/api/admin/company-submissions");
+    const data = await res.json();
+    setRows(Array.isArray(data) ? data : []);
+    setLoading(false);
+  }
+
+  async function save() {
+    if (!editRow) return;
+    const name = editRow.companyName.trim();
+    if (!name) return;
+    setSaving(true);
+    const res = await fetch("/api/admin/company-submissions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(editRow),
+    });
+    if (res.ok) {
+      const saved: CompanySubmission = await res.json();
+      setRows((prev) => {
+        const idx = prev.findIndex((r) => r.companyName === saved.companyName);
+        return idx >= 0 ? prev.map((r, i) => i === idx ? saved : r) : [...prev, saved].sort((a, b) => a.companyName.localeCompare(b.companyName));
+      });
+      setEditRow(null);
+    }
+    setSaving(false);
+  }
+
+  async function deleteRow(companyName: string) {
+    if (!confirm(`"${companyName}" 제출처 정보를 삭제할까요?`)) return;
+    setDeletingName(companyName);
+    await fetch("/api/admin/company-submissions", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ companyName }),
+    });
+    setRows((prev) => prev.filter((r) => r.companyName !== companyName));
+    setDeletingName(null);
+  }
+
+  const filtered = rows.filter((r) => {
+    if (!query.trim()) return true;
+    const q = query.toLowerCase();
+    return r.companyName.toLowerCase().includes(q) ||
+      (r.contactName || "").toLowerCase().includes(q) ||
+      (r.email || "").toLowerCase().includes(q) ||
+      (r.phone || "").includes(query);
+  });
+
+  if (loading) return <div className="py-16 text-center text-gray-400 text-sm">불러오는 중...</div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-800">제약사 제출처 관리 ({filtered.length}/{rows.length}개)</h2>
+            <p className="text-xs text-gray-400 mt-0.5">필터링 요청 시 제약사별 담당자·연락처를 관리합니다.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="제약사·담당자·이메일·전화번호"
+                className="h-9 w-60 border border-gray-200 rounded pl-8 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+              />
+              {query && (
+                <button onClick={() => setQuery("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            <button
+              onClick={() => setEditRow({ ...emptySubmission(), isNew: true })}
+              className="h-9 px-3 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1.5"
+            >
+              <Plus className="w-3.5 h-3.5" />제약사 추가
+            </button>
+            <button onClick={load} className="text-xs text-gray-500 hover:text-gray-800 border border-gray-200 rounded px-2 py-1.5 flex items-center gap-1">
+              <RefreshCw className="w-3 h-3" />새로고침
+            </button>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 text-xs text-gray-500 font-semibold">
+                <th className="px-4 py-3 text-left">제약사명</th>
+                <th className="px-4 py-3 text-left">담당자명</th>
+                <th className="px-4 py-3 text-left">이메일</th>
+                <th className="px-4 py-3 text-left">전화번호</th>
+                <th className="px-4 py-3 text-left">팩스</th>
+                <th className="px-4 py-3 text-left">비고</th>
+                <th className="px-4 py-3 text-center w-20">관리</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {filtered.map((row) => (
+                <tr key={row.companyName} className="hover:bg-gray-50 align-top">
+                  <td className="px-4 py-3 font-medium text-gray-900">{row.companyName}</td>
+                  <td className="px-4 py-3 text-gray-700">{row.contactName || <span className="text-gray-300">-</span>}</td>
+                  <td className="px-4 py-3 text-gray-600 text-xs">
+                    {row.email ? (
+                      <a href={`mailto:${row.email}`} className="flex items-center gap-1 text-blue-600 hover:underline">
+                        <Mail className="w-3 h-3" />{row.email}
+                      </a>
+                    ) : <span className="text-gray-300">-</span>}
+                  </td>
+                  <td className="px-4 py-3 text-gray-600 text-xs">
+                    {row.phone ? (
+                      <span className="flex items-center gap-1"><Phone className="w-3 h-3 text-gray-400" />{row.phone}</span>
+                    ) : <span className="text-gray-300">-</span>}
+                  </td>
+                  <td className="px-4 py-3 text-gray-500 text-xs">{row.fax || <span className="text-gray-300">-</span>}</td>
+                  <td className="px-4 py-3 text-gray-500 text-xs max-w-[180px] truncate">{row.notes || <span className="text-gray-300">-</span>}</td>
+                  <td className="px-4 py-3 text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      <button
+                        onClick={() => setEditRow({ ...row })}
+                        className="text-xs text-blue-600 hover:text-blue-800 px-2 py-1 rounded hover:bg-blue-50"
+                      >수정</button>
+                      <button
+                        onClick={() => deleteRow(row.companyName)}
+                        disabled={deletingName === row.companyName}
+                        className="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 disabled:opacity-40"
+                      >{deletingName === row.companyName ? "..." : "삭제"}</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {filtered.length === 0 && (
+                <tr><td colSpan={7} className="py-12 text-center text-gray-400 text-sm">
+                  {query ? "검색 결과가 없어요." : "등록된 제출처 정보가 없어요. 제약사를 추가해 주세요."}
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {editRow && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md">
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h3 className="font-semibold text-gray-900">{editRow.isNew ? "제약사 제출처 추가" : `${editRow.companyName} 수정`}</h3>
+              <button onClick={() => setEditRow(null)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">제약사명 <span className="text-red-500">*</span></label>
+                <input
+                  value={editRow.companyName}
+                  onChange={(e) => setEditRow((p) => p ? { ...p, companyName: e.target.value } : p)}
+                  disabled={!editRow.isNew}
+                  placeholder="예) 동아ST"
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-50 disabled:text-gray-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">담당자명</label>
+                <input
+                  value={editRow.contactName || ""}
+                  onChange={(e) => setEditRow((p) => p ? { ...p, contactName: e.target.value } : p)}
+                  placeholder="예) 홍길동"
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">이메일</label>
+                <input
+                  type="email"
+                  value={editRow.email || ""}
+                  onChange={(e) => setEditRow((p) => p ? { ...p, email: e.target.value } : p)}
+                  placeholder="예) contact@company.com"
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">전화번호</label>
+                  <input
+                    value={editRow.phone || ""}
+                    onChange={(e) => setEditRow((p) => p ? { ...p, phone: e.target.value } : p)}
+                    placeholder="예) 02-1234-5678"
+                    className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">팩스</label>
+                  <input
+                    value={editRow.fax || ""}
+                    onChange={(e) => setEditRow((p) => p ? { ...p, fax: e.target.value } : p)}
+                    placeholder="예) 02-1234-5679"
+                    className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">비고</label>
+                <textarea
+                  value={editRow.notes || ""}
+                  onChange={(e) => setEditRow((p) => p ? { ...p, notes: e.target.value } : p)}
+                  placeholder="메모 (선택)"
+                  rows={3}
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
+                />
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2">
+              <button onClick={() => setEditRow(null)} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded hover:bg-gray-50">취소</button>
+              <button
+                onClick={save}
+                disabled={saving || !editRow.companyName.trim()}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-300"
+              >{saving ? "저장 중..." : "저장"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
