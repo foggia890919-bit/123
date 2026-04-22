@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { ensureCompanySubmissionTable } from "@/lib/ensure-company-submission-table";
 
 interface BulkRow {
   companyName: string;
@@ -14,6 +15,7 @@ interface BulkRow {
 
 export async function POST(req: NextRequest) {
   try {
+    await ensureCompanySubmissionTable();
     const rows: BulkRow[] = await req.json();
     if (!Array.isArray(rows)) {
       return NextResponse.json({ error: "배열 형식 필요" }, { status: 400 });

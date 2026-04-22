@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { ensureCompanySubmissionTable } from "@/lib/ensure-company-submission-table";
 
 // 제약사별 제출처(담당자·연락처) 정보 관리
 // 관리자 대시보드에서 사용
 
 export async function GET() {
   try {
+    await ensureCompanySubmissionTable();
     const rows = await prisma.companySubmission.findMany({
       orderBy: { companyName: "asc" },
     });
@@ -21,6 +23,7 @@ export async function GET() {
 // Upsert by companyName (primary key)
 export async function POST(req: NextRequest) {
   try {
+    await ensureCompanySubmissionTable();
     const body = await req.json();
     const companyName = String(body?.companyName ?? "").trim();
     if (!companyName) {
@@ -52,6 +55,7 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
+    await ensureCompanySubmissionTable();
     const body = await req.json();
     const companyName = String(body?.companyName ?? "").trim();
     if (!companyName) {
