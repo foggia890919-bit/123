@@ -1924,6 +1924,7 @@ function BulkSubmissionTab() {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [editSub, setEditSub] = useState<EditSub | null>(null);
   const [savingSub, setSavingSub] = useState(false);
+  const [editSubEntityMode, setEditSubEntityMode] = useState<"select" | "new">("select");
   const [bulkingName, setBulkingName] = useState<string | null>(null);
   const [copiedName, setCopiedName] = useState<string | null>(null);
   const [kakaoReady, setKakaoReady] = useState(false);
@@ -2206,7 +2207,7 @@ function BulkSubmissionTab() {
                   >{bulkingName === companyName ? "처리중..." : `${pendingCount}건 확인중 표시`}</button>
                 )}
                 <button
-                  onClick={() => setEditSub(sub ? { ...sub } : { companyName, submissionEntity: "", contactName: "", email: "", phone: "", fax: "", defaultAdditionalRate: null, notes: "", isNew: true })}
+                  onClick={() => { setEditSub(sub ? { ...sub } : { companyName, submissionEntity: "", contactName: "", email: "", phone: "", fax: "", defaultAdditionalRate: null, notes: "", isNew: true }); setEditSubEntityMode(sub?.submissionEntity ? "select" : "select"); }}
                   className="text-xs bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 rounded px-2.5 py-1.5 flex items-center gap-1"
                 ><Inbox className="w-3 h-3" />{sub ? "제출처 수정" : "제출처 등록"}</button>
               </div>
@@ -2335,6 +2336,45 @@ function BulkSubmissionTab() {
               <button onClick={() => setEditSub(null)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
             </div>
             <div className="px-6 py-5 space-y-4">
+              {/* 제출처법인명 */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-medium text-gray-700">제출처법인명</label>
+                  {editSubEntityMode === "select" ? (
+                    <button
+                      type="button"
+                      onClick={() => { setEditSubEntityMode("new"); setEditSub((p) => p ? { ...p, submissionEntity: "" } : p); }}
+                      className="text-[11px] text-blue-600 hover:underline flex items-center gap-1"
+                    ><Plus className="w-3 h-3" />신규 제출처 직접 입력</button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setEditSubEntityMode("select")}
+                      className="text-[11px] text-gray-500 hover:underline"
+                    >← 기존 목록에서 선택</button>
+                  )}
+                </div>
+                {editSubEntityMode === "select" ? (
+                  <select
+                    value={editSub.submissionEntity || ""}
+                    onChange={(e) => setEditSub((p) => p ? { ...p, submissionEntity: e.target.value } : p)}
+                    className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+                  >
+                    <option value="">— 선택 안 함 —</option>
+                    {Array.from(new Set(subs.map((s) => s.submissionEntity).filter(Boolean))).sort().map((entity) => (
+                      <option key={entity!} value={entity!}>{entity}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    autoFocus
+                    value={editSub.submissionEntity || ""}
+                    onChange={(e) => setEditSub((p) => p ? { ...p, submissionEntity: e.target.value } : p)}
+                    placeholder="예) 동아쏘시오홀딩스"
+                    className="w-full border border-blue-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  />
+                )}
+              </div>
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">담당자명</label>
                 <input
