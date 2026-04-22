@@ -2,11 +2,47 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut, Building2, Search, X, Mail, Phone, Send } from "lucide-react";
+import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut, Building2, Search, X, Mail, Phone, Send, Inbox, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import * as XLSX from "xlsx";
 
-type Tab = "upload" | "members" | "rates" | "filterReqs" | "userClients" | "apiSources" | "notices" | "companySubmissions";
+type Tab = "upload" | "members" | "rates" | "filterReqs" | "userClients" | "apiSources" | "notices" | "companySubmissions" | "bulkSubmit";
+
+interface MenuItem { key: Tab; label: string; icon: React.ElementType }
+interface MenuGroup { title: string; items: MenuItem[] }
+
+const MENU_GROUPS: MenuGroup[] = [
+  {
+    title: "데이터 관리",
+    items: [
+      { key: "upload", label: "요율표 업로드", icon: Upload },
+      { key: "apiSources", label: "API 연동관리", icon: Database },
+    ],
+  },
+  {
+    title: "회원 & 거래처",
+    items: [
+      { key: "members", label: "회원관리", icon: Users },
+      { key: "rates", label: "추가수수료 관리", icon: Percent },
+      { key: "userClients", label: "담당자별 거래처", icon: Building2 },
+    ],
+  },
+  {
+    title: "필터링 요청",
+    items: [
+      { key: "filterReqs", label: "요청 내역", icon: Filter },
+      { key: "bulkSubmit", label: "제약사별 일괄제출", icon: Send },
+      { key: "companySubmissions", label: "제약사 제출처 관리", icon: Inbox },
+    ],
+  },
+  {
+    title: "콘텐츠",
+    items: [
+      { key: "notices", label: "공지사항 관리", icon: FileSpreadsheet },
+    ],
+  },
+];
 
 interface UserDoc { id: string; docType: string; fileName: string; fileData: string; }
 interface User {
@@ -42,57 +78,60 @@ export default function AdminDashboardPage() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <ShieldCheck className="w-7 h-7 text-gray-800" />
+    <div className="flex gap-6 max-w-7xl mx-auto">
+      <aside className="w-56 shrink-0 space-y-6 sticky top-4 self-start">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="w-6 h-6 text-gray-800" />
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">관리자 대시보드</h1>
-            <p className="text-gray-500 text-sm">데이터 및 회원 관리</p>
+            <h1 className="text-base font-bold text-gray-900 leading-tight">관리자</h1>
+            <p className="text-[11px] text-gray-400">데이터 · 회원 관리</p>
           </div>
         </div>
+
+        <nav className="space-y-5">
+          {MENU_GROUPS.map((group) => (
+            <div key={group.title}>
+              <div className="text-[10px] font-semibold tracking-wider text-gray-400 uppercase px-2 mb-1.5">{group.title}</div>
+              <div className="space-y-0.5">
+                {group.items.map(({ key, label, icon: Icon }) => (
+                  <button
+                    key={key}
+                    onClick={() => setTab(key)}
+                    className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors text-left ${
+                      tab === key
+                        ? "bg-blue-50 text-blue-700 font-medium"
+                        : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                    }`}
+                  >
+                    <Icon className={`w-4 h-4 shrink-0 ${tab === key ? "text-blue-600" : "text-gray-400"}`} />
+                    <span className="truncate">{label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </nav>
+
         <button
           onClick={handleLogout}
-          className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-red-600 border border-gray-200 hover:border-red-300 rounded-md px-3 py-1.5 transition-colors"
+          className="w-full flex items-center gap-2 text-sm text-gray-500 hover:text-red-600 border border-gray-200 hover:border-red-200 rounded-md px-2.5 py-2 transition-colors"
         >
           <LogOut className="w-4 h-4" />
           로그아웃
         </button>
-      </div>
+      </aside>
 
-      <div className="flex gap-1 border-b border-gray-200">
-        {([
-          { key: "upload", label: "요율표 업로드", icon: Upload },
-          { key: "notices", label: "공지사항 관리", icon: FileSpreadsheet },
-          { key: "apiSources", label: "API 연동관리", icon: Database },
-          { key: "members", label: "회원관리", icon: Users },
-          { key: "rates", label: "추가수수료 관리", icon: Percent },
-          { key: "filterReqs", label: "영업사원 필터링요청", icon: Filter },
-          { key: "companySubmissions", label: "제약사 제출처 관리", icon: Send },
-          { key: "userClients", label: "담당자별 거래처 등록 현황", icon: Building2 },
-        ] as { key: Tab; label: string; icon: React.ElementType }[]).map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-              tab === key
-                ? "border-blue-600 text-blue-600"
-                : "border-transparent text-gray-500 hover:text-gray-800"
-            }`}
-          >
-            <Icon className="w-4 h-4" />{label}
-          </button>
-        ))}
-      </div>
-
-      {tab === "upload" && <UploadTab />}
-      {tab === "notices" && <NoticesTab />}
-      {tab === "members" && <MembersTab />}
-      {tab === "rates" && <RatesTab />}
-      {tab === "filterReqs" && <FilterReqsTab />}
-      {tab === "companySubmissions" && <CompanySubmissionsTab />}
-      {tab === "userClients" && <UserClientsTab />}
-      {tab === "apiSources" && <ApiSourcesTab />}
+      <main className="flex-1 min-w-0 space-y-4">
+        {tab === "upload" && <UploadTab />}
+        {tab === "notices" && <NoticesTab />}
+        {tab === "members" && <MembersTab />}
+        {tab === "rates" && <RatesTab />}
+        {tab === "filterReqs" && <FilterReqsTab />}
+        {tab === "bulkSubmit" && <BulkSubmissionTab />}
+        {tab === "companySubmissions" && <CompanySubmissionsTab />}
+        {tab === "userClients" && <UserClientsTab />}
+        {tab === "apiSources" && <ApiSourcesTab />}
+      </main>
     </div>
   );
 }
@@ -874,6 +913,7 @@ function FilterReqsTab() {
   const [replyDraft, setReplyDraft] = useState<Record<string, string>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("ALL");
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState(1);
 
@@ -912,7 +952,12 @@ function FilterReqsTab() {
     setSavingId(null);
   }
 
+  const statusCounts: Record<string, number> = { ALL: reqs.length };
+  for (const s of statusOptions) statusCounts[s.value] = 0;
+  for (const r of reqs) statusCounts[r.status] = (statusCounts[r.status] || 0) + 1;
+
   const filtered = reqs.filter((r) => {
+    if (statusFilter !== "ALL" && r.status !== statusFilter) return false;
     if (!query.trim()) return true;
     const q = query.toLowerCase();
     return (
@@ -929,42 +974,96 @@ function FilterReqsTab() {
   const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   function handleQueryChange(v: string) { setQuery(v); setPage(1); }
+  function handleStatusChange(v: string) { setStatusFilter(v); setPage(1); }
   function handlePageSizeChange(v: number) { setPageSize(v); setPage(1); }
+
+  function exportExcel() {
+    const rows = filtered.map((r) => ({
+      영업사원명: r.user.name || r.userName,
+      아이디: r.user.email,
+      거래처명: r.clientName,
+      사업자번호: r.bizNumber,
+      "요청 제약사": r.companyName,
+      요청일: new Date(r.createdAt).toLocaleString("ko-KR"),
+      상태: statusOptions.find((s) => s.value === r.status)?.label || r.status,
+      회신: r.replyText || "",
+      회신일: r.repliedAt ? new Date(r.repliedAt).toLocaleString("ko-KR") : "",
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws["!cols"] = [{ wch: 10 }, { wch: 24 }, { wch: 18 }, { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 10 }, { wch: 40 }, { wch: 18 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "필터링요청");
+    const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    const blob = new Blob([buf], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `필터링요청_${statusFilter === "ALL" ? "전체" : statusOptions.find((s) => s.value === statusFilter)?.label}_${stamp}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   if (loading) return <div className="py-16 text-center text-gray-400 text-sm">불러오는 중...</div>;
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-      <div className="px-5 py-4 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-gray-800">영업사원 필터링 요청 ({filtered.length}/{reqs.length}건)</h2>
-          <p className="text-xs text-gray-400 mt-0.5">영업사원이 요청한 제약사 거래 조회 현황입니다.</p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
-            <input
-              value={query}
-              onChange={(e) => handleQueryChange(e.target.value)}
-              placeholder="영업사원·거래처·사업자번호·제약사 검색"
-              className="h-9 w-72 border border-gray-200 rounded pl-8 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-            />
-            {query && (
-              <button onClick={() => handleQueryChange("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
+      <div className="px-5 py-4 border-b border-gray-100 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-800">영업사원 필터링 요청 ({filtered.length}/{reqs.length}건)</h2>
+            <p className="text-xs text-gray-400 mt-0.5">영업사원이 요청한 제약사 거래 조회 현황입니다.</p>
           </div>
-          <select
-            value={pageSize}
-            onChange={(e) => handlePageSizeChange(Number(e.target.value))}
-            className="h-9 border border-gray-200 rounded px-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
-          >
-            {[10, 20, 30, 50, 100].map((n) => <option key={n} value={n}>{n}개씩</option>)}
-          </select>
-          <button onClick={fetchReqs} className="text-xs text-gray-500 hover:text-gray-800 border border-gray-200 rounded px-2 py-1.5 flex items-center gap-1">
-            <RefreshCw className="w-3 h-3" />새로고침
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+              <input
+                value={query}
+                onChange={(e) => handleQueryChange(e.target.value)}
+                placeholder="영업사원·거래처·사업자번호·제약사 검색"
+                className="h-9 w-72 border border-gray-200 rounded pl-8 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+              />
+              {query && (
+                <button onClick={() => handleQueryChange("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            <select
+              value={pageSize}
+              onChange={(e) => handlePageSizeChange(Number(e.target.value))}
+              className="h-9 border border-gray-200 rounded px-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
+            >
+              {[10, 20, 30, 50, 100].map((n) => <option key={n} value={n}>{n}개씩</option>)}
+            </select>
+            <button
+              onClick={exportExcel}
+              disabled={filtered.length === 0}
+              className="h-9 px-3 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:bg-gray-300 flex items-center gap-1.5"
+            >
+              <Download className="w-3.5 h-3.5" />엑셀
+            </button>
+            <button onClick={fetchReqs} className="text-xs text-gray-500 hover:text-gray-800 border border-gray-200 rounded px-2 py-1.5 flex items-center gap-1">
+              <RefreshCw className="w-3 h-3" />새로고침
+            </button>
+          </div>
+        </div>
+        <div className="flex gap-1.5 flex-wrap">
+          <button
+            onClick={() => handleStatusChange("ALL")}
+            className={`text-xs px-3 py-1.5 rounded-full border font-medium transition-colors ${
+              statusFilter === "ALL" ? "bg-gray-800 text-white border-gray-800" : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+            }`}
+          >전체 <span className="opacity-70">({statusCounts.ALL})</span></button>
+          {statusOptions.map((s) => (
+            <button
+              key={s.value}
+              onClick={() => handleStatusChange(s.value)}
+              className={`text-xs px-3 py-1.5 rounded-full border font-medium transition-colors ${
+                statusFilter === s.value ? `${s.cls} ring-2 ring-offset-1 ring-current/20` : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+              }`}
+            >{s.label} <span className="opacity-70">({statusCounts[s.value] || 0})</span></button>
+          ))}
         </div>
       </div>
       <div className="overflow-x-auto">
@@ -1118,6 +1217,387 @@ interface CompanySubmission {
 const emptySubmission = (): Omit<CompanySubmission, "companyName"> & { companyName: string } => ({
   companyName: "", contactName: "", email: "", phone: "", fax: "", notes: "",
 });
+
+// ─────────────────────────────────────────────
+// 제약사별 일괄제출 탭
+// ─────────────────────────────────────────────
+
+type EditSub = CompanySubmission & { isNew?: boolean };
+
+function BulkSubmissionTab() {
+  const [reqs, setReqs] = useState<FilterReq[]>([]);
+  const [subs, setSubs] = useState<CompanySubmission[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [statusScope, setStatusScope] = useState<"PENDING" | "ALL" | "OPEN">("PENDING");
+  const [query, setQuery] = useState("");
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [editSub, setEditSub] = useState<EditSub | null>(null);
+  const [savingSub, setSavingSub] = useState(false);
+  const [bulkingName, setBulkingName] = useState<string | null>(null);
+  const [copiedName, setCopiedName] = useState<string | null>(null);
+
+  useEffect(() => { load(); }, []);
+
+  async function load() {
+    setLoading(true);
+    const [r1, r2] = await Promise.all([
+      fetch("/api/filter-request").then((r) => r.json()),
+      fetch("/api/admin/company-submissions").then((r) => r.json()),
+    ]);
+    setReqs(Array.isArray(r1) ? r1 : []);
+    setSubs(Array.isArray(r2) ? r2 : []);
+    setLoading(false);
+  }
+
+  const subsByCompany = new Map(subs.map((s) => [s.companyName, s]));
+
+  const filtered = reqs.filter((r) => {
+    if (statusScope === "PENDING" && r.status !== "PENDING") return false;
+    if (statusScope === "OPEN" && r.status !== "PENDING" && r.status !== "REVIEWING") return false;
+    if (query.trim()) {
+      const q = query.toLowerCase();
+      return (
+        r.companyName.toLowerCase().includes(q) ||
+        r.clientName.toLowerCase().includes(q) ||
+        r.bizNumber.includes(query)
+      );
+    }
+    return true;
+  });
+
+  const groups = new Map<string, FilterReq[]>();
+  for (const r of filtered) {
+    const arr = groups.get(r.companyName) || [];
+    arr.push(r);
+    groups.set(r.companyName, arr);
+  }
+  const groupEntries = Array.from(groups.entries()).sort((a, b) => {
+    const aHas = subsByCompany.has(a[0]) ? 1 : 0;
+    const bHas = subsByCompany.has(b[0]) ? 1 : 0;
+    if (aHas !== bHas) return aHas - bHas; // 제출처 없는 곳을 위로
+    return a[0].localeCompare(b[0]);
+  });
+
+  const withSubCount = groupEntries.filter(([name]) => subsByCompany.has(name)).length;
+
+  function toggle(name: string) {
+    setCollapsed((p) => ({ ...p, [name]: !p[name] }));
+  }
+
+  function composeMail(companyName: string, rows: FilterReq[], sub: CompanySubmission | undefined) {
+    if (!sub?.email) {
+      alert("이 제약사의 이메일 제출처가 등록되지 않았어요. 먼저 제출처를 등록해 주세요.");
+      return;
+    }
+    const subject = `[필터링 요청] ${companyName} - 거래가능 여부 확인 (${rows.length}건)`;
+    const body = `안녕하세요, ${sub.contactName || "담당자"}님.\n\n아래 ${rows.length}개 거래처에 대해 거래 가능 여부 확인 부탁드립니다.\n\n` +
+      rows.map((r, i) => `${i + 1}. ${r.clientName} (사업자번호 ${r.bizNumber})`).join("\n") +
+      `\n\n회신은 본 메일로 부탁드리며, 각 거래처별 가능/불가 여부 표시해 주시면 감사하겠습니다.\n\n감사합니다.`;
+    window.location.href = `mailto:${sub.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  }
+
+  async function copyList(companyName: string, rows: FilterReq[]) {
+    const text = rows.map((r, i) => `${i + 1}. ${r.clientName} / ${r.bizNumber}`).join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedName(companyName);
+      setTimeout(() => setCopiedName((n) => n === companyName ? null : n), 1500);
+    } catch {
+      alert("복사에 실패했어요.");
+    }
+  }
+
+  function exportCompanyExcel(companyName: string, rows: FilterReq[]) {
+    const data = rows.map((r) => ({
+      거래처명: r.clientName,
+      사업자번호: r.bizNumber,
+      영업사원명: r.user.name || r.userName,
+      아이디: r.user.email,
+      요청일: new Date(r.createdAt).toLocaleDateString("ko-KR"),
+      상태: statusOptions.find((s) => s.value === r.status)?.label || r.status,
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    ws["!cols"] = [{ wch: 20 }, { wch: 14 }, { wch: 10 }, { wch: 24 }, { wch: 14 }, { wch: 10 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, companyName.slice(0, 30) || "Sheet1");
+    const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    const blob = new Blob([buf], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `필터링요청_${companyName}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function markAllReviewing(companyName: string, rows: FilterReq[]) {
+    const pendingIds = rows.filter((r) => r.status === "PENDING").map((r) => r.id);
+    if (pendingIds.length === 0) return;
+    if (!confirm(`${companyName}의 대기 ${pendingIds.length}건을 "확인중"으로 변경할까요?`)) return;
+    setBulkingName(companyName);
+    await Promise.all(pendingIds.map((id) => fetch("/api/filter-request", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, status: "REVIEWING" }),
+    })));
+    setReqs((prev) => prev.map((r) => pendingIds.includes(r.id) ? { ...r, status: "REVIEWING" } : r));
+    setBulkingName(null);
+  }
+
+  async function saveSubmission() {
+    if (!editSub) return;
+    const name = editSub.companyName.trim();
+    if (!name) return;
+    setSavingSub(true);
+    const res = await fetch("/api/admin/company-submissions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(editSub),
+    });
+    if (res.ok) {
+      const saved: CompanySubmission = await res.json();
+      setSubs((prev) => {
+        const idx = prev.findIndex((s) => s.companyName === saved.companyName);
+        return idx >= 0 ? prev.map((s, i) => i === idx ? saved : s) : [...prev, saved];
+      });
+      setEditSub(null);
+    }
+    setSavingSub(false);
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-lg border border-gray-200 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-800">제약사별 일괄제출</h2>
+            <p className="text-xs text-gray-400 mt-0.5">여러 거래처의 필터링 요청을 제약사 단위로 묶어 제출처(필터링요청처)에 한 번에 보냅니다.</p>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              value={statusScope}
+              onChange={(e) => setStatusScope(e.target.value as "PENDING" | "ALL" | "OPEN")}
+              className="h-9 border border-gray-200 rounded px-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
+            >
+              <option value="PENDING">대기 상태만</option>
+              <option value="OPEN">대기 + 확인중</option>
+              <option value="ALL">전체 상태</option>
+            </select>
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="제약사 / 거래처 / 사업자번호"
+                className="h-9 w-60 border border-gray-200 rounded pl-8 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+              />
+              {query && (
+                <button onClick={() => setQuery("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            <button onClick={load} className="text-xs text-gray-500 hover:text-gray-800 border border-gray-200 rounded px-2 py-1.5 flex items-center gap-1">
+              <RefreshCw className="w-3 h-3" />새로고침
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-3">
+          <div className="bg-blue-50 border border-blue-100 rounded-md px-3 py-2.5">
+            <div className="text-[11px] text-blue-700 font-medium">대상 제약사</div>
+            <div className="text-xl font-bold text-blue-900 mt-0.5">{groupEntries.length}곳</div>
+          </div>
+          <div className="bg-amber-50 border border-amber-100 rounded-md px-3 py-2.5">
+            <div className="text-[11px] text-amber-700 font-medium">총 요청 건수</div>
+            <div className="text-xl font-bold text-amber-900 mt-0.5">{filtered.length}건</div>
+          </div>
+          <div className={`${withSubCount === groupEntries.length ? "bg-emerald-50 border-emerald-100" : "bg-red-50 border-red-100"} border rounded-md px-3 py-2.5`}>
+            <div className={`text-[11px] font-medium ${withSubCount === groupEntries.length ? "text-emerald-700" : "text-red-700"}`}>제출처 등록됨</div>
+            <div className={`text-xl font-bold mt-0.5 ${withSubCount === groupEntries.length ? "text-emerald-900" : "text-red-900"}`}>{withSubCount}/{groupEntries.length}곳</div>
+          </div>
+        </div>
+      </div>
+
+      {loading && <div className="py-16 text-center text-gray-400 text-sm">불러오는 중...</div>}
+
+      {!loading && groupEntries.length === 0 && (
+        <div className="bg-white border border-gray-200 rounded-lg py-16 text-center text-gray-400 text-sm">
+          {query || statusScope !== "PENDING" ? "조건에 맞는 요청이 없어요." : "대기 중인 필터링 요청이 없어요."}
+        </div>
+      )}
+
+      {!loading && groupEntries.map(([companyName, rows]) => {
+        const sub = subsByCompany.get(companyName);
+        const isCollapsed = collapsed[companyName] ?? false;
+        const pendingCount = rows.filter((r) => r.status === "PENDING").length;
+        return (
+          <div key={companyName} className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <button onClick={() => toggle(companyName)} className="text-gray-400 hover:text-gray-700 shrink-0">
+                  {isCollapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                </button>
+                <h3 className="text-base font-semibold text-gray-900 truncate">{companyName}</h3>
+                <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium shrink-0">{rows.length}건</span>
+                {sub ? (
+                  <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-medium flex items-center gap-1 shrink-0">
+                    <CheckCircle className="w-3 h-3" />제출처 등록됨
+                  </span>
+                ) : (
+                  <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium flex items-center gap-1 shrink-0">
+                    <AlertCircle className="w-3 h-3" />제출처 없음
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {sub?.email && (
+                  <button onClick={() => composeMail(companyName, rows, sub)} className="text-xs bg-blue-600 text-white hover:bg-blue-700 rounded px-2.5 py-1.5 flex items-center gap-1">
+                    <Mail className="w-3 h-3" />이메일 작성
+                  </button>
+                )}
+                <button onClick={() => copyList(companyName, rows)} className="text-xs bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 rounded px-2.5 py-1.5 flex items-center gap-1">
+                  <Copy className="w-3 h-3" />{copiedName === companyName ? "복사됨!" : "목록 복사"}
+                </button>
+                <button onClick={() => exportCompanyExcel(companyName, rows)} className="text-xs bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-50 rounded px-2.5 py-1.5 flex items-center gap-1">
+                  <Download className="w-3 h-3" />엑셀
+                </button>
+                {pendingCount > 0 && (
+                  <button
+                    onClick={() => markAllReviewing(companyName, rows)}
+                    disabled={bulkingName === companyName}
+                    className="text-xs bg-white text-blue-700 border border-blue-200 hover:bg-blue-50 rounded px-2.5 py-1.5 flex items-center gap-1 disabled:opacity-50"
+                  >{bulkingName === companyName ? "처리중..." : `${pendingCount}건 확인중 표시`}</button>
+                )}
+                <button
+                  onClick={() => setEditSub(sub ? { ...sub } : { companyName, contactName: "", email: "", phone: "", fax: "", notes: "", isNew: true })}
+                  className="text-xs bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 rounded px-2.5 py-1.5 flex items-center gap-1"
+                ><Inbox className="w-3 h-3" />{sub ? "제출처 수정" : "제출처 등록"}</button>
+              </div>
+            </div>
+
+            {sub ? (
+              <div className="px-5 py-2.5 bg-gray-50/60 border-b border-gray-100 flex flex-wrap gap-x-5 gap-y-1 text-xs">
+                {sub.contactName && <span className="text-gray-700"><span className="text-gray-400">담당자:</span> <span className="font-medium">{sub.contactName}</span></span>}
+                {sub.email && <span className="text-gray-700"><span className="text-gray-400">이메일:</span> <a className="text-blue-600 hover:underline" href={`mailto:${sub.email}`}>{sub.email}</a></span>}
+                {sub.phone && <span className="text-gray-700"><span className="text-gray-400">전화:</span> {sub.phone}</span>}
+                {sub.fax && <span className="text-gray-700"><span className="text-gray-400">팩스:</span> {sub.fax}</span>}
+                {sub.notes && <span className="text-gray-500 italic">{sub.notes}</span>}
+              </div>
+            ) : (
+              <div className="px-5 py-2.5 bg-red-50/50 border-b border-red-100 text-xs text-red-700 flex items-center gap-2">
+                <AlertCircle className="w-3.5 h-3.5" /> 제출처 정보가 없어요. "제출처 등록"을 눌러 담당자 이메일·연락처를 먼저 등록해 주세요.
+              </div>
+            )}
+
+            {!isCollapsed && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-white text-xs text-gray-500 font-semibold">
+                      <th className="px-5 py-2.5 text-left w-10">#</th>
+                      <th className="px-4 py-2.5 text-left">거래처명</th>
+                      <th className="px-4 py-2.5 text-left">사업자번호</th>
+                      <th className="px-4 py-2.5 text-left">영업사원</th>
+                      <th className="px-4 py-2.5 text-center">요청일</th>
+                      <th className="px-4 py-2.5 text-center">상태</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {rows.map((r, i) => {
+                      const sOpt = statusOptions.find((s) => s.value === r.status) || statusOptions[0];
+                      return (
+                        <tr key={r.id} className="hover:bg-gray-50">
+                          <td className="px-5 py-2 text-gray-400 text-xs">{i + 1}</td>
+                          <td className="px-4 py-2 text-gray-800">{r.clientName}</td>
+                          <td className="px-4 py-2 text-gray-500 text-xs font-mono">{r.bizNumber}</td>
+                          <td className="px-4 py-2 text-gray-600 text-xs">{r.user.name || r.userName} <span className="text-gray-400">({r.user.email})</span></td>
+                          <td className="px-4 py-2 text-center text-gray-400 text-xs">{new Date(r.createdAt).toLocaleDateString("ko-KR")}</td>
+                          <td className="px-4 py-2 text-center">
+                            <span className={`text-[11px] px-2 py-0.5 rounded border font-medium ${sOpt.cls}`}>{sOpt.label}</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {editSub && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md">
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h3 className="font-semibold text-gray-900">{editSub.isNew ? `${editSub.companyName} 제출처 등록` : `${editSub.companyName} 제출처 수정`}</h3>
+              <button onClick={() => setEditSub(null)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">담당자명</label>
+                <input
+                  value={editSub.contactName || ""}
+                  onChange={(e) => setEditSub((p) => p ? { ...p, contactName: e.target.value } : p)}
+                  placeholder="예) 홍길동"
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">이메일 <span className="text-red-500">*</span></label>
+                <input
+                  type="email"
+                  value={editSub.email || ""}
+                  onChange={(e) => setEditSub((p) => p ? { ...p, email: e.target.value } : p)}
+                  placeholder="예) contact@company.com"
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+                <p className="text-[11px] text-gray-400 mt-1">이메일이 있어야 "이메일 작성" 버튼으로 일괄 발송할 수 있어요.</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">전화번호</label>
+                  <input
+                    value={editSub.phone || ""}
+                    onChange={(e) => setEditSub((p) => p ? { ...p, phone: e.target.value } : p)}
+                    placeholder="예) 02-1234-5678"
+                    className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">팩스</label>
+                  <input
+                    value={editSub.fax || ""}
+                    onChange={(e) => setEditSub((p) => p ? { ...p, fax: e.target.value } : p)}
+                    className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">비고</label>
+                <textarea
+                  value={editSub.notes || ""}
+                  onChange={(e) => setEditSub((p) => p ? { ...p, notes: e.target.value } : p)}
+                  rows={2}
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
+                />
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2">
+              <button onClick={() => setEditSub(null)} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded hover:bg-gray-50">취소</button>
+              <button
+                onClick={saveSubmission}
+                disabled={savingSub}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-300"
+              >{savingSub ? "저장 중..." : "저장"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function CompanySubmissionsTab() {
   const [rows, setRows] = useState<CompanySubmission[]>([]);
