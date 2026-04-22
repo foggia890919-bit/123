@@ -1648,9 +1648,6 @@ function FilterReqsTab() {
         사업자번호: r.bizNumber,
         "요청 제약사": r.companyName,
         "제출처 법인명": sub?.submissionEntity || "",
-        "제출처 담당자": sub?.contactName || "",
-        "제출처 이메일": sub?.email || "",
-        "제출처 전화": sub?.phone || "",
         "추가수수료(%)": sub?.defaultAdditionalRate ?? "",
         요청일: new Date(r.createdAt).toLocaleString("ko-KR"),
         상태: statusOptions.find((s) => s.value === r.status)?.label || r.status,
@@ -1661,8 +1658,7 @@ function FilterReqsTab() {
     const ws = XLSX.utils.json_to_sheet(rows);
     ws["!cols"] = [
       { wch: 10 }, { wch: 24 }, { wch: 18 }, { wch: 14 }, { wch: 18 },
-      { wch: 16 }, { wch: 12 }, { wch: 24 }, { wch: 16 }, { wch: 12 },
-      { wch: 18 }, { wch: 10 }, { wch: 40 }, { wch: 18 },
+      { wch: 16 }, { wch: 12 }, { wch: 18 }, { wch: 10 }, { wch: 40 }, { wch: 18 },
     ];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "필터링요청");
@@ -2031,16 +2027,18 @@ function BulkSubmissionTab() {
   }
 
   function exportCompanyExcel(companyName: string, rows: FilterReq[]) {
+    const sub = subsByCompany.get(companyName);
     const data = rows.map((r) => ({
       거래처명: r.clientName,
       사업자번호: r.bizNumber,
       영업사원명: r.user.name || r.userName,
       아이디: r.user.email,
+      "제출처 법인명": sub?.submissionEntity || "",
       요청일: new Date(r.createdAt).toLocaleDateString("ko-KR"),
       상태: statusOptions.find((s) => s.value === r.status)?.label || r.status,
     }));
     const ws = XLSX.utils.json_to_sheet(data);
-    ws["!cols"] = [{ wch: 20 }, { wch: 14 }, { wch: 10 }, { wch: 24 }, { wch: 14 }, { wch: 10 }];
+    ws["!cols"] = [{ wch: 20 }, { wch: 14 }, { wch: 10 }, { wch: 24 }, { wch: 16 }, { wch: 14 }, { wch: 10 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, companyName.slice(0, 30) || "Sheet1");
     const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
