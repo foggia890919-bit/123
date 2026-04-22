@@ -339,6 +339,21 @@ function ProposalsContent() {
     await loadProposal(selected);
   }
 
+  function sanitizeFilename(name: string): string {
+    return name.replace(/[\\/:*?"<>|]/g, "_").trim() || "proposal";
+  }
+
+  function downloadBlob(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   function exportExcel() {
     if (!selected?.items) return;
     const withRate = isSalesRep && cols.showRate;
@@ -366,19 +381,27 @@ function ProposalsContent() {
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "제안서");
-    XLSX.writeFile(wb, `${selected.title}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    // ArrayBuffer → Blob 으로 다운로드 (writeFile 의 브라우저 파일명 인코딩 이슈 회피)
+    const buf = XLSX.write(wb, { bookType: "xlsx", type: "array", compression: true });
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const filename = sanitizeFilename(`${selected.title}_${new Date().toISOString().slice(0, 10)}`) + ".xlsx";
+    downloadBlob(blob, filename);
   }
 
   async function exportPDF() {
     if (!selected?.items) return;
-    const { jsPDF } = await import("jspdf");
-    const autoTable = (await import("jspdf-autotable")).default;
-    const doc = new jsPDF({ orientation: "landscape" });
-    doc.setFontSize(14);
-    doc.text(selected.title, 14, 15);
-    doc.setFontSize(9);
-    doc.text(`작성일: ${new Date().toLocaleDateString("ko-KR")}`, 14, 22);
+    const [{ jsPDF }, html2canvasMod] = await Promise.all([
+      import("jspdf"),
+      import("html2canvas"),
+    ]);
+    const html2canvas = html2canvasMod.default;
+
     const withRate = isSalesRep && cols.showRate;
+    const esc = (s: unknown) =>
+      String(s ?? "")
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
     const head = ["순번", "품목명", "성분명", "제약사"];
     if (cols.showCategoryB) head.push("분류B");
     if (cols.showBioStatus) head.push("생동/생산");
@@ -387,7 +410,8 @@ function ProposalsContent() {
     if (cols.showNotes) head.push("특이사항");
     head.push("약가");
     if (withRate) head.push("기본수수료", "추가수수료", "합계수수료", "정산금액");
-    const body = selected.items.map((item, i) => {
+
+    const bodyRows = selected.items.map((item, i) => {
       const m = item.altMedication;
       const base = m?.commissionRate ?? null;
       const extra = m?.additionalRate ?? null;
@@ -401,13 +425,81 @@ function ProposalsContent() {
       if (cols.showNotes) row.push(m?.notes || "-");
       row.push(m?.price ? `${m.price.toLocaleString()}원` : "-");
       if (withRate) {
-        row.push(base != null ? `${base}%` : "-", extra != null ? `${extra}%` : "-",
-          total != null ? `${total}%` : "-", settlement != null ? `${settlement.toLocaleString()}원` : "-");
+        row.push(
+          base != null ? `${base}%` : "-",
+          extra != null ? `${extra}%` : "-",
+          total != null ? `${total}%` : "-",
+          settlement != null ? `${settlement.toLocaleString()}원` : "-"
+        );
       }
       return row;
     });
-    autoTable(doc, { startY: 28, head: [head], body, styles: { fontSize: 8 }, headStyles: { fillColor: [37, 99, 235] } });
-    doc.save(`${selected.title}_${new Date().toISOString().slice(0, 10)}.pdf`);
+
+    // 한글 렌더링을 위해 HTML 로 만들고 html2canvas 로 이미지화 → jsPDF 에 삽입
+    const container = document.createElement("div");
+    container.style.cssText = [
+      "position:absolute",
+      "left:-10000px",
+      "top:0",
+      "width:1400px",
+      "background:#ffffff",
+      "padding:24px",
+      "font-family:'Pretendard','Noto Sans KR','Malgun Gothic','Apple SD Gothic Neo',sans-serif",
+      "color:#111827",
+    ].join(";");
+    container.innerHTML = `
+      <h1 style="font-size:20px;margin:0 0 6px 0;font-weight:700;">${esc(selected.title)}</h1>
+      <div style="font-size:11px;color:#6b7280;margin-bottom:14px;">작성일: ${esc(new Date().toLocaleDateString("ko-KR"))}</div>
+      <table style="width:100%;border-collapse:collapse;font-size:11px;">
+        <thead>
+          <tr>${head.map((h) => `<th style="border:1px solid #d1d5db;padding:6px 8px;background:#2563eb;color:#ffffff;text-align:center;font-weight:600;">${esc(h)}</th>`).join("")}</tr>
+        </thead>
+        <tbody>
+          ${bodyRows
+            .map(
+              (r) =>
+                `<tr>${r.map((c) => `<td style="border:1px solid #e5e7eb;padding:5px 8px;vertical-align:top;">${esc(c)}</td>`).join("")}</tr>`
+            )
+            .join("")}
+        </tbody>
+      </table>
+    `;
+    document.body.appendChild(container);
+
+    try {
+      const canvas = await html2canvas(container, {
+        scale: 2,
+        backgroundColor: "#ffffff",
+        useCORS: true,
+        logging: false,
+      });
+      const imgData = canvas.toDataURL("image/png");
+
+      const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const margin = 10;
+      const imgWidth = pageWidth - margin * 2;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+      let heightLeft = imgHeight;
+      let position = margin;
+      doc.addImage(imgData, "PNG", margin, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight - margin * 2;
+
+      while (heightLeft > 0) {
+        position = heightLeft - imgHeight + margin;
+        doc.addPage();
+        doc.addImage(imgData, "PNG", margin, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight - margin * 2;
+      }
+
+      const blob = doc.output("blob");
+      const filename = sanitizeFilename(`${selected.title}_${new Date().toISOString().slice(0, 10)}`) + ".pdf";
+      downloadBlob(blob, filename);
+    } finally {
+      document.body.removeChild(container);
+    }
   }
 
   if (loading) return <div className="flex justify-center py-20 text-gray-400">불러오는 중...</div>;
