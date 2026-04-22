@@ -107,7 +107,10 @@ function ProposalsContent() {
   const resizingRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
   function startResize(key: string, e: React.MouseEvent) {
     e.preventDefault();
+    e.stopPropagation();
     resizingRef.current = { key, startX: e.clientX, startWidth: colWidths[key] ?? DEFAULT_WIDTHS[key] ?? 100 };
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
     const onMove = (ev: MouseEvent) => {
       if (!resizingRef.current) return;
       const { key: k, startX, startWidth } = resizingRef.current;
@@ -116,6 +119,8 @@ function ProposalsContent() {
     };
     const onUp = () => {
       resizingRef.current = null;
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
     };
@@ -654,37 +659,48 @@ function ProposalsContent() {
                   <ColumnToggles cols={cols} setCols={setCols} isSalesRep={isSalesRep} />
                 </div>
                 <div className="overflow-x-auto overflow-y-auto max-h-[60vh] md:flex-1 rounded-lg border border-gray-200 bg-white">
-                  <table className="text-sm table-fixed" style={{ minWidth: "100%" }}>
+                  {(() => {
+                    const activeCols: { k: string; label: string; align: "left" | "center" | "right" }[] = [
+                      { k: "num", label: "#", align: "left" },
+                      { k: "productName", label: "품목명", align: "left" },
+                      { k: "ingredient", label: "성분명", align: "left" },
+                      { k: "sameIngredient", label: "", align: "center" },
+                      { k: "company", label: "제약사", align: "left" },
+                      ...(cols.showCategoryB ? [{ k: "categoryB", label: "분류B", align: "center" as const }] : []),
+                      ...(cols.showBioStatus ? [{ k: "bioStatus", label: "생동/생산", align: "center" as const }] : []),
+                      ...(cols.showOriginalDrug ? [{ k: "originalDrug", label: "오리지날", align: "center" as const }] : []),
+                      ...(cols.showInsuranceCode ? [{ k: "insuranceCode", label: "보험코드", align: "left" as const }] : []),
+                      ...(cols.showNotes ? [{ k: "notes", label: "특이사항", align: "left" as const }] : []),
+                      { k: "price", label: "약가", align: "right" },
+                      ...(isSalesRep && cols.showRate ? [
+                        { k: "baseRate", label: "기본수수료", align: "right" as const },
+                        { k: "additionalRate", label: "추가수수료", align: "right" as const },
+                        { k: "totalRate", label: "합계수수료", align: "right" as const },
+                        { k: "settlement", label: "정산금액", align: "right" as const },
+                      ] : []),
+                      { k: "actions", label: "", align: "center" },
+                    ];
+                    const getW = (k: string) => colWidths[k] ?? DEFAULT_WIDTHS[k] ?? 100;
+                    const totalWidth = activeCols.reduce((s, c) => s + getW(c.k), 0);
+                    return (
+                  <table className="text-sm table-fixed border-collapse" style={{ width: totalWidth }}>
+                    <colgroup>
+                      {activeCols.map((c) => <col key={c.k} style={{ width: getW(c.k) }} />)}
+                    </colgroup>
                     <thead className="sticky top-0 bg-gray-50 border-b border-gray-200 z-10">
                       <tr className="text-xs text-gray-500 font-semibold whitespace-nowrap">
-                        {([
-                          { k: "num", label: "#", align: "left" as const },
-                          { k: "productName", label: "품목명", align: "left" as const },
-                          { k: "ingredient", label: "성분명", align: "left" as const },
-                          { k: "sameIngredient", label: "", align: "center" as const },
-                          { k: "company", label: "제약사", align: "left" as const },
-                          ...(cols.showCategoryB ? [{ k: "categoryB", label: "분류B", align: "center" as const }] : []),
-                          ...(cols.showBioStatus ? [{ k: "bioStatus", label: "생동/생산", align: "center" as const }] : []),
-                          ...(cols.showOriginalDrug ? [{ k: "originalDrug", label: "오리지날", align: "center" as const }] : []),
-                          ...(cols.showInsuranceCode ? [{ k: "insuranceCode", label: "보험코드", align: "left" as const }] : []),
-                          ...(cols.showNotes ? [{ k: "notes", label: "특이사항", align: "left" as const }] : []),
-                          { k: "price", label: "약가", align: "right" as const },
-                          ...(isSalesRep && cols.showRate ? [
-                            { k: "baseRate", label: "기본수수료", align: "right" as const },
-                            { k: "additionalRate", label: "추가수수료", align: "right" as const },
-                            { k: "totalRate", label: "합계수수료", align: "right" as const },
-                            { k: "settlement", label: "정산금액", align: "right" as const },
-                          ] : []),
-                          { k: "actions", label: "", align: "left" as const },
-                        ] as const).map(({ k, label, align }) => (
-                          <th key={k}
-                            style={{ width: colWidths[k] ?? DEFAULT_WIDTHS[k] ?? 100 }}
-                            className={`relative px-3 py-2.5 text-${align} select-none`}>
+                        {activeCols.map(({ k, label, align }) => (
+                          <th key={k} className={`relative px-3 py-2.5 text-${align} select-none`}>
                             <span className="truncate block">{label}</span>
-                            <span
+                            <div
                               onMouseDown={(e) => startResize(k, e)}
-                              className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize hover:bg-blue-400 active:bg-blue-500 transition-colors"
-                              title="드래그로 너비 조절" />
+                              onClick={(e) => e.stopPropagation()}
+                              role="separator"
+                              aria-orientation="vertical"
+                              className="absolute top-0 right-[-4px] h-full w-2 cursor-col-resize z-20 group flex items-center justify-center"
+                              title="드래그로 너비 조절">
+                              <div className="h-[60%] w-[2px] bg-gray-300 group-hover:bg-blue-500 group-active:bg-blue-600 transition-colors" />
+                            </div>
                           </th>
                         ))}
                       </tr>
@@ -766,6 +782,8 @@ function ProposalsContent() {
                       })}
                     </tbody>
                   </table>
+                    );
+                  })()}
                 </div>
               </>
             )}
