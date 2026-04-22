@@ -1927,7 +1927,7 @@ function BulkSubmissionTab() {
   const [bulkingName, setBulkingName] = useState<string | null>(null);
   const [copiedName, setCopiedName] = useState<string | null>(null);
   const [kakaoReady, setKakaoReady] = useState(false);
-  const [kakaoModal, setKakaoModal] = useState<{ companyName: string; rows: FilterReq[]; sub: CompanySubmission } | null>(null);
+  const [kakaoModal, setKakaoModal] = useState<{ companyName: string; rows: FilterReq[]; sub: CompanySubmission; editMsg: string; editContact: string; editPhone: string } | null>(null);
 
   useEffect(() => { load(); }, []);
 
@@ -2075,11 +2075,8 @@ function BulkSubmissionTab() {
 
   function sendKakao() {
     if (!kakaoModal) return;
-    const { companyName, rows, sub } = kakaoModal;
     if (!window.Kakao?.Share) { alert("카카오 SDK가 아직 로드되지 않았어요. 잠시 후 다시 시도해 주세요."); return; }
-    const listText = rows.slice(0, 6).map((r, i) => `${i + 1}. ${r.clientName} (${r.bizNumber})`).join("\n");
-    const suffix = rows.length > 6 ? `\n...외 ${rows.length - 6}건` : "";
-    const text = `[필터링 요청] ${companyName}\n${rows.length}개 거래처 거래가능 여부 확인 요청드립니다.\n\n${listText}${suffix}`.slice(0, 200);
+    const text = kakaoModal.editMsg.slice(0, 200);
     window.Kakao.Share.sendDefault({
       objectType: "text",
       text,
@@ -2188,7 +2185,7 @@ function BulkSubmissionTab() {
                 )}
                 {kakaoReady && sub && (
                   <button
-                    onClick={() => setKakaoModal({ companyName, rows, sub })}
+                    onClick={() => setKakaoModal({ companyName, rows, sub, editMsg: buildKakaoPreview(companyName, rows), editContact: sub.contactName || "", editPhone: sub.phone || "" })}
                     className="text-xs rounded px-2.5 py-1.5 flex items-center gap-1 font-medium"
                     style={{ background: "#FEE500", color: "#3C1E1E" }}
                   >
@@ -2268,31 +2265,51 @@ function BulkSubmissionTab() {
 
       {kakaoModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md">
             <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
               <h3 className="font-semibold text-gray-900 flex items-center gap-2">
                 <span className="inline-flex items-center justify-center w-6 h-6 rounded-full" style={{ background: "#FEE500" }}>
                   <MessageCircle className="w-3.5 h-3.5" style={{ color: "#3C1E1E" }} />
                 </span>
-                카카오톡으로 보내기
+                카카오톡으로 보내기 — {kakaoModal.companyName}
               </h3>
               <button onClick={() => setKakaoModal(null)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
             </div>
             <div className="px-5 py-4 space-y-3">
-              <div>
-                <div className="text-xs font-semibold text-gray-500 mb-1.5">전송 대상 (등록된 제출처)</div>
-                <div className="border border-gray-200 rounded-lg p-3 bg-gray-50 space-y-1">
-                  <div className="text-sm font-medium text-gray-800">{kakaoModal.sub.contactName || <span className="text-gray-400 font-normal">담당자명 미등록</span>}</div>
-                  {kakaoModal.sub.phone && <div className="text-xs text-gray-600"><span className="text-gray-400">전화:</span> {kakaoModal.sub.phone}</div>}
-                  {kakaoModal.sub.email && <div className="text-xs text-gray-600"><span className="text-gray-400">이메일:</span> {kakaoModal.sub.email}</div>}
-                  {kakaoModal.sub.submissionEntity && <div className="text-xs text-gray-600"><span className="text-gray-400">제출처:</span> {kakaoModal.sub.submissionEntity}</div>}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">담당자명</label>
+                  <input
+                    value={kakaoModal.editContact}
+                    onChange={(e) => setKakaoModal((p) => p ? { ...p, editContact: e.target.value } : p)}
+                    className="w-full border border-gray-200 rounded px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-300"
+                    placeholder="담당자명"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">전화번호</label>
+                  <input
+                    value={kakaoModal.editPhone}
+                    onChange={(e) => setKakaoModal((p) => p ? { ...p, editPhone: e.target.value } : p)}
+                    className="w-full border border-gray-200 rounded px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-300"
+                    placeholder="전화번호"
+                  />
                 </div>
               </div>
               <div>
-                <div className="text-xs font-semibold text-gray-500 mb-1.5">메시지 미리보기</div>
-                <pre className="text-xs text-gray-700 whitespace-pre-wrap font-sans border border-gray-200 rounded-lg p-3 bg-gray-50 leading-relaxed">
-                  {buildKakaoPreview(kakaoModal.companyName, kakaoModal.rows)}
-                </pre>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-semibold text-gray-500">메시지 내용</label>
+                  <span className={`text-[10px] ${kakaoModal.editMsg.length > 200 ? "text-red-500 font-semibold" : "text-gray-400"}`}>{kakaoModal.editMsg.length}/200자</span>
+                </div>
+                <textarea
+                  value={kakaoModal.editMsg}
+                  onChange={(e) => setKakaoModal((p) => p ? { ...p, editMsg: e.target.value } : p)}
+                  rows={7}
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-yellow-300 resize-none leading-relaxed"
+                />
+                {kakaoModal.editMsg.length > 200 && (
+                  <p className="text-[11px] text-red-500 mt-1">200자를 초과했어요. 전송 시 200자까지만 발송됩니다.</p>
+                )}
               </div>
               <p className="text-[11px] text-gray-400">카카오톡 공유 화면이 열리면 보낼 대화방 또는 친구를 선택해 주세요.</p>
             </div>
