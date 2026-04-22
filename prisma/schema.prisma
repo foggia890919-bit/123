@@ -250,12 +250,14 @@ model Notice {
 }
 
 model CompanySubmission {
-  companyName String   @id
-  contactName String?
-  email       String?
-  phone       String?
-  fax         String?
-  notes       String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  companyName           String   @id
+  submissionEntity      String?
+  contactName           String?
+  email                 String?
+  phone                 String?
+  fax                   String?
+  defaultAdditionalRate Float?
+  notes                 String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 }

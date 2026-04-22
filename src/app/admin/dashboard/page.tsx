@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import * as XLSX from "xlsx";
 
-type Tab = "upload" | "members" | "rates" | "filterReqs" | "userClients" | "apiSources" | "notices" | "companySubmissions" | "bulkSubmit";
+type Tab = "upload" | "submissionUpload" | "members" | "rates" | "filterReqs" | "userClients" | "apiSources" | "notices" | "companySubmissions" | "bulkSubmit";
 
 interface MenuItem { key: Tab; label: string; icon: React.ElementType }
 interface MenuGroup { title: string; items: MenuItem[] }
@@ -17,6 +17,7 @@ const MENU_GROUPS: MenuGroup[] = [
     title: "데이터 관리",
     items: [
       { key: "upload", label: "요율표 업로드", icon: Upload },
+      { key: "submissionUpload", label: "제출처 일괄 업로드", icon: FileSpreadsheet },
       { key: "apiSources", label: "API 연동관리", icon: Database },
     ],
   },
@@ -123,6 +124,7 @@ export default function AdminDashboardPage() {
 
       <main className="flex-1 min-w-0 space-y-4">
         {tab === "upload" && <UploadTab />}
+        {tab === "submissionUpload" && <SubmissionUploadTab />}
         {tab === "notices" && <NoticesTab />}
         {tab === "members" && <MembersTab />}
         {tab === "rates" && <RatesTab />}
@@ -534,6 +536,260 @@ function UploadTab() {
   );
 }
 
+// ─────────────────────────────────────────────
+// 제출처 일괄 업로드 탭
+// ─────────────────────────────────────────────
+
+interface SubUploadRow {
+  companyName: string;
+  submissionEntity: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  fax: string;
+  defaultAdditionalRate: string;
+  notes: string;
+  _error?: string;
+}
+
+const EXPECTED_COLUMNS: Record<string, keyof SubUploadRow> = {
+  "제약사명": "companyName",
+  "제출처법인명": "submissionEntity",
+  "담당자": "contactName",
+  "담당자명": "contactName",
+  "이메일": "email",
+  "전화번호": "phone",
+  "전화": "phone",
+  "팩스": "fax",
+  "추가수수료": "defaultAdditionalRate",
+  "추가수수료율": "defaultAdditionalRate",
+  "비고": "notes",
+};
+
+function SubmissionUploadTab() {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<SubUploadRow[]>([]);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [result, setResult] = useState<{ created: number; updated: number; errors: string[] } | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function parseFile(f: File) {
+    setFile(f);
+    setResult(null);
+    setParseError(null);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target?.result, { type: "binary" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const raw = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
+        if (raw.length === 0) { setParseError("시트에 데이터가 없어요."); return; }
+
+        const rows: SubUploadRow[] = raw.map((r) => {
+          const row: SubUploadRow = { companyName: "", submissionEntity: "", contactName: "", email: "", phone: "", fax: "", defaultAdditionalRate: "", notes: "" };
+          for (const [colKey, val] of Object.entries(r)) {
+            const field = EXPECTED_COLUMNS[colKey.trim()];
+            if (field) row[field] = String(val ?? "").trim();
+          }
+          if (!row.companyName) row._error = "제약사명 없음";
+          const rate = row.defaultAdditionalRate;
+          if (rate && isNaN(Number(rate))) row._error = `추가수수료 숫자 아님: ${rate}`;
+          return row;
+        });
+
+        setPreview(rows);
+      } catch {
+        setParseError("파일을 읽는 중 오류가 발생했어요. xlsx/xls 파일인지 확인해 주세요.");
+      }
+    };
+    reader.readAsBinaryString(f);
+  }
+
+  async function doUpload() {
+    const validRows = preview.filter((r) => !r._error && r.companyName);
+    if (validRows.length === 0) return;
+    setUploading(true);
+    setResult(null);
+    const payload = validRows.map((r) => ({
+      companyName: r.companyName,
+      submissionEntity: r.submissionEntity || null,
+      contactName: r.contactName || null,
+      email: r.email || null,
+      phone: r.phone || null,
+      fax: r.fax || null,
+      defaultAdditionalRate: r.defaultAdditionalRate !== "" ? Number(r.defaultAdditionalRate) : null,
+      notes: r.notes || null,
+    }));
+    const res = await fetch("/api/admin/company-submissions/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    setResult(data);
+    setUploading(false);
+    if (res.ok && data.errors?.length === 0) {
+      setFile(null);
+      setPreview([]);
+    }
+  }
+
+  function downloadTemplate() {
+    const sample = [
+      { 제약사명: "동아ST", 제출처법인명: "동아쏘시오홀딩스", 담당자: "홍길동", 이메일: "contact@donga.com", 전화번호: "02-1234-5678", 팩스: "02-1234-5679", 추가수수료: "2.5", 비고: "" },
+      { 제약사명: "한미약품", 제출처법인명: "", 담당자: "", 이메일: "", 전화번호: "", 팩스: "", 추가수수료: "", 비고: "" },
+    ];
+    const ws = XLSX.utils.json_to_sheet(sample);
+    ws["!cols"] = [{ wch: 16 }, { wch: 18 }, { wch: 10 }, { wch: 24 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 20 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "제출처");
+    const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    const blob = new Blob([buf], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "제출처업로드_양식.xlsx";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const errorRows = preview.filter((r) => r._error);
+  const validCount = preview.length - errorRows.length;
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-lg border border-gray-200 p-6">
+        <div className="flex items-start justify-between mb-5">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-800">제출처 일괄 업로드</h2>
+            <p className="text-xs text-gray-400 mt-0.5">엑셀 파일로 제약사별 제출처(담당자·이메일·법인명·추가수수료)를 한 번에 등록·수정합니다.</p>
+          </div>
+          <button onClick={downloadTemplate} className="flex items-center gap-1.5 text-xs text-blue-600 border border-blue-200 hover:bg-blue-50 rounded px-3 py-2">
+            <Download className="w-3.5 h-3.5" />양식 내려받기
+          </button>
+        </div>
+
+        <div className="bg-blue-50 border border-blue-100 rounded-md p-4 mb-5 text-xs text-blue-800 space-y-1">
+          <div className="font-medium mb-1">엑셀 파일 열 순서 (첫 행이 헤더)</div>
+          <div className="grid grid-cols-4 gap-1.5 font-mono text-[11px]">
+            <span className="bg-blue-100 rounded px-1.5 py-0.5">제약사명 *</span>
+            <span className="bg-blue-100 rounded px-1.5 py-0.5">제출처법인명</span>
+            <span className="bg-blue-100 rounded px-1.5 py-0.5">담당자</span>
+            <span className="bg-blue-100 rounded px-1.5 py-0.5">이메일</span>
+            <span className="bg-blue-100 rounded px-1.5 py-0.5">전화번호</span>
+            <span className="bg-blue-100 rounded px-1.5 py-0.5">팩스</span>
+            <span className="bg-blue-100 rounded px-1.5 py-0.5">추가수수료</span>
+            <span className="bg-blue-100 rounded px-1.5 py-0.5">비고</span>
+          </div>
+          <div className="text-blue-600 mt-1">• 제약사명이 같은 기존 행은 덮어씁니다 (upsert). 추가수수료는 숫자만 (예: 2.5 → 2.5%)</div>
+        </div>
+
+        <div
+          className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
+            file ? "border-blue-400 bg-blue-50/40" : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"
+          }`}
+          onClick={() => inputRef.current?.click()}
+        >
+          <input ref={inputRef} type="file" accept=".xlsx,.xls" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) parseFile(f); e.target.value = ""; }} />
+          {file ? (
+            <div className="space-y-1">
+              <FileSpreadsheet className="w-8 h-8 text-blue-500 mx-auto" />
+              <p className="text-sm font-medium text-blue-700">{file.name}</p>
+              <p className="text-xs text-gray-400">{preview.length}행 파싱됨 (유효 {validCount}행{errorRows.length > 0 ? `, 오류 ${errorRows.length}행` : ""})</p>
+              <button
+                type="button"
+                onClick={(ev) => { ev.stopPropagation(); setFile(null); setPreview([]); setResult(null); }}
+                className="text-xs text-red-500 hover:text-red-700 mt-1"
+              >파일 제거</button>
+            </div>
+          ) : (
+            <div className="space-y-1">
+              <Upload className="w-8 h-8 text-gray-300 mx-auto" />
+              <p className="text-sm text-gray-500">엑셀 파일을 클릭하거나 끌어다 놓으세요</p>
+              <p className="text-xs text-gray-400">.xlsx / .xls</p>
+            </div>
+          )}
+        </div>
+
+        {parseError && <p className="mt-3 text-sm text-red-600 bg-red-50 border border-red-100 rounded px-3 py-2">{parseError}</p>}
+      </div>
+
+      {preview.length > 0 && (
+        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold text-gray-800">미리보기 ({preview.length}행)</h3>
+              <p className="text-xs text-gray-400 mt-0.5">업로드 전 내용을 확인하세요. {errorRows.length > 0 ? `오류 ${errorRows.length}행은 건너뜁니다.` : ""}</p>
+            </div>
+            <button
+              onClick={doUpload}
+              disabled={uploading || validCount === 0}
+              className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-300 flex items-center gap-2"
+            >
+              {uploading ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" />업로드 중...</> : <><Upload className="w-3.5 h-3.5" />{validCount}행 업로드</>}
+            </button>
+          </div>
+          <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-gray-50">
+                <tr className="text-gray-500 font-semibold">
+                  <th className="px-3 py-2.5 text-left w-8">#</th>
+                  <th className="px-3 py-2.5 text-left">제약사명</th>
+                  <th className="px-3 py-2.5 text-left">제출처법인명</th>
+                  <th className="px-3 py-2.5 text-left">담당자</th>
+                  <th className="px-3 py-2.5 text-left">이메일</th>
+                  <th className="px-3 py-2.5 text-left">전화</th>
+                  <th className="px-3 py-2.5 text-left">팩스</th>
+                  <th className="px-3 py-2.5 text-right">추가수수료</th>
+                  <th className="px-3 py-2.5 text-left">비고</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {preview.map((row, i) => (
+                  <tr key={i} className={row._error ? "bg-red-50" : "hover:bg-gray-50"}>
+                    <td className="px-3 py-2 text-gray-400">{i + 1}</td>
+                    <td className="px-3 py-2 font-medium text-gray-900">
+                      {row.companyName || <span className="text-red-400">(없음)</span>}
+                      {row._error && <div className="text-[10px] text-red-500">{row._error}</div>}
+                    </td>
+                    <td className="px-3 py-2 text-gray-600">{row.submissionEntity || <span className="text-gray-300">-</span>}</td>
+                    <td className="px-3 py-2 text-gray-600">{row.contactName || <span className="text-gray-300">-</span>}</td>
+                    <td className="px-3 py-2 text-gray-600">{row.email || <span className="text-gray-300">-</span>}</td>
+                    <td className="px-3 py-2 text-gray-600">{row.phone || <span className="text-gray-300">-</span>}</td>
+                    <td className="px-3 py-2 text-gray-600">{row.fax || <span className="text-gray-300">-</span>}</td>
+                    <td className="px-3 py-2 text-right text-gray-700 font-mono">{row.defaultAdditionalRate ? `${row.defaultAdditionalRate}%` : <span className="text-gray-300">-</span>}</td>
+                    <td className="px-3 py-2 text-gray-500">{row.notes || <span className="text-gray-300">-</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {result && (
+        <div className={`rounded-lg border p-4 ${result.errors.length > 0 ? "bg-yellow-50 border-yellow-200" : "bg-green-50 border-green-200"}`}>
+          <div className="flex items-center gap-2 mb-2">
+            {result.errors.length > 0
+              ? <AlertCircle className="w-4 h-4 text-yellow-600" />
+              : <CheckCircle className="w-4 h-4 text-green-600" />}
+            <span className="text-sm font-medium text-gray-800">
+              신규 등록 {result.created}건 · 수정 {result.updated}건
+              {result.errors.length > 0 ? ` · 오류 ${result.errors.length}건` : " 완료"}
+            </span>
+          </div>
+          {result.errors.length > 0 && (
+            <ul className="text-xs text-red-700 space-y-0.5 ml-6 list-disc">
+              {result.errors.map((e, i) => <li key={i}>{e}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MembersTab() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -909,6 +1165,7 @@ const statusOptions = [
 
 function FilterReqsTab() {
   const [reqs, setReqs] = useState<FilterReq[]>([]);
+  const [subs, setSubs] = useState<Map<string, CompanySubmission>>(new Map());
   const [loading, setLoading] = useState(true);
   const [replyDraft, setReplyDraft] = useState<Record<string, string>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -917,13 +1174,22 @@ function FilterReqsTab() {
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState(1);
 
-  useEffect(() => { fetchReqs(); }, []);
+  useEffect(() => { fetchAll(); }, []);
+
+  async function fetchAll() {
+    setLoading(true);
+    const [r1, r2] = await Promise.all([
+      fetch("/api/filter-request").then((r) => r.json()),
+      fetch("/api/admin/company-submissions").then((r) => r.json()),
+    ]);
+    setReqs(Array.isArray(r1) ? r1 : []);
+    setSubs(new Map(Array.isArray(r2) ? r2.map((s: CompanySubmission) => [s.companyName, s]) : []));
+    setLoading(false);
+  }
 
   async function fetchReqs() {
-    setLoading(true);
     const res = await fetch("/api/filter-request");
     setReqs(await res.json());
-    setLoading(false);
   }
 
   async function updateStatus(id: string, status: string) {
@@ -978,19 +1244,31 @@ function FilterReqsTab() {
   function handlePageSizeChange(v: number) { setPageSize(v); setPage(1); }
 
   function exportExcel() {
-    const rows = filtered.map((r) => ({
-      영업사원명: r.user.name || r.userName,
-      아이디: r.user.email,
-      거래처명: r.clientName,
-      사업자번호: r.bizNumber,
-      "요청 제약사": r.companyName,
-      요청일: new Date(r.createdAt).toLocaleString("ko-KR"),
-      상태: statusOptions.find((s) => s.value === r.status)?.label || r.status,
-      회신: r.replyText || "",
-      회신일: r.repliedAt ? new Date(r.repliedAt).toLocaleString("ko-KR") : "",
-    }));
+    const rows = filtered.map((r) => {
+      const sub = subs.get(r.companyName);
+      return {
+        영업사원명: r.user.name || r.userName,
+        아이디: r.user.email,
+        거래처명: r.clientName,
+        사업자번호: r.bizNumber,
+        "요청 제약사": r.companyName,
+        "제출처 법인명": sub?.submissionEntity || "",
+        "제출처 담당자": sub?.contactName || "",
+        "제출처 이메일": sub?.email || "",
+        "제출처 전화": sub?.phone || "",
+        "추가수수료(%)": sub?.defaultAdditionalRate ?? "",
+        요청일: new Date(r.createdAt).toLocaleString("ko-KR"),
+        상태: statusOptions.find((s) => s.value === r.status)?.label || r.status,
+        회신: r.replyText || "",
+        회신일: r.repliedAt ? new Date(r.repliedAt).toLocaleString("ko-KR") : "",
+      };
+    });
     const ws = XLSX.utils.json_to_sheet(rows);
-    ws["!cols"] = [{ wch: 10 }, { wch: 24 }, { wch: 18 }, { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 10 }, { wch: 40 }, { wch: 18 }];
+    ws["!cols"] = [
+      { wch: 10 }, { wch: 24 }, { wch: 18 }, { wch: 14 }, { wch: 18 },
+      { wch: 16 }, { wch: 12 }, { wch: 24 }, { wch: 16 }, { wch: 12 },
+      { wch: 18 }, { wch: 10 }, { wch: 40 }, { wch: 18 },
+    ];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "필터링요청");
     const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
@@ -1075,6 +1353,7 @@ function FilterReqsTab() {
               <th className="px-4 py-3 text-left">거래처명</th>
               <th className="px-4 py-3 text-left">사업자번호</th>
               <th className="px-4 py-3 text-left">요청 제약사</th>
+              <th className="px-4 py-3 text-left">제출처</th>
               <th className="px-4 py-3 text-center">요청일</th>
               <th className="px-4 py-3 text-center">상태</th>
               <th className="px-4 py-3 text-left min-w-[280px]">회신</th>
@@ -1084,6 +1363,7 @@ function FilterReqsTab() {
             {pageRows.map((req) => {
               const statusOpt = statusOptions.find((s) => s.value === req.status) || statusOptions[0];
               const draft = replyDraft[req.id] ?? "";
+              const sub = subs.get(req.companyName);
               return (
                 <tr key={req.id} className="hover:bg-gray-50 align-top">
                   <td className="px-4 py-3 font-medium text-gray-900">{req.user.name || req.userName}</td>
@@ -1091,6 +1371,20 @@ function FilterReqsTab() {
                   <td className="px-4 py-3 text-gray-700">{req.clientName}</td>
                   <td className="px-4 py-3 text-gray-500 text-xs font-mono">{req.bizNumber}</td>
                   <td className="px-4 py-3 text-gray-800">{req.companyName}</td>
+                  <td className="px-4 py-3 text-xs">
+                    {sub ? (
+                      <div className="space-y-0.5">
+                        {sub.submissionEntity && <div className="font-medium text-gray-800">{sub.submissionEntity}</div>}
+                        {sub.contactName && <div className="text-gray-500">{sub.contactName}</div>}
+                        {sub.email && <div className="text-blue-600 truncate max-w-[140px]">{sub.email}</div>}
+                        {sub.defaultAdditionalRate != null && (
+                          <div className="text-emerald-600 font-medium">+{sub.defaultAdditionalRate}%</div>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-gray-300 text-[11px]">미등록</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-center text-gray-400 text-xs">{new Date(req.createdAt).toLocaleDateString("ko-KR")}</td>
                   <td className="px-4 py-3 text-center">
                     <select
@@ -1158,7 +1452,7 @@ function FilterReqsTab() {
               );
             })}
             {pageRows.length === 0 && (
-              <tr><td colSpan={8} className="py-12 text-center text-gray-400 text-sm">
+              <tr><td colSpan={9} className="py-12 text-center text-gray-400 text-sm">
                 {query ? "검색 결과가 없어요." : "요청 내역이 없어요."}
               </td></tr>
             )}
@@ -1207,15 +1501,17 @@ function FilterReqsTab() {
 
 interface CompanySubmission {
   companyName: string;
+  submissionEntity: string | null;
   contactName: string | null;
   email: string | null;
   phone: string | null;
   fax: string | null;
+  defaultAdditionalRate: number | null;
   notes: string | null;
 }
 
 const emptySubmission = (): Omit<CompanySubmission, "companyName"> & { companyName: string } => ({
-  companyName: "", contactName: "", email: "", phone: "", fax: "", notes: "",
+  companyName: "", submissionEntity: "", contactName: "", email: "", phone: "", fax: "", defaultAdditionalRate: null, notes: "",
 });
 
 // ─────────────────────────────────────────────
@@ -1470,7 +1766,7 @@ function BulkSubmissionTab() {
                   >{bulkingName === companyName ? "처리중..." : `${pendingCount}건 확인중 표시`}</button>
                 )}
                 <button
-                  onClick={() => setEditSub(sub ? { ...sub } : { companyName, contactName: "", email: "", phone: "", fax: "", notes: "", isNew: true })}
+                  onClick={() => setEditSub(sub ? { ...sub } : { companyName, submissionEntity: "", contactName: "", email: "", phone: "", fax: "", defaultAdditionalRate: null, notes: "", isNew: true })}
                   className="text-xs bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 rounded px-2.5 py-1.5 flex items-center gap-1"
                 ><Inbox className="w-3 h-3" />{sub ? "제출처 수정" : "제출처 등록"}</button>
               </div>
@@ -1700,7 +1996,9 @@ function CompanySubmissionsTab() {
             <thead>
               <tr className="bg-gray-50 text-xs text-gray-500 font-semibold">
                 <th className="px-4 py-3 text-left">제약사명</th>
+                <th className="px-4 py-3 text-left">제출처 법인명</th>
                 <th className="px-4 py-3 text-left">담당자명</th>
+                <th className="px-4 py-3 text-right">추가수수료</th>
                 <th className="px-4 py-3 text-left">이메일</th>
                 <th className="px-4 py-3 text-left">전화번호</th>
                 <th className="px-4 py-3 text-left">팩스</th>
@@ -1712,7 +2010,11 @@ function CompanySubmissionsTab() {
               {filtered.map((row) => (
                 <tr key={row.companyName} className="hover:bg-gray-50 align-top">
                   <td className="px-4 py-3 font-medium text-gray-900">{row.companyName}</td>
+                  <td className="px-4 py-3 text-gray-600 text-xs">{row.submissionEntity || <span className="text-gray-300">-</span>}</td>
                   <td className="px-4 py-3 text-gray-700">{row.contactName || <span className="text-gray-300">-</span>}</td>
+                  <td className="px-4 py-3 text-right text-xs font-mono text-emerald-600 font-medium">
+                    {row.defaultAdditionalRate != null ? `${row.defaultAdditionalRate}%` : <span className="text-gray-300">-</span>}
+                  </td>
                   <td className="px-4 py-3 text-gray-600 text-xs">
                     {row.email ? (
                       <a href={`mailto:${row.email}`} className="flex items-center gap-1 text-blue-600 hover:underline">
@@ -1743,7 +2045,7 @@ function CompanySubmissionsTab() {
                 </tr>
               ))}
               {filtered.length === 0 && (
-                <tr><td colSpan={7} className="py-12 text-center text-gray-400 text-sm">
+                <tr><td colSpan={9} className="py-12 text-center text-gray-400 text-sm">
                   {query ? "검색 결과가 없어요." : "등록된 제출처 정보가 없어요. 제약사를 추가해 주세요."}
                 </td></tr>
               )}
@@ -1771,13 +2073,36 @@ function CompanySubmissionsTab() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">담당자명</label>
+                <label className="block text-xs font-medium text-gray-700 mb-1">제출처 법인명</label>
                 <input
-                  value={editRow.contactName || ""}
-                  onChange={(e) => setEditRow((p) => p ? { ...p, contactName: e.target.value } : p)}
-                  placeholder="예) 홍길동"
+                  value={editRow.submissionEntity || ""}
+                  onChange={(e) => setEditRow((p) => p ? { ...p, submissionEntity: e.target.value } : p)}
+                  placeholder="예) 동아쏘시오홀딩스 (제약사와 다를 때만)"
                   className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
                 />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">담당자명</label>
+                  <input
+                    value={editRow.contactName || ""}
+                    onChange={(e) => setEditRow((p) => p ? { ...p, contactName: e.target.value } : p)}
+                    placeholder="예) 홍길동"
+                    className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">기본 추가수수료 (%)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    value={editRow.defaultAdditionalRate ?? ""}
+                    onChange={(e) => setEditRow((p) => p ? { ...p, defaultAdditionalRate: e.target.value !== "" ? Number(e.target.value) : null } : p)}
+                    placeholder="예) 2.5"
+                    className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  />
+                </div>
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">이메일</label>
@@ -1815,7 +2140,7 @@ function CompanySubmissionsTab() {
                   value={editRow.notes || ""}
                   onChange={(e) => setEditRow((p) => p ? { ...p, notes: e.target.value } : p)}
                   placeholder="메모 (선택)"
-                  rows={3}
+                  rows={2}
                   className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
                 />
               </div>

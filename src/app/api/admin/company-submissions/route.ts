@@ -26,11 +26,14 @@ export async function POST(req: NextRequest) {
     if (!companyName) {
       return NextResponse.json({ error: "제약사명 필수" }, { status: 400 });
     }
+    const rawRate = body?.defaultAdditionalRate;
     const data = {
+      submissionEntity: body?.submissionEntity?.trim() || null,
       contactName: body?.contactName?.trim() || null,
       email: body?.email?.trim() || null,
       phone: body?.phone?.trim() || null,
       fax: body?.fax?.trim() || null,
+      defaultAdditionalRate: rawRate != null && rawRate !== "" ? Number(rawRate) : null,
       notes: body?.notes?.trim() || null,
     };
     const row = await prisma.companySubmission.upsert({
