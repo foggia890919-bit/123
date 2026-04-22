@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useRef, useMemo } from "react";
+import { useState, useRef, useMemo, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { Upload, Trash2, FileSpreadsheet, FileDown, X, RefreshCw, AlertCircle, Loader2, Search } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Upload, Trash2, FileSpreadsheet, FileDown, X, AlertCircle, Loader2, Search, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatPrice } from "@/lib/utils";
@@ -19,6 +20,13 @@ interface SwapRow {
   alternative: MedicationItem | null; // 사용자가 선택한 대체품
 }
 
+interface UserClient {
+  id: string;
+  clientName: string;
+  bizNumber: string;
+  approved: boolean;
+}
+
 function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
@@ -33,19 +41,40 @@ export default function BulkRegisterPage() {
 
 function BulkRegisterInner() {
   const { data: session } = useSession();
+  const router = useRouter();
   const userId = session?.user?.id;
   const userRole = session?.user?.role;
   const isSalesRep = hasRole(userRole, "SALES_REP");
 
   const [title, setTitle] = useState("대체제안서");
   const [clientName, setClientName] = useState("");
+  const [clients, setClients] = useState<UserClient[]>([]);
+  const [selectedClientId, setSelectedClientId] = useState<string>("");
   const [rows, setRows] = useState<SwapRow[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [lastSummary, setLastSummary] = useState<{ total: number; matched: number; unmatched: number } | null>(null);
   const [altModal, setAltModal] = useState<{ rowId: string; row: SwapRow } | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!userId) return;
+    fetch(`/api/user-clients?userId=${userId}`)
+      .then((r) => r.json())
+      .then((d) => { if (Array.isArray(d)) setClients(d); })
+      .catch(() => {});
+  }, [userId]);
+
+  // 선택한 거래처명 자동으로 clientName 입력칸에 채워줌 (출력용)
+  useEffect(() => {
+    if (!selectedClientId) return;
+    const c = clients.find((c) => c.id === selectedClientId);
+    if (c) setClientName(c.clientName);
+  }, [selectedClientId, clients]);
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -193,6 +222,43 @@ function BulkRegisterInner() {
     downloadBlob(blob, filename);
   }
 
+  async function saveAsProposal() {
+    if (!userId) return;
+    if (rows.length === 0) return;
+    setSaveError("");
+    setSaving(true);
+    try {
+      const items = rows.map((r) => ({
+        originalMedicationId: r.original?.id ?? null,
+        altMedicationId: r.alternative?.id ?? null,
+        originalCode: r.originalCode,
+      }));
+      const res = await fetch("/api/proposals/bulk-save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: title.trim() || "대체제안서",
+          userId,
+          clientId: selectedClientId || null,
+          items,
+        }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setSaveError(d?.error || "저장 실패");
+        return;
+      }
+      const data = await res.json() as { id: string };
+      setSaveModalOpen(false);
+      // 저장된 제안서로 이동 → 필터링 가능
+      router.push(`/proposals?id=${data.id}`);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "저장 실패");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function exportPDF() {
     if (rows.length === 0) return;
     setExporting(true);
@@ -336,7 +402,11 @@ function BulkRegisterInner() {
                 거래처의 기존 품목 보험코드를 엑셀 A열에 넣어 업로드하고, 각 품목에 대해 대체할 품목을 선택해서 PDF·Excel로 출력하세요.
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button size="sm" onClick={() => setSaveModalOpen(true)} disabled={rows.length === 0}
+                className="bg-blue-600 hover:bg-blue-700 text-white">
+                <Save className="w-4 h-4 mr-1" /> 제안서로 저장
+              </Button>
               <Button variant="outline" size="sm" onClick={exportExcel} disabled={rows.length === 0}>
                 <FileSpreadsheet className="w-4 h-4 mr-1" /> Excel
               </Button>
@@ -346,13 +416,28 @@ function BulkRegisterInner() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
             <div>
               <label className="text-xs font-medium text-gray-600 mb-1 block">제목</label>
               <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="대체제안서 제목" />
             </div>
             <div>
-              <label className="text-xs font-medium text-gray-600 mb-1 block">거래처명 (선택)</label>
+              <label className="text-xs font-medium text-gray-600 mb-1 block">거래처 (제안서 저장용)</label>
+              <select
+                value={selectedClientId}
+                onChange={(e) => setSelectedClientId(e.target.value)}
+                className="w-full h-9 px-3 border border-gray-300 rounded-md text-sm bg-white"
+              >
+                <option value="">거래처 미지정</option>
+                {clients.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.clientName}{!c.approved ? " (승인전)" : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600 mb-1 block">거래처명 (PDF/Excel 표기)</label>
               <Input value={clientName} onChange={(e) => setClientName(e.target.value)} placeholder="예: 행복약국" />
             </div>
           </div>
@@ -511,6 +596,64 @@ function BulkRegisterInner() {
             onSelect: (med) => assignAlternative(altModal.rowId, med),
           }}
         />
+      )}
+
+      {saveModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <div>
+                <h2 className="font-bold text-gray-900">제안서로 저장</h2>
+                <p className="text-xs text-gray-500 mt-0.5">현재 {rows.length}개 품목을 제안서 목록에 저장합니다.</p>
+              </div>
+              <button onClick={() => setSaveModalOpen(false)} className="text-gray-400 hover:text-gray-600 p-1">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div>
+                <label className="text-xs font-medium text-gray-600 mb-1 block">제안서 제목</label>
+                <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="대체제안서 제목" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600 mb-1 block">거래처</label>
+                <select
+                  value={selectedClientId}
+                  onChange={(e) => setSelectedClientId(e.target.value)}
+                  className="w-full h-9 px-3 border border-gray-300 rounded-md text-sm bg-white"
+                >
+                  <option value="">거래처 미지정</option>
+                  {clients.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.clientName}{!c.approved ? " (승인전)" : ""}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-gray-400 mt-1">거래처를 지정해야 저장 후 필터링 요청이 가능합니다.</p>
+              </div>
+              <div className="bg-gray-50 rounded-md p-3 text-xs text-gray-600 space-y-1">
+                <div>총 품목: <strong className="text-gray-900">{stats.total}</strong>건</div>
+                <div>매칭된 기존품목: <strong className="text-emerald-700">{stats.matched}</strong>건 · 대체 선택: <strong className="text-blue-700">{stats.withAlt}</strong>건</div>
+                {stats.unmatched > 0 && <div className="text-orange-700">미매칭 {stats.unmatched}건은 보험코드만 기록됩니다.</div>}
+              </div>
+              {saveError && (
+                <div className="flex items-start gap-2 bg-red-50 text-red-700 border border-red-200 rounded-md px-3 py-2 text-xs">
+                  <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" /> {saveError}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-3 border-t border-gray-100 bg-gray-50 rounded-b-xl">
+              <Button variant="outline" size="sm" onClick={() => setSaveModalOpen(false)} disabled={saving}>
+                취소
+              </Button>
+              <Button size="sm" onClick={saveAsProposal} disabled={saving || !title.trim()}
+                className="bg-blue-600 hover:bg-blue-700 text-white">
+                {saving ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Save className="w-4 h-4 mr-1" />}
+                저장하고 제안서로 이동
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
