@@ -603,6 +603,10 @@ function SubmissionUploadTab() {
   const [batchSaving, setBatchSaving] = useState(false);
   const [result, setResult] = useState<{ created: number; updated: number; errors: string[] } | null>(null);
   const [deletingName, setDeletingName] = useState<string | null>(null);
+  const [currentEdits, setCurrentEdits] = useState<Record<string, CompanySubmission>>({});
+  const [currentSavingName, setCurrentSavingName] = useState<string | null>(null);
+  const [currentSavedSet, setCurrentSavedSet] = useState<Set<string>>(new Set());
+  const [newCurrentRow, setNewCurrentRow] = useState<CompanySubmission | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { loadCurrent(); }, []);
@@ -759,6 +763,82 @@ function SubmissionUploadTab() {
     setDeletingName(null);
   }
 
+  function updateCurrentField(companyName: string, field: keyof CompanySubmission, value: string) {
+    const base = currentEdits[companyName] ?? current.find((r) => r.companyName === companyName) ?? { companyName, submissionEntity: null, contactName: null, email: null, phone: null, fax: null, defaultAdditionalRate: null, notes: null };
+    setCurrentEdits((prev) => ({ ...prev, [companyName]: { ...base, [field]: value } }));
+    setCurrentSavedSet((prev) => { const n = new Set(prev); n.delete(companyName); return n; });
+  }
+
+  function updateNewCurrentField(field: keyof CompanySubmission, value: string) {
+    setNewCurrentRow((prev) => prev ? { ...prev, [field]: value } : prev);
+  }
+
+  async function saveCurrentRow(companyName: string) {
+    const edited = currentEdits[companyName];
+    if (!edited) return;
+    const name = edited.companyName.trim();
+    if (!name) { alert("제약사명은 필수에요."); return; }
+    setCurrentSavingName(companyName);
+    const res = await fetch("/api/admin/company-submissions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        companyName: name,
+        submissionEntity: edited.submissionEntity || null,
+        contactName: edited.contactName || null,
+        email: edited.email || null,
+        phone: edited.phone || null,
+        fax: edited.fax || null,
+        defaultAdditionalRate: edited.defaultAdditionalRate != null && String(edited.defaultAdditionalRate) !== "" ? Number(edited.defaultAdditionalRate) : null,
+        notes: edited.notes || null,
+      }),
+    });
+    if (res.ok) {
+      const saved: CompanySubmission = await res.json();
+      setCurrent((prev) => {
+        const idx = prev.findIndex((r) => r.companyName === saved.companyName);
+        return idx >= 0 ? prev.map((r, i) => i === idx ? saved : r) : [...prev, saved].sort((a, b) => a.companyName.localeCompare(b.companyName));
+      });
+      setCurrentEdits((prev) => { const n = { ...prev }; delete n[companyName]; return n; });
+      setCurrentSavedSet((prev) => new Set([...prev, name]));
+    } else {
+      const data = await res.json().catch(() => ({}));
+      alert(`저장 실패: ${data.error || "알 수 없는 오류"}`);
+    }
+    setCurrentSavingName(null);
+  }
+
+  async function saveNewCurrentRow() {
+    if (!newCurrentRow) return;
+    const name = newCurrentRow.companyName.trim();
+    if (!name) { alert("제약사명은 필수에요."); return; }
+    setCurrentSavingName("__new__");
+    const res = await fetch("/api/admin/company-submissions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        companyName: name,
+        submissionEntity: newCurrentRow.submissionEntity || null,
+        contactName: newCurrentRow.contactName || null,
+        email: newCurrentRow.email || null,
+        phone: newCurrentRow.phone || null,
+        fax: newCurrentRow.fax || null,
+        defaultAdditionalRate: newCurrentRow.defaultAdditionalRate != null && String(newCurrentRow.defaultAdditionalRate) !== "" ? Number(newCurrentRow.defaultAdditionalRate) : null,
+        notes: newCurrentRow.notes || null,
+      }),
+    });
+    if (res.ok) {
+      const saved: CompanySubmission = await res.json();
+      setCurrent((prev) => [...prev, saved].sort((a, b) => a.companyName.localeCompare(b.companyName)));
+      setNewCurrentRow(null);
+      setCurrentSavedSet((prev) => new Set([...prev, name]));
+    } else {
+      const data = await res.json().catch(() => ({}));
+      alert(`저장 실패: ${data.error || "알 수 없는 오류"}`);
+    }
+    setCurrentSavingName(null);
+  }
+
   function downloadTemplate() {
     const sample = [
       { 제약사명: "동아ST", 제출처법인명: "동아쏘시오홀딩스", 담당자: "홍길동", 이메일: "contact@donga.com", 전화번호: "02-1234-5678", 팩스: "02-1234-5679", 추가수수료: "2.5", 비고: "" },
@@ -903,6 +983,10 @@ function SubmissionUploadTab() {
                   className="h-8 w-52 border border-gray-200 rounded pl-8 pr-3 text-xs focus:outline-none focus:ring-2 focus:ring-blue-400"
                 />
               </div>
+              <button
+                onClick={() => { setNewCurrentRow({ companyName: "", submissionEntity: null, contactName: null, email: null, phone: null, fax: null, defaultAdditionalRate: null, notes: null }); setViewTab("current"); }}
+                className="text-xs text-gray-600 border border-gray-200 hover:bg-gray-50 rounded px-2 py-1.5 flex items-center gap-1"
+              ><Plus className="w-3 h-3" />행 추가</button>
               <button onClick={loadCurrent} className="text-xs text-gray-500 hover:text-gray-800 border border-gray-200 rounded px-2 py-1.5 flex items-center gap-1">
                 <RefreshCw className="w-3 h-3" />새로고침
               </button>
@@ -991,44 +1075,86 @@ function SubmissionUploadTab() {
             </div>
           ) : (
             <div className="overflow-x-auto max-h-[560px] overflow-y-auto">
-              <table className="w-full text-xs min-w-[1100px]">
+              <table className="w-full text-xs min-w-[1200px]">
                 <thead className="sticky top-0 bg-gray-50 z-10">
                   <tr className="text-gray-500 font-semibold">
-                    <th className="px-3 py-2.5 text-left w-[160px]">제약사명</th>
-                    <th className="px-3 py-2.5 text-left w-[160px]">제출처법인명</th>
-                    <th className="px-3 py-2.5 text-left w-[100px]">담당자</th>
-                    <th className="px-3 py-2.5 text-left w-[200px]">이메일</th>
-                    <th className="px-3 py-2.5 text-left w-[120px]">전화</th>
-                    <th className="px-3 py-2.5 text-left w-[120px]">팩스</th>
-                    <th className="px-3 py-2.5 text-right w-[80px]">수수료%</th>
-                    <th className="px-3 py-2.5 text-left">비고</th>
-                    <th className="px-3 py-2.5 text-center w-[60px]">관리</th>
+                    <th className="px-2 py-2.5 text-left w-[160px]">제약사명 *</th>
+                    <th className="px-2 py-2.5 text-left w-[150px]">제출처법인명</th>
+                    <th className="px-2 py-2.5 text-left w-[100px]">담당자</th>
+                    <th className="px-2 py-2.5 text-left w-[190px]">이메일</th>
+                    <th className="px-2 py-2.5 text-left w-[120px]">전화</th>
+                    <th className="px-2 py-2.5 text-left w-[110px]">팩스</th>
+                    <th className="px-2 py-2.5 text-right w-[80px]">수수료%</th>
+                    <th className="px-2 py-2.5 text-left">비고</th>
+                    <th className="px-2 py-2.5 text-center w-[90px]">저장</th>
+                    <th className="px-2 py-2.5 text-center w-[50px]">삭제</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {currentFiltered.map((r) => (
-                    <tr key={r.companyName} className="hover:bg-gray-50">
-                      <td className="px-3 py-2 font-medium text-gray-900">{r.companyName}</td>
-                      <td className="px-3 py-2 text-gray-700">{r.submissionEntity || <span className="text-gray-300">-</span>}</td>
-                      <td className="px-3 py-2 text-gray-600">{r.contactName || <span className="text-gray-300">-</span>}</td>
-                      <td className="px-3 py-2 text-blue-600">{r.email ? <a href={`mailto:${r.email}`} className="hover:underline">{r.email}</a> : <span className="text-gray-300">-</span>}</td>
-                      <td className="px-3 py-2 text-gray-600">{r.phone || <span className="text-gray-300">-</span>}</td>
-                      <td className="px-3 py-2 text-gray-500">{r.fax || <span className="text-gray-300">-</span>}</td>
-                      <td className="px-3 py-2 text-right font-mono text-emerald-600">
-                        {r.defaultAdditionalRate != null ? `${r.defaultAdditionalRate}%` : <span className="text-gray-300">-</span>}
+                  {newCurrentRow && (
+                    <tr className="bg-blue-50/60">
+                      <td className="px-1 py-1 align-middle">
+                        <input value={newCurrentRow.companyName} onChange={(e) => updateNewCurrentField("companyName", e.target.value)} className={`${inputCls} font-medium text-gray-900`} placeholder="제약사명 (필수)" />
                       </td>
-                      <td className="px-3 py-2 text-gray-500 truncate max-w-[200px]">{r.notes || <span className="text-gray-300">-</span>}</td>
-                      <td className="px-3 py-2 text-center">
+                      <td className="px-1 py-1 align-middle"><input value={newCurrentRow.submissionEntity || ""} onChange={(e) => updateNewCurrentField("submissionEntity", e.target.value)} className={inputCls} /></td>
+                      <td className="px-1 py-1 align-middle"><input value={newCurrentRow.contactName || ""} onChange={(e) => updateNewCurrentField("contactName", e.target.value)} className={inputCls} /></td>
+                      <td className="px-1 py-1 align-middle"><input type="email" value={newCurrentRow.email || ""} onChange={(e) => updateNewCurrentField("email", e.target.value)} className={inputCls} /></td>
+                      <td className="px-1 py-1 align-middle"><input value={newCurrentRow.phone || ""} onChange={(e) => updateNewCurrentField("phone", e.target.value)} className={inputCls} /></td>
+                      <td className="px-1 py-1 align-middle"><input value={newCurrentRow.fax || ""} onChange={(e) => updateNewCurrentField("fax", e.target.value)} className={inputCls} /></td>
+                      <td className="px-1 py-1 align-middle"><input value={String(newCurrentRow.defaultAdditionalRate ?? "")} onChange={(e) => updateNewCurrentField("defaultAdditionalRate", e.target.value)} className={`${inputCls} text-right font-mono`} placeholder="0" /></td>
+                      <td className="px-1 py-1 align-middle"><input value={newCurrentRow.notes || ""} onChange={(e) => updateNewCurrentField("notes", e.target.value)} className={inputCls} /></td>
+                      <td className="px-1 py-1 text-center align-middle">
                         <button
-                          onClick={() => deleteCurrent(r.companyName)}
-                          disabled={deletingName === r.companyName}
-                          className="text-[11px] text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 disabled:opacity-40"
-                        >{deletingName === r.companyName ? "..." : "삭제"}</button>
+                          onClick={saveNewCurrentRow}
+                          disabled={currentSavingName === "__new__" || !newCurrentRow.companyName.trim()}
+                          className="text-[11px] px-2 py-1 rounded font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400"
+                        >{currentSavingName === "__new__" ? "..." : "저장"}</button>
+                      </td>
+                      <td className="px-1 py-1 text-center align-middle">
+                        <button onClick={() => setNewCurrentRow(null)} className="text-gray-300 hover:text-red-500"><X className="w-3.5 h-3.5" /></button>
                       </td>
                     </tr>
-                  ))}
+                  )}
+                  {currentFiltered.map((r) => {
+                    const display = currentEdits[r.companyName] ?? r;
+                    const hasPending = !!currentEdits[r.companyName];
+                    const isSaved = currentSavedSet.has(r.companyName) && !hasPending;
+                    const isSaving = currentSavingName === r.companyName;
+                    return (
+                      <tr key={r.companyName} className={hasPending ? "bg-amber-50/40" : isSaved ? "bg-emerald-50/40" : "hover:bg-gray-50"}>
+                        <td className="px-1 py-1 align-middle">
+                          <input value={display.companyName} onChange={(e) => updateCurrentField(r.companyName, "companyName", e.target.value)} className={`${inputCls} font-medium text-gray-900`} />
+                        </td>
+                        <td className="px-1 py-1 align-middle"><input value={display.submissionEntity || ""} onChange={(e) => updateCurrentField(r.companyName, "submissionEntity", e.target.value)} className={inputCls} /></td>
+                        <td className="px-1 py-1 align-middle"><input value={display.contactName || ""} onChange={(e) => updateCurrentField(r.companyName, "contactName", e.target.value)} className={inputCls} /></td>
+                        <td className="px-1 py-1 align-middle"><input type="email" value={display.email || ""} onChange={(e) => updateCurrentField(r.companyName, "email", e.target.value)} className={inputCls} /></td>
+                        <td className="px-1 py-1 align-middle"><input value={display.phone || ""} onChange={(e) => updateCurrentField(r.companyName, "phone", e.target.value)} className={inputCls} /></td>
+                        <td className="px-1 py-1 align-middle"><input value={display.fax || ""} onChange={(e) => updateCurrentField(r.companyName, "fax", e.target.value)} className={inputCls} /></td>
+                        <td className="px-1 py-1 align-middle"><input value={display.defaultAdditionalRate != null ? String(display.defaultAdditionalRate) : ""} onChange={(e) => updateCurrentField(r.companyName, "defaultAdditionalRate", e.target.value)} className={`${inputCls} text-right font-mono`} placeholder="0" /></td>
+                        <td className="px-1 py-1 align-middle"><input value={display.notes || ""} onChange={(e) => updateCurrentField(r.companyName, "notes", e.target.value)} className={inputCls} /></td>
+                        <td className="px-1 py-1 text-center align-middle">
+                          <button
+                            onClick={() => saveCurrentRow(r.companyName)}
+                            disabled={!hasPending || isSaving}
+                            className={`text-[11px] px-2 py-1 rounded font-medium ${
+                              isSaved ? "bg-emerald-100 text-emerald-700" :
+                              hasPending ? "bg-blue-600 text-white hover:bg-blue-700" :
+                              "bg-gray-100 text-gray-400 cursor-default"
+                            }`}
+                          >{isSaving ? "..." : isSaved ? "저장됨 ✓" : hasPending ? "저장" : "—"}</button>
+                        </td>
+                        <td className="px-1 py-1 text-center align-middle">
+                          <button
+                            onClick={() => deleteCurrent(r.companyName)}
+                            disabled={deletingName === r.companyName}
+                            className="text-gray-300 hover:text-red-500 disabled:opacity-40"
+                          >{deletingName === r.companyName ? <RefreshCw className="w-3 h-3 animate-spin" /> : <X className="w-3.5 h-3.5" />}</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {currentFiltered.length === 0 && currentQuery && (
-                    <tr><td colSpan={9} className="py-10 text-center text-gray-400 text-sm">검색 결과가 없어요.</td></tr>
+                    <tr><td colSpan={10} className="py-10 text-center text-gray-400 text-sm">검색 결과가 없어요.</td></tr>
                   )}
                 </tbody>
               </table>
