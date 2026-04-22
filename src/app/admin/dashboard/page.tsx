@@ -24,7 +24,7 @@ declare global {
   }
 }
 
-type Tab = "upload" | "submissionUpload" | "members" | "rates" | "filterReqs" | "userClients" | "apiSources" | "notices" | "companySubmissions" | "bulkSubmit";
+type Tab = "upload" | "submissionUpload" | "members" | "rates" | "filterReqs" | "userClients" | "apiSources" | "notices" | "companySubmissions" | "bulkSubmit" | "submissionEntities";
 
 interface MenuItem { key: Tab; label: string; icon: React.ElementType }
 interface MenuGroup { title: string; items: MenuItem[] }
@@ -44,6 +44,7 @@ const MENU_GROUPS: MenuGroup[] = [
       { key: "members", label: "회원관리", icon: Users },
       { key: "rates", label: "추가수수료 관리", icon: Percent },
       { key: "userClients", label: "담당자별 거래처", icon: Building2 },
+      { key: "submissionEntities", label: "제출처(법인) 관리", icon: Inbox },
     ],
   },
   {
@@ -149,6 +150,7 @@ export default function AdminDashboardPage() {
         {tab === "bulkSubmit" && <BulkSubmissionTab />}
         {tab === "companySubmissions" && <CompanySubmissionsTab />}
         {tab === "userClients" && <UserClientsTab />}
+        {tab === "submissionEntities" && <SubmissionEntityTab />}
         {tab === "apiSources" && <ApiSourcesTab />}
       </main>
     </div>
@@ -1909,6 +1911,15 @@ const emptySubmission = (): Omit<CompanySubmission, "companyName"> & { companyNa
   companyName: "", submissionEntity: "", contactName: "", email: "", phone: "", fax: "", defaultAdditionalRate: null, notes: "",
 });
 
+interface SubmissionEntity {
+  name: string;
+  contactName: string | null;
+  email: string | null;
+  phone: string | null;
+  fax: string | null;
+  notes: string | null;
+}
+
 // ─────────────────────────────────────────────
 // 제약사별 일괄제출 탭
 // ─────────────────────────────────────────────
@@ -1918,6 +1929,7 @@ type EditSub = CompanySubmission & { isNew?: boolean };
 function BulkSubmissionTab() {
   const [reqs, setReqs] = useState<FilterReq[]>([]);
   const [subs, setSubs] = useState<CompanySubmission[]>([]);
+  const [entities, setEntities] = useState<SubmissionEntity[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusScope, setStatusScope] = useState<"PENDING" | "ALL" | "OPEN">("PENDING");
   const [query, setQuery] = useState("");
@@ -1925,6 +1937,8 @@ function BulkSubmissionTab() {
   const [editSub, setEditSub] = useState<EditSub | null>(null);
   const [savingSub, setSavingSub] = useState(false);
   const [editSubEntityMode, setEditSubEntityMode] = useState<"select" | "new">("select");
+  const [newEntityForm, setNewEntityForm] = useState<SubmissionEntity | null>(null);
+  const [savingEntity, setSavingEntity] = useState(false);
   const [bulkingName, setBulkingName] = useState<string | null>(null);
   const [copiedName, setCopiedName] = useState<string | null>(null);
   const [kakaoReady, setKakaoReady] = useState(false);
@@ -1949,12 +1963,14 @@ function BulkSubmissionTab() {
 
   async function load() {
     setLoading(true);
-    const [r1, r2] = await Promise.all([
+    const [r1, r2, r3] = await Promise.all([
       fetch("/api/filter-request").then((r) => r.json()),
       fetch("/api/admin/company-submissions").then((r) => r.json()),
+      fetch("/api/admin/submission-entities").then((r) => r.json()),
     ]);
     setReqs(Array.isArray(r1) ? r1 : []);
     setSubs(Array.isArray(r2) ? r2 : []);
+    setEntities(Array.isArray(r3) ? r3 : []);
     setLoading(false);
   }
 
@@ -2051,6 +2067,29 @@ function BulkSubmissionTab() {
     })));
     setReqs((prev) => prev.map((r) => pendingIds.includes(r.id) ? { ...r, status: "REVIEWING" } : r));
     setBulkingName(null);
+  }
+
+  async function saveNewEntity() {
+    if (!newEntityForm) return;
+    const name = newEntityForm.name.trim();
+    if (!name) { alert("법인명은 필수에요."); return; }
+    setSavingEntity(true);
+    const res = await fetch("/api/admin/submission-entities", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(newEntityForm),
+    });
+    if (res.ok) {
+      const saved: SubmissionEntity = await res.json();
+      setEntities((prev) => [...prev.filter((e) => e.name !== saved.name), saved].sort((a, b) => a.name.localeCompare(b.name)));
+      setEditSub((p) => p ? { ...p, submissionEntity: saved.name, contactName: saved.contactName || p.contactName, email: saved.email || p.email, phone: saved.phone || p.phone, fax: saved.fax || p.fax } : p);
+      setEditSubEntityMode("select");
+      setNewEntityForm(null);
+    } else {
+      const data = await res.json().catch(() => ({}));
+      alert(`저장 실패: ${data.error || "알 수 없는 오류"}`);
+    }
+    setSavingEntity(false);
   }
 
   async function saveSubmission() {
@@ -2340,39 +2379,41 @@ function BulkSubmissionTab() {
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-xs font-medium text-gray-700">제출처법인명</label>
-                  {editSubEntityMode === "select" ? (
                     <button
-                      type="button"
-                      onClick={() => { setEditSubEntityMode("new"); setEditSub((p) => p ? { ...p, submissionEntity: "" } : p); }}
-                      className="text-[11px] text-blue-600 hover:underline flex items-center gap-1"
-                    ><Plus className="w-3 h-3" />신규 제출처 직접 입력</button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setEditSubEntityMode("select")}
-                      className="text-[11px] text-gray-500 hover:underline"
-                    >← 기존 목록에서 선택</button>
-                  )}
+                    type="button"
+                    onClick={() => setNewEntityForm({ name: "", contactName: null, email: null, phone: null, fax: null, notes: null })}
+                    className="text-[11px] text-blue-600 hover:underline flex items-center gap-1"
+                  ><Plus className="w-3 h-3" />신규 제출처 등록</button>
                 </div>
-                {editSubEntityMode === "select" ? (
-                  <select
-                    value={editSub.submissionEntity || ""}
-                    onChange={(e) => setEditSub((p) => p ? { ...p, submissionEntity: e.target.value } : p)}
-                    className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
-                  >
-                    <option value="">— 선택 안 함 —</option>
-                    {Array.from(new Set(subs.map((s) => s.submissionEntity).filter(Boolean))).sort().map((entity) => (
-                      <option key={entity!} value={entity!}>{entity}</option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    autoFocus
-                    value={editSub.submissionEntity || ""}
-                    onChange={(e) => setEditSub((p) => p ? { ...p, submissionEntity: e.target.value } : p)}
-                    placeholder="예) 동아쏘시오홀딩스"
-                    className="w-full border border-blue-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  />
+                <select
+                  value={editSub.submissionEntity || ""}
+                  onChange={(e) => {
+                    const entity = entities.find((en) => en.name === e.target.value);
+                    setEditSub((p) => p ? {
+                      ...p,
+                      submissionEntity: e.target.value,
+                      contactName: entity?.contactName ?? p.contactName,
+                      email: entity?.email ?? p.email,
+                      phone: entity?.phone ?? p.phone,
+                      fax: entity?.fax ?? p.fax,
+                    } : p);
+                  }}
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+                >
+                  <option value="">— 선택 안 함 —</option>
+                  {entities.map((en) => (
+                    <option key={en.name} value={en.name}>{en.name}</option>
+                  ))}
+                </select>
+                {editSub.submissionEntity && entities.find((e) => e.name === editSub.submissionEntity) && (
+                  <div className="mt-1.5 text-[11px] text-gray-500 bg-gray-50 rounded px-2 py-1.5 flex flex-wrap gap-x-3">
+                    {entities.find((e) => e.name === editSub.submissionEntity)?.contactName && <span>담당자: {entities.find((e) => e.name === editSub.submissionEntity)?.contactName}</span>}
+                    {entities.find((e) => e.name === editSub.submissionEntity)?.phone && <span>전화: {entities.find((e) => e.name === editSub.submissionEntity)?.phone}</span>}
+                    {entities.find((e) => e.name === editSub.submissionEntity)?.email && <span>이메일: {entities.find((e) => e.name === editSub.submissionEntity)?.email}</span>}
+                  </div>
+                )}
+                {entities.length === 0 && (
+                  <p className="text-[11px] text-amber-600 mt-1">등록된 제출처가 없어요. 아래 버튼으로 먼저 등록해 주세요.</p>
                 )}
               </div>
               <div>
@@ -2431,6 +2472,83 @@ function BulkSubmissionTab() {
                 disabled={savingSub}
                 className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-300"
               >{savingSub ? "저장 중..." : "저장"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {newEntityForm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm">
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h3 className="font-semibold text-gray-900">신규 제출처(법인) 등록</h3>
+              <button onClick={() => setNewEntityForm(null)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">법인명 <span className="text-red-500">*</span></label>
+                <input
+                  autoFocus
+                  value={newEntityForm.name}
+                  onChange={(e) => setNewEntityForm((p) => p ? { ...p, name: e.target.value } : p)}
+                  placeholder="예) 동아쏘시오홀딩스"
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">담당자명</label>
+                <input
+                  value={newEntityForm.contactName || ""}
+                  onChange={(e) => setNewEntityForm((p) => p ? { ...p, contactName: e.target.value } : p)}
+                  placeholder="예) 홍길동"
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">이메일</label>
+                <input
+                  type="email"
+                  value={newEntityForm.email || ""}
+                  onChange={(e) => setNewEntityForm((p) => p ? { ...p, email: e.target.value } : p)}
+                  placeholder="예) contact@company.com"
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">전화번호</label>
+                  <input
+                    value={newEntityForm.phone || ""}
+                    onChange={(e) => setNewEntityForm((p) => p ? { ...p, phone: e.target.value } : p)}
+                    placeholder="예) 02-1234-5678"
+                    className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">팩스</label>
+                  <input
+                    value={newEntityForm.fax || ""}
+                    onChange={(e) => setNewEntityForm((p) => p ? { ...p, fax: e.target.value } : p)}
+                    className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">비고</label>
+                <input
+                  value={newEntityForm.notes || ""}
+                  onChange={(e) => setNewEntityForm((p) => p ? { ...p, notes: e.target.value } : p)}
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-gray-100 flex justify-end gap-2">
+              <button onClick={() => setNewEntityForm(null)} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded hover:bg-gray-50">취소</button>
+              <button
+                onClick={saveNewEntity}
+                disabled={savingEntity || !newEntityForm.name.trim()}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-300"
+              >{savingEntity ? "저장 중..." : "등록 후 선택"}</button>
             </div>
           </div>
         </div>
@@ -3272,6 +3390,232 @@ function NoticesTab() {
           ))
         )}
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// 제출처(법인) 관리 탭
+// ─────────────────────────────────────────────
+
+function SubmissionEntityTab() {
+  const [rows, setRows] = useState<SubmissionEntity[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  const [editRow, setEditRow] = useState<(SubmissionEntity & { isNew?: boolean }) | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [deletingName, setDeletingName] = useState<string | null>(null);
+
+  useEffect(() => { load(); }, []);
+
+  async function load() {
+    setLoading(true);
+    const res = await fetch("/api/admin/submission-entities");
+    const data = await res.json();
+    setRows(Array.isArray(data) ? data : []);
+    setLoading(false);
+  }
+
+  async function save() {
+    if (!editRow) return;
+    const name = editRow.name.trim();
+    if (!name) { alert("법인명은 필수에요."); return; }
+    setSaving(true);
+    const res = await fetch("/api/admin/submission-entities", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(editRow),
+    });
+    if (res.ok) {
+      const saved: SubmissionEntity = await res.json();
+      setRows((prev) => {
+        const idx = prev.findIndex((r) => r.name === saved.name);
+        return idx >= 0 ? prev.map((r, i) => i === idx ? saved : r) : [...prev, saved].sort((a, b) => a.name.localeCompare(b.name));
+      });
+      setEditRow(null);
+    } else {
+      const data = await res.json().catch(() => ({}));
+      alert(`저장 실패: ${data.error || "알 수 없는 오류"}`);
+    }
+    setSaving(false);
+  }
+
+  async function deleteRow(name: string) {
+    if (!confirm(`"${name}" 제출처를 삭제할까요?`)) return;
+    setDeletingName(name);
+    await fetch("/api/admin/submission-entities", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    setRows((prev) => prev.filter((r) => r.name !== name));
+    setDeletingName(null);
+  }
+
+  const filtered = rows.filter((r) => {
+    if (!query.trim()) return true;
+    const q = query.toLowerCase();
+    return r.name.toLowerCase().includes(q) ||
+      (r.contactName || "").toLowerCase().includes(q) ||
+      (r.email || "").toLowerCase().includes(q) ||
+      (r.phone || "").includes(query);
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-800">제출처(법인) 관리</h2>
+            <p className="text-xs text-gray-400 mt-0.5">필터링 요청을 접수하는 제출처(법인) 정보를 등록·관리합니다. 등록된 법인은 제약사별 제출처 연결 시 드롭다운으로 선택할 수 있어요.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="법인명 · 담당자 · 이메일"
+                className="h-8 w-52 border border-gray-200 rounded pl-8 pr-3 text-xs focus:outline-none focus:ring-2 focus:ring-blue-400"
+              />
+            </div>
+            <button onClick={load} className="text-xs text-gray-500 hover:text-gray-800 border border-gray-200 rounded px-2 py-1.5 flex items-center gap-1">
+              <RefreshCw className="w-3 h-3" />새로고침
+            </button>
+            <button
+              onClick={() => setEditRow({ name: "", contactName: null, email: null, phone: null, fax: null, notes: null, isNew: true })}
+              className="h-8 px-3 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1.5"
+            >
+              <Plus className="w-3 h-3" />신규 등록
+            </button>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="py-16 text-center text-gray-400 text-sm">불러오는 중...</div>
+        ) : filtered.length === 0 ? (
+          <div className="py-16 text-center text-gray-400 text-sm">
+            {query ? "검색 결과가 없어요." : "등록된 제출처가 없어요. 위 \"신규 등록\" 버튼으로 추가해 주세요."}
+          </div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 text-xs text-gray-500 font-semibold">
+                <th className="px-4 py-3 text-left">법인명</th>
+                <th className="px-4 py-3 text-left">담당자</th>
+                <th className="px-4 py-3 text-left">이메일</th>
+                <th className="px-4 py-3 text-left">전화번호</th>
+                <th className="px-4 py-3 text-left">팩스</th>
+                <th className="px-4 py-3 text-left">비고</th>
+                <th className="px-4 py-3 text-center w-[100px]">관리</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {filtered.map((r) => (
+                <tr key={r.name} className="hover:bg-gray-50">
+                  <td className="px-4 py-2.5 font-medium text-gray-900">{r.name}</td>
+                  <td className="px-4 py-2.5 text-gray-600">{r.contactName || <span className="text-gray-300">-</span>}</td>
+                  <td className="px-4 py-2.5 text-blue-600">{r.email ? <a href={`mailto:${r.email}`} className="hover:underline">{r.email}</a> : <span className="text-gray-300">-</span>}</td>
+                  <td className="px-4 py-2.5 text-gray-600">{r.phone || <span className="text-gray-300">-</span>}</td>
+                  <td className="px-4 py-2.5 text-gray-500">{r.fax || <span className="text-gray-300">-</span>}</td>
+                  <td className="px-4 py-2.5 text-gray-500 max-w-[160px] truncate">{r.notes || <span className="text-gray-300">-</span>}</td>
+                  <td className="px-4 py-2.5 text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      <button
+                        onClick={() => setEditRow({ ...r })}
+                        className="text-xs text-blue-600 hover:text-blue-800 px-2 py-1 rounded hover:bg-blue-50"
+                      >수정</button>
+                      <button
+                        onClick={() => deleteRow(r.name)}
+                        disabled={deletingName === r.name}
+                        className="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 disabled:opacity-40"
+                      >{deletingName === r.name ? "..." : "삭제"}</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {editRow && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm">
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h3 className="font-semibold text-gray-900">{editRow.isNew ? "신규 제출처 등록" : `${editRow.name} 수정`}</h3>
+              <button onClick={() => setEditRow(null)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">법인명 <span className="text-red-500">*</span></label>
+                <input
+                  autoFocus={!!editRow.isNew}
+                  value={editRow.name}
+                  onChange={(e) => setEditRow((p) => p ? { ...p, name: e.target.value } : p)}
+                  disabled={!editRow.isNew}
+                  placeholder="예) 동아쏘시오홀딩스"
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-50 disabled:text-gray-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">담당자명</label>
+                <input
+                  value={editRow.contactName || ""}
+                  onChange={(e) => setEditRow((p) => p ? { ...p, contactName: e.target.value } : p)}
+                  placeholder="예) 홍길동"
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">이메일</label>
+                <input
+                  type="email"
+                  value={editRow.email || ""}
+                  onChange={(e) => setEditRow((p) => p ? { ...p, email: e.target.value } : p)}
+                  placeholder="예) contact@company.com"
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">전화번호</label>
+                  <input
+                    value={editRow.phone || ""}
+                    onChange={(e) => setEditRow((p) => p ? { ...p, phone: e.target.value } : p)}
+                    placeholder="예) 02-1234-5678"
+                    className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">팩스</label>
+                  <input
+                    value={editRow.fax || ""}
+                    onChange={(e) => setEditRow((p) => p ? { ...p, fax: e.target.value } : p)}
+                    className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">비고</label>
+                <input
+                  value={editRow.notes || ""}
+                  onChange={(e) => setEditRow((p) => p ? { ...p, notes: e.target.value } : p)}
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-gray-100 flex justify-end gap-2">
+              <button onClick={() => setEditRow(null)} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded hover:bg-gray-50">취소</button>
+              <button
+                onClick={save}
+                disabled={saving || !editRow.name.trim()}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-300"
+              >{saving ? "저장 중..." : "저장"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
