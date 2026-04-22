@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
-import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Download, Menu, X, Filter, BarChart3 } from "lucide-react";
+import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Download, Menu, X, Filter, BarChart3, Upload } from "lucide-react";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
 const navItems: { href: string; label: string; icon: React.ElementType; minRole: UserRole }[] = [
@@ -14,6 +14,7 @@ const navItems: { href: string; label: string; icon: React.ElementType; minRole:
   { href: "/filter",            label: "제약사 필터링",   icon: Filter,    minRole: "BIZ"      },
   { href: "/filter-list",       label: "리스트 다운",     icon: Download,  minRole: "SALES_REP" },
   { href: "/proposals",         label: "제안서",          icon: FileText,  minRole: "SALES_REP" },
+  { href: "/bulk-register",     label: "엑셀대량등록",    icon: Upload,    minRole: "SALES_REP" },
   { href: "/stats",             label: "처방통계",        icon: BarChart3, minRole: "BIZ"      },
 ];
 

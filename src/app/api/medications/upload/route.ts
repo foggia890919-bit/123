@@ -67,13 +67,14 @@ export async function POST(req: NextRequest) {
 
     if (normalizedCodes.length > 0) {
       // DB의 insuranceCode는 "A,B,C" 형태로 여러 EDI가 들어있을 수 있음
-      // 각 코드를 분리·정규화해서 엑셀 코드와 매칭
+      // 각 코드를 분리·정규화(하이픈·공백·탭 제거, 대문자화)해서 엑셀 코드와 매칭
       const rows = await prisma.$queryRaw<{ id: string; matched: string }[]>`
-        SELECT m.id, UPPER(REGEXP_REPLACE(TRIM(code), '[\s\-]', '', 'g')) AS matched
+        SELECT m.id,
+               UPPER(REPLACE(REPLACE(REPLACE(TRIM(code), '-', ''), ' ', ''), E'\t', '')) AS matched
         FROM "Medication" m,
              UNNEST(string_to_array(m."insuranceCode", ',')) AS code
         WHERE m."insuranceCode" IS NOT NULL
-          AND UPPER(REGEXP_REPLACE(TRIM(code), '[\s\-]', '', 'g')) = ANY(${normalizedCodes})
+          AND UPPER(REPLACE(REPLACE(REPLACE(TRIM(code), '-', ''), ' ', ''), E'\t', '')) = ANY(${normalizedCodes})
       `;
       // 같은 코드가 여러 레코드에 매칭되면 첫 번째 것 사용
       rows.forEach((r) => {

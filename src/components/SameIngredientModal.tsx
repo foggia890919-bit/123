@@ -13,14 +13,21 @@ interface ReplaceContext {
   onDone?: () => void;
 }
 
+interface SelectContext {
+  originalProductName: string;
+  onSelect: (med: MedicationItem) => void;
+}
+
 interface Props {
   ingredientName: string;
   categoryBCode?: string;
   userId?: string;
   onClose: () => void;
   initialCols?: Partial<ColVis>;
-  /** 기존 제안서 항목을 대체할 때 넘겨받는 컨텍스트 */
+  /** 기존 제안서 항목을 대체할 때 넘겨받는 컨텍스트 (DB 업데이트) */
   replaceContext?: ReplaceContext;
+  /** DB 저장 없이 단순 선택만 하는 모드 (클라이언트 state 용) */
+  selectContext?: SelectContext;
 }
 
 type SortKey = "productName" | "price" | "commissionRate" | "additionalRate" | "totalRate" | "settlement";
@@ -31,7 +38,7 @@ interface ColVis {
   insuranceCode: boolean; notes: boolean;
 }
 
-export default function SameIngredientModal({ ingredientName, categoryBCode, userId, onClose, initialCols, replaceContext }: Props) {
+export default function SameIngredientModal({ ingredientName, categoryBCode, userId, onClose, initialCols, replaceContext, selectContext }: Props) {
   const [medications, setMedications] = useState<MedicationItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -145,6 +152,13 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
               {replaceError && <span className="text-red-600">{replaceError}</span>}
             </div>
           )}
+          {selectContext && !replaceContext && (
+            <div className="px-6 py-3 bg-emerald-50 border-b border-emerald-100 text-xs">
+              <span className="font-semibold text-gray-700">대체품 선택 모드:</span>{" "}
+              <span className="text-gray-500 line-through">{selectContext.originalProductName}</span>{" "}
+              의 대체 품목을 선택하세요.
+            </div>
+          )}
 
           {/* 컬럼 토글 */}
           <div className="px-6 py-2 border-b bg-gray-50 flex flex-wrap gap-3 text-xs">
@@ -238,7 +252,12 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
                           </>
                         )}
                         <td className="px-4 py-2.5 text-center">
-                          {userId ? (
+                          {selectContext ? (
+                            <button onClick={() => { selectContext.onSelect(med); onClose(); }}
+                              className="text-xs text-white bg-emerald-600 hover:bg-emerald-700 rounded px-3 py-1 flex items-center gap-1 whitespace-nowrap mx-auto">
+                              선택
+                            </button>
+                          ) : userId ? (
                             <div className="flex items-center gap-1 justify-center">
                               {replaceContext && (
                                 <button onClick={() => replaceItem(med)}
