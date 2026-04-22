@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
-import { Plus, Trash2, FileSpreadsheet, FileDown, FileText, X, Edit2, Check, Building2, Search, ChevronDown, ChevronUp, Filter, Loader2, UserPlus } from "lucide-react";
+import { Plus, Trash2, FileSpreadsheet, FileDown, FileText, X, Edit2, Check, Building2, Search, ChevronDown, ChevronUp, Filter, Loader2, UserPlus, Upload, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatPrice } from "@/lib/utils";
@@ -21,7 +21,7 @@ interface Medication {
   categoryB: string | null; bioStatus: string | null; originalDrug: string | null; notes: string | null;
   isSettlement: boolean; settlementType?: string | null; additionalRate?: number | null;
 }
-interface ProposalItem { id: string; altMedication: Medication | null; order: number; }
+interface ProposalItem { id: string; altMedication: Medication | null; order: number; note?: string | null; }
 interface UserClient { id: string; clientName: string; bizNumber: string; approved: boolean; }
 interface Proposal {
   id: string; title: string; clientId?: string | null;
@@ -69,6 +69,12 @@ function ProposalsContent() {
   const [regBizNum, setRegBizNum] = useState("");
   const [regLoading, setRegLoading] = useState(false);
   const [regError, setRegError] = useState("");
+
+  // 엑셀 대량등록
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkPreview, setBulkPreview] = useState<{ code: string; matched: boolean }[]>([]);
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [bulkResult, setBulkResult] = useState<{ added: number; unmatched: string[] } | null>(null);
 
   const loadProposals = useCallback(async () => {
     if (!userId) return;
@@ -246,6 +252,42 @@ function ProposalsContent() {
     } finally {
       setRequestingFilter((prev) => { const n = new Set(prev); n.delete(companyName); return n; });
     }
+  }
+
+  function handleBulkFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const data = new Uint8Array(ev.target?.result as ArrayBuffer);
+      const wb = XLSX.read(data, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows: string[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
+      // A열(index 0) 값만 추출, 숫자/문자열 모두 허용
+      const codes = rows
+        .map((r) => String(r[0] ?? "").trim())
+        .filter((v) => v.length > 0);
+      // 보험코드 9자리면 matched 예상, 아니면 unmatched 예상 (실제 매칭은 서버에서)
+      setBulkPreview(codes.map((code) => ({ code, matched: /^\d{9}$/.test(code) })));
+      setBulkResult(null);
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  }
+
+  async function submitBulk() {
+    if (!selected || bulkPreview.length === 0) return;
+    setBulkLoading(true);
+    const codes = bulkPreview.map((p) => p.code);
+    const res = await fetch(`/api/proposals/${selected.id}/items/bulk`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ codes }),
+    });
+    const result = await res.json();
+    setBulkResult(result);
+    setBulkLoading(false);
+    await loadProposal(selected);
   }
 
   function exportExcel() {
@@ -534,6 +576,9 @@ function ProposalsContent() {
                 )}
               </div>
               <div className="flex gap-2 shrink-0">
+                <Button variant="outline" size="sm" onClick={() => { setBulkOpen(true); setBulkPreview([]); setBulkResult(null); }}>
+                  <Upload className="w-3.5 h-3.5 mr-1" />엑셀 대량등록
+                </Button>
                 <Button variant="outline" size="sm" onClick={exportExcel} disabled={!selected.items?.length}>
                   <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />엑셀
                 </Button>
@@ -581,22 +626,30 @@ function ProposalsContent() {
                     <tbody className="divide-y divide-gray-100">
                       {selected.items.map((item, i) => {
                         const m = item.altMedication;
+                        const isUnmatched = !m && !!item.note;
                         const base = m?.commissionRate ?? null;
                         const extra = m?.additionalRate ?? null;
                         const total = base != null ? base + (extra ?? 0) : null;
                         const settlement = m?.price != null && total != null ? Math.round(m.price * total / 100) : null;
                         return (
-                          <tr key={item.id} className="hover:bg-gray-50">
+                          <tr key={item.id} className={`hover:bg-gray-50 ${isUnmatched ? "bg-orange-50/40" : ""}`}>
                             <td className="px-3 py-2.5 text-gray-400 text-xs">{i + 1}</td>
                             <td className="px-3 py-2.5">
-                              <p className="font-medium text-gray-900 text-sm whitespace-nowrap">
-                                {m?.productName || "-"}
-                                {m?.isSettlement && (m.settlementType === "원외" || m.settlementType === "원내") && (
-                                  <span className={`inline-block text-[10px] border px-1 py-0.5 rounded ml-1 align-middle ${
-                                    m.settlementType === "원외" ? "text-blue-700 bg-blue-50 border-blue-200" : "text-indigo-700 bg-indigo-50 border-indigo-200"
-                                  }`}>{m.settlementType === "원외" ? "cso" : "원내가능"}</span>
-                                )}
-                              </p>
+                              {isUnmatched ? (
+                                <p className="font-medium text-sm whitespace-nowrap flex items-center gap-1.5">
+                                  <span className="text-[10px] bg-orange-100 text-orange-700 border border-orange-200 rounded px-1.5 py-0.5 font-semibold">미인식</span>
+                                  <span className="font-mono text-gray-500 text-xs">{item.note}</span>
+                                </p>
+                              ) : (
+                                <p className="font-medium text-gray-900 text-sm whitespace-nowrap">
+                                  {m?.productName || "-"}
+                                  {m?.isSettlement && (m.settlementType === "원외" || m.settlementType === "원내") && (
+                                    <span className={`inline-block text-[10px] border px-1 py-0.5 rounded ml-1 align-middle ${
+                                      m.settlementType === "원외" ? "text-blue-700 bg-blue-50 border-blue-200" : "text-indigo-700 bg-indigo-50 border-indigo-200"
+                                    }`}>{m.settlementType === "원외" ? "cso" : "원내가능"}</span>
+                                  )}
+                                </p>
+                              )}
                             </td>
                             <td className="px-3 py-2.5 text-xs text-gray-500 max-w-[140px] truncate">{m?.ingredientName || "-"}</td>
                             <td className="px-3 py-2.5 text-center">
@@ -714,6 +767,93 @@ function ProposalsContent() {
             originalDrug: cols.showOriginalDrug, insuranceCode: cols.showInsuranceCode, notes: cols.showNotes,
           }}
         />
+      )}
+
+      {/* ── 엑셀 대량등록 모달 ── */}
+      {bulkOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <h3 className="font-bold text-gray-900 text-base">엑셀 대량등록</h3>
+              <button onClick={() => setBulkOpen(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="px-6 py-4 space-y-4 overflow-y-auto flex-1">
+              {/* 파일 선택 */}
+              <div>
+                <p className="text-sm text-gray-600 mb-2">
+                  엑셀 파일의 <span className="font-bold text-blue-600">A열</span>에 보험코드를 넣어주세요.<br/>
+                  <span className="text-xs text-gray-400">보험코드(9자리)는 자동 매칭, 그 외는 미인식으로 표시됩니다.</span>
+                </p>
+                <label className="flex items-center justify-center gap-2 w-full border-2 border-dashed border-blue-300 rounded-xl p-5 cursor-pointer hover:bg-blue-50 transition-all">
+                  <Upload className="w-5 h-5 text-blue-400" />
+                  <span className="text-sm text-blue-600 font-medium">파일 선택 (.xlsx, .xls)</span>
+                  <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleBulkFile} />
+                </label>
+              </div>
+
+              {/* 미리보기 */}
+              {bulkPreview.length > 0 && !bulkResult && (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-xs font-semibold text-gray-600">인식된 코드 ({bulkPreview.length}개)</p>
+                    <div className="flex gap-2 text-xs">
+                      <span className="text-blue-600">{bulkPreview.filter(p => p.matched).length}개 매칭 예상</span>
+                      <span className="text-orange-500">{bulkPreview.filter(p => !p.matched).length}개 미인식 예상</span>
+                    </div>
+                  </div>
+                  <div className="border border-gray-200 rounded-lg overflow-hidden max-h-56 overflow-y-auto">
+                    {bulkPreview.map((p, i) => (
+                      <div key={i} className={`flex items-center justify-between px-3 py-2 text-xs border-b border-gray-100 last:border-0 ${p.matched ? "bg-white" : "bg-orange-50"}`}>
+                        <span className="font-mono text-gray-700">{p.code}</span>
+                        {p.matched
+                          ? <span className="text-blue-600 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded">보험코드</span>
+                          : <span className="text-orange-600 bg-orange-100 border border-orange-200 px-1.5 py-0.5 rounded flex items-center gap-1"><AlertCircle className="w-3 h-3" />미인식</span>
+                        }
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 결과 */}
+              {bulkResult && (
+                <div className="space-y-3">
+                  <div className="bg-green-50 border border-green-200 rounded-xl p-4 text-center">
+                    <p className="text-green-700 font-bold text-lg">{bulkResult.added}개 추가 완료</p>
+                    {bulkResult.unmatched.length > 0 && (
+                      <p className="text-xs text-orange-600 mt-1">{bulkResult.unmatched.length}개는 보험코드 미인식 (제안서에 표시됨)</p>
+                    )}
+                  </div>
+                  {bulkResult.unmatched.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500 mb-1">미인식 코드 (제안서에 표기됨)</p>
+                      <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 max-h-32 overflow-y-auto">
+                        {bulkResult.unmatched.map((code, i) => (
+                          <span key={i} className="inline-block font-mono text-xs text-orange-700 mr-2 mb-1">{code}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-100 flex gap-2 justify-end">
+              <button onClick={() => setBulkOpen(false)}
+                className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+                {bulkResult ? "닫기" : "취소"}
+              </button>
+              {bulkPreview.length > 0 && !bulkResult && (
+                <button onClick={submitBulk} disabled={bulkLoading}
+                  className="px-5 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-50 flex items-center gap-2">
+                  {bulkLoading && <Loader2 className="w-4 h-4 animate-spin" />}
+                  {bulkLoading ? "등록 중..." : `${bulkPreview.length}개 제안서에 추가`}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
