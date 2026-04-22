@@ -175,7 +175,9 @@ function ProposalsContent() {
     if (!selected?.items) return [];
     const map = new Map<string, number>();
     for (const item of selected.items) {
-      const name = item.altMedication?.companyName;
+      // 대체품이 선택됐으면 대체 제약사를, 아니면 원본(기존) 제약사를 기준으로 집계
+      // 제안서(대량) 저장 직후처럼 altMedication 이 null 인 행도 원본 기준으로 노출
+      const name = item.altMedication?.companyName ?? item.originalMedication?.companyName;
       if (name) map.set(name, (map.get(name) || 0) + 1);
     }
     return Array.from(map.entries())
