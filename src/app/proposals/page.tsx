@@ -711,11 +711,15 @@ function ProposalsContent() {
                           className="flex items-center gap-1 mt-0.5 group"
                         >
                           {selected.client ? (
-                            <span className="text-xs text-gray-400 group-hover:text-blue-500">{selected.client.clientName} · {selected.client.bizNumber}</span>
+                            <>
+                              <span className="text-xs text-gray-400 group-hover:text-blue-500">{selected.client.clientName} · {selected.client.bizNumber}</span>
+                              <Edit2 className="w-3 h-3 text-gray-300 group-hover:text-blue-400 opacity-0 group-hover:opacity-100" />
+                            </>
                           ) : (
-                            <span className="text-xs text-gray-300 group-hover:text-blue-400">거래처 미지정 (클릭해서 설정)</span>
+                            <span className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded px-2 py-0.5">
+                              <UserPlus className="w-3 h-3" />거래처 지정
+                            </span>
                           )}
-                          <Edit2 className="w-3 h-3 text-gray-300 group-hover:text-blue-400 opacity-0 group-hover:opacity-100" />
                         </button>
                       )}
                     </div>
