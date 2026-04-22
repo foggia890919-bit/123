@@ -331,9 +331,9 @@ function BulkRegisterInner() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
-              <h1 className="text-xl font-bold text-gray-900">엑셀 대량등록 (대체 제안)</h1>
+              <h1 className="text-xl font-bold text-gray-900">제안서(대량)</h1>
               <p className="text-xs text-gray-500 mt-1">
-                거래처의 기존 품목 보험코드를 A열에 넣은 엑셀을 업로드하고, 각 품목에 대해 대체할 품목을 선택해서 PDF·Excel로 출력하세요.
+                거래처의 기존 품목 보험코드를 엑셀 A열에 넣어 업로드하고, 각 품목에 대해 대체할 품목을 선택해서 PDF·Excel로 출력하세요.
               </p>
             </div>
             <div className="flex items-center gap-2">
