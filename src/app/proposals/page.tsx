@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
@@ -85,6 +85,44 @@ function ProposalsContent() {
   const [bulkPreview, setBulkPreview] = useState<{ code: string; matched: boolean }[]>([]);
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ added: number; unmatched: string[] } | null>(null);
+
+  // 컬럼 너비 (localStorage 저장)
+  const DEFAULT_WIDTHS: Record<string, number> = {
+    num: 40, productName: 200, ingredient: 140, sameIngredient: 100, company: 110,
+    categoryB: 80, bioStatus: 80, originalDrug: 80, insuranceCode: 110, notes: 120,
+    price: 80, baseRate: 90, additionalRate: 90, totalRate: 90, settlement: 110, actions: 44,
+  };
+  const [colWidths, setColWidths] = useState<Record<string, number>>(DEFAULT_WIDTHS);
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("proposal_col_widths");
+      if (saved) setColWidths({ ...DEFAULT_WIDTHS, ...JSON.parse(saved) });
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    try { localStorage.setItem("proposal_col_widths", JSON.stringify(colWidths)); } catch {}
+  }, [colWidths]);
+
+  const resizingRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
+  function startResize(key: string, e: React.MouseEvent) {
+    e.preventDefault();
+    resizingRef.current = { key, startX: e.clientX, startWidth: colWidths[key] ?? DEFAULT_WIDTHS[key] ?? 100 };
+    const onMove = (ev: MouseEvent) => {
+      if (!resizingRef.current) return;
+      const { key: k, startX, startWidth } = resizingRef.current;
+      const w = Math.max(40, startWidth + (ev.clientX - startX));
+      setColWidths((prev) => ({ ...prev, [k]: w }));
+    };
+    const onUp = () => {
+      resizingRef.current = null;
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+  function resetColWidths() { setColWidths(DEFAULT_WIDTHS); }
 
   const loadProposals = useCallback(async () => {
     if (!userId) return;
@@ -607,33 +645,48 @@ function ProposalsContent() {
               </div>
             ) : (
               <>
-                <div className="flex justify-end">
+                <div className="flex justify-end gap-2 items-center">
+                  <button onClick={resetColWidths}
+                    title="컬럼 너비 초기화"
+                    className="text-[11px] text-gray-500 hover:text-blue-600 border border-gray-200 hover:border-blue-300 rounded px-2 py-1">
+                    너비 초기화
+                  </button>
                   <ColumnToggles cols={cols} setCols={setCols} isSalesRep={isSalesRep} />
                 </div>
                 <div className="overflow-x-auto overflow-y-auto max-h-[60vh] md:flex-1 rounded-lg border border-gray-200 bg-white">
-                  <table className="w-full text-sm">
-                    <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
+                  <table className="text-sm table-fixed" style={{ minWidth: "100%" }}>
+                    <thead className="sticky top-0 bg-gray-50 border-b border-gray-200 z-10">
                       <tr className="text-xs text-gray-500 font-semibold whitespace-nowrap">
-                        <th className="px-3 py-2.5 text-left w-8">#</th>
-                        <th className="px-3 py-2.5 text-left min-w-[120px]">품목명</th>
-                        <th className="px-3 py-2.5 text-left min-w-[100px]">성분명</th>
-                        <th className="px-3 py-2.5 text-center w-24"></th>
-                        <th className="px-3 py-2.5 text-left min-w-[90px]">제약사</th>
-                        {cols.showCategoryB && <th className="px-3 py-2.5 text-center">분류B</th>}
-                        {cols.showBioStatus && <th className="px-3 py-2.5 text-center">생동/생산</th>}
-                        {cols.showOriginalDrug && <th className="px-3 py-2.5 text-center">오리지날</th>}
-                        {cols.showInsuranceCode && <th className="px-3 py-2.5 text-left">보험코드</th>}
-                        {cols.showNotes && <th className="px-3 py-2.5 text-left">특이사항</th>}
-                        <th className="px-3 py-2.5 text-right">약가</th>
-                        {isSalesRep && cols.showRate && (
-                          <>
-                            <th className="px-3 py-2.5 text-right">기본수수료</th>
-                            <th className="px-3 py-2.5 text-right">추가수수료</th>
-                            <th className="px-3 py-2.5 text-right">합계수수료</th>
-                            <th className="px-3 py-2.5 text-right">정산금액</th>
-                          </>
-                        )}
-                        <th className="px-3 py-2.5 w-8"></th>
+                        {([
+                          { k: "num", label: "#", align: "left" as const },
+                          { k: "productName", label: "품목명", align: "left" as const },
+                          { k: "ingredient", label: "성분명", align: "left" as const },
+                          { k: "sameIngredient", label: "", align: "center" as const },
+                          { k: "company", label: "제약사", align: "left" as const },
+                          ...(cols.showCategoryB ? [{ k: "categoryB", label: "분류B", align: "center" as const }] : []),
+                          ...(cols.showBioStatus ? [{ k: "bioStatus", label: "생동/생산", align: "center" as const }] : []),
+                          ...(cols.showOriginalDrug ? [{ k: "originalDrug", label: "오리지날", align: "center" as const }] : []),
+                          ...(cols.showInsuranceCode ? [{ k: "insuranceCode", label: "보험코드", align: "left" as const }] : []),
+                          ...(cols.showNotes ? [{ k: "notes", label: "특이사항", align: "left" as const }] : []),
+                          { k: "price", label: "약가", align: "right" as const },
+                          ...(isSalesRep && cols.showRate ? [
+                            { k: "baseRate", label: "기본수수료", align: "right" as const },
+                            { k: "additionalRate", label: "추가수수료", align: "right" as const },
+                            { k: "totalRate", label: "합계수수료", align: "right" as const },
+                            { k: "settlement", label: "정산금액", align: "right" as const },
+                          ] : []),
+                          { k: "actions", label: "", align: "left" as const },
+                        ] as const).map(({ k, label, align }) => (
+                          <th key={k}
+                            style={{ width: colWidths[k] ?? DEFAULT_WIDTHS[k] ?? 100 }}
+                            className={`relative px-3 py-2.5 text-${align} select-none`}>
+                            <span className="truncate block">{label}</span>
+                            <span
+                              onMouseDown={(e) => startResize(k, e)}
+                              className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize hover:bg-blue-400 active:bg-blue-500 transition-colors"
+                              title="드래그로 너비 조절" />
+                          </th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -646,28 +699,28 @@ function ProposalsContent() {
                         const settlement = m?.price != null && total != null ? Math.round(m.price * total / 100) : null;
                         return (
                           <tr key={item.id} className={`hover:bg-gray-50 ${isUnmatched ? "bg-orange-50/40" : ""}`}>
-                            <td className="px-3 py-2.5 text-gray-400 text-xs">{i + 1}</td>
-                            <td className="px-3 py-2.5">
+                            <td className="px-3 py-2.5 text-gray-400 text-xs truncate">{i + 1}</td>
+                            <td className="px-3 py-2.5 overflow-hidden" title={m?.productName || item.note || ""}>
                               {isUnmatched ? (
-                                <p className="font-medium text-sm whitespace-nowrap flex items-center gap-1.5">
-                                  <span className="text-[10px] bg-orange-100 text-orange-700 border border-orange-200 rounded px-1.5 py-0.5 font-semibold">미인식</span>
-                                  <span className="font-mono text-gray-500 text-xs">{item.note}</span>
+                                <p className="font-medium text-sm truncate flex items-center gap-1.5">
+                                  <span className="text-[10px] bg-orange-100 text-orange-700 border border-orange-200 rounded px-1.5 py-0.5 font-semibold shrink-0">미인식</span>
+                                  <span className="font-mono text-gray-500 text-xs truncate">{item.note}</span>
                                 </p>
                               ) : (
-                                <div className="space-y-0.5">
+                                <div className="space-y-0.5 min-w-0">
                                   {item.originalMedication && (
-                                    <p className="text-xs text-gray-400 line-through whitespace-nowrap flex items-center gap-1">
-                                      <span className="text-[10px] bg-gray-100 text-gray-500 border border-gray-200 rounded px-1 py-0.5 no-underline">원본</span>
-                                      {item.originalMedication.productName}
+                                    <p className="text-xs text-gray-400 line-through truncate flex items-center gap-1">
+                                      <span className="text-[10px] bg-gray-100 text-gray-500 border border-gray-200 rounded px-1 py-0.5 no-underline shrink-0">원본</span>
+                                      <span className="truncate">{item.originalMedication.productName}</span>
                                     </p>
                                   )}
-                                  <p className="font-medium text-gray-900 text-sm whitespace-nowrap flex items-center gap-1">
+                                  <p className="font-medium text-gray-900 text-sm truncate flex items-center gap-1">
                                     {item.originalMedication && (
-                                      <span className="text-[10px] bg-blue-100 text-blue-700 border border-blue-200 rounded px-1 py-0.5 font-semibold">대체</span>
+                                      <span className="text-[10px] bg-blue-100 text-blue-700 border border-blue-200 rounded px-1 py-0.5 font-semibold shrink-0">대체</span>
                                     )}
-                                    {m?.productName || "-"}
+                                    <span className="truncate">{m?.productName || "-"}</span>
                                     {m?.isSettlement && (m.settlementType === "원외" || m.settlementType === "원내") && (
-                                      <span className={`inline-block text-[10px] border px-1 py-0.5 rounded align-middle ${
+                                      <span className={`inline-block text-[10px] border px-1 py-0.5 rounded align-middle shrink-0 ${
                                         m.settlementType === "원외" ? "text-blue-700 bg-blue-50 border-blue-200" : "text-indigo-700 bg-indigo-50 border-indigo-200"
                                       }`}>{m.settlementType === "원외" ? "cso" : "원내가능"}</span>
                                     )}
@@ -675,7 +728,7 @@ function ProposalsContent() {
                                 </div>
                               )}
                             </td>
-                            <td className="px-3 py-2.5 text-xs text-gray-500 max-w-[140px] truncate">{m?.ingredientName || "-"}</td>
+                            <td className="px-3 py-2.5 text-xs text-gray-500 truncate" title={m?.ingredientName || ""}>{m?.ingredientName || "-"}</td>
                             <td className="px-3 py-2.5 text-center">
                               {m && (
                                 <button onClick={() => selected && setIngredientModal({
@@ -688,22 +741,22 @@ function ProposalsContent() {
                                 </button>
                               )}
                             </td>
-                            <td className="px-3 py-2.5 text-xs text-gray-600 whitespace-nowrap">{m?.companyName || "-"}</td>
-                            {cols.showCategoryB && <td className="px-3 py-2.5 text-center text-xs text-gray-500">{m?.categoryB || "-"}</td>}
-                            {cols.showBioStatus && <td className="px-3 py-2.5 text-center text-xs text-gray-500">{m?.bioStatus || "-"}</td>}
-                            {cols.showOriginalDrug && <td className="px-3 py-2.5 text-center text-xs text-gray-500">{m?.originalDrug || "-"}</td>}
-                            {cols.showInsuranceCode && <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{m?.insuranceCode || "-"}</td>}
-                            {cols.showNotes && <td className="px-3 py-2.5 text-xs text-gray-500 max-w-[100px] truncate">{m?.notes || "-"}</td>}
-                            <td className="px-3 py-2.5 text-right text-sm text-gray-700 whitespace-nowrap">{formatPrice(m?.price)}</td>
+                            <td className="px-3 py-2.5 text-xs text-gray-600 truncate" title={m?.companyName || ""}>{m?.companyName || "-"}</td>
+                            {cols.showCategoryB && <td className="px-3 py-2.5 text-center text-xs text-gray-500 truncate">{m?.categoryB || "-"}</td>}
+                            {cols.showBioStatus && <td className="px-3 py-2.5 text-center text-xs text-gray-500 truncate">{m?.bioStatus || "-"}</td>}
+                            {cols.showOriginalDrug && <td className="px-3 py-2.5 text-center text-xs text-gray-500 truncate">{m?.originalDrug || "-"}</td>}
+                            {cols.showInsuranceCode && <td className="px-3 py-2.5 text-xs font-mono text-gray-500 truncate">{m?.insuranceCode || "-"}</td>}
+                            {cols.showNotes && <td className="px-3 py-2.5 text-xs text-gray-500 truncate" title={m?.notes || ""}>{m?.notes || "-"}</td>}
+                            <td className="px-3 py-2.5 text-right text-sm text-gray-700 truncate">{formatPrice(m?.price)}</td>
                             {isSalesRep && cols.showRate && (
                               <>
-                                <td className="px-3 py-2.5 text-right text-sm text-blue-600 font-medium whitespace-nowrap">{base != null ? `${base}%` : "-"}</td>
-                                <td className="px-3 py-2.5 text-right text-sm text-gray-500 whitespace-nowrap">{extra != null ? `${extra}%` : "-"}</td>
-                                <td className="px-3 py-2.5 text-right text-sm font-semibold text-blue-700 whitespace-nowrap">{total != null ? `${total}%` : "-"}</td>
-                                <td className="px-3 py-2.5 text-right text-sm font-semibold text-green-700 whitespace-nowrap">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</td>
+                                <td className="px-3 py-2.5 text-right text-sm text-blue-600 font-medium truncate">{base != null ? `${base}%` : "-"}</td>
+                                <td className="px-3 py-2.5 text-right text-sm text-gray-500 truncate">{extra != null ? `${extra}%` : "-"}</td>
+                                <td className="px-3 py-2.5 text-right text-sm font-semibold text-blue-700 truncate">{total != null ? `${total}%` : "-"}</td>
+                                <td className="px-3 py-2.5 text-right text-sm font-semibold text-green-700 truncate">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</td>
                               </>
                             )}
-                            <td className="px-3 py-2.5">
+                            <td className="px-3 py-2.5 text-center">
                               <button onClick={() => removeItem(item.id)} className="text-red-400 hover:text-red-600 p-1">
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
