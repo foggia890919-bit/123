@@ -43,7 +43,8 @@ async function fetchPageWithRetry(pageNo: number, retries = 3): Promise<{ items:
 function mapDrug(item: PublicDrug) {
   const ediRaw = (item.EDI_CODE ?? "").trim();
   const ediCodes = ediRaw ? ediRaw.split(",").map((s) => s.trim()).filter(Boolean) : [];
-  const insuranceCode = ediCodes[0] || null;
+  // 여러 EDI 코드를 모두 저장 (엑셀 업로드 시 어떤 코드로든 매칭되도록)
+  const insuranceCode = ediCodes.length > 0 ? ediCodes.join(",") : null;
 
   return {
     categoryA: (item.PRODUCT_TYPE ?? "").trim() || null,

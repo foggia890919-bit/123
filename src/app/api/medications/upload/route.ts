@@ -6,10 +6,6 @@ function normalizeCode(code: string): string {
   return code.replace(/[\s\-]/g, "").toUpperCase();
 }
 
-function normalizeProductKey(name: string, company: string): string {
-  return `${name.trim().toLowerCase()}||${company.trim().toLowerCase()}`;
-}
-
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
@@ -56,60 +52,45 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "유효한 데이터가 없어요. 컬럼명을 확인해주세요." }, { status: 400 });
     }
 
-    // 1차 매칭: 보험코드(정규화) → 기존 레코드 id 맵
-    const codes = rateRows.map((r) => r.insuranceCode).filter(Boolean) as string[];
+    // 보험코드 매칭: 양쪽 정규화(하이픈·공백 제거, 대문자화)해서 비교
+    // DB에 '123-456' 으로 저장되고 엑셀에 '123456' 이어도 매칭되도록 raw SQL 사용
+    const normalizedCodes = Array.from(
+      new Set(
+        rateRows
+          .map((r) => r.insuranceCode)
+          .filter(Boolean)
+          .map((c) => normalizeCode(c as string))
+      )
+    );
+
     const existingByCode = new Map<string, string>(); // normalizedCode → id
 
-    if (codes.length > 0) {
-      const existing = await prisma.medication.findMany({
-        where: { insuranceCode: { in: codes } },
-        select: { id: true, insuranceCode: true },
+    if (normalizedCodes.length > 0) {
+      // DB의 insuranceCode는 "A,B,C" 형태로 여러 EDI가 들어있을 수 있음
+      // 각 코드를 분리·정규화해서 엑셀 코드와 매칭
+      const rows = await prisma.$queryRaw<{ id: string; matched: string }[]>`
+        SELECT m.id, UPPER(REGEXP_REPLACE(TRIM(code), '[\s\-]', '', 'g')) AS matched
+        FROM "Medication" m,
+             UNNEST(string_to_array(m."insuranceCode", ',')) AS code
+        WHERE m."insuranceCode" IS NOT NULL
+          AND UPPER(REGEXP_REPLACE(TRIM(code), '[\s\-]', '', 'g')) = ANY(${normalizedCodes})
+      `;
+      // 같은 코드가 여러 레코드에 매칭되면 첫 번째 것 사용
+      rows.forEach((r) => {
+        if (!existingByCode.has(r.matched)) existingByCode.set(r.matched, r.id);
       });
-      existing.forEach((e) => {
-        if (e.insuranceCode) existingByCode.set(normalizeCode(e.insuranceCode), e.id);
-      });
-    }
-
-    // 2차 매칭 준비: 코드 미매칭 품목들의 productName+companyName으로 PUBLIC_API 레코드 조회
-    const noCodeMatch = rateRows.filter((r) => {
-      if (!r.insuranceCode) return r.productName && r.ingredientName;
-      return !existingByCode.has(normalizeCode(r.insuranceCode));
-    });
-
-    const existingByProductKey = new Map<string, string>(); // productKey → id
-    if (noCodeMatch.length > 0) {
-      const nameConditions = noCodeMatch
-        .filter((r) => r.productName && r.companyName)
-        .map((r) => ({ productName: r.productName, companyName: r.companyName }));
-
-      if (nameConditions.length > 0) {
-        const fallbackRecords = await prisma.medication.findMany({
-          where: {
-            OR: nameConditions.map((c) => ({
-              AND: [
-                { productName: { equals: c.productName, mode: "insensitive" as const } },
-                { companyName: { equals: c.companyName, mode: "insensitive" as const } },
-              ],
-            })),
-          },
-          select: { id: true, productName: true, companyName: true },
-        });
-        fallbackRecords.forEach((r) => {
-          existingByProductKey.set(normalizeProductKey(r.productName, r.companyName), r.id);
-        });
-      }
     }
 
     let updated = 0;
     const toCreate: typeof rateRows = [];
-    const skippedItems: { code: string; productName: string }[] = [];
+    const skippedItems: { code: string; productName: string; companyName: string }[] = [];
 
     for (const row of rateRows) {
-      // 1차: 보험코드 매칭
       const codeKey = row.insuranceCode ? normalizeCode(row.insuranceCode) : null;
       const idByCode = codeKey ? existingByCode.get(codeKey) : undefined;
 
       if (idByCode) {
+        // 보험코드 매칭된 기존 레코드에 수수료율 업데이트
         const updateData: Record<string, unknown> = {
           commissionRate: row.commissionRate,
           isSettlement,
@@ -126,37 +107,16 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      // 2차: 품목명+제약사명 매칭
-      const productKey = row.productName && row.companyName
-        ? normalizeProductKey(row.productName, row.companyName)
-        : null;
-      const idByProduct = productKey ? existingByProductKey.get(productKey) : undefined;
-
-      if (idByProduct) {
-        const updateData: Record<string, unknown> = {
-          commissionRate: row.commissionRate,
-          isSettlement,
-          settlementType,
-          updatedAt: new Date(),
-        };
-        if (row.insuranceCode) updateData.insuranceCode = row.insuranceCode;
-        if (row.bioStatus) updateData.bioStatus = row.bioStatus;
-        if (row.originalDrug) updateData.originalDrug = row.originalDrug;
-        if (row.notes) updateData.notes = row.notes;
-        if (row.categoryA) updateData.categoryA = row.categoryA;
-        if (row.categoryB) updateData.categoryB = row.categoryB;
-        await prisma.medication.update({ where: { id: idByProduct }, data: updateData });
-        updated++;
-        continue;
-      }
-
-      // 매칭 없음: 품목명+성분명 있으면 신규 생성, 보험코드만 있으면 스킵
+      // 보험코드 미매칭
       if (row.productName && row.ingredientName) {
+        // 품목명/성분명 있으면 EXCEL 레코드로 신규 생성
         toCreate.push(row);
       } else {
+        // 보험코드만 있고 공공데이터 미매칭 → 스킵 (공공데이터 sync 후 재업로드 필요)
         skippedItems.push({
           code: row.insuranceCode ?? "",
           productName: row.productName,
+          companyName: row.companyName,
         });
       }
     }
