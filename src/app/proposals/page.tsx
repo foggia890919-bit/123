@@ -21,7 +21,13 @@ interface Medication {
   categoryB: string | null; bioStatus: string | null; originalDrug: string | null; notes: string | null;
   isSettlement: boolean; settlementType?: string | null; additionalRate?: number | null;
 }
-interface ProposalItem { id: string; altMedication: Medication | null; order: number; note?: string | null; }
+interface ProposalItem {
+  id: string;
+  altMedication: Medication | null;
+  originalMedication?: Medication | null;
+  order: number;
+  note?: string | null;
+}
 interface UserClient { id: string; clientName: string; bizNumber: string; approved: boolean; }
 interface Proposal {
   id: string; title: string; clientId?: string | null;
@@ -58,7 +64,11 @@ function ProposalsContent() {
   const [confirmClientId, setConfirmClientId] = useState<string | null>(null);
   const [companyStatuses, setCompanyStatuses] = useState<Record<string, string>>({});
   const [cols, setCols] = useState<ColumnVisibility>({ showRate: true, showInsuranceCode: true });
-  const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null } | null>(null);
+  const [ingredientModal, setIngredientModal] = useState<{
+    name: string;
+    categoryB?: string | null;
+    replaceContext?: { proposalId: string; itemId: string; originalProductName: string };
+  } | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [expandedCompanies, setExpandedCompanies] = useState<Set<string>>(new Set());
   const [requestingFilter, setRequestingFilter] = useState<Set<string>>(new Set());
@@ -644,20 +654,35 @@ function ProposalsContent() {
                                   <span className="font-mono text-gray-500 text-xs">{item.note}</span>
                                 </p>
                               ) : (
-                                <p className="font-medium text-gray-900 text-sm whitespace-nowrap">
-                                  {m?.productName || "-"}
-                                  {m?.isSettlement && (m.settlementType === "원외" || m.settlementType === "원내") && (
-                                    <span className={`inline-block text-[10px] border px-1 py-0.5 rounded ml-1 align-middle ${
-                                      m.settlementType === "원외" ? "text-blue-700 bg-blue-50 border-blue-200" : "text-indigo-700 bg-indigo-50 border-indigo-200"
-                                    }`}>{m.settlementType === "원외" ? "cso" : "원내가능"}</span>
+                                <div className="space-y-0.5">
+                                  {item.originalMedication && (
+                                    <p className="text-xs text-gray-400 line-through whitespace-nowrap flex items-center gap-1">
+                                      <span className="text-[10px] bg-gray-100 text-gray-500 border border-gray-200 rounded px-1 py-0.5 no-underline">원본</span>
+                                      {item.originalMedication.productName}
+                                    </p>
                                   )}
-                                </p>
+                                  <p className="font-medium text-gray-900 text-sm whitespace-nowrap flex items-center gap-1">
+                                    {item.originalMedication && (
+                                      <span className="text-[10px] bg-blue-100 text-blue-700 border border-blue-200 rounded px-1 py-0.5 font-semibold">대체</span>
+                                    )}
+                                    {m?.productName || "-"}
+                                    {m?.isSettlement && (m.settlementType === "원외" || m.settlementType === "원내") && (
+                                      <span className={`inline-block text-[10px] border px-1 py-0.5 rounded align-middle ${
+                                        m.settlementType === "원외" ? "text-blue-700 bg-blue-50 border-blue-200" : "text-indigo-700 bg-indigo-50 border-indigo-200"
+                                      }`}>{m.settlementType === "원외" ? "cso" : "원내가능"}</span>
+                                    )}
+                                  </p>
+                                </div>
                               )}
                             </td>
                             <td className="px-3 py-2.5 text-xs text-gray-500 max-w-[140px] truncate">{m?.ingredientName || "-"}</td>
                             <td className="px-3 py-2.5 text-center">
                               {m && (
-                                <button onClick={() => setIngredientModal({ name: m.ingredientName, categoryB: m.categoryB })}
+                                <button onClick={() => selected && setIngredientModal({
+                                  name: m.ingredientName,
+                                  categoryB: m.categoryB,
+                                  replaceContext: { proposalId: selected.id, itemId: item.id, originalProductName: m.productName },
+                                })}
                                   className="text-xs text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 whitespace-nowrap">
                                   <Search className="w-3 h-3 inline mr-0.5" />동일성분
                                 </button>
@@ -764,6 +789,9 @@ function ProposalsContent() {
           ingredientName={ingredientModal.name}
           categoryBCode={ingredientModal.categoryB ?? undefined}
           userId={userId}
+          replaceContext={ingredientModal.replaceContext
+            ? { ...ingredientModal.replaceContext, onDone: () => { if (selected) loadProposal(selected); } }
+            : undefined}
           onClose={() => { setIngredientModal(null); if (selected) loadProposal(selected); }}
           initialCols={{
             categoryB: cols.showCategoryB, bioStatus: cols.showBioStatus,

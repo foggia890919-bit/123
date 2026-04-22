@@ -1,10 +1,17 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { X, ShoppingCart, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
+import { X, ShoppingCart, ChevronUp, ChevronDown, ChevronsUpDown, RefreshCw, Loader2 } from "lucide-react";
 import { formatPrice } from "@/lib/utils";
 import AddToProposalDialog from "./AddToProposalDialog";
 import type { MedicationItem } from "@/types";
+
+interface ReplaceContext {
+  proposalId: string;
+  itemId: string;
+  originalProductName: string;
+  onDone?: () => void;
+}
 
 interface Props {
   ingredientName: string;
@@ -12,6 +19,8 @@ interface Props {
   userId?: string;
   onClose: () => void;
   initialCols?: Partial<ColVis>;
+  /** 기존 제안서 항목을 대체할 때 넘겨받는 컨텍스트 */
+  replaceContext?: ReplaceContext;
 }
 
 type SortKey = "productName" | "price" | "commissionRate" | "additionalRate" | "totalRate" | "settlement";
@@ -22,11 +31,13 @@ interface ColVis {
   insuranceCode: boolean; notes: boolean;
 }
 
-export default function SameIngredientModal({ ingredientName, categoryBCode, userId, onClose, initialCols }: Props) {
+export default function SameIngredientModal({ ingredientName, categoryBCode, userId, onClose, initialCols, replaceContext }: Props) {
   const [medications, setMedications] = useState<MedicationItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [proposalTarget, setProposalTarget] = useState<MedicationItem | null>(null);
+  const [replacingId, setReplacingId] = useState<string>("");
+  const [replaceError, setReplaceError] = useState<string>("");
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [cols, setCols] = useState<ColVis>({
@@ -36,6 +47,29 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
     insuranceCode: initialCols?.insuranceCode ?? true,
     notes: initialCols?.notes ?? false,
   });
+
+  async function replaceItem(med: MedicationItem) {
+    if (!replaceContext) return;
+    setReplaceError(""); setReplacingId(med.id);
+    try {
+      const res = await fetch(`/api/proposals/${replaceContext.proposalId}/items`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemId: replaceContext.itemId, newMedicationId: med.id }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        if (d.error === "already_exists") setReplaceError("이 품목은 이미 제안서에 있어요");
+        else if (d.error === "same_medication") setReplaceError("원본과 동일한 품목이에요");
+        else setReplaceError("대체 실패");
+        return;
+      }
+      replaceContext.onDone?.();
+      onClose();
+    } finally {
+      setReplacingId("");
+    }
+  }
 
   useEffect(() => {
     if (!categoryBCode) { setLoading(false); return; }
@@ -99,6 +133,18 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
             </div>
             <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X className="w-5 h-5" /></button>
           </div>
+
+          {/* 대체 모드 배너 */}
+          {replaceContext && (
+            <div className="px-6 py-3 bg-blue-50 border-b border-blue-100 text-xs flex items-center justify-between">
+              <div className="text-gray-700">
+                <span className="font-semibold">대체 모드:</span>{" "}
+                <span className="text-gray-500 line-through">{replaceContext.originalProductName}</span>{" "}
+                을(를) 선택한 품목으로 교체합니다.
+              </div>
+              {replaceError && <span className="text-red-600">{replaceError}</span>}
+            </div>
+          )}
 
           {/* 컬럼 토글 */}
           <div className="px-6 py-2 border-b bg-gray-50 flex flex-wrap gap-3 text-xs">
@@ -193,10 +239,22 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
                         )}
                         <td className="px-4 py-2.5 text-center">
                           {userId ? (
-                            <button onClick={() => setProposalTarget(med)}
-                              className="text-xs text-white bg-green-600 hover:bg-green-700 rounded px-2 py-1 flex items-center gap-1 mx-auto whitespace-nowrap">
-                              <ShoppingCart className="w-3 h-3" />추가
-                            </button>
+                            <div className="flex items-center gap-1 justify-center">
+                              {replaceContext && (
+                                <button onClick={() => replaceItem(med)}
+                                  disabled={!!replacingId}
+                                  className="text-xs text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded px-2 py-1 flex items-center gap-1 whitespace-nowrap">
+                                  {replacingId === med.id
+                                    ? <Loader2 className="w-3 h-3 animate-spin" />
+                                    : <RefreshCw className="w-3 h-3" />}
+                                  대체
+                                </button>
+                              )}
+                              <button onClick={() => setProposalTarget(med)}
+                                className="text-xs text-white bg-green-600 hover:bg-green-700 rounded px-2 py-1 flex items-center gap-1 whitespace-nowrap">
+                                <ShoppingCart className="w-3 h-3" />추가
+                              </button>
+                            </div>
                           ) : <span className="text-xs text-gray-300">로그인 필요</span>}
                         </td>
                       </tr>

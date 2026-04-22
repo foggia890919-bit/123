@@ -7,7 +7,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const proposal = await prisma.proposal.findUnique({
     where: { id },
     include: {
-      items: { include: { altMedication: true }, orderBy: { order: "asc" } },
+      items: { include: { altMedication: true, originalMedication: true }, orderBy: { order: "asc" } },
       client: { select: { id: true, clientName: true, bizNumber: true, approved: true } },
     },
   });
@@ -21,6 +21,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     ...item,
     altMedication: item.altMedication
       ? { ...item.altMedication, additionalRate: rateMap[normalizeCompanyKey(item.altMedication.companyName)] ?? null }
+      : null,
+    originalMedication: item.originalMedication
+      ? { ...item.originalMedication, additionalRate: rateMap[normalizeCompanyKey(item.originalMedication.companyName)] ?? null }
       : null,
   }));
 
