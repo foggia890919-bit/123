@@ -3,7 +3,7 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { Upload, Trash2, FileSpreadsheet, FileDown, X, AlertCircle, Loader2, Search, Save } from "lucide-react";
+import { Upload, Trash2, FileSpreadsheet, FileDown, X, AlertCircle, Loader2, Search, Save, Sparkles, TrendingUp, Package } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatPrice } from "@/lib/utils";
@@ -64,6 +64,8 @@ function BulkRegisterInner() {
   const [newBizNumber, setNewBizNumber] = useState("");
   const [addClientError, setAddClientError] = useState("");
   const [addClientSaving, setAddClientSaving] = useState(false);
+  const [autoSwitching, setAutoSwitching] = useState<"commission" | "stock" | "ai" | null>(null);
+  const [autoSwitchResult, setAutoSwitchResult] = useState<{ applied: number; skipped: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   function refreshClients() {
@@ -94,6 +96,45 @@ function BulkRegisterInner() {
       setNewClientName(""); setNewBizNumber("");
     } catch { setAddClientError("저장 중 오류가 발생했어요."); }
     finally { setAddClientSaving(false); }
+  }
+
+  async function handleAutoSwitch(criteria: "commission" | "stock" | "ai") {
+    const eligibleRows = rows.filter((r) => r.original?.categoryB);
+    if (eligibleRows.length === 0) return;
+    setAutoSwitching(criteria);
+    setAutoSwitchResult(null);
+    try {
+      const payload = {
+        rows: eligibleRows.map((r) => ({
+          id: r.id,
+          categoryB: r.original!.categoryB,
+          originalMedicationId: r.original!.id,
+          originalProductName: r.original!.productName,
+          ingredientName: r.original!.ingredientName,
+        })),
+        criteria,
+        userId: userId ?? null,
+      };
+      const res = await fetch("/api/ai/auto-switch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) return;
+      const data = await res.json() as { results: { rowId: string; medication: (typeof rows[0]["alternative"]) }[] };
+      const resultMap = new Map(data.results.map((r) => [r.rowId, r.medication]));
+      const applied = data.results.filter((r) => r.medication != null).length;
+      const skipped = eligibleRows.length - applied;
+      setRows((prev) =>
+        prev.map((r) => {
+          const med = resultMap.get(r.id);
+          return med ? { ...r, alternative: med } : r;
+        })
+      );
+      setAutoSwitchResult({ applied, skipped });
+    } finally {
+      setAutoSwitching(null);
+    }
   }
 
   useEffect(() => {
@@ -522,6 +563,50 @@ function BulkRegisterInner() {
             </div>
           )}
         </div>
+
+        {/* 자동 선택 */}
+        {rows.some((r) => r.original?.categoryB) && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+            <div className="flex items-center gap-3 flex-wrap">
+              <div>
+                <p className="text-sm font-semibold text-gray-800">자동 대체 선택</p>
+                <p className="text-xs text-gray-500 mt-0.5">동일성분 품목 중 기준에 따라 대체품을 일괄 선택합니다.</p>
+              </div>
+              <div className="flex items-center gap-2 ml-auto flex-wrap">
+                <button
+                  onClick={() => handleAutoSwitch("commission")}
+                  disabled={autoSwitching !== null}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-medium disabled:opacity-50"
+                >
+                  {autoSwitching === "commission" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <TrendingUp className="w-3.5 h-3.5" />}
+                  수수료율 기준
+                </button>
+                <button
+                  onClick={() => handleAutoSwitch("stock")}
+                  disabled={autoSwitching !== null}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 text-xs font-medium disabled:opacity-50"
+                >
+                  {autoSwitching === "stock" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Package className="w-3.5 h-3.5" />}
+                  재고 기준
+                </button>
+                <button
+                  onClick={() => handleAutoSwitch("ai")}
+                  disabled={autoSwitching !== null}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-purple-300 bg-purple-50 text-purple-700 hover:bg-purple-100 text-xs font-medium disabled:opacity-50"
+                >
+                  {autoSwitching === "ai" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                  AI 추천
+                </button>
+              </div>
+            </div>
+            {autoSwitchResult && (
+              <div className="mt-2 text-xs text-gray-600 flex gap-3">
+                <span className="text-emerald-700 font-medium">✓ {autoSwitchResult.applied}건 선택됨</span>
+                {autoSwitchResult.skipped > 0 && <span className="text-gray-400">{autoSwitchResult.skipped}건 대체품 없음</span>}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* 표 */}
         {rows.length === 0 ? (
