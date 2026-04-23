@@ -13,7 +13,7 @@ import * as XLSX from "xlsx";
 
 interface Company { name: string; isSettlement: boolean; count: number; hasOutpatient?: boolean; hasInpatient?: boolean; }
 interface ProposalSummary { id: string; title: string; _count?: { items: number }; }
-type CompanyTab = "전체" | "원외" | "원내";
+type CompanyTab = "전체" | "CSO" | "원내";
 
 function StatusBadge({ status }: { status: string }) {
   if (status === "APPROVED") return <span className="text-xs text-green-700 bg-green-50 border border-green-200 px-1.5 py-0.5 rounded shrink-0">거래가능</span>;
@@ -97,7 +97,7 @@ export default function FilterListPage() {
   }
 
   const tabCompanies = companies.filter((c) => {
-    if (companyTab === "원외") return c.hasOutpatient;
+    if (companyTab === "CSO") return c.hasOutpatient;
     if (companyTab === "원내") return c.hasInpatient;
     return true;
   });
@@ -119,7 +119,8 @@ export default function FilterListPage() {
       params.set("q", productSearch.trim() || " ");
       params.set("companies", Array.from(selected).join(","));
       if (session?.user?.id) params.set("userId", session.user.id);
-      if (companyTab === "원외" || companyTab === "원내") params.set("settlementType", companyTab);
+      if (companyTab === "CSO") params.set("settlementType", "원외");
+      else if (companyTab === "원내") params.set("settlementType", "원내");
       const res = await fetch(`/api/medications/filter?${params.toString()}`);
       const data = await res.json();
       setResults(data.medications || []); setTotal(data.total || 0);
@@ -174,9 +175,9 @@ export default function FilterListPage() {
                   {/* 원외/원내/전체 탭 */}
                   <div className="px-3 pt-2.5 pb-2 border-b border-gray-100">
                     <div className="flex gap-0.5 bg-gray-100 rounded-lg p-0.5 text-xs mb-2">
-                      {(["전체", "원외", "원내"] as CompanyTab[]).map((tab) => {
+                      {(["전체", "CSO", "원내"] as CompanyTab[]).map((tab) => {
                         const count = tab === "전체" ? companies.length
-                          : tab === "원외" ? companies.filter((c) => c.hasOutpatient).length
+                          : tab === "CSO" ? companies.filter((c) => c.hasOutpatient).length
                           : companies.filter((c) => c.hasInpatient).length;
                         return (
                           <button key={tab} type="button"
@@ -260,7 +261,7 @@ export default function FilterListPage() {
 
           {/* 선택된 제약사 칩 */}
           {selected.size > 0 && (
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-1.5 items-center">
               {Array.from(selected).map((name) => (
                 <span key={name} className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded-full">
                   <Building2 className="w-3 h-3 shrink-0" />{name}
@@ -268,6 +269,13 @@ export default function FilterListPage() {
                   <button type="button" onClick={() => toggleCompany(name)} className="hover:text-red-500 ml-0.5">×</button>
                 </span>
               ))}
+              <button
+                type="button"
+                onClick={() => { setSelected(new Set()); setResults([]); setSearched(false); }}
+                className="inline-flex items-center gap-1 text-xs text-red-500 hover:text-red-700 border border-red-200 bg-red-50 hover:bg-red-100 px-2 py-1 rounded-full transition-colors whitespace-nowrap"
+              >
+                <X className="w-3 h-3" />전체 해제
+              </button>
             </div>
           )}
 
