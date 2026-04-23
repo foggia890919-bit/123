@@ -114,34 +114,24 @@ export default function FilterListPage() {
     setSelected((prev) => { const n = new Set(prev); n.has(name) ? n.delete(name) : n.add(name); return n; });
   }
 
-  const searchBaseRef = useRef<URLSearchParams | null>(null);
-
-  async function fetchPage(targetPage: number, targetSize: number, base?: URLSearchParams) {
-    const params = new URLSearchParams(base ?? searchBaseRef.current ?? undefined);
-    params.set("limit", String(targetSize));
-    params.set("skip", String((targetPage - 1) * targetSize));
-    setLoading(true);
+  const handleSearch = useCallback(async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (selected.size === 0) return alert("제약사를 1개 이상 선택해주세요.");
+    setLoading(true); setSearched(true); setPage(1);
     try {
+      const params = new URLSearchParams();
+      params.set("q", productSearch.trim() || " ");
+      params.set("companies", Array.from(selected).join(","));
+      if (session?.user?.id) params.set("userId", session.user.id);
+      if (companyTab === "CSO") params.set("settlementType", "원외");
+      else if (companyTab === "원내") params.set("settlementType", "원내");
+      params.set("limit", "9999");
       const res = await fetch(`/api/medications/filter?${params.toString()}`);
       const data = await res.json();
       setResults(data.medications || []); setTotal(data.total || 0);
     } catch { setResults([]); }
     finally { setLoading(false); }
-  }
-
-  const handleSearch = useCallback(async (e?: React.FormEvent) => {
-    e?.preventDefault();
-    if (selected.size === 0) return alert("제약사를 1개 이상 선택해주세요.");
-    const params = new URLSearchParams();
-    params.set("q", productSearch.trim() || " ");
-    params.set("companies", Array.from(selected).join(","));
-    if (session?.user?.id) params.set("userId", session.user.id);
-    if (companyTab === "CSO") params.set("settlementType", "원외");
-    else if (companyTab === "원내") params.set("settlementType", "원내");
-    searchBaseRef.current = params;
-    setSearched(true); setPage(1);
-    await fetchPage(1, pageSize, params);
-  }, [selected, productSearch, session, companyTab, pageSize]);
+  }, [selected, productSearch, session, companyTab]);
 
   const [downloading, setDownloading] = useState(false);
 
@@ -333,7 +323,8 @@ export default function FilterListPage() {
         </div>
 
         {searched && (() => {
-          const totalPages = Math.max(1, Math.ceil(total / pageSize));
+          const totalPages = Math.max(1, Math.ceil(results.length / pageSize));
+          const pageItems = results.slice((page - 1) * pageSize, page * pageSize);
           const pageNums: (number | "…")[] = [];
           if (totalPages <= 7) {
             for (let i = 1; i <= totalPages; i++) pageNums.push(i);
@@ -349,32 +340,27 @@ export default function FilterListPage() {
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <div className="flex items-center gap-3">
                   <p className="text-sm text-gray-500">
-                    조회 결과 <span className="font-semibold text-gray-900">{total.toLocaleString()}개</span>
-                    <span className="text-gray-400 ml-2">({page}/{totalPages} 페이지)</span>
+                    조회 결과 <span className="font-semibold text-gray-900">{results.length.toLocaleString()}개</span>
                   </p>
                   <select
                     value={pageSize}
-                    onChange={(e) => {
-                      const newSize = Number(e.target.value);
-                      setPageSize(newSize); setPage(1);
-                      fetchPage(1, newSize);
-                    }}
+                    onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
                     className="text-xs border border-gray-300 rounded px-2 py-1 text-gray-600 bg-white"
                   >
                     {[10, 20, 50, 100].map((n) => <option key={n} value={n}>{n}개씩</option>)}
                   </select>
                 </div>
                 <div className="flex items-center gap-3 flex-wrap">
-                  <Button size="sm" variant="outline" onClick={exportExcel} disabled={total === 0 || downloading}>
+                  <Button size="sm" variant="outline" onClick={exportExcel} disabled={results.length === 0 || downloading}>
                     <Download className="w-4 h-4 mr-1.5" />{downloading ? "다운로드 중…" : "엑셀 다운"}
                   </Button>
                 </div>
               </div>
-              <MedicationTable medications={results} loading={loading} {...cols} showRate={isSalesRep ? cols.showRate : false} userId={session?.user?.id} />
+              <MedicationTable medications={pageItems} loading={loading} {...cols} showRate={isSalesRep ? cols.showRate : false} userId={session?.user?.id} />
               {totalPages > 1 && (
                 <div className="flex items-center justify-center gap-1 pt-1">
                   <button
-                    onClick={() => { const p = Math.max(1, page - 1); setPage(p); fetchPage(p, pageSize); }}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
                     disabled={page === 1}
                     className="px-2.5 py-1.5 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
                   >이전</button>
@@ -384,13 +370,13 @@ export default function FilterListPage() {
                     ) : (
                       <button
                         key={n}
-                        onClick={() => { setPage(n as number); fetchPage(n as number, pageSize); }}
+                        onClick={() => setPage(n as number)}
                         className={`px-2.5 py-1.5 text-xs rounded border ${page === n ? "bg-gray-900 text-white border-gray-900 font-semibold" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}
                       >{n}</button>
                     )
                   )}
                   <button
-                    onClick={() => { const p = Math.min(totalPages, page + 1); setPage(p); fetchPage(p, pageSize); }}
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                     disabled={page === totalPages}
                     className="px-2.5 py-1.5 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
                   >다음</button>
