@@ -27,13 +27,16 @@ export async function GET(req: NextRequest) {
   }
 
   const limitParam = req.nextUrl.searchParams.get("limit");
-  const take = limitParam ? parseInt(limitParam) : 200;
+  const skipParam = req.nextUrl.searchParams.get("skip");
+  const take = limitParam ? Math.min(parseInt(limitParam), 9999) : 200;
+  const skip = skipParam ? parseInt(skipParam) : 0;
 
   const [medications, total] = await Promise.all([
     prisma.medication.findMany({
       where,
       orderBy: [{ isSettlement: "desc" }, { commissionRate: "desc" }, { companyName: "asc" }],
       take,
+      skip,
     }),
     prisma.medication.count({ where }),
   ]);
