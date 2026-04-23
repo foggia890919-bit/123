@@ -24,7 +24,7 @@ declare global {
   }
 }
 
-type Tab = "upload" | "members" | "rates" | "filterReqs" | "userClients" | "apiSources" | "notices" | "companySubmissions" | "bulkSubmit" | "loginLogs" | "fileMigration";
+type Tab = "upload" | "members" | "rates" | "filterReqs" | "userClients" | "apiSources" | "notices" | "companySubmissions" | "bulkSubmit" | "loginLogs" | "fileMigration" | "banners" | "boards";
 
 interface MenuItem { key: Tab; label: string; icon: React.ElementType }
 interface MenuGroup { title: string; items: MenuItem[] }
@@ -57,6 +57,8 @@ const MENU_GROUPS: MenuGroup[] = [
     title: "콘텐츠",
     items: [
       { key: "notices", label: "공지사항 관리", icon: FileSpreadsheet },
+      { key: "banners", label: "메인 배너", icon: Upload },
+      { key: "boards", label: "게시판 관리", icon: MessageCircle },
     ],
   },
   {
@@ -156,6 +158,8 @@ export default function AdminDashboardPage() {
         {tab === "apiSources" && <ApiSourcesTab />}
         {tab === "loginLogs" && <LoginLogsTab />}
         {tab === "fileMigration" && <FileMigrationTab />}
+        {tab === "banners" && <BannersTab />}
+        {tab === "boards" && <BoardsTab />}
       </main>
     </div>
   );
@@ -3112,7 +3116,7 @@ function ApiSourcesTab() {
 }
 
 // ── 공지사항 관리 탭 ──────────────────────────────────────────────────────────
-interface Notice { id: string; title: string; content: string; category: string; isPinned: boolean; createdAt: string; }
+interface Notice { id: string; title: string; content: string; category: string; isPinned: boolean; showAsPopup: boolean; popupUntil: string | null; createdAt: string; }
 
 function NoticesTab() {
   const [notices, setNotices] = useState<Notice[]>([]);
@@ -3120,6 +3124,8 @@ function NoticesTab() {
   const [content, setContent] = useState("");
   const [category, setCategory] = useState("공지");
   const [isPinned, setIsPinned] = useState(false);
+  const [showAsPopup, setShowAsPopup] = useState(false);
+  const [popupUntil, setPopupUntil] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -3137,10 +3143,11 @@ function NoticesTab() {
     const r = await fetch("/api/notices", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, content, category, isPinned }),
+      body: JSON.stringify({ title, content, category, isPinned, showAsPopup, popupUntil: popupUntil || null }),
     });
     if (r.ok) {
       setTitle(""); setContent(""); setIsPinned(false); setCategory("공지");
+      setShowAsPopup(false); setPopupUntil("");
       await load();
     } else {
       const d = await r.json();
@@ -3155,19 +3162,27 @@ function NoticesTab() {
     await load();
   }
 
+  async function togglePopup(n: Notice) {
+    await fetch(`/api/notices/${n.id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ showAsPopup: !n.showAsPopup }),
+    });
+    load();
+  }
+
   return (
     <div className="space-y-6">
       {/* 등록 폼 */}
       <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
         <h3 className="font-semibold text-gray-800 mb-4">공지사항 등록</h3>
         <form onSubmit={submit} className="space-y-3">
-          <div className="flex gap-3">
+          <div className="flex gap-3 flex-wrap">
             <select value={category} onChange={(e) => setCategory(e.target.value)}
               className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-28">
               {["공지", "업데이트", "안내", "이벤트"].map((c) => <option key={c}>{c}</option>)}
             </select>
             <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="제목"
-              className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+              className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm min-w-0" />
             <label className="flex items-center gap-1.5 text-sm text-gray-600 whitespace-nowrap cursor-pointer">
               <input type="checkbox" checked={isPinned} onChange={(e) => setIsPinned(e.target.checked)} className="rounded" />
               필독 고정
@@ -3175,6 +3190,20 @@ function NoticesTab() {
           </div>
           <textarea value={content} onChange={(e) => setContent(e.target.value)} placeholder="내용"
             rows={4} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm resize-none" />
+          <div className="flex gap-4 items-center flex-wrap">
+            <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer">
+              <input type="checkbox" checked={showAsPopup} onChange={(e) => setShowAsPopup(e.target.checked)} className="rounded" />
+              팝업으로 노출
+            </label>
+            {showAsPopup && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500">팝업 종료일:</span>
+                <input type="date" value={popupUntil} onChange={e => setPopupUntil(e.target.value)}
+                  className="border border-gray-300 rounded-lg px-2 py-1 text-sm" />
+                <span className="text-xs text-gray-400">(비워두면 무기한)</span>
+              </div>
+            )}
+          </div>
           {error && <p className="text-red-500 text-xs">{error}</p>}
           <Button type="submit" disabled={loading} className="w-full">
             {loading ? "등록 중..." : "공지 등록"}
@@ -3193,17 +3222,24 @@ function NoticesTab() {
           notices.map((n) => (
             <div key={n.id} className="border-b border-gray-100 last:border-0 px-5 py-3 flex items-start justify-between gap-3">
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-0.5">
+                <div className="flex items-center gap-2 mb-0.5 flex-wrap">
                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">{n.category}</span>
                   {n.isPinned && <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-600 font-medium">필독</span>}
+                  {n.showAsPopup && <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-600 font-medium">팝업</span>}
                   <span className="text-sm font-medium text-gray-800 truncate">{n.title}</span>
                 </div>
                 <p className="text-xs text-gray-400">{new Date(n.createdAt).toLocaleDateString("ko-KR")}</p>
               </div>
-              <button onClick={() => remove(n.id)}
-                className="text-xs text-red-500 hover:text-red-700 border border-red-200 hover:border-red-400 rounded px-2 py-1 flex-shrink-0">
-                삭제
-              </button>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <button onClick={() => togglePopup(n)}
+                  className={`text-xs px-2 py-1 rounded border ${n.showAsPopup ? "border-orange-300 text-orange-600 hover:border-orange-400" : "border-gray-200 text-gray-400 hover:border-gray-300"}`}>
+                  {n.showAsPopup ? "팝업끄기" : "팝업켜기"}
+                </button>
+                <button onClick={() => remove(n.id)}
+                  className="text-xs text-red-500 hover:text-red-700 border border-red-200 hover:border-red-400 rounded px-2 py-1">
+                  삭제
+                </button>
+              </div>
             </div>
           ))
         )}
@@ -3708,6 +3744,361 @@ function Stat({ label, value }: { label: string; value: number }) {
     <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
       <div className="text-[11px] text-gray-500">{label}</div>
       <div className="text-xl font-bold text-gray-900">{value.toLocaleString()}</div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────
+// BannersTab
+// ─────────────────────────────────────────────────────
+interface Banner {
+  id: string; title: string; subtitle: string | null; description: string | null;
+  buttonText: string | null; buttonLink: string | null; imageKey: string | null;
+  imageUrl: string | null; bgColor: string | null; order: number; active: boolean;
+}
+
+const BG_PRESETS = [
+  { label: "파랑", value: "from-blue-900 to-blue-700" },
+  { label: "남색", value: "from-slate-800 to-blue-900" },
+  { label: "보라", value: "from-indigo-900 to-purple-800" },
+  { label: "청록", value: "from-blue-800 to-cyan-700" },
+  { label: "초록", value: "from-green-800 to-teal-700" },
+  { label: "빨강", value: "from-red-900 to-rose-700" },
+];
+
+function BannersTab() {
+  const [banners, setBanners] = useState<Banner[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState<Partial<Banner> & { imageDataUri?: string }>({});
+  const [editing, setEditing] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function load() {
+    setLoading(true);
+    const r = await fetch("/api/admin/banners").then(r => r.json()).catch(() => []);
+    setBanners(Array.isArray(r) ? r : []);
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, []);
+
+  function startNew() {
+    setForm({ active: true, order: banners.length, bgColor: BG_PRESETS[0].value });
+    setEditing("new");
+  }
+  function startEdit(b: Banner) {
+    setForm({ ...b });
+    setEditing(b.id);
+  }
+  function cancelEdit() { setEditing(null); setForm({}); }
+
+  function pickImage() { fileRef.current?.click(); }
+  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setForm(f => ({ ...f, imageDataUri: reader.result as string }));
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  }
+
+  async function save() {
+    setSaving(true);
+    let imageKey = form.imageKey ?? null;
+    if (form.imageDataUri) {
+      const up = await fetch("/api/upload/banner-image", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dataUri: form.imageDataUri }),
+      }).then(r => r.json()).catch(() => ({}));
+      if (up.key) imageKey = up.key;
+    }
+    const payload = { title: form.title, subtitle: form.subtitle, description: form.description,
+      buttonText: form.buttonText, buttonLink: form.buttonLink, imageKey, bgColor: form.bgColor,
+      order: form.order ?? 0, active: form.active !== false };
+
+    if (editing === "new") {
+      await fetch("/api/admin/banners", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    } else {
+      await fetch(`/api/admin/banners/${editing}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    }
+    setSaving(false);
+    cancelEdit();
+    load();
+  }
+
+  async function toggleActive(b: Banner) {
+    await fetch(`/api/admin/banners/${b.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ active: !b.active }) });
+    load();
+  }
+  async function remove(id: string) {
+    if (!confirm("배너를 삭제할까요?")) return;
+    await fetch(`/api/admin/banners/${id}`, { method: "DELETE" });
+    load();
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-xl border border-gray-200 p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-base font-bold text-gray-900">메인 배너 관리</h2>
+          <Button size="sm" onClick={startNew}><Plus className="w-4 h-4 mr-1" />배너 추가</Button>
+        </div>
+
+        {editing && (
+          <div className="mb-5 p-4 bg-blue-50 border border-blue-200 rounded-xl space-y-3">
+            <h3 className="text-sm font-semibold text-blue-900">{editing === "new" ? "새 배너" : "배너 수정"}</h3>
+            <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="제목 *" value={form.title ?? ""} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} />
+            <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="부제목" value={form.subtitle ?? ""} onChange={e => setForm(f => ({ ...f, subtitle: e.target.value }))} />
+            <textarea className="w-full border rounded-lg px-3 py-2 text-sm resize-none" rows={2} placeholder="설명 텍스트" value={form.description ?? ""} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
+            <div className="flex gap-2">
+              <input className="flex-1 border rounded-lg px-3 py-2 text-sm" placeholder="버튼 텍스트" value={form.buttonText ?? ""} onChange={e => setForm(f => ({ ...f, buttonText: e.target.value }))} />
+              <input className="flex-1 border rounded-lg px-3 py-2 text-sm" placeholder="버튼 링크 (예: /search)" value={form.buttonLink ?? ""} onChange={e => setForm(f => ({ ...f, buttonLink: e.target.value }))} />
+            </div>
+            <div className="flex gap-2 flex-wrap items-center">
+              <span className="text-xs text-gray-500 mr-1">배경색:</span>
+              {BG_PRESETS.map(p => (
+                <button key={p.value} onClick={() => setForm(f => ({ ...f, bgColor: p.value }))}
+                  className={`px-3 py-1 rounded-full text-xs font-medium bg-gradient-to-r ${p.value} text-white border-2 ${form.bgColor === p.value ? "border-blue-600" : "border-transparent"}`}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2 items-center">
+              <button onClick={pickImage} className="text-xs px-3 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50">이미지 선택</button>
+              {(form.imageDataUri || form.imageUrl) && <span className="text-xs text-green-600">✓ 이미지 선택됨</span>}
+              {(form.imageDataUri || form.imageUrl) && <button onClick={() => setForm(f => ({ ...f, imageDataUri: undefined, imageKey: null, imageUrl: null }))} className="text-xs text-red-400 hover:text-red-600">제거</button>}
+              <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onFile} />
+            </div>
+            <div className="flex gap-2 items-center">
+              <input type="number" className="w-20 border rounded-lg px-3 py-2 text-sm" placeholder="순서" value={form.order ?? 0} onChange={e => setForm(f => ({ ...f, order: Number(e.target.value) }))} />
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input type="checkbox" checked={form.active !== false} onChange={e => setForm(f => ({ ...f, active: e.target.checked }))} />
+                활성화
+              </label>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={save} disabled={saving || !form.title?.trim()}>{saving ? "저장 중…" : "저장"}</Button>
+              <Button size="sm" variant="outline" onClick={cancelEdit}>취소</Button>
+            </div>
+          </div>
+        )}
+
+        {loading ? <div className="text-sm text-gray-400">불러오는 중…</div> : banners.length === 0 ? (
+          <div className="text-sm text-gray-400 py-6 text-center">등록된 배너가 없어요.</div>
+        ) : (
+          <div className="space-y-2">
+            {banners.map((b) => (
+              <div key={b.id} className={`flex items-center gap-3 p-3 rounded-xl border ${b.active ? "border-gray-200" : "border-dashed border-gray-200 opacity-60"}`}>
+                <div className={`w-14 h-10 rounded-lg bg-gradient-to-r ${b.bgColor || "from-blue-900 to-blue-700"} flex-shrink-0 overflow-hidden`}>
+                  {b.imageUrl && <img src={b.imageUrl} alt="" className="w-full h-full object-cover opacity-60" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-gray-900 truncate">{b.title}</div>
+                  <div className="text-xs text-gray-400 truncate">{b.subtitle}</div>
+                </div>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${b.active ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>{b.active ? "활성" : "비활성"}</span>
+                <button onClick={() => toggleActive(b)} className="text-xs text-gray-400 hover:text-blue-600">{b.active ? "끄기" : "켜기"}</button>
+                <button onClick={() => startEdit(b)} className="text-xs text-gray-400 hover:text-blue-600">수정</button>
+                <button onClick={() => remove(b.id)} className="text-xs text-gray-400 hover:text-red-500">삭제</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────
+// BoardsTab
+// ─────────────────────────────────────────────────────
+interface BoardRow {
+  id: string; slug: string; name: string; description: string | null;
+  type: "TEXT" | "IMAGE" | "MIXED"; order: number; active: boolean;
+  _count: { posts: number; editors: number };
+}
+interface EditorRow { id: string; userId: string; user: { id: string; name: string | null; email: string; role: string } }
+interface UserOption { id: string; name: string | null; email: string; role: string }
+
+const BOARD_TYPE_LABELS: Record<string, string> = { TEXT: "글자형", IMAGE: "사진형", MIXED: "글자+사진형" };
+
+function BoardsTab() {
+  const [boards, setBoards] = useState<BoardRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState<Partial<BoardRow>>({});
+  const [editing, setEditing] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [editorsBoard, setEditorsBoard] = useState<BoardRow | null>(null);
+  const [editors, setEditors] = useState<EditorRow[]>([]);
+  const [userSearch, setUserSearch] = useState("");
+  const [userResults, setUserResults] = useState<UserOption[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    const r = await fetch("/api/admin/boards").then(r => r.json()).catch(() => []);
+    setBoards(Array.isArray(r) ? r : []);
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, []);
+
+  async function loadEditors(b: BoardRow) {
+    setEditorsBoard(b);
+    const r = await fetch(`/api/admin/boards/${b.id}/editors`).then(r => r.json()).catch(() => []);
+    setEditors(Array.isArray(r) ? r : []);
+  }
+
+  async function searchUsers(q: string) {
+    if (!q.trim()) { setUserResults([]); return; }
+    setSearchLoading(true);
+    const r = await fetch(`/api/admin/users?q=${encodeURIComponent(q)}&limit=10`).then(r => r.json()).catch(() => ({}));
+    setUserResults(Array.isArray(r.users) ? r.users : []);
+    setSearchLoading(false);
+  }
+  useEffect(() => {
+    const t = setTimeout(() => searchUsers(userSearch), 300);
+    return () => clearTimeout(t);
+  }, [userSearch]);
+
+  async function addEditor(userId: string) {
+    if (!editorsBoard) return;
+    await fetch(`/api/admin/boards/${editorsBoard.id}/editors`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId }),
+    });
+    loadEditors(editorsBoard);
+    load();
+    setUserSearch(""); setUserResults([]);
+  }
+  async function removeEditor(userId: string) {
+    if (!editorsBoard) return;
+    await fetch(`/api/admin/boards/${editorsBoard.id}/editors/${userId}`, { method: "DELETE" });
+    loadEditors(editorsBoard);
+    load();
+  }
+
+  function startNew() {
+    setForm({ active: true, order: boards.length, type: "MIXED" });
+    setEditing("new");
+  }
+  function startEdit(b: BoardRow) { setForm({ ...b }); setEditing(b.id); }
+  function cancelEdit() { setEditing(null); setForm({}); }
+
+  async function save() {
+    setSaving(true);
+    const payload = { name: form.name, slug: form.slug, description: form.description,
+      type: form.type || "MIXED", order: form.order ?? 0, active: form.active !== false };
+    if (editing === "new") {
+      await fetch("/api/admin/boards", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    } else {
+      await fetch(`/api/admin/boards/${editing}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    }
+    setSaving(false); cancelEdit(); load();
+  }
+
+  async function remove(id: string) {
+    if (!confirm("게시판을 삭제하면 모든 글도 삭제됩니다. 계속할까요?")) return;
+    await fetch(`/api/admin/boards/${id}`, { method: "DELETE" });
+    load();
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-xl border border-gray-200 p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-base font-bold text-gray-900">게시판 관리</h2>
+          <Button size="sm" onClick={startNew}><Plus className="w-4 h-4 mr-1" />게시판 추가</Button>
+        </div>
+
+        {editing && (
+          <div className="mb-5 p-4 bg-blue-50 border border-blue-200 rounded-xl space-y-3">
+            <h3 className="text-sm font-semibold text-blue-900">{editing === "new" ? "새 게시판" : "게시판 수정"}</h3>
+            <div className="flex gap-2">
+              <input className="flex-1 border rounded-lg px-3 py-2 text-sm" placeholder="게시판 이름 *" value={form.name ?? ""} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+              <input className="flex-1 border rounded-lg px-3 py-2 text-sm" placeholder="슬러그 (URL용, 영문·숫자·-) *" value={form.slug ?? ""} onChange={e => setForm(f => ({ ...f, slug: e.target.value }))} />
+            </div>
+            <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="설명 (선택)" value={form.description ?? ""} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
+            <div className="flex gap-2 items-center">
+              <span className="text-xs text-gray-500">타입:</span>
+              {(["TEXT", "IMAGE", "MIXED"] as const).map(t => (
+                <button key={t} onClick={() => setForm(f => ({ ...f, type: t }))}
+                  className={`px-3 py-1 rounded-full text-xs border ${form.type === t ? "bg-blue-600 text-white border-blue-600" : "border-gray-300 text-gray-600"}`}>
+                  {BOARD_TYPE_LABELS[t]}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2 items-center">
+              <input type="number" className="w-20 border rounded-lg px-3 py-2 text-sm" placeholder="순서" value={form.order ?? 0} onChange={e => setForm(f => ({ ...f, order: Number(e.target.value) }))} />
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input type="checkbox" checked={form.active !== false} onChange={e => setForm(f => ({ ...f, active: e.target.checked }))} />
+                활성화
+              </label>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={save} disabled={saving || !form.name?.trim() || !form.slug?.trim()}>{saving ? "저장 중…" : "저장"}</Button>
+              <Button size="sm" variant="outline" onClick={cancelEdit}>취소</Button>
+            </div>
+          </div>
+        )}
+
+        {/* Editor management panel */}
+        {editorsBoard && (
+          <div className="mb-5 p-4 bg-gray-50 border border-gray-200 rounded-xl space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-900">"{editorsBoard.name}" 편집자 관리</h3>
+              <button onClick={() => setEditorsBoard(null)} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="flex gap-2">
+              <input className="flex-1 border rounded-lg px-3 py-2 text-sm" placeholder="이름·이메일로 회원 검색" value={userSearch} onChange={e => setUserSearch(e.target.value)} />
+              {searchLoading && <span className="text-xs text-gray-400 self-center">검색 중…</span>}
+            </div>
+            {userResults.length > 0 && (
+              <div className="border rounded-lg divide-y bg-white">
+                {userResults.map(u => (
+                  <div key={u.id} className="flex items-center gap-2 px-3 py-2">
+                    <div className="flex-1 text-sm">{u.name || "이름없음"} <span className="text-gray-400 text-xs">{u.email}</span></div>
+                    <button onClick={() => addEditor(u.id)} className="text-xs text-blue-600 hover:text-blue-800 font-medium">편집자 추가</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {editors.length === 0 ? (
+              <div className="text-sm text-gray-400">등록된 편집자가 없어요. ADMIN은 모든 게시판에 글을 쓸 수 있습니다.</div>
+            ) : (
+              <div className="space-y-1">
+                {editors.map(e => (
+                  <div key={e.id} className="flex items-center gap-2 px-3 py-2 bg-white border rounded-lg">
+                    <div className="flex-1 text-sm">{e.user.name || "이름없음"} <span className="text-gray-400 text-xs">{e.user.email}</span></div>
+                    <button onClick={() => removeEditor(e.userId)} className="text-xs text-red-400 hover:text-red-600">제거</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {loading ? <div className="text-sm text-gray-400">불러오는 중…</div> : boards.length === 0 ? (
+          <div className="text-sm text-gray-400 py-6 text-center">등록된 게시판이 없어요.</div>
+        ) : (
+          <div className="space-y-2">
+            {boards.map((b) => (
+              <div key={b.id} className={`flex items-center gap-3 p-3 rounded-xl border ${b.active ? "border-gray-200" : "border-dashed border-gray-200 opacity-60"}`}>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-gray-900">{b.name}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">{BOARD_TYPE_LABELS[b.type]}</span>
+                    <span className="text-[10px] text-gray-400">/boards/{b.slug}</span>
+                  </div>
+                  <div className="text-xs text-gray-400">글 {b._count.posts}개 · 편집자 {b._count.editors}명</div>
+                </div>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${b.active ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>{b.active ? "활성" : "비활성"}</span>
+                <button onClick={() => loadEditors(b)} className="text-xs text-gray-400 hover:text-blue-600">편집자</button>
+                <button onClick={() => startEdit(b)} className="text-xs text-gray-400 hover:text-blue-600">수정</button>
+                <button onClick={() => remove(b.id)} className="text-xs text-gray-400 hover:text-red-500">삭제</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

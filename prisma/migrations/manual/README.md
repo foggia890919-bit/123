@@ -14,7 +14,19 @@ After the master migration runs successfully, open `_ADMIN_PROMOTE.sql`, replace
 
 | File | Purpose |
 | --- | --- |
-| `_MASTER_MIGRATION.sql` | **The one you run.** Creates `LoginLog`, adds `Medication.ingredientCode`, performance indexes, and Supabase Storage columns (`fileKey`, `bizFileKey`, `imageKey`). |
+| `_MASTER_MIGRATION.sql` | Run first. Creates `LoginLog`, indexes, Storage columns. |
+| `_BOARD_MIGRATION.sql` | **Run second.** Adds Notice popup columns, `HomeBanner`, `Board`, `Post`, `BoardEditor` tables, and 3 sample boards. |
 | `_ADMIN_PROMOTE.sql` | Grants `role=ADMIN` + `approved=true` to one user. |
 | `add_ingredient_code.sql` | Historical — already folded into master. |
 | `add_perf_indexes.sql` | Historical — already folded into master. |
+
+## Supabase Storage buckets to create
+
+In addition to the 4 buckets from the master migration, create 2 more **public** buckets:
+
+| Bucket name | Public |
+| --- | --- |
+| `banners` | **ON (공개)** |
+| `post-images` | **ON (공개)** |
+
+These two buckets are public because banner images and board post images are shown to all visitors.

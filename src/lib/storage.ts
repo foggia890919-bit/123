@@ -11,7 +11,14 @@ export const BUCKETS = {
   userClientBiz: "client-documents",
   filterRequestBiz: "filter-request-docs",
   prescriptionImage: "prescription-images",
+  bannerImage: "banners",
+  postImage: "post-images",
 } as const;
+
+export function publicUrl(bucket: BucketName, key: string): string {
+  if (!process.env.SUPABASE_URL) return "";
+  return `${process.env.SUPABASE_URL.replace(/\/+$/, "")}/storage/v1/object/public/${bucket}/${encodeURI(key)}`;
+}
 
 export type BucketName = (typeof BUCKETS)[keyof typeof BUCKETS];
 

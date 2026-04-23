@@ -24,6 +24,8 @@ model User {
   userClients           UserClient[]
   prescriptionReports   PrescriptionReport[]
   loginLogs             LoginLog[]
+  posts                 Post[]
+  boardEditorOf         BoardEditor[]
 }
 
 model LoginLog {
@@ -266,13 +268,84 @@ model ScrapeJob {
 }
 
 model Notice {
+  id          String    @id @default(cuid())
+  title       String
+  content     String
+  category    String    @default("공지")
+  isPinned    Boolean   @default(false)
+  showAsPopup Boolean   @default(false)
+  popupUntil  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([showAsPopup, popupUntil])
+}
+
+model HomeBanner {
+  id          String   @id @default(cuid())
+  title       String
+  subtitle    String?
+  description String?
+  buttonText  String?
+  buttonLink  String?
+  imageKey    String?
+  bgColor     String?
+  order       Int      @default(0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([active, order])
+}
+
+enum BoardType {
+  TEXT
+  IMAGE
+  MIXED
+}
+
+model Board {
+  id          String        @id @default(cuid())
+  slug        String        @unique
+  name        String
+  description String?
+  type        BoardType     @default(MIXED)
+  order       Int           @default(0)
+  active      Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  posts       Post[]
+  editors     BoardEditor[]
+
+  @@index([active, order])
+}
+
+model Post {
   id        String   @id @default(cuid())
+  boardId   String
+  board     Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   title     String
-  content   String
-  category  String   @default("공지")
-  isPinned  Boolean  @default(false)
+  content   String?
+  images    String[] @default([])
+  views     Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([boardId, createdAt])
+  @@index([userId])
+}
+
+model BoardEditor {
+  id      String @id @default(cuid())
+  boardId String
+  board   Board  @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([boardId, userId])
+  @@index([userId])
 }
 
 model CompanySubmission {
