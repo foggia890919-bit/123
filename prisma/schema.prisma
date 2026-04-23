@@ -47,7 +47,8 @@ model UserClient {
   user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   clientName  String
   bizNumber   String
-  bizDocument String?
+  bizDocument String?   // legacy base64 — preferred storage is Supabase Storage via bizFileKey
+  bizFileKey  String?   // Supabase Storage path (bucket: client-documents)
   bizFileName String?
   approved    Boolean    @default(false)
   createdAt   DateTime   @default(now())
@@ -87,7 +88,8 @@ model UserDocument {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   docType   String
   fileName  String
-  fileData  String
+  fileData  String?  // legacy base64 — preferred storage is Supabase Storage via fileKey
+  fileKey   String?  // Supabase Storage path (bucket: user-documents)
   createdAt DateTime @default(now())
 }
 
@@ -185,7 +187,8 @@ model PrescriptionReport {
   month                Int
   hospitalName         String?
   companyName          String?
-  imageData            String?
+  imageData            String?   // legacy base64 — preferred storage is Supabase Storage via imageKey
+  imageKey             String?   // Supabase Storage path (bucket: prescription-images)
   ocrData              Json?
   status               String      @default("PENDING_REVIEW")
   totalFee             Float?
@@ -205,7 +208,8 @@ model FilterRequest {
   userName    String
   clientName  String
   bizNumber   String
-  bizDocument String?
+  bizDocument String?   // legacy base64
+  bizFileKey  String?   // Supabase Storage path (bucket: filter-request-docs)
   bizFileName String?
   companyName String
   status      FilterStatus @default(PENDING)

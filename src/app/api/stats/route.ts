@@ -1,23 +1,37 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { BUCKETS, persistDataUri } from "@/lib/storage";
 
 export async function GET() {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
+  // Exclude heavy imageData from list responses — fetch individual image via /api/files/prescription-report/[id]
   try {
     const reports = await prisma.prescriptionReport.findMany({
       where: { userId: user.id },
       orderBy: { createdAt: "desc" },
-      include: { client: { select: { id: true, clientName: true, bizNumber: true, approved: true } } },
+      select: {
+        id: true, userId: true, clientId: true, year: true, month: true,
+        hospitalName: true, companyName: true, ocrData: true, status: true,
+        totalFee: true, clientApprovedAtSave: true, createdAt: true, updatedAt: true,
+        imageKey: true,
+        client: { select: { id: true, clientName: true, bizNumber: true, approved: true } },
+      },
     });
-    return NextResponse.json(reports);
+    return NextResponse.json(reports.map((r) => ({ ...r, imageData: null, hasImage: !!r.imageKey })));
   } catch {
     const reports = await prisma.prescriptionReport.findMany({
       where: { userId: user.id },
       orderBy: { createdAt: "desc" },
+      select: {
+        id: true, userId: true, clientId: true, year: true, month: true,
+        hospitalName: true, companyName: true, ocrData: true, status: true,
+        totalFee: true, clientApprovedAtSave: true, createdAt: true, updatedAt: true,
+        imageKey: true,
+      },
     });
-    return NextResponse.json(reports);
+    return NextResponse.json(reports.map((r) => ({ ...r, imageData: null, hasImage: !!r.imageKey })));
   }
 }
 
@@ -38,6 +52,9 @@ export async function POST(req: NextRequest) {
       clientApprovedAtSave = client?.approved ?? false;
     }
 
+    const { fileKey: imageKey, fileData: imageDataFallback } =
+      await persistDataUri(BUCKETS.prescriptionImage, user.id, imageData);
+
     const report = await prisma.prescriptionReport.create({
       data: {
         userId: user.id,
@@ -46,14 +63,15 @@ export async function POST(req: NextRequest) {
         month,
         hospitalName,
         companyName,
-        imageData,
+        imageData: imageDataFallback,
+        imageKey,
         ocrData,
         totalFee,
         clientApprovedAtSave,
         updatedAt: new Date(),
       },
     });
-    return NextResponse.json(report);
+    return NextResponse.json({ ...report, imageData: null });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }

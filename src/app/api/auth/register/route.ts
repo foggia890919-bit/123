@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureSmsOtpTable } from "@/lib/ensure-sms-otp-table";
 import bcrypt from "bcryptjs";
+import { BUCKETS, persistDataUri } from "@/lib/storage";
 
 export async function POST(req: NextRequest) {
   await ensureSmsOtpTable();
@@ -56,12 +57,14 @@ export async function POST(req: NextRequest) {
   });
 
   if (document?.fileData && document?.fileName) {
+    const { fileKey, fileData } = await persistDataUri(BUCKETS.userDocument, user.id, document.fileData);
     await prisma.userDocument.create({
       data: {
         userId: user.id,
         docType: document.docType || "기타",
         fileName: document.fileName,
-        fileData: document.fileData,
+        fileKey,
+        fileData,
       },
     });
   }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { BUCKETS, persistDataUri } from "@/lib/storage";
 
 // GET /api/user-clients → 본인 거래처
 // GET /api/user-clients?all=true → 관리자 전용, 모든 담당자의 거래처
@@ -11,11 +12,18 @@ export async function GET(req: NextRequest) {
 
   if (all) {
     if (user.role !== "ADMIN") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+    // Exclude heavy bizDocument (base64) from list; download via /api/files/user-client-biz/[id]
     const rows = await prisma.userClient.findMany({
       orderBy: { createdAt: "desc" },
-      include: { user: { select: { name: true, email: true } } },
+      select: {
+        id: true, userId: true, clientName: true, bizNumber: true,
+        bizFileName: true, bizFileKey: true, approved: true, createdAt: true,
+        user: { select: { name: true, email: true } },
+      },
     });
-    return NextResponse.json(rows);
+    // hasBizDocument flag keeps existing UI logic working without transferring megabytes
+    const annotated = rows.map((r) => ({ ...r, bizDocument: null, hasBizDocument: !!r.bizFileName }));
+    return NextResponse.json(annotated);
   }
 
   const userId = user.id;
@@ -51,17 +59,20 @@ export async function POST(req: NextRequest) {
   if (!clientName || !bizNumber) {
     return NextResponse.json({ error: "필수 항목 누락" }, { status: 400 });
   }
+  const { fileKey: bizFileKey, fileData: bizDocumentFallback } =
+    await persistDataUri(BUCKETS.userClientBiz, user.id, bizDocument);
   try {
     const row = await prisma.userClient.create({
       data: {
         userId: user.id,
         clientName: String(clientName).trim(),
         bizNumber: String(bizNumber).trim(),
-        bizDocument: bizDocument || null,
+        bizDocument: bizDocumentFallback,
+        bizFileKey,
         bizFileName: bizFileName || null,
       },
     });
-    return NextResponse.json(row);
+    return NextResponse.json({ ...row, bizDocument: null });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes("Unique constraint")) {
