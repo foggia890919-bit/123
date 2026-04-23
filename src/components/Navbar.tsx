@@ -175,10 +175,12 @@ export default function Navbar() {
               </Link>
             )}
 
-            <Link href="/admin/login"
-              className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-white bg-gray-800 hover:bg-gray-700">
-              <ShieldCheck className="w-4 h-4" />관리자
-            </Link>
+            {(session?.user as { role?: string } | undefined)?.role === "ADMIN" && (
+              <Link href="/admin/dashboard"
+                className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-white bg-gray-800 hover:bg-gray-700">
+                <ShieldCheck className="w-4 h-4" />관리자
+              </Link>
+            )}
 
             {/* 햄버거 버튼 (모바일) */}
             <button onClick={() => setMobileOpen((v) => !v)}
@@ -227,12 +229,14 @@ export default function Navbar() {
                 </div>
               );
             })}
-            <div className="border-t border-gray-100 pt-2 pb-1">
-              <Link href="/admin/login" onClick={() => setMobileOpen(false)}
-                className="flex items-center gap-3 px-3 py-3 rounded-md text-sm font-medium text-white bg-gray-800">
-                <ShieldCheck className="w-4 h-4" />관리자
-              </Link>
-            </div>
+            {(session?.user as { role?: string } | undefined)?.role === "ADMIN" && (
+              <div className="border-t border-gray-100 pt-2 pb-1">
+                <Link href="/admin/dashboard" onClick={() => setMobileOpen(false)}
+                  className="flex items-center gap-3 px-3 py-3 rounded-md text-sm font-medium text-white bg-gray-800">
+                  <ShieldCheck className="w-4 h-4" />관리자
+                </Link>
+              </div>
+            )}
           </div>
         </div>
       )}
