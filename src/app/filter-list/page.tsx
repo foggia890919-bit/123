@@ -325,15 +325,18 @@ export default function FilterListPage() {
         {searched && (() => {
           const totalPages = Math.max(1, Math.ceil(results.length / pageSize));
           const pageItems = results.slice((page - 1) * pageSize, page * pageSize);
+          const WINDOW = 10;
           const pageNums: (number | "…")[] = [];
-          if (totalPages <= 7) {
+          if (totalPages <= WINDOW) {
             for (let i = 1; i <= totalPages; i++) pageNums.push(i);
           } else {
-            pageNums.push(1);
-            if (page > 3) pageNums.push("…");
-            for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) pageNums.push(i);
-            if (page < totalPages - 2) pageNums.push("…");
-            pageNums.push(totalPages);
+            const half = Math.floor(WINDOW / 2);
+            let start = Math.max(1, page - half);
+            let end = start + WINDOW - 1;
+            if (end > totalPages) { end = totalPages; start = Math.max(1, end - WINDOW + 1); }
+            if (start > 1) { pageNums.push(1); if (start > 2) pageNums.push("…"); }
+            for (let i = start; i <= end; i++) pageNums.push(i);
+            if (end < totalPages) { if (end < totalPages - 1) pageNums.push("…"); pageNums.push(totalPages); }
           }
           return (
             <>
