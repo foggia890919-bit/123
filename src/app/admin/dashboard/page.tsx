@@ -162,17 +162,6 @@ function UploadTab() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const [merging, setMerging] = useState(false);
-  const [mergeResult, setMergeResult] = useState<{ ok?: boolean; updated?: number; message?: string; error?: string } | null>(null);
-
-  async function handleMergeCso() {
-    setMerging(true); setMergeResult(null);
-    try {
-      const res = await fetch("/api/admin/merge-cso", { method: "POST" });
-      setMergeResult(await res.json());
-    } catch { setMergeResult({ error: "머지 중 오류가 발생했어요." }); }
-    finally { setMerging(false); }
-  }
 
   const [mapFile, setMapFile] = useState<File | null>(null);
   const [mapLoading, setMapLoading] = useState(false);
@@ -488,27 +477,6 @@ function UploadTab() {
               : <><AlertCircle className="w-4 h-4 shrink-0" />{result.error}</>}
           </div>
         )}
-      </div>
-
-      {/* CSO 데이터 머지 */}
-      <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-3">
-        <div>
-          <h2 className="text-base font-semibold text-gray-800">② - 보조 &nbsp; CSO 데이터 머지</h2>
-          <p className="text-xs text-gray-500 mt-0.5">
-            요율표(EXCEL)의 CSO 수수료·분류 데이터를 보험코드 기준으로 공공데이터(PUBLIC_API) 레코드에 일괄 적용합니다.
-            요율표 업로드 후 CSO 탭이 비어있을 때 실행하세요.
-          </p>
-        </div>
-        {mergeResult && (
-          <div className={`flex items-center gap-2 p-3 rounded-lg text-sm ${mergeResult.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
-            {mergeResult.ok
-              ? <><CheckCircle className="w-4 h-4 shrink-0" />{mergeResult.message ?? `공공데이터 레코드 ${mergeResult.updated?.toLocaleString()}건에 CSO 데이터 적용 완료`}</>
-              : <><AlertCircle className="w-4 h-4 shrink-0" />{mergeResult.error}</>}
-          </div>
-        )}
-        <Button onClick={handleMergeCso} disabled={merging} variant="outline" className="border-orange-300 text-orange-700 hover:bg-orange-50">
-          {merging ? "머지 중..." : "CSO 데이터 공공데이터에 머지"}
-        </Button>
       </div>
 
       {/* 주성분코드 매핑 */}

@@ -134,11 +134,58 @@ export async function POST(req: NextRequest) {
       created += batch.length;
     }
 
+    // isSettlement=true 요율표라면 PUBLIC_API 레코드에도 동일하게 머지
+    // (공공데이터 sync 전에 업로드한 경우 등 이전에 스킵된 코드까지 커버)
+    let merged = 0;
+    if (isSettlement && settlementType) {
+      const normalizedCodes = Array.from(
+        new Set(
+          rateRows
+            .map((r) => r.insuranceCode)
+            .filter(Boolean)
+            .map((c) => c!.replace(/[\s\-]/g, "").toUpperCase())
+        )
+      );
+
+      if (normalizedCodes.length > 0) {
+        const MCHUNK = 200;
+        for (let i = 0; i < normalizedCodes.length; i += MCHUNK) {
+          const slice = normalizedCodes.slice(i, i + MCHUNK);
+          // 각 정규화 코드에 해당하는 EXCEL 레코드의 수수료율 찾기
+          const rateByCode = new Map<string, number | null>();
+          for (const row of rateRows) {
+            if (!row.insuranceCode) continue;
+            const norm = row.insuranceCode.replace(/[\s\-]/g, "").toUpperCase();
+            if (slice.includes(norm)) rateByCode.set(norm, row.commissionRate);
+          }
+
+          const params: unknown[] = [isSettlement, settlementType];
+          const codeList = slice.map((_, idx) => `$${idx + 3}`).join(", ");
+          const result = await prisma.$executeRawUnsafe(
+            `UPDATE "Medication"
+             SET "isSettlement" = $1,
+                 "settlementType" = $2,
+                 "updatedAt" = NOW()
+             WHERE source = 'PUBLIC_API'
+               AND "insuranceCode" IS NOT NULL
+               AND EXISTS (
+                 SELECT 1
+                 FROM UNNEST(string_to_array("insuranceCode", ',')) AS raw_code
+                 WHERE UPPER(REPLACE(REPLACE(TRIM(raw_code), '-', ''), ' ', '')) = ANY(ARRAY[${codeList}]::text[])
+               )`,
+            ...params, ...slice
+          );
+          merged += Number(result);
+        }
+      }
+    }
+
     return NextResponse.json({
       success: true,
       count: rateRows.length,
       updated,
       created,
+      merged,
       skipped: skippedItems.length,
       skippedItems: skippedItems.length > 0 ? skippedItems : undefined,
     });
