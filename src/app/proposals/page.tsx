@@ -811,6 +811,7 @@ function ProposalsContent() {
                         const extra = m?.additionalRate ?? null;
                         const total = base != null ? base + (extra ?? 0) : null;
                         const settlement = m?.price != null && total != null ? Math.round(m.price * total / 100) : null;
+                        const medForButton = m ?? item.originalMedication ?? null;
                         return (
                           <tr key={item.id} className={`hover:bg-gray-50 ${isUnmatched ? "bg-orange-50/40" : ""}`}>
                             <td className="px-3 py-2.5 text-gray-400 text-xs truncate">{i + 1}</td>
@@ -844,11 +845,11 @@ function ProposalsContent() {
                             </td>
                             <td className="px-3 py-2.5 text-xs text-gray-500 truncate" title={m?.ingredientName || ""}>{m?.ingredientName || "-"}</td>
                             <td className="px-3 py-2.5 text-center">
-                              {m && (
+                              {medForButton && (
                                 <button onClick={() => selected && setIngredientModal({
-                                  name: m.ingredientName,
-                                  categoryB: m.categoryB,
-                                  replaceContext: { proposalId: selected.id, itemId: item.id, originalProductName: m.productName },
+                                  name: medForButton.ingredientName,
+                                  categoryB: medForButton.categoryB,
+                                  replaceContext: { proposalId: selected.id, itemId: item.id, originalProductName: medForButton.productName },
                                 })}
                                   className="text-xs text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 whitespace-nowrap">
                                   <Search className="w-3 h-3 inline mr-0.5" />동일성분
