@@ -79,13 +79,16 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
   }
 
   useEffect(() => {
-    if (!categoryBCode) { setLoading(false); return; }
+    if (!categoryBCode && !ingredientName) { setLoading(false); return; }
     const uid = userId ? `&userId=${userId}` : "";
-    fetch(`/api/medications/search?categoryBCode=${encodeURIComponent(categoryBCode)}${uid}&limit=500`)
+    const url = categoryBCode
+      ? `/api/medications/search?categoryBCode=${encodeURIComponent(categoryBCode)}${uid}&limit=500`
+      : `/api/medications/search?q=${encodeURIComponent(ingredientName)}${uid}&ingredientOnly=true&limit=500`;
+    fetch(url)
       .then((r) => r.json())
       .then((d) => { setMedications(d.medications || []); setTotal(d.total || 0); })
       .finally(() => setLoading(false));
-  }, [categoryBCode, userId]);
+  }, [categoryBCode, ingredientName, userId]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => d === "asc" ? "desc" : "asc");

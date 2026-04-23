@@ -221,10 +221,7 @@ function BulkRegisterInner() {
   }
 
   function openAltModal(row: SwapRow) {
-    if (!row.original?.categoryB) {
-      alert("이 품목은 주성분코드(분류B)가 없어 동일성분 검색이 불가해요.");
-      return;
-    }
+    if (!row.original) return;
     setAltModal({ rowId: row.id, row });
   }
 
