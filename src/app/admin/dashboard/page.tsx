@@ -548,40 +548,6 @@ function UploadTab() {
             onChange={(e) => { setMapFile(e.target.files?.[0] || null); setMapResult(null); }} />
         </div>
       </div>
-
-      {/* CSO 데이터 머지 */}
-      <CsoMergeSection />
-    </div>
-  );
-}
-
-function CsoMergeSection() {
-  const [merging, setMerging] = useState(false);
-  const [mergeResult, setMergeResult] = useState<{ ok?: boolean; updated?: number; message?: string; error?: string } | null>(null);
-
-  async function handleMerge() {
-    setMerging(true); setMergeResult(null);
-    try {
-      const res = await fetch("/api/admin/merge-cso", { method: "POST" });
-      setMergeResult(await res.json());
-    } catch { setMergeResult({ error: "머지 중 오류가 발생했어요." }); }
-    finally { setMerging(false); }
-  }
-
-  return (
-    <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-3">
-      <div>
-        <h2 className="text-base font-semibold text-gray-800">④ CSO 데이터 머지</h2>
-        <p className="text-xs text-gray-500 mt-0.5">요율표 업로드된 CSO(isSettlement) 데이터를 공공데이터(PUBLIC_API) 레코드에 보험코드 기준으로 반영합니다. 최초 1회 또는 재동기화 후 실행하세요.</p>
-      </div>
-      {mergeResult && (
-        <div className={`text-xs p-2 rounded border ${mergeResult.ok ? "bg-green-50 text-green-700 border-green-200" : "bg-red-50 text-red-700 border-red-200"}`}>
-          {mergeResult.ok ? `✅ 머지 완료: ${mergeResult.updated}건 반영${mergeResult.message ? ` — ${mergeResult.message}` : ""}` : `❌ ${mergeResult.error}`}
-        </div>
-      )}
-      <Button onClick={handleMerge} disabled={merging} variant="outline" className="border-blue-300 text-blue-700 hover:bg-blue-50">
-        {merging ? "머지 중…" : "CSO 데이터 머지 실행"}
-      </Button>
     </div>
   );
 }
