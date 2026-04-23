@@ -80,9 +80,11 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
 
   useEffect(() => {
     if (!categoryBCode && !ingredientName) { setLoading(false); return; }
+    // 숫자만 있는 categoryB(엑셀 분류번호)는 HIRA 주성분코드가 아니므로 성분명으로 검색
+    const isRealIngredientCode = categoryBCode && /[A-Za-z]/.test(categoryBCode);
     const uid = userId ? `&userId=${userId}` : "";
-    const url = categoryBCode
-      ? `/api/medications/search?categoryBCode=${encodeURIComponent(categoryBCode)}${uid}&limit=500`
+    const url = isRealIngredientCode
+      ? `/api/medications/search?categoryBCode=${encodeURIComponent(categoryBCode!)}${uid}&limit=500`
       : `/api/medications/search?q=${encodeURIComponent(ingredientName)}${uid}&ingredientOnly=true&limit=500`;
     fetch(url)
       .then((r) => r.json())
@@ -138,7 +140,7 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
             <div>
               <h2 className="font-bold text-gray-900">동일성분 검색</h2>
               <p className="text-xs text-gray-500 mt-0.5">
-                {categoryBCode ? `주성분코드: ${categoryBCode}` : ingredientName} · 총 {total}개 품목
+                {categoryBCode && /[A-Za-z]/.test(categoryBCode) ? `주성분코드: ${categoryBCode}` : ingredientName} · 총 {total}개 품목
               </p>
             </div>
             <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X className="w-5 h-5" /></button>

@@ -34,7 +34,8 @@ export async function POST(req: NextRequest) {
   const criteria: Criteria = body?.criteria ?? "commission";
   const userId: string | null = body?.userId ?? null;
 
-  const validRows = rows.filter((r) => r.categoryB);
+  // 숫자만인 categoryB(엑셀 분류번호)는 HIRA 주성분코드가 아니므로 제외
+  const validRows = rows.filter((r) => r.categoryB && /[A-Za-z]/.test(r.categoryB));
   if (validRows.length === 0) {
     return NextResponse.json({ results: rows.map((r) => ({ rowId: r.id, medication: null })) });
   }
