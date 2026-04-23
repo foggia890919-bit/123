@@ -577,7 +577,6 @@ function BulkRegisterInner() {
                 ] as const
               ).map(({ key, label }) => {
                 const isActive = activeCriteria === key;
-                const isLoading = autoSwitching === key;
                 return (
                   <label
                     key={key}
@@ -592,10 +591,7 @@ function BulkRegisterInner() {
                       name="auto-criteria"
                       className="sr-only"
                       checked={isActive}
-                      onChange={() => {
-                        setActiveCriteria(key);
-                        handleAutoSwitch(key);
-                      }}
+                      onChange={() => setActiveCriteria(key)}
                       disabled={autoSwitching !== null}
                     />
                     <span
@@ -605,11 +601,18 @@ function BulkRegisterInner() {
                     >
                       {isActive && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
                     </span>
-                    {isLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
                     <span className="text-sm font-medium">{label}</span>
                   </label>
                 );
               })}
+              <button
+                onClick={() => activeCriteria && handleAutoSwitch(activeCriteria)}
+                disabled={!activeCriteria || autoSwitching !== null || rows.length === 0}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {autoSwitching !== null ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                자동 선택 실행
+              </button>
             </div>
             {autoSwitchResult && (
               <p className="mt-2 text-xs text-gray-500">
