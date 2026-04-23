@@ -566,8 +566,7 @@ function BulkRegisterInner() {
         </div>
 
         {/* 자동 선택 */}
-        {rows.some((r) => r.original?.categoryB) && (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
             <p className="text-xs font-semibold text-gray-500 mb-3">자동 대체 선택 기준</p>
             <div className="flex items-center gap-3 flex-wrap">
               {(
@@ -618,8 +617,7 @@ function BulkRegisterInner() {
                 {autoSwitchResult.skipped > 0 && <span className="text-gray-400"> · {autoSwitchResult.skipped}건 대체품 없음</span>}
               </p>
             )}
-          </div>
-        )}
+        </div>
 
         {/* 표 */}
         {rows.length === 0 ? (
