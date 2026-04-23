@@ -59,7 +59,42 @@ function BulkRegisterInner() {
   const [saveModalOpen, setSaveModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [addClientOpen, setAddClientOpen] = useState(false);
+  const [newClientName, setNewClientName] = useState("");
+  const [newBizNumber, setNewBizNumber] = useState("");
+  const [addClientError, setAddClientError] = useState("");
+  const [addClientSaving, setAddClientSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  function refreshClients() {
+    if (!userId) return;
+    fetch(`/api/user-clients?userId=${userId}`)
+      .then((r) => r.json())
+      .then((d) => { if (Array.isArray(d)) setClients(d); })
+      .catch(() => {});
+  }
+
+  async function handleAddClient() {
+    if (!newClientName.trim() || !newBizNumber.trim()) {
+      setAddClientError("거래처명과 사업자번호를 입력해주세요."); return;
+    }
+    setAddClientSaving(true); setAddClientError("");
+    try {
+      const res = await fetch("/api/user-clients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, clientName: newClientName.trim(), bizNumber: newBizNumber.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setAddClientError(data.error || "저장 실패"); return; }
+      refreshClients();
+      setSelectedClientId(data.id);
+      setClientName(data.clientName);
+      setAddClientOpen(false);
+      setNewClientName(""); setNewBizNumber("");
+    } catch { setAddClientError("저장 중 오류가 발생했어요."); }
+    finally { setAddClientSaving(false); }
+  }
 
   useEffect(() => {
     if (!userId) return;
@@ -424,18 +459,26 @@ function BulkRegisterInner() {
             </div>
             <div>
               <label className="text-xs font-medium text-gray-600 mb-1 block">거래처 (제안서 저장용)</label>
-              <select
-                value={selectedClientId}
-                onChange={(e) => setSelectedClientId(e.target.value)}
-                className="w-full h-9 px-3 border border-gray-300 rounded-md text-sm bg-white"
-              >
-                <option value="">거래처 미지정</option>
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.clientName}{!c.approved ? " (승인전)" : ""}
-                  </option>
-                ))}
-              </select>
+              <div className="flex gap-2">
+                <select
+                  value={selectedClientId}
+                  onChange={(e) => setSelectedClientId(e.target.value)}
+                  className="flex-1 h-9 px-3 border border-gray-300 rounded-md text-sm bg-white"
+                >
+                  <option value="">거래처 미지정</option>
+                  {clients.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.clientName}{!c.approved ? " (승인전)" : ""}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => { setAddClientOpen(true); setAddClientError(""); }}
+                  className="h-9 px-3 rounded-md border border-blue-300 text-blue-600 hover:bg-blue-50 text-sm font-medium whitespace-nowrap"
+                  title="새 거래처 추가"
+                >+ 추가</button>
+              </div>
             </div>
             <div>
               <label className="text-xs font-medium text-gray-600 mb-1 block">거래처명 (PDF/Excel 표기)</label>
@@ -618,18 +661,26 @@ function BulkRegisterInner() {
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 mb-1 block">거래처</label>
-                <select
-                  value={selectedClientId}
-                  onChange={(e) => setSelectedClientId(e.target.value)}
-                  className="w-full h-9 px-3 border border-gray-300 rounded-md text-sm bg-white"
-                >
-                  <option value="">거래처 미지정</option>
-                  {clients.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.clientName}{!c.approved ? " (승인전)" : ""}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex gap-2">
+                  <select
+                    value={selectedClientId}
+                    onChange={(e) => setSelectedClientId(e.target.value)}
+                    className="flex-1 h-9 px-3 border border-gray-300 rounded-md text-sm bg-white"
+                  >
+                    <option value="">거래처 미지정</option>
+                    {clients.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.clientName}{!c.approved ? " (승인전)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => { setAddClientOpen(true); setAddClientError(""); }}
+                    className="h-9 px-3 rounded-md border border-blue-300 text-blue-600 hover:bg-blue-50 text-sm font-medium whitespace-nowrap"
+                    title="새 거래처 추가"
+                  >+ 추가</button>
+                </div>
                 <p className="text-[11px] text-gray-400 mt-1">거래처를 지정해야 저장 후 필터링 요청이 가능합니다.</p>
               </div>
               <div className="bg-gray-50 rounded-md p-3 text-xs text-gray-600 space-y-1">
@@ -651,6 +702,53 @@ function BulkRegisterInner() {
                 className="bg-blue-600 hover:bg-blue-700 text-white">
                 {saving ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Save className="w-4 h-4 mr-1" />}
                 저장하고 제안서로 이동
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 거래처 추가 모달 */}
+      {addClientOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <h2 className="font-bold text-gray-900">새 거래처 추가</h2>
+              <button onClick={() => setAddClientOpen(false)} className="text-gray-400 hover:text-gray-600 p-1">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div>
+                <label className="text-xs font-medium text-gray-600 mb-1 block">거래처명 <span className="text-red-500">*</span></label>
+                <Input
+                  value={newClientName}
+                  onChange={(e) => setNewClientName(e.target.value)}
+                  placeholder="예: 행복약국"
+                  onKeyDown={(e) => e.key === "Enter" && handleAddClient()}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600 mb-1 block">사업자번호 <span className="text-red-500">*</span></label>
+                <Input
+                  value={newBizNumber}
+                  onChange={(e) => setNewBizNumber(e.target.value)}
+                  placeholder="예: 123-45-67890"
+                  onKeyDown={(e) => e.key === "Enter" && handleAddClient()}
+                />
+              </div>
+              {addClientError && (
+                <p className="text-xs text-red-600 flex items-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5" />{addClientError}
+                </p>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-3 border-t border-gray-100 bg-gray-50 rounded-b-xl">
+              <Button variant="outline" size="sm" onClick={() => setAddClientOpen(false)} disabled={addClientSaving}>취소</Button>
+              <Button size="sm" onClick={handleAddClient} disabled={addClientSaving || !newClientName.trim() || !newBizNumber.trim()}
+                className="bg-blue-600 hover:bg-blue-700 text-white">
+                {addClientSaving ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : null}
+                추가
               </Button>
             </div>
           </div>
