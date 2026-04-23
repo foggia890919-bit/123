@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { normalizeCompanyKey } from "@/lib/utils";
+import { safeParseInt } from "@/lib/auth-guard";
 
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q")?.trim() || "";
@@ -26,10 +27,8 @@ export async function GET(req: NextRequest) {
     ];
   }
 
-  const limitParam = req.nextUrl.searchParams.get("limit");
-  const skipParam = req.nextUrl.searchParams.get("skip");
-  const take = limitParam ? Math.min(parseInt(limitParam), 9999) : 200;
-  const skip = skipParam ? parseInt(skipParam) : 0;
+  const take = safeParseInt(req.nextUrl.searchParams.get("limit"), 200, 1, 1000);
+  const skip = safeParseInt(req.nextUrl.searchParams.get("skip"), 0, 0, 1_000_000);
 
   const [medications, total] = await Promise.all([
     prisma.medication.findMany({

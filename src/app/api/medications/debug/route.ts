@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 
 // 진단용: DB에 특정 약품이 어떻게 저장돼 있는지 모든 필드·중복까지 표시
 // 사용: /api/medications/debug?q=에어페낙
 export async function GET(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   const q = req.nextUrl.searchParams.get("q")?.trim() || "";
   if (!q) return NextResponse.json({ error: "q 파라미터 필요" }, { status: 400 });
 

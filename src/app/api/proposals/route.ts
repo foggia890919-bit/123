@@ -1,19 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireSession, isNextResponse } from "@/lib/auth-guard";
 
 export async function POST(req: NextRequest) {
+  const user = await requireSession();
+  if (isNextResponse(user)) return user;
   try {
-    const { title, userId, clientId } = await req.json();
-    if (!title || !userId) return NextResponse.json({ error: "필수 항목 없음" }, { status: 400 });
+    const { title, clientId } = await req.json();
+    if (!title) return NextResponse.json({ error: "제목 필수" }, { status: 400 });
     try {
       const proposal = await prisma.proposal.create({
-        data: { title, userId, clientId: clientId || null },
+        data: { title, userId: user.id, clientId: clientId || null },
         include: { client: { select: { id: true, clientName: true, bizNumber: true, approved: true } } },
       });
       return NextResponse.json(proposal);
     } catch {
-      // clientId 컬럼 없는 경우 거래처 없이 생성
-      const proposal = await prisma.proposal.create({ data: { title, userId } });
+      const proposal = await prisma.proposal.create({ data: { title, userId: user.id } });
       return NextResponse.json(proposal);
     }
   } catch (e) {
@@ -21,12 +23,12 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function GET(req: NextRequest) {
-  const userId = req.nextUrl.searchParams.get("userId");
-  if (!userId) return NextResponse.json({ error: "userId 필요" }, { status: 400 });
+export async function GET() {
+  const user = await requireSession();
+  if (isNextResponse(user)) return user;
   try {
     const proposals = await prisma.proposal.findMany({
-      where: { userId },
+      where: { userId: user.id },
       orderBy: { createdAt: "desc" },
       include: {
         _count: { select: { items: true } },
@@ -35,10 +37,9 @@ export async function GET(req: NextRequest) {
     });
     return NextResponse.json(proposals);
   } catch {
-    // clientId 컬럼 없는 경우(마이그레이션 전) 기존 제안서라도 반환
     try {
       const proposals = await prisma.proposal.findMany({
-        where: { userId },
+        where: { userId: user.id },
         orderBy: { createdAt: "desc" },
         include: { _count: { select: { items: true } } },
       });

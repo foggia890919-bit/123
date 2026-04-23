@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureCompanySubmissionTable } from "@/lib/ensure-company-submission-table";
+import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 
 interface BulkRow {
   companyName: string;
@@ -14,11 +15,16 @@ interface BulkRow {
 }
 
 export async function POST(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   try {
     await ensureCompanySubmissionTable();
     const rows: BulkRow[] = await req.json();
     if (!Array.isArray(rows)) {
       return NextResponse.json({ error: "배열 형식 필요" }, { status: 400 });
+    }
+    if (rows.length > 5000) {
+      return NextResponse.json({ error: "한 번에 5000개까지만 처리할 수 있어요." }, { status: 400 });
     }
 
     let created = 0;

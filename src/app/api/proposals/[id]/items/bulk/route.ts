@@ -1,12 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireSession, isNextResponse } from "@/lib/auth-guard";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const user = await requireSession();
+  if (isNextResponse(user)) return user;
   const { id: proposalId } = await params;
+
+  const proposal = await prisma.proposal.findUnique({ where: { id: proposalId }, select: { userId: true } });
+  if (!proposal) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+  if (user.role !== "ADMIN" && proposal.userId !== user.id) {
+    return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+  }
+
   const { codes } = await req.json() as { codes: string[] };
 
   if (!Array.isArray(codes) || codes.length === 0) {
     return NextResponse.json({ error: "코드 목록이 비어있습니다" }, { status: 400 });
+  }
+  if (codes.length > 2000) {
+    return NextResponse.json({ error: "한 번에 2000개까지만 처리할 수 있어요." }, { status: 400 });
   }
 
   const matched: string[] = [];

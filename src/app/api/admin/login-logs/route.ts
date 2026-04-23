@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireAdmin, isNextResponse, safeParseInt } from "@/lib/auth-guard";
 
 export async function GET(req: NextRequest) {
-  const page = parseInt(req.nextUrl.searchParams.get("page") || "1");
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
+  const page = safeParseInt(req.nextUrl.searchParams.get("page"), 1, 1, 10000);
   const limit = 50;
   const skip = (page - 1) * limit;
   const q = req.nextUrl.searchParams.get("q")?.trim() || "";

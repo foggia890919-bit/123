@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 
 // EXCEL 레코드의 CSO(isSettlement=true) 수수료·분류 데이터를
 // 보험코드 정규화 매칭으로 PUBLIC_API 레코드에 반영
 export async function POST() {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   try {
     // ① EXCEL 소스 중 isSettlement=true 인 레코드만 추출 (보험코드 있는 것)
     const excelRows = await prisma.$queryRawUnsafe<{

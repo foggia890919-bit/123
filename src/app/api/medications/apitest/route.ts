@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 
 const API_KEY = process.env.PUBLIC_DATA_API_KEY!;
 
@@ -14,6 +15,8 @@ const ENDPOINTS: Record<string, { url: string; useJson: boolean }> = {
 };
 
 export async function GET(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   const target = req.nextUrl.searchParams.get("target") || "hira_msupply";
   const endpoint = ENDPOINTS[target];
   if (!endpoint) return NextResponse.json({ error: "알 수 없는 target", available: Object.keys(ENDPOINTS) });

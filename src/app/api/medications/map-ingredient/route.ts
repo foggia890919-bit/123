@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import * as XLSX from "xlsx";
+import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 
 export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   try {
     const formData = await req.formData();
     const file = formData.get("file") as File;

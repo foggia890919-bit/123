@@ -3,6 +3,7 @@ import CredentialsProvider from "next-auth/providers/credentials";
 import { prisma } from "@/lib/prisma";
 import bcrypt from "bcryptjs";
 import { randomBytes } from "crypto";
+import { rateLimit } from "@/lib/rate-limit";
 
 function extractIp(req: Record<string, unknown>): string | null {
   const headers = (req?.headers ?? {}) as Record<string, string | string[] | undefined>;
@@ -27,6 +28,9 @@ async function recordLogin(email: string, success: boolean, userId: string | nul
   } catch {}
 }
 
+// Role cache TTL — refresh session role from DB at most every 5 minutes per session
+const ROLE_CACHE_TTL_MS = 5 * 60 * 1000;
+
 export const authOptions: NextAuthOptions = {
   providers: [
     CredentialsProvider({
@@ -38,6 +42,14 @@ export const authOptions: NextAuthOptions = {
       async authorize(credentials, req) {
         const email = credentials?.email ?? "";
         if (!email || !credentials?.password) return null;
+
+        const ip = extractIp(req as Record<string, unknown>) ?? "unknown";
+        const byEmail = rateLimit(`login:email:${email.toLowerCase()}`, 5, 300);
+        const byIp = rateLimit(`login:ip:${ip}`, 30, 300);
+        if (!byEmail.ok || !byIp.ok) {
+          await recordLogin(email, false, null, req as Record<string, unknown>);
+          throw new Error("RATE_LIMIT");
+        }
 
         const user = await prisma.user.findUnique({ where: { email } });
 
@@ -66,15 +78,19 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
+        token.role = (user as { role?: string }).role;
+        token.roleCheckedAt = Date.now();
       }
-      // 매번 DB에서 최신 역할 조회 (관리자가 변경해도 즉시 반영)
-      if (token.id) {
+      // Refresh role from DB at most every ROLE_CACHE_TTL_MS instead of every request
+      const lastChecked = (token.roleCheckedAt as number | undefined) ?? 0;
+      if (token.id && Date.now() - lastChecked > ROLE_CACHE_TTL_MS) {
         try {
           const dbUser = await prisma.user.findUnique({
             where: { id: token.id as string },
             select: { role: true, approved: true },
           });
           if (dbUser) token.role = dbUser.role;
+          token.roleCheckedAt = Date.now();
         } catch {}
       }
       return token;
@@ -89,5 +105,16 @@ export const authOptions: NextAuthOptions = {
   },
   pages: { signIn: "/login" },
   session: { strategy: "jwt" },
+  cookies: {
+    sessionToken: {
+      name: process.env.NODE_ENV === "production" ? "__Secure-next-auth.session-token" : "next-auth.session-token",
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: process.env.NODE_ENV === "production",
+      },
+    },
+  },
   secret: process.env.NEXTAUTH_SECRET,
 };

@@ -55,6 +55,7 @@ model UserClient {
   prescriptionReports   PrescriptionReport[]
 
   @@index([userId])
+  @@index([approved])
   @@unique([userId, bizNumber])
 }
 
@@ -118,6 +119,8 @@ model Medication {
   @@index([insuranceCode])
   @@index([companyName])
   @@index([ingredientCode])
+  @@index([source])
+  @@index([settlementType])
 }
 
 enum MedSource {
@@ -192,6 +195,7 @@ model PrescriptionReport {
 
   @@index([userId])
   @@index([clientId])
+  @@index([status])
 }
 
 model FilterRequest {

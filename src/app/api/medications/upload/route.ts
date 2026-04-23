@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import * as XLSX from "xlsx";
+import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 
 function normalizeCode(code: string): string {
   return code.replace(/[\s\-]/g, "").toUpperCase();
 }
 
 export async function POST(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   try {
     const formData = await req.formData();
     const file = formData.get("file") as File;

@@ -10,13 +10,19 @@ export async function POST(req: NextRequest) {
   if (!email || !password || !name) {
     return NextResponse.json({ error: "필수 항목을 입력해주세요." }, { status: 400 });
   }
+  if (typeof password !== "string" || password.length < 8) {
+    return NextResponse.json({ error: "비밀번호는 8자 이상이어야 합니다." }, { status: 400 });
+  }
+  if (typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return NextResponse.json({ error: "올바른 이메일 주소를 입력해주세요." }, { status: 400 });
+  }
 
   const digits = String(phone ?? "").replace(/\D/g, "");
   if (!digits) {
     return NextResponse.json({ error: "전화번호를 입력해주세요." }, { status: 400 });
   }
 
-  // 휴대폰 인증 완료 여부 확인 (10분 이내 인증)
+  // 휴대폰 인증 완료 여부 확인 (5분 이내 인증)
   const verified = await prisma.$queryRawUnsafe<{ id: string }[]>(
     `SELECT "id" FROM "SmsOtp"
      WHERE "phone"=$1 AND "verified"=true AND "expiresAt" > NOW() - INTERVAL '5 minutes'
@@ -32,12 +38,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "이미 사용 중인 이메일이에요." }, { status: 409 });
   }
 
-  const hashed = await bcrypt.hash(password, 10);
+  const validRoles = ["SALES_REP", "BIZ", "BASIC", "DOCTOR", "PHARMACIST"];
+  const safeRole = validRoles.includes(role) ? role : "SALES_REP";
+
+  const hashed = await bcrypt.hash(password, 12);
 
   const user = await prisma.user.create({
     data: {
       email, password: hashed, name,
-      role: role || "SALES_REP",
+      role: safeRole,
       phone: phone || null,
       carrier: carrier || null,
       approved: false,
@@ -57,7 +66,6 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // OTP 사용 완료 처리
   await prisma.$executeRawUnsafe(`DELETE FROM "SmsOtp" WHERE "phone"=$1`, digits);
 
   return NextResponse.json(user, { status: 201 });

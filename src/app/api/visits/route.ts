@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireSession, isNextResponse } from "@/lib/auth-guard";
 
 function todayKey() {
   return `visits_${new Date().toISOString().slice(0, 10)}`;
@@ -34,6 +35,9 @@ async function increment(key: string) {
 }
 
 export async function POST() {
+  // 로그인한 사용자의 방문만 카운트 — 익명 봇/자동화 요청 차단
+  const user = await requireSession();
+  if (isNextResponse(user)) return user;
   try {
     await Promise.all([increment("visits_total"), increment(todayKey())]);
     return NextResponse.json({ ok: true });

@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { normalizeCompanyKey } from "@/lib/utils";
+import { safeParseInt } from "@/lib/auth-guard";
 
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q")?.trim() || "";
   const ingredientCodeParam = req.nextUrl.searchParams.get("ingredientCode")?.trim() || "";
   const settlementOnly = req.nextUrl.searchParams.get("settlement") === "true";
   const userId = req.nextUrl.searchParams.get("userId") || null;
-  const page = parseInt(req.nextUrl.searchParams.get("page") || "1");
-  const limit = Math.min(parseInt(req.nextUrl.searchParams.get("limit") || "50"), 500);
+  const page = safeParseInt(req.nextUrl.searchParams.get("page"), 1, 1, 10000);
+  const limit = safeParseInt(req.nextUrl.searchParams.get("limit"), 50, 1, 200);
   const ingredientOnly = req.nextUrl.searchParams.get("ingredientOnly") === "true";
   const companiesRaw = req.nextUrl.searchParams.get("companies") || "";
   const companyList = companiesRaw.split(",").map((s) => s.trim()).filter(Boolean);

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireSession, requireAdmin, isNextResponse } from "@/lib/auth-guard";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -11,20 +12,18 @@ interface ClovaField {
 }
 
 export async function GET() {
-  // 환경변수 진단용 (값은 노출하지 않고 존재 여부와 길이만)
-  const url = process.env.CLOVA_OCR_INVOKE_URL ?? "";
-  const secret = process.env.CLOVA_OCR_SECRET_KEY ?? "";
+  // 진단용 — 관리자만 접근. 환경변수 값/접두어는 노출하지 않음
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   return NextResponse.json({
-    hasUrl: !!url,
-    urlLength: url.length,
-    urlStartsWith: url.slice(0, 20),
-    hasSecret: !!secret,
-    secretLength: secret.length,
-    runtime: process.env.VERCEL ? "vercel" : "local",
+    hasUrl: !!process.env.CLOVA_OCR_INVOKE_URL,
+    hasSecret: !!process.env.CLOVA_OCR_SECRET_KEY,
   });
 }
 
 export async function POST(req: NextRequest) {
+  const user = await requireSession();
+  if (isNextResponse(user)) return user;
   try {
     const rawUrl = process.env.CLOVA_OCR_INVOKE_URL?.trim();
     // Vercel은 http:// 아웃바운드를 차단하므로 https:// 로 강제 변환

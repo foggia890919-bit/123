@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 
 export const maxDuration = 300;
 
@@ -160,6 +161,8 @@ async function processPage(pageItems: HiraDrug[]): Promise<number> {
 }
 
 export async function POST(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   const body = await req.json().catch(() => ({}));
   const testMode = body?.mode === "test";
   const startPage = Math.max(1, parseInt(body?.startPage) || 1);
@@ -217,6 +220,8 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET() {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   const [publicCount, excelCount, syncRows] = await Promise.all([
     prisma.medication.count({ where: { source: "PUBLIC_API" } }),
     prisma.medication.count({ where: { source: "EXCEL" } }),

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { signOut } from "next-auth/react";
 import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut, Building2, Search, X, Mail, Phone, Send, Inbox, Copy, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -67,7 +67,7 @@ const MENU_GROUPS: MenuGroup[] = [
   },
 ];
 
-interface UserDoc { id: string; docType: string; fileName: string; fileData: string; }
+interface UserDoc { id: string; docType: string; fileName: string; fileData?: string; }
 interface User {
   id: string; email: string; name: string | null;
   role: string; approved: boolean; createdAt: string;
@@ -88,16 +88,10 @@ const roleColor: Record<string, string> = {
 };
 
 export default function AdminDashboardPage() {
-  const router = useRouter();
   const [tab, setTab] = useState<Tab>("upload");
 
-  useEffect(() => {
-    if (localStorage.getItem("isAdmin") !== "true") router.push("/admin/login");
-  }, [router]);
-
   function handleLogout() {
-    localStorage.removeItem("isAdmin");
-    router.push("/admin/login");
+    signOut({ callbackUrl: "/login" });
   }
 
   return (
@@ -946,8 +940,9 @@ function MembersTab() {
 
   async function fetchUsers() {
     setLoading(true);
-    const res = await fetch("/api/admin/users");
-    setUsers(await res.json());
+    const res = await fetch("/api/admin/users?limit=200");
+    const data = await res.json();
+    setUsers(Array.isArray(data) ? data : (data.users ?? []));
     setLoading(false);
   }
 
@@ -971,9 +966,17 @@ function MembersTab() {
     alert("비밀번호가 초기화됐어요.");
   }
 
-  function downloadDoc(doc: UserDoc) {
+  async function downloadDoc(doc: UserDoc) {
+    let data = doc.fileData;
+    if (!data) {
+      const res = await fetch(`/api/admin/users/document/${doc.id}`);
+      if (!res.ok) { alert("문서를 불러오지 못했어요."); return; }
+      const full = await res.json();
+      data = full.fileData;
+    }
+    if (!data) return;
     const a = document.createElement("a");
-    a.href = doc.fileData;
+    a.href = data;
     a.download = doc.fileName;
     a.click();
   }
@@ -1106,7 +1109,9 @@ function RatesTab() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    fetch("/api/admin/users").then((r) => r.json()).then(setUsers);
+    fetch("/api/admin/users?limit=200")
+      .then((r) => r.json())
+      .then((data) => setUsers(Array.isArray(data) ? data : (data.users ?? [])));
   }, []);
 
   async function loadCurrentRates(userId: string) {
@@ -1323,7 +1328,7 @@ function FilterReqsTab() {
   async function fetchAll() {
     setLoading(true);
     const [r1, r2] = await Promise.all([
-      fetch("/api/filter-request").then((r) => r.json()),
+      fetch("/api/filter-request?all=true").then((r) => r.json()),
       fetch("/api/admin/company-submissions").then((r) => r.json()),
     ]);
     setReqs(Array.isArray(r1) ? r1 : []);
@@ -1332,7 +1337,7 @@ function FilterReqsTab() {
   }
 
   async function fetchReqs() {
-    const res = await fetch("/api/filter-request");
+    const res = await fetch("/api/filter-request?all=true");
     setReqs(await res.json());
   }
 
@@ -1707,7 +1712,7 @@ function BulkSubmissionTab() {
   async function load() {
     setLoading(true);
     const [r1, r2, r3] = await Promise.all([
-      fetch("/api/filter-request").then((r) => r.json()),
+      fetch("/api/filter-request?all=true").then((r) => r.json()),
       fetch("/api/admin/company-submissions").then((r) => r.json()),
       fetch("/api/admin/submission-entities").then((r) => r.json()),
     ]);

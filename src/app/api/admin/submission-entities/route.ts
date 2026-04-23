@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureSubmissionEntityTable } from "@/lib/ensure-submission-entity-table";
+import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 
 export async function GET() {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   try {
     await ensureSubmissionEntityTable();
     const rows = await prisma.$queryRawUnsafe<unknown[]>(
@@ -15,6 +18,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   try {
     await ensureSubmissionEntityTable();
     const body = await req.json();
@@ -44,6 +49,8 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   try {
     await ensureSubmissionEntityTable();
     const body = await req.json();

@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureCompanySubmissionTable } from "@/lib/ensure-company-submission-table";
+import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 
 // 제약사별 제출처(담당자·연락처) 정보 관리
 // 관리자 대시보드에서 사용
 
 export async function GET() {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   try {
     await ensureCompanySubmissionTable();
     const rows = await prisma.companySubmission.findMany({
@@ -22,6 +25,8 @@ export async function GET() {
 
 // Upsert by companyName (primary key)
 export async function POST(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   try {
     await ensureCompanySubmissionTable();
     const body = await req.json();
@@ -54,6 +59,8 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   try {
     await ensureCompanySubmissionTable();
     const body = await req.json();

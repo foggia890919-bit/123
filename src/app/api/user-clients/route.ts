@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireSession, isNextResponse } from "@/lib/auth-guard";
 
-// GET /api/user-clients?userId=... → 담당자 본인의 거래처
-// GET /api/user-clients?all=true → 관리자용, 모든 담당자의 거래처 (담당자 정보 포함)
+// GET /api/user-clients → 본인 거래처
+// GET /api/user-clients?all=true → 관리자 전용, 모든 담당자의 거래처
 export async function GET(req: NextRequest) {
-  const userId = req.nextUrl.searchParams.get("userId");
+  const user = await requireSession();
+  if (isNextResponse(user)) return user;
   const all = req.nextUrl.searchParams.get("all") === "true";
 
   if (all) {
+    if (user.role !== "ADMIN") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
     const rows = await prisma.userClient.findMany({
       orderBy: { createdAt: "desc" },
       include: { user: { select: { name: true, email: true } } },
@@ -15,7 +18,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(rows);
   }
 
-  if (!userId) return NextResponse.json([], { status: 200 });
+  const userId = user.id;
 
   // 기존 FilterRequest에서 거래처 정보를 UserClient로 자동 가져오기
   const pastRequests = await prisma.filterRequest.findMany({
@@ -42,16 +45,18 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { userId, clientName, bizNumber, bizDocument, bizFileName } = await req.json();
-  if (!userId || !clientName || !bizNumber) {
+  const user = await requireSession();
+  if (isNextResponse(user)) return user;
+  const { clientName, bizNumber, bizDocument, bizFileName } = await req.json();
+  if (!clientName || !bizNumber) {
     return NextResponse.json({ error: "필수 항목 누락" }, { status: 400 });
   }
   try {
     const row = await prisma.userClient.create({
       data: {
-        userId,
-        clientName: clientName.trim(),
-        bizNumber: bizNumber.trim(),
+        userId: user.id,
+        clientName: String(clientName).trim(),
+        bizNumber: String(bizNumber).trim(),
         bizDocument: bizDocument || null,
         bizFileName: bizFileName || null,
       },
@@ -67,16 +72,29 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
+  const user = await requireSession();
+  if (isNextResponse(user)) return user;
   const id = req.nextUrl.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id 필요" }, { status: 400 });
+  const existing = await prisma.userClient.findUnique({ where: { id }, select: { userId: true } });
+  if (!existing) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+  // approved 변경은 관리자만
   const { approved } = await req.json();
+  if (user.role !== "ADMIN") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
   const row = await prisma.userClient.update({ where: { id }, data: { approved: Boolean(approved) } });
   return NextResponse.json(row);
 }
 
 export async function DELETE(req: NextRequest) {
+  const user = await requireSession();
+  if (isNextResponse(user)) return user;
   const id = req.nextUrl.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id 필요" }, { status: 400 });
+  const existing = await prisma.userClient.findUnique({ where: { id }, select: { userId: true } });
+  if (!existing) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+  if (user.role !== "ADMIN" && existing.userId !== user.id) {
+    return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+  }
   await prisma.userClient.delete({ where: { id } });
   return NextResponse.json({ success: true });
 }

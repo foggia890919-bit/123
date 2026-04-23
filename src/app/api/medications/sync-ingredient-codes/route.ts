@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 
 export const maxDuration = 300;
 
@@ -122,6 +123,8 @@ function combineIngredient(name: string, spec: string): string {
 }
 
 export async function POST() {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   try {
     const { items: firstItems, totalCount } = await fetchPageWithRetry(1);
 
@@ -257,6 +260,8 @@ export async function POST() {
 }
 
 export async function GET() {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   const [filled, total, settingRows] = await Promise.all([
     prisma.medication.count({ where: { ingredientCode: { not: null } } }),
     prisma.medication.count(),
