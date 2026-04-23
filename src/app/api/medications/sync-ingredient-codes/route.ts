@@ -187,7 +187,7 @@ export async function POST() {
 
       const result = await withDbRetry(() => prisma.$queryRawUnsafe<{ id: string; apiName: string; apiSpec: string; oldName: string; newName: string }[]>(
         `UPDATE "Medication" AS m
-         SET "categoryB" = v."categoryB",
+         SET "ingredientCode" = v."ingredientCode",
              "ingredientName" = CASE
                WHEN v."apiName" <> '' AND v."apiSpec" <> '' THEN v."apiName" || ' ' || v."apiSpec"
                WHEN v."apiName" <> '' THEN v."apiName"
@@ -198,7 +198,7 @@ export async function POST() {
                ELSE m."ingredientName"
              END,
              "updatedAt" = NOW()
-         FROM (VALUES ${values}) AS v("insuranceCode", "categoryB", "apiName", "apiSpec")
+         FROM (VALUES ${values}) AS v("insuranceCode", "ingredientCode", "apiName", "apiSpec")
          WHERE m."insuranceCode" = v."insuranceCode"
          RETURNING m.id, v."apiName" AS "apiName", v."apiSpec" AS "apiSpec",
                    COALESCE(m."ingredientName", '') AS "newName"`,
@@ -220,13 +220,13 @@ export async function POST() {
 
     // 최종 카운트 포함 응답 (프론트에서 바로 박스 갱신 가능하게)
     const [filled, total] = await Promise.all([
-      withDbRetry(() => prisma.medication.count({ where: { categoryB: { not: null } } })),
+      withDbRetry(() => prisma.medication.count({ where: { ingredientCode: { not: null } } })),
       withDbRetry(() => prisma.medication.count()),
     ]);
 
     // 샘플 3개 (실제 DB 반영 확인용)
     const sampleRows = await withDbRetry(() => prisma.medication.findMany({
-      where: { categoryB: { not: null }, insuranceCode: { not: null } },
+      where: { ingredientCode: { not: null }, insuranceCode: { not: null } },
       select: { productName: true, ingredientName: true, insuranceCode: true },
       take: 5,
       orderBy: { updatedAt: "desc" },
@@ -258,7 +258,7 @@ export async function POST() {
 
 export async function GET() {
   const [filled, total, settingRows] = await Promise.all([
-    prisma.medication.count({ where: { categoryB: { not: null } } }),
+    prisma.medication.count({ where: { ingredientCode: { not: null } } }),
     prisma.medication.count(),
     prisma.$queryRaw<{ value: string }[]>`
       SELECT "value" FROM "SystemSetting" WHERE "key" = 'lastAtcSync'

@@ -18,7 +18,7 @@ import * as XLSX from "xlsx";
 interface Medication {
   id: string; productName: string; companyName: string; ingredientName: string;
   price: number | null; commissionRate: number | null; insuranceCode: string | null;
-  categoryB: string | null; bioStatus: string | null; originalDrug: string | null; notes: string | null;
+  categoryB: string | null; ingredientCode: string | null; bioStatus: string | null; originalDrug: string | null; notes: string | null;
   isSettlement: boolean; settlementType?: string | null; additionalRate?: number | null;
 }
 interface ProposalItem {
@@ -847,7 +847,7 @@ function ProposalsContent() {
                               {medForButton && (
                                 <button onClick={() => selected && setIngredientModal({
                                   name: medForButton.ingredientName,
-                                  categoryB: medForButton.categoryB,
+                                  categoryB: medForButton.ingredientCode ?? null,
                                   replaceContext: { proposalId: selected.id, itemId: item.id, originalProductName: medForButton.productName },
                                 })}
                                   className="text-xs text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 whitespace-nowrap">
@@ -956,7 +956,7 @@ function ProposalsContent() {
       {ingredientModal && (
         <SameIngredientModal
           ingredientName={ingredientModal.name}
-          categoryBCode={ingredientModal.categoryB ?? undefined}
+          ingredientCode={ingredientModal.categoryB ?? undefined}
           userId={userId}
           replaceContext={ingredientModal.replaceContext
             ? { ...ingredientModal.replaceContext, onDone: () => { if (selected) loadProposal(selected); } }

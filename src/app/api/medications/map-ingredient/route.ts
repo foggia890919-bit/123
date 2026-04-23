@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
         seen.add(row.id);
         await prisma.medication.update({
           where: { id: row.id },
-          data: { categoryB, updatedAt: new Date() },
+          data: { ingredientCode: categoryB, updatedAt: new Date() },
         });
         updated++;
       }

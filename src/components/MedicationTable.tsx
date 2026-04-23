@@ -207,7 +207,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                     {showBioStatus !== false && <span className="text-gray-500">{med.bioStatus || "-"}</span>}
                     {showOriginalDrug !== false && <span className="text-gray-500">{med.originalDrug || "-"}</span>}
                     {showInsuranceCode !== false && <span className="font-mono text-gray-500">{med.insuranceCode || "-"}</span>}
-                    <button onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.categoryB })}
+                    <button onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.ingredientCode ?? null })}
                       className="mt-0.5 text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 whitespace-nowrap transition-colors inline-flex items-center">
                       <Search className="w-3 h-3 inline mr-1" />동일성분
                     </button>
@@ -257,7 +257,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
       {ingredientModal && (
         <SameIngredientModal
           ingredientName={ingredientModal.name}
-          categoryBCode={ingredientModal.categoryB ?? undefined}
+          ingredientCode={ingredientModal.categoryB ?? undefined}
           userId={userId}
           onClose={() => setIngredientModal(null)}
           initialCols={{

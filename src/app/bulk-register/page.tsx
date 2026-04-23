@@ -100,7 +100,7 @@ function BulkRegisterInner() {
   }
 
   async function handleAutoSwitch(criteria: "commission" | "stock" | "settlement" | "ai") {
-    const eligibleRows = rows.filter((r) => r.original?.categoryB);
+    const eligibleRows = rows.filter((r) => r.original?.ingredientCode);
     if (eligibleRows.length === 0) return;
     setAutoSwitching(criteria);
     setAutoSwitchResult(null);
@@ -108,7 +108,7 @@ function BulkRegisterInner() {
       const payload = {
         rows: eligibleRows.map((r) => ({
           id: r.id,
-          categoryB: r.original!.categoryB,
+          ingredientCode: r.original!.ingredientCode,
           originalMedicationId: r.original!.id,
           originalProductName: r.original!.productName,
           ingredientName: r.original!.ingredientName,
@@ -728,7 +728,7 @@ function BulkRegisterInner() {
       {altModal && altModal.row.original && (
         <SameIngredientModal
           ingredientName={altModal.row.original.ingredientName}
-          categoryBCode={altModal.row.original.categoryB ?? undefined}
+          ingredientCode={altModal.row.original.ingredientCode ?? undefined}
           userId={userId}
           onClose={() => setAltModal(null)}
           selectContext={{

@@ -13,7 +13,7 @@ type Criteria = "commission" | "stock" | "settlement" | "ai";
 
 interface InputRow {
   id: string;
-  categoryB: string | null;
+  ingredientCode: string | null;
   originalMedicationId: string | null;
   originalProductName?: string;
   ingredientName?: string;
@@ -34,16 +34,15 @@ export async function POST(req: NextRequest) {
   const criteria: Criteria = body?.criteria ?? "commission";
   const userId: string | null = body?.userId ?? null;
 
-  // 숫자만인 categoryB(엑셀 분류번호)는 HIRA 주성분코드가 아니므로 제외
-  const validRows = rows.filter((r) => r.categoryB && /[A-Za-z]/.test(r.categoryB));
+  const validRows = rows.filter((r) => r.ingredientCode);
   if (validRows.length === 0) {
     return NextResponse.json({ results: rows.map((r) => ({ rowId: r.id, medication: null })) });
   }
 
-  const categoryBCodes = [...new Set(validRows.map((r) => r.categoryB as string))];
+  const ingredientCodeCodes = [...new Set(validRows.map((r) => r.ingredientCode as string))];
 
   const allMeds = await prisma.medication.findMany({
-    where: { categoryB: { in: categoryBCodes } },
+    where: { ingredientCode: { in: ingredientCodeCodes } },
     orderBy: [{ isSettlement: "desc" }, { commissionRate: "desc" }],
   });
 
@@ -58,19 +57,19 @@ export async function POST(req: NextRequest) {
     additionalRate: rateMap[normalizeCompanyKey(m.companyName)] ?? null,
   }));
 
-  const medsByCategoryB = new Map<string, MedicationWithRate[]>();
+  const medsByIngredientCode = new Map<string, MedicationWithRate[]>();
   for (const m of medsWithRate) {
-    if (!m.categoryB) continue;
-    if (!medsByCategoryB.has(m.categoryB)) medsByCategoryB.set(m.categoryB, []);
-    medsByCategoryB.get(m.categoryB)!.push(m);
+    if (!m.ingredientCode) continue;
+    if (!medsByIngredientCode.has(m.ingredientCode)) medsByIngredientCode.set(m.ingredientCode, []);
+    medsByIngredientCode.get(m.ingredientCode)!.push(m);
   }
 
   const medById = new Map(medsWithRate.map((m) => [m.id, m]));
 
   if (criteria === "commission") {
     const results = rows.map((row) => {
-      if (!row.categoryB) return { rowId: row.id, medication: null };
-      const alts = (medsByCategoryB.get(row.categoryB) ?? [])
+      if (!row.ingredientCode) return { rowId: row.id, medication: null };
+      const alts = (medsByIngredientCode.get(row.ingredientCode) ?? [])
         .filter((m) => m.id !== row.originalMedicationId)
         .sort((a, b) => {
           const ar = (a.commissionRate ?? 0) + (a.additionalRate ?? 0);
@@ -84,8 +83,8 @@ export async function POST(req: NextRequest) {
 
   if (criteria === "stock") {
     const results = rows.map((row) => {
-      if (!row.categoryB) return { rowId: row.id, medication: null };
-      const alts = (medsByCategoryB.get(row.categoryB) ?? [])
+      if (!row.ingredientCode) return { rowId: row.id, medication: null };
+      const alts = (medsByIngredientCode.get(row.ingredientCode) ?? [])
         .filter((m) => m.id !== row.originalMedicationId)
         .sort((a, b) => {
           const as_ = a.stock ?? -1;
@@ -99,8 +98,8 @@ export async function POST(req: NextRequest) {
 
   if (criteria === "settlement") {
     const results = rows.map((row) => {
-      if (!row.categoryB) return { rowId: row.id, medication: null };
-      const alts = (medsByCategoryB.get(row.categoryB) ?? [])
+      if (!row.ingredientCode) return { rowId: row.id, medication: null };
+      const alts = (medsByIngredientCode.get(row.ingredientCode) ?? [])
         .filter((m) => m.id !== row.originalMedicationId)
         .sort((a, b) => {
           const aRate = (a.commissionRate ?? 0) + (a.additionalRate ?? 0);
@@ -116,9 +115,9 @@ export async function POST(req: NextRequest) {
 
   // AI mode — Claude picks balancing commission rate + stock
   const rowsForAI = rows
-    .filter((r) => r.categoryB)
+    .filter((r) => r.ingredientCode)
     .map((row) => {
-      const alts = (medsByCategoryB.get(row.categoryB!) ?? [])
+      const alts = (medsByIngredientCode.get(row.ingredientCode!) ?? [])
         .filter((m) => m.id !== row.originalMedicationId)
         .slice(0, 20);
       return {

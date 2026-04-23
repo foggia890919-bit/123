@@ -4,7 +4,7 @@ import { normalizeCompanyKey } from "@/lib/utils";
 
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q")?.trim() || "";
-  const categoryBCode = req.nextUrl.searchParams.get("categoryBCode")?.trim() || "";
+  const ingredientCodeParam = req.nextUrl.searchParams.get("ingredientCode")?.trim() || "";
   const settlementOnly = req.nextUrl.searchParams.get("settlement") === "true";
   const userId = req.nextUrl.searchParams.get("userId") || null;
   const page = parseInt(req.nextUrl.searchParams.get("page") || "1");
@@ -13,14 +13,14 @@ export async function GET(req: NextRequest) {
   const companiesRaw = req.nextUrl.searchParams.get("companies") || "";
   const companyList = companiesRaw.split(",").map((s) => s.trim()).filter(Boolean);
 
-  if (!q && !categoryBCode && companyList.length === 0) return NextResponse.json({ medications: [], total: 0 });
+  if (!q && !ingredientCodeParam && companyList.length === 0) return NextResponse.json({ medications: [], total: 0 });
 
   const where = {
     AND: [
       settlementOnly ? { isSettlement: true } : {},
       companyList.length > 0 ? { companyName: { in: companyList } } : {},
-      categoryBCode
-        ? { categoryB: categoryBCode }
+      ingredientCodeParam
+        ? { ingredientCode: ingredientCodeParam }
         : q
           ? ingredientOnly
             ? { ingredientName: { contains: q, mode: "insensitive" as const } }

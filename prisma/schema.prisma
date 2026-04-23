@@ -78,7 +78,8 @@ model Medication {
   id             String    @id @default(cuid())
   categoryA      String?
   ingredientName String
-  categoryB      String?
+  categoryB      String?   // 식약분류 (엑셀 분류B 컬럼, 숫자)
+  ingredientCode String?   // HIRA 주성분코드 (ATC 매핑 파일, 영문+숫자 예: 641400ATR)
   commissionRate Float?
   companyName    String
   bioStatus      String?
@@ -100,6 +101,7 @@ model Medication {
   @@index([productName])
   @@index([insuranceCode])
   @@index([companyName])
+  @@index([ingredientCode])
 }
 
 enum MedSource {

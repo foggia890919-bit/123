@@ -20,7 +20,7 @@ interface SelectContext {
 
 interface Props {
   ingredientName: string;
-  categoryBCode?: string;
+  ingredientCode?: string;
   userId?: string;
   onClose: () => void;
   initialCols?: Partial<ColVis>;
@@ -38,7 +38,7 @@ interface ColVis {
   insuranceCode: boolean; notes: boolean;
 }
 
-export default function SameIngredientModal({ ingredientName, categoryBCode, userId, onClose, initialCols, replaceContext, selectContext }: Props) {
+export default function SameIngredientModal({ ingredientName, ingredientCode, userId, onClose, initialCols, replaceContext, selectContext }: Props) {
   const [medications, setMedications] = useState<MedicationItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -79,18 +79,16 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
   }
 
   useEffect(() => {
-    if (!categoryBCode && !ingredientName) { setLoading(false); return; }
-    // 숫자만 있는 categoryB(엑셀 분류번호)는 HIRA 주성분코드가 아니므로 성분명으로 검색
-    const isRealIngredientCode = categoryBCode && /[A-Za-z]/.test(categoryBCode);
+    if (!ingredientCode && !ingredientName) { setLoading(false); return; }
     const uid = userId ? `&userId=${userId}` : "";
-    const url = isRealIngredientCode
-      ? `/api/medications/search?categoryBCode=${encodeURIComponent(categoryBCode!)}${uid}&limit=500`
+    const url = ingredientCode
+      ? `/api/medications/search?ingredientCode=${encodeURIComponent(ingredientCode)}${uid}&limit=500`
       : `/api/medications/search?q=${encodeURIComponent(ingredientName)}${uid}&ingredientOnly=true&limit=500`;
     fetch(url)
       .then((r) => r.json())
       .then((d) => { setMedications(d.medications || []); setTotal(d.total || 0); })
       .finally(() => setLoading(false));
-  }, [categoryBCode, ingredientName, userId]);
+  }, [ingredientCode, ingredientName, userId]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => d === "asc" ? "desc" : "asc");
@@ -140,7 +138,7 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
             <div>
               <h2 className="font-bold text-gray-900">동일성분 검색</h2>
               <p className="text-xs text-gray-500 mt-0.5">
-                {categoryBCode && /[A-Za-z]/.test(categoryBCode) ? `주성분코드: ${categoryBCode}` : ingredientName} · 총 {total}개 품목
+                {ingredientCode ? `주성분코드: ${ingredientCode}` : ingredientName} · 총 {total}개 품목
               </p>
             </div>
             <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X className="w-5 h-5" /></button>
@@ -184,10 +182,9 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
 
           {/* 테이블 */}
           <div className="overflow-auto flex-1">
-            {!categoryBCode ? (
+            {!ingredientCode && !ingredientName ? (
               <div className="flex flex-col items-center justify-center py-16 gap-2 text-gray-400 text-sm">
-                <p>주성분코드 정보가 없어 동일성분 검색이 불가합니다.</p>
-                <p className="text-xs text-gray-300">요율표 엑셀에 분류(B) 주성분코드를 포함해 업로드하면 검색됩니다.</p>
+                <p>검색 정보가 없습니다.</p>
               </div>
             ) : loading ? (
               <div className="flex justify-center py-16 text-gray-400 text-sm">검색 중...</div>

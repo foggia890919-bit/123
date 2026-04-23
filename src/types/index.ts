@@ -4,7 +4,8 @@ export interface MedicationItem {
   id: string;
   categoryA: string | null;
   ingredientName: string;
-  categoryB: string | null;
+  categoryB: string | null;      // 식약분류 (엑셀 분류B)
+  ingredientCode: string | null; // HIRA 주성분코드 (ATC 매핑)
   commissionRate: number | null;
   companyName: string;
   bioStatus: string | null;
