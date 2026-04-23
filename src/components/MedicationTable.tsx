@@ -56,7 +56,7 @@ function SettlementBadge({ med }: { med: MedicationItem }) {
   return null;
 }
 
-export default function MedicationTable({ medications, loading, userId, showCategoryA, showIngredientName, showCategoryB, showRate, showBioStatus, showPrice, showOriginalDrug, showInsuranceCode, showNotes }: Props) {
+export default function MedicationTable({ medications, loading, userId, showCategoryA, showIngredientName, showCategoryB, showRate, showBioStatus, showPrice, showOriginalDrug, showInsuranceCode, showNotes, showStock }: Props) {
   const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null } | null>(null);
   const [proposalTarget, setProposalTarget] = useState<MedicationItem | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -156,6 +156,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
               {showCategoryA && <th className="px-4 py-3 text-left whitespace-nowrap">분류(A)</th>}
               {showCategoryB && <th className="px-4 py-3 text-left whitespace-nowrap">분류(B)</th>}
               {showNotes && <th className="px-4 py-3 text-left whitespace-nowrap">특이사항</th>}
+              {showStock && <th className="px-4 py-3 text-right whitespace-nowrap">재고</th>}
               {showPrice !== false && <SortTh label="약가" k="price" right />}
               {showRate && (
                 <>
@@ -215,6 +216,13 @@ export default function MedicationTable({ medications, loading, userId, showCate
                 {showCategoryA && <td className="px-4 py-3 text-xs text-gray-500">{med.categoryA || "-"}</td>}
                 {showCategoryB && <td className="px-4 py-3 text-xs text-gray-500">{med.categoryB || "-"}</td>}
                 {showNotes && <td className="px-4 py-3 text-xs text-gray-500 max-w-[160px]">{med.notes || "-"}</td>}
+                {showStock && (
+                  <td className="px-4 py-3 text-right text-xs whitespace-nowrap">
+                    {med.stock != null
+                      ? <span className={med.stock > 0 ? "text-green-700 font-medium" : "text-red-500"}>{med.stock > 0 ? `${med.stock.toLocaleString()}` : "품절"}</span>
+                      : <span className="text-gray-300">-</span>}
+                  </td>
+                )}
                 {showPrice !== false && <td className="px-4 py-3 text-right text-gray-700 whitespace-nowrap">{formatPrice(med.price)}</td>}
                 {showRate && (() => {
                   const base = med.commissionRate ?? null;

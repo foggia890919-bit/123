@@ -14,7 +14,7 @@ const TOGGLES: { key: keyof ColumnVisibility; label: string; salesRepOnly?: bool
   { key: "showCategoryA", label: "분류(A)" },
   { key: "showIngredientName", label: "성분명" },
   { key: "showCategoryB", label: "분류(B)" },
-  { key: "showRate", label: "수수료율", salesRepOnly: true },
+  { key: "showRate", label: "코드(수수료율)", salesRepOnly: true },
   { key: "showCompanyName", label: "제약사명" },
   { key: "showBioStatus", label: "생동/생산" },
   { key: "showProductName", label: "품목명" },
@@ -22,6 +22,7 @@ const TOGGLES: { key: keyof ColumnVisibility; label: string; salesRepOnly?: bool
   { key: "showOriginalDrug", label: "오리지날/대조약" },
   { key: "showInsuranceCode", label: "보험코드" },
   { key: "showNotes", label: "특이사항" },
+  { key: "showStock", label: "재고" },
 ];
 
 export default function ColumnToggles({ cols, setCols, isSalesRep }: Props) {

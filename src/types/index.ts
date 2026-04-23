@@ -13,6 +13,7 @@ export interface MedicationItem {
   originalDrug: string | null;
   insuranceCode: string | null;
   notes: string | null;
+  stock?: number | null;
   isSettlement: boolean;
   settlementType?: string | null;
   source: "EXCEL" | "PUBLIC_API";

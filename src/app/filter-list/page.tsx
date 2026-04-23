@@ -47,7 +47,7 @@ export default function FilterListPage() {
     showCategoryA: false, showIngredientName: true, showCategoryB: false,
     showRate: false, showCompanyName: true, showBioStatus: true,
     showProductName: true, showPrice: true, showOriginalDrug: true,
-    showInsuranceCode: true, showNotes: false,
+    showInsuranceCode: true, showNotes: false, showStock: false,
   });
   const [proposals, setProposals] = useState<ProposalSummary[]>([]);
   const [showProposalMenu, setShowProposalMenu] = useState(false);
@@ -162,6 +162,7 @@ export default function FilterListPage() {
         ...(cols.showOriginalDrug ? { "오리지날/대조약": m.originalDrug || "" } : {}),
         ...(cols.showInsuranceCode ? { 보험코드: m.insuranceCode || "" } : {}),
         ...(cols.showNotes ? { 특이사항: m.notes || "" } : {}),
+        ...(cols.showStock ? { 재고: m.stock != null ? m.stock : "" } : {}),
       }));
       const ws = XLSX.utils.json_to_sheet(rows);
       const wb = XLSX.utils.book_new();
@@ -317,9 +318,6 @@ export default function FilterListPage() {
               {selected.size === 0 ? "제약사 선택 필요" : `${selected.size}개 조회`}
             </Button>
           </form>
-          <div className="pt-1">
-            <ColumnToggles cols={cols} setCols={setCols} isSalesRep={isSalesRep} />
-          </div>
         </div>
 
         {searched && (() => {
@@ -389,12 +387,16 @@ export default function FilterListPage() {
           );
         })()}
 
-        {!searched && (
-          <div className="flex flex-col items-center justify-center py-16 text-gray-400 bg-white rounded-lg border border-gray-200">
-            <Download className="w-8 h-8 mb-2 text-gray-300" />
-            <p className="text-sm">위에서 제약사를 선택하고 조회하세요</p>
-          </div>
-        )}
+        <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+          <p className="text-xs font-semibold text-gray-500">출력 항목 선택</p>
+          <ColumnToggles cols={cols} setCols={setCols} isSalesRep={isSalesRep} />
+          {!searched && (
+            <div className="flex items-center gap-2 pt-2 text-gray-400 text-sm">
+              <Download className="w-4 h-4 text-gray-300 shrink-0" />
+              위에서 제약사를 선택하고 조회하세요
+            </div>
+          )}
+        </div>
       </div>
     </RequireRole>
   );
