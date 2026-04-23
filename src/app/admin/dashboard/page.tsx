@@ -2607,6 +2607,7 @@ function UserClientsTab() {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [clientTab, setClientTab] = useState<"approved" | "unapproved">("unapproved");
 
   useEffect(() => { load(); }, []);
 
@@ -2618,7 +2619,11 @@ function UserClientsTab() {
     setLoading(false);
   }
 
-  const filtered = rows.filter((r) => {
+  const approvedRows = rows.filter((r) => r.approved);
+  const unapprovedRows = rows.filter((r) => !r.approved);
+  const baseRows = clientTab === "approved" ? approvedRows : unapprovedRows;
+
+  const filtered = baseRows.filter((r) => {
     if (!query.trim()) return true;
     const q = query.toLowerCase();
     return (
@@ -2677,8 +2682,29 @@ function UserClientsTab() {
         </div>
       </div>
 
-      {rows.length === 0 ? (
-        <p className="py-12 text-center text-gray-400 text-sm">등록된 거래처가 없어요.</p>
+      <div className="flex border-b border-gray-100">
+        <button
+          onClick={() => setClientTab("unapproved")}
+          className={`text-sm px-5 py-2.5 border-b-2 font-medium transition-colors ${
+            clientTab === "unapproved" ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-800"
+          }`}
+        >
+          미승인 거래처 <span className="text-xs opacity-70">({unapprovedRows.length})</span>
+        </button>
+        <button
+          onClick={() => setClientTab("approved")}
+          className={`text-sm px-5 py-2.5 border-b-2 font-medium transition-colors ${
+            clientTab === "approved" ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-800"
+          }`}
+        >
+          승인 거래처 <span className="text-xs opacity-70">({approvedRows.length})</span>
+        </button>
+      </div>
+
+      {filtered.length === 0 && !query ? (
+        <p className="py-12 text-center text-gray-400 text-sm">
+          {clientTab === "unapproved" ? "미승인 거래처가 없어요." : "승인된 거래처가 없어요."}
+        </p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -2728,7 +2754,7 @@ function UserClientsTab() {
                             : "bg-green-50 text-green-700 hover:bg-green-100"
                         }`}
                       >
-                        {approvingId === c.id ? "..." : c.approved ? "취소" : "승인"}
+                        {approvingId === c.id ? "..." : c.approved ? "승인취소" : "승인"}
                       </button>
                     </td>
                   </tr>
