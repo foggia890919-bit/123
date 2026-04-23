@@ -813,13 +813,12 @@ function ProposalsContent() {
                         const settlement = m?.price != null && total != null ? Math.round(m.price * total / 100) : null;
                         const medForButton = m ?? item.originalMedication ?? null;
                         return (
-                          <tr key={item.id} className={`hover:bg-gray-50 ${isUnmatched ? "bg-orange-50/40" : ""}`}>
+                          <tr key={item.id} className="hover:bg-gray-50">
                             <td className="px-3 py-2.5 text-gray-400 text-xs truncate">{i + 1}</td>
                             <td className="px-3 py-2.5 overflow-hidden" title={m?.productName || item.note || ""}>
                               {isUnmatched ? (
-                                <p className="font-medium text-sm truncate flex items-center gap-1.5">
-                                  <span className="text-[10px] bg-orange-100 text-orange-700 border border-orange-200 rounded px-1.5 py-0.5 font-semibold shrink-0">미인식</span>
-                                  <span className="font-mono text-gray-500 text-xs truncate">{item.note}</span>
+                                <p className="font-medium text-sm truncate">
+                                  <span className="font-mono text-red-500 text-xs truncate">{item.note}</span>
                                 </p>
                               ) : (
                                 <div className="space-y-0.5 min-w-0">

@@ -230,7 +230,8 @@ function BulkRegisterInner() {
     try {
       const items = rows.map((r) => ({
         originalMedicationId: r.original?.id ?? null,
-        altMedicationId: r.alternative?.id ?? null,
+        // 대체품 미지정 시 원본 그대로 적용 (수수료율 유지)
+        altMedicationId: r.alternative?.id ?? r.original?.id ?? null,
         originalCode: r.originalCode,
       }));
       const res = await fetch("/api/proposals/bulk-save", {
