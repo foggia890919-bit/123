@@ -42,8 +42,7 @@ export default function FilterListPage() {
   const [searched, setSearched] = useState(false);
   const [productSearch, setProductSearch] = useState("");
   const [cols, setCols] = useState<ColumnVisibility>({
-    showCategoryB: true, showBioStatus: true, showOriginalDrug: true,
-    showInsuranceCode: true, showNotes: true, showRate: true,
+    showCategoryA: false, showCategoryB: false, showNotes: false, showRate: true,
   });
   const [proposals, setProposals] = useState<ProposalSummary[]>([]);
   const [showProposalMenu, setShowProposalMenu] = useState(false);
@@ -130,12 +129,21 @@ export default function FilterListPage() {
 
   function exportExcel() {
     const rows = results.map((m) => ({
-      분류A: m.categoryA || "", 성분명: m.ingredientName, 분류B: m.categoryB || "",
-      수수료율: m.commissionRate != null ? `${m.commissionRate}%` : "",
-      제약사명: m.companyName, "생동/생산": m.bioStatus || "", 품목명: m.productName,
-      약가: m.price || "", "오리지날/대조약": m.originalDrug || "",
-      보험코드: m.insuranceCode || "", 특이사항: m.notes || "",
-      ...(isSalesRep ? { 추가수수료: m.additionalRate != null ? `${m.additionalRate}%` : "" } : {}),
+      제약사명: m.companyName,
+      품목명: m.productName,
+      성분명: m.ingredientName,
+      "생동여부": m.bioStatus || "",
+      "대조약": m.originalDrug || "",
+      보험코드: m.insuranceCode || "",
+      약가: m.price || "",
+      ...(cols.showCategoryA ? { 분류A: m.categoryA || "" } : {}),
+      ...(cols.showCategoryB ? { 분류B: m.categoryB || "" } : {}),
+      ...(cols.showNotes ? { 특이사항: m.notes || "" } : {}),
+      ...(isSalesRep && cols.showRate ? {
+        기본수수료: m.commissionRate != null ? `${m.commissionRate}%` : "",
+        추가수수료: m.additionalRate != null ? `${m.additionalRate}%` : "",
+        합계수수료: m.commissionRate != null ? `${m.commissionRate + (m.additionalRate ?? 0)}%` : "",
+      } : {}),
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();

@@ -11,13 +11,15 @@ type SortKey = "productName" | "companyName" | "price" | "commissionRate" | "add
 type SortDir = "asc" | "desc";
 
 export interface ColumnVisibility {
+  showCategoryA?: boolean;
   showCategoryB?: boolean;
+  showNotes?: boolean;
+  showRate?: boolean;
+  // proposals page 자체 테이블에서 사용하는 필드 (MedicationTable은 무시)
   showBioStatus?: boolean;
   showOriginalDrug?: boolean;
   showInsuranceCode?: boolean;
-  showNotes?: boolean;
   showStock?: boolean;
-  showRate?: boolean;
 }
 
 interface Props extends ColumnVisibility {
@@ -49,7 +51,7 @@ function SettlementBadge({ med }: { med: MedicationItem }) {
   return null;
 }
 
-export default function MedicationTable({ medications, loading, userId, showBioStatus, showOriginalDrug, showRate }: Props) {
+export default function MedicationTable({ medications, loading, userId, showCategoryA, showCategoryB, showNotes, showRate }: Props) {
   const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null } | null>(null);
   const [proposalTarget, setProposalTarget] = useState<MedicationItem | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -146,7 +148,9 @@ export default function MedicationTable({ medications, loading, userId, showBioS
               <SortTh label="제품명 / 제약사" k="productName" />
               <th className="px-4 py-3 text-left">성분명</th>
               <th className="px-4 py-3 text-left">정보</th>
-              <th className="px-4 py-3 text-center">재고</th>
+              {showCategoryA && <th className="px-4 py-3 text-left whitespace-nowrap">분류A</th>}
+              {showCategoryB && <th className="px-4 py-3 text-left whitespace-nowrap">분류B</th>}
+              {showNotes && <th className="px-4 py-3 text-left whitespace-nowrap">특이사항</th>}
               <SortTh label="약가" k="price" right />
               {showRate && (
                 <>
@@ -191,17 +195,19 @@ export default function MedicationTable({ medications, loading, userId, showBioS
                   <IngredientName name={med.ingredientName} />
                 </td>
                 <td className="px-4 py-3">
-                  <div className="flex flex-col items-start gap-1 text-xs">
-                    {showBioStatus && med.bioStatus && <span className="text-gray-500">{med.bioStatus}</span>}
-                    {showOriginalDrug && med.originalDrug && <span className="text-gray-500">{med.originalDrug}</span>}
+                  <div className="flex flex-col items-start gap-0.5 text-xs">
+                    <span className="text-gray-500">{med.bioStatus || "-"}</span>
+                    <span className="text-gray-500">{med.originalDrug || "-"}</span>
                     <span className="font-mono text-gray-500">{med.insuranceCode || "-"}</span>
                     <button onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.categoryB })}
-                      className="text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 whitespace-nowrap transition-colors inline-flex items-center">
+                      className="mt-0.5 text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 whitespace-nowrap transition-colors inline-flex items-center">
                       <Search className="w-3 h-3 inline mr-1" />동일성분
                     </button>
                   </div>
                 </td>
-                <td className="px-4 py-3 text-center text-xs text-gray-400">-</td>
+                {showCategoryA && <td className="px-4 py-3 text-xs text-gray-500">{med.categoryA || "-"}</td>}
+                {showCategoryB && <td className="px-4 py-3 text-xs text-gray-500">{med.categoryB || "-"}</td>}
+                {showNotes && <td className="px-4 py-3 text-xs text-gray-500 max-w-[160px]">{med.notes || "-"}</td>}
                 <td className="px-4 py-3 text-right text-gray-700 whitespace-nowrap">{formatPrice(med.price)}</td>
                 {showRate && (() => {
                   const base = med.commissionRate ?? null;
@@ -241,8 +247,8 @@ export default function MedicationTable({ medications, loading, userId, showBioS
           onClose={() => setIngredientModal(null)}
           initialCols={{
             categoryB: false,
-            bioStatus: showBioStatus,
-            originalDrug: showOriginalDrug,
+            bioStatus: true,
+            originalDrug: true,
             insuranceCode: true,
             notes: false,
           }}
