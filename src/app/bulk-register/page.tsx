@@ -3,7 +3,7 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { Upload, Trash2, FileSpreadsheet, FileDown, X, AlertCircle, Loader2, Search, Save, Sparkles, TrendingUp, Package } from "lucide-react";
+import { Upload, Trash2, FileSpreadsheet, FileDown, X, AlertCircle, Loader2, Search, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatPrice } from "@/lib/utils";
@@ -64,7 +64,8 @@ function BulkRegisterInner() {
   const [newBizNumber, setNewBizNumber] = useState("");
   const [addClientError, setAddClientError] = useState("");
   const [addClientSaving, setAddClientSaving] = useState(false);
-  const [autoSwitching, setAutoSwitching] = useState<"commission" | "stock" | "ai" | null>(null);
+  const [autoSwitching, setAutoSwitching] = useState<"commission" | "stock" | "settlement" | "ai" | null>(null);
+  const [activeCriteria, setActiveCriteria] = useState<"commission" | "stock" | "settlement" | null>(null);
   const [autoSwitchResult, setAutoSwitchResult] = useState<{ applied: number; skipped: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -98,7 +99,7 @@ function BulkRegisterInner() {
     finally { setAddClientSaving(false); }
   }
 
-  async function handleAutoSwitch(criteria: "commission" | "stock" | "ai") {
+  async function handleAutoSwitch(criteria: "commission" | "stock" | "settlement" | "ai") {
     const eligibleRows = rows.filter((r) => r.original?.categoryB);
     if (eligibleRows.length === 0) return;
     setAutoSwitching(criteria);
@@ -567,43 +568,55 @@ function BulkRegisterInner() {
         {/* 자동 선택 */}
         {rows.some((r) => r.original?.categoryB) && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+            <p className="text-xs font-semibold text-gray-500 mb-3">자동 대체 선택 기준</p>
             <div className="flex items-center gap-3 flex-wrap">
-              <div>
-                <p className="text-sm font-semibold text-gray-800">자동 대체 선택</p>
-                <p className="text-xs text-gray-500 mt-0.5">동일성분 품목 중 기준에 따라 대체품을 일괄 선택합니다.</p>
-              </div>
-              <div className="flex items-center gap-2 ml-auto flex-wrap">
-                <button
-                  onClick={() => handleAutoSwitch("commission")}
-                  disabled={autoSwitching !== null}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-medium disabled:opacity-50"
-                >
-                  {autoSwitching === "commission" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <TrendingUp className="w-3.5 h-3.5" />}
-                  수수료율 기준
-                </button>
-                <button
-                  onClick={() => handleAutoSwitch("stock")}
-                  disabled={autoSwitching !== null}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 text-xs font-medium disabled:opacity-50"
-                >
-                  {autoSwitching === "stock" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Package className="w-3.5 h-3.5" />}
-                  재고 기준
-                </button>
-                <button
-                  onClick={() => handleAutoSwitch("ai")}
-                  disabled={autoSwitching !== null}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-purple-300 bg-purple-50 text-purple-700 hover:bg-purple-100 text-xs font-medium disabled:opacity-50"
-                >
-                  {autoSwitching === "ai" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                  AI 추천
-                </button>
-              </div>
+              {(
+                [
+                  { key: "stock", label: "재고 많은순" },
+                  { key: "commission", label: "수수료 높은순" },
+                  { key: "settlement", label: "정산금 높은순" },
+                ] as const
+              ).map(({ key, label }) => {
+                const isActive = activeCriteria === key;
+                const isLoading = autoSwitching === key;
+                return (
+                  <label
+                    key={key}
+                    className={`flex items-center gap-2 px-4 py-2.5 rounded-lg border cursor-pointer select-none transition-colors ${
+                      isActive
+                        ? "border-blue-500 bg-blue-50 text-blue-700"
+                        : "border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300 hover:bg-gray-100"
+                    } ${autoSwitching !== null ? "pointer-events-none opacity-60" : ""}`}
+                  >
+                    <input
+                      type="radio"
+                      name="auto-criteria"
+                      className="sr-only"
+                      checked={isActive}
+                      onChange={() => {
+                        setActiveCriteria(key);
+                        handleAutoSwitch(key);
+                      }}
+                      disabled={autoSwitching !== null}
+                    />
+                    <span
+                      className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                        isActive ? "border-blue-500 bg-blue-500" : "border-gray-300"
+                      }`}
+                    >
+                      {isActive && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                    </span>
+                    {isLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                    <span className="text-sm font-medium">{label}</span>
+                  </label>
+                );
+              })}
             </div>
             {autoSwitchResult && (
-              <div className="mt-2 text-xs text-gray-600 flex gap-3">
-                <span className="text-emerald-700 font-medium">✓ {autoSwitchResult.applied}건 선택됨</span>
-                {autoSwitchResult.skipped > 0 && <span className="text-gray-400">{autoSwitchResult.skipped}건 대체품 없음</span>}
-              </div>
+              <p className="mt-2 text-xs text-gray-500">
+                <span className="text-emerald-700 font-medium">{autoSwitchResult.applied}건</span> 선택됨
+                {autoSwitchResult.skipped > 0 && <span className="text-gray-400"> · {autoSwitchResult.skipped}건 대체품 없음</span>}
+              </p>
             )}
           </div>
         )}

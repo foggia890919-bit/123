@@ -9,7 +9,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 type MedRow = Record<string, any>;
 type MedicationWithRate = MedRow & { additionalRate: number | null };
 
-type Criteria = "commission" | "stock" | "ai";
+type Criteria = "commission" | "stock" | "settlement" | "ai";
 
 interface InputRow {
   id: string;
@@ -90,6 +90,23 @@ export async function POST(req: NextRequest) {
           const as_ = a.stock ?? -1;
           const bs = b.stock ?? -1;
           return bs - as_;
+        });
+      return { rowId: row.id, medication: alts[0] ?? null };
+    });
+    return NextResponse.json({ results });
+  }
+
+  if (criteria === "settlement") {
+    const results = rows.map((row) => {
+      if (!row.categoryB) return { rowId: row.id, medication: null };
+      const alts = (medsByCategoryB.get(row.categoryB) ?? [])
+        .filter((m) => m.id !== row.originalMedicationId)
+        .sort((a, b) => {
+          const aRate = (a.commissionRate ?? 0) + (a.additionalRate ?? 0);
+          const bRate = (b.commissionRate ?? 0) + (b.additionalRate ?? 0);
+          const aSettlement = (a.price ?? 0) * aRate / 100;
+          const bSettlement = (b.price ?? 0) * bRate / 100;
+          return bSettlement - aSettlement;
         });
       return { rowId: row.id, medication: alts[0] ?? null };
     });
