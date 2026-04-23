@@ -3425,7 +3425,7 @@ interface LoginLogEntry {
   ip: string | null;
   userAgent: string | null;
   createdAt: string;
-  user: { name: string | null; role: string } | null;
+  user: { name: string | null; role: string; phone: string | null; email: string } | null;
 }
 
 function LoginLogsTab() {
@@ -3433,14 +3433,14 @@ function LoginLogsTab() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [emailFilter, setEmailFilter] = useState("");
+  const [query, setQuery] = useState("");
   const [successFilter, setSuccessFilter] = useState<"" | "true" | "false">("");
 
-  async function loadLogs(p = page, email = emailFilter, success = successFilter) {
+  async function loadLogs(p = page, q = query, success = successFilter) {
     setLoading(true);
     try {
       const params = new URLSearchParams({ page: String(p) });
-      if (email) params.set("email", email);
+      if (q) params.set("q", q);
       if (success) params.set("success", success);
       const res = await fetch(`/api/admin/login-logs?${params}`);
       const data = await res.json();
@@ -3455,7 +3455,7 @@ function LoginLogsTab() {
 
   function handleSearch() {
     setPage(1);
-    loadLogs(1, emailFilter, successFilter);
+    loadLogs(1, query, successFilter);
   }
 
   const totalPages = Math.ceil(total / 50);
@@ -3469,11 +3469,11 @@ function LoginLogsTab() {
         <div className="flex flex-wrap gap-2 mb-4">
           <input
             type="text"
-            value={emailFilter}
-            onChange={(e) => setEmailFilter(e.target.value)}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            placeholder="이메일 검색"
-            className="h-9 px-3 border border-gray-300 rounded-md text-sm w-56"
+            placeholder="이름 · 이메일 · 전화번호 검색"
+            className="h-9 px-3 border border-gray-300 rounded-md text-sm w-72"
           />
           <select
             value={successFilter}
@@ -3497,8 +3497,9 @@ function LoginLogsTab() {
             <thead className="bg-gray-50 text-xs text-gray-500 font-semibold">
               <tr>
                 <th className="px-4 py-2.5 text-left">시각</th>
-                <th className="px-4 py-2.5 text-left">이메일</th>
                 <th className="px-4 py-2.5 text-left">이름</th>
+                <th className="px-4 py-2.5 text-left">이메일</th>
+                <th className="px-4 py-2.5 text-left">전화번호</th>
                 <th className="px-4 py-2.5 text-left">역할</th>
                 <th className="px-4 py-2.5 text-center">결과</th>
                 <th className="px-4 py-2.5 text-left">IP</th>
@@ -3507,15 +3508,16 @@ function LoginLogsTab() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {logs.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400 text-sm">기록이 없습니다.</td></tr>
+                <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400 text-sm">기록이 없습니다.</td></tr>
               )}
               {logs.map((log) => (
                 <tr key={log.id} className="hover:bg-gray-50">
                   <td className="px-4 py-2.5 text-xs text-gray-500 whitespace-nowrap">
                     {new Date(log.createdAt).toLocaleString("ko-KR")}
                   </td>
-                  <td className="px-4 py-2.5 text-xs text-gray-800">{log.email}</td>
-                  <td className="px-4 py-2.5 text-xs text-gray-600">{log.user?.name ?? "-"}</td>
+                  <td className="px-4 py-2.5 text-xs text-gray-800 font-medium">{log.user?.name ?? "-"}</td>
+                  <td className="px-4 py-2.5 text-xs text-gray-600">{log.email}</td>
+                  <td className="px-4 py-2.5 text-xs text-gray-600">{log.user?.phone ?? "-"}</td>
                   <td className="px-4 py-2.5 text-xs">
                     {log.user ? (
                       <span className={`px-1.5 py-0.5 rounded text-[11px] font-medium ${roleColor[log.user.role] ?? "bg-gray-100 text-gray-600"}`}>

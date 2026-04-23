@@ -5,11 +5,18 @@ export async function GET(req: NextRequest) {
   const page = parseInt(req.nextUrl.searchParams.get("page") || "1");
   const limit = 50;
   const skip = (page - 1) * limit;
-  const email = req.nextUrl.searchParams.get("email")?.trim() || "";
+  const q = req.nextUrl.searchParams.get("q")?.trim() || "";
   const successParam = req.nextUrl.searchParams.get("success");
 
   const where: Record<string, unknown> = {};
-  if (email) where.email = { contains: email, mode: "insensitive" };
+
+  if (q) {
+    (where as { OR?: unknown[] }).OR = [
+      { email: { contains: q, mode: "insensitive" } },
+      { user: { name: { contains: q, mode: "insensitive" } } },
+      { user: { phone: { contains: q, mode: "insensitive" } } },
+    ];
+  }
   if (successParam === "true") where.success = true;
   if (successParam === "false") where.success = false;
 
@@ -19,7 +26,7 @@ export async function GET(req: NextRequest) {
       orderBy: { createdAt: "desc" },
       take: limit,
       skip,
-      include: { user: { select: { name: true, role: true } } },
+      include: { user: { select: { name: true, role: true, phone: true, email: true } } },
     }),
     prisma.loginLog.count({ where }),
   ]);
