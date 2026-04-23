@@ -23,6 +23,22 @@ model User {
   filterRequests        FilterRequest[]
   userClients           UserClient[]
   prescriptionReports   PrescriptionReport[]
+  loginLogs             LoginLog[]
+}
+
+model LoginLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  email     String
+  success   Boolean
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([userId])
+  @@index([email])
 }
 
 model UserClient {
