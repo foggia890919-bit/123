@@ -41,6 +41,8 @@ export default function FilterListPage() {
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [productSearch, setProductSearch] = useState("");
+  const [pageSize, setPageSize] = useState(20);
+  const [page, setPage] = useState(1);
   const [cols, setCols] = useState<ColumnVisibility>({
     showCategoryA: false, showCategoryB: false, showNotes: false, showRate: true,
   });
@@ -122,7 +124,7 @@ export default function FilterListPage() {
       else if (companyTab === "원내") params.set("settlementType", "원내");
       const res = await fetch(`/api/medications/filter?${params.toString()}`);
       const data = await res.json();
-      setResults(data.medications || []); setTotal(data.total || 0);
+      setResults(data.medications || []); setTotal(data.total || 0); setPage(1);
     } catch { setResults([]); }
     finally { setLoading(false); }
   }, [selected, productSearch, session, companyTab]);
@@ -317,20 +319,69 @@ export default function FilterListPage() {
           </form>
         </div>
 
-        {searched && (
-          <>
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <p className="text-sm text-gray-500">조회 결과 <span className="font-semibold text-gray-900">{total.toLocaleString()}개</span></p>
-              <div className="flex items-center gap-3 flex-wrap">
-                <ColumnToggles cols={cols} setCols={setCols} isSalesRep={isSalesRep} />
-                <Button size="sm" variant="outline" onClick={exportExcel} disabled={results.length === 0 || downloading}>
-                  <Download className="w-4 h-4 mr-1.5" />{downloading ? "다운로드 중…" : "엑셀 다운"}
-                </Button>
+        {searched && (() => {
+          const totalPages = Math.max(1, Math.ceil(results.length / pageSize));
+          const safePage = Math.min(page, totalPages);
+          const pageItems = results.slice((safePage - 1) * pageSize, safePage * pageSize);
+          const pageNums: (number | "…")[] = [];
+          if (totalPages <= 7) {
+            for (let i = 1; i <= totalPages; i++) pageNums.push(i);
+          } else {
+            pageNums.push(1);
+            if (safePage > 3) pageNums.push("…");
+            for (let i = Math.max(2, safePage - 1); i <= Math.min(totalPages - 1, safePage + 1); i++) pageNums.push(i);
+            if (safePage < totalPages - 2) pageNums.push("…");
+            pageNums.push(totalPages);
+          }
+          return (
+            <>
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div className="flex items-center gap-3">
+                  <p className="text-sm text-gray-500">조회 결과 <span className="font-semibold text-gray-900">{results.length.toLocaleString()}개</span></p>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+                    className="text-xs border border-gray-300 rounded px-2 py-1 text-gray-600 bg-white"
+                  >
+                    {[10, 20, 50, 100].map((n) => <option key={n} value={n}>{n}개씩</option>)}
+                  </select>
+                </div>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <ColumnToggles cols={cols} setCols={setCols} isSalesRep={isSalesRep} />
+                  <Button size="sm" variant="outline" onClick={exportExcel} disabled={results.length === 0 || downloading}>
+                    <Download className="w-4 h-4 mr-1.5" />{downloading ? "다운로드 중…" : "엑셀 다운"}
+                  </Button>
+                </div>
               </div>
-            </div>
-            <MedicationTable medications={results} loading={loading} {...cols} showRate={isSalesRep ? cols.showRate : false} userId={session?.user?.id} />
-          </>
-        )}
+              <MedicationTable medications={pageItems} loading={loading} {...cols} showRate={isSalesRep ? cols.showRate : false} userId={session?.user?.id} />
+              {totalPages > 1 && (
+                <div className="flex items-center justify-center gap-1 pt-1">
+                  <button
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={safePage === 1}
+                    className="px-2.5 py-1.5 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >이전</button>
+                  {pageNums.map((n, i) =>
+                    n === "…" ? (
+                      <span key={`ellipsis-${i}`} className="px-1.5 text-xs text-gray-400">…</span>
+                    ) : (
+                      <button
+                        key={n}
+                        onClick={() => setPage(n as number)}
+                        className={`px-2.5 py-1.5 text-xs rounded border ${safePage === n ? "bg-gray-900 text-white border-gray-900 font-semibold" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}
+                      >{n}</button>
+                    )
+                  )}
+                  <button
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={safePage === totalPages}
+                    className="px-2.5 py-1.5 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >다음</button>
+                </div>
+              )}
+            </>
+          );
+        })()}
 
         {!searched && (
           <div className="flex flex-col items-center justify-center py-16 text-gray-400 bg-white rounded-lg border border-gray-200">
