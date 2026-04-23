@@ -11,14 +11,19 @@ type SortKey = "productName" | "companyName" | "price" | "commissionRate" | "add
 type SortDir = "asc" | "desc";
 
 export interface ColumnVisibility {
+  // 엑셀 다운로드 및 화면 표시 토글
   showCategoryA?: boolean;
+  showIngredientName?: boolean;
   showCategoryB?: boolean;
-  showNotes?: boolean;
   showRate?: boolean;
-  // proposals page 자체 테이블에서 사용하는 필드 (MedicationTable은 무시)
+  showCompanyName?: boolean;
   showBioStatus?: boolean;
+  showProductName?: boolean;
+  showPrice?: boolean;
   showOriginalDrug?: boolean;
   showInsuranceCode?: boolean;
+  showNotes?: boolean;
+  // proposals 페이지 전용 (MedicationTable 무시)
   showStock?: boolean;
 }
 

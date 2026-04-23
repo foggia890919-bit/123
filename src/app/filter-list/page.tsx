@@ -44,8 +44,10 @@ export default function FilterListPage() {
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState(1);
   const [cols, setCols] = useState<ColumnVisibility>({
-    showBioStatus: true, showOriginalDrug: true,
-    showCategoryA: false, showCategoryB: false, showNotes: false, showRate: true,
+    showCategoryA: false, showIngredientName: true, showCategoryB: false,
+    showRate: false, showCompanyName: true, showBioStatus: true,
+    showProductName: true, showPrice: true, showOriginalDrug: true,
+    showInsuranceCode: true, showNotes: false,
   });
   const [proposals, setProposals] = useState<ProposalSummary[]>([]);
   const [showProposalMenu, setShowProposalMenu] = useState(false);
@@ -148,21 +150,17 @@ export default function FilterListPage() {
       const all: MedicationItem[] = data.medications || [];
 
       const rows = all.map((m) => ({
-        제약사명: m.companyName,
-        품목명: m.productName,
-        성분명: m.ingredientName,
-        보험코드: m.insuranceCode || "",
-        약가: m.price || "",
+        ...(cols.showCategoryA ? { "분류(A)": m.categoryA || "" } : {}),
+        ...(cols.showIngredientName ? { 성분명: m.ingredientName } : {}),
+        ...(cols.showCategoryB ? { "분류(B)": m.categoryB || "" } : {}),
+        ...(isSalesRep && cols.showRate ? { 수수료율: m.commissionRate != null ? `${m.commissionRate}%` : "" } : {}),
+        ...(cols.showCompanyName ? { 제약사명: m.companyName } : {}),
         ...(cols.showBioStatus ? { "생동/생산": m.bioStatus || "" } : {}),
+        ...(cols.showProductName ? { 품목명: m.productName } : {}),
+        ...(cols.showPrice ? { 약가: m.price || "" } : {}),
         ...(cols.showOriginalDrug ? { "오리지날/대조약": m.originalDrug || "" } : {}),
-        ...(cols.showCategoryA ? { 분류A: m.categoryA || "" } : {}),
-        ...(cols.showCategoryB ? { 분류B: m.categoryB || "" } : {}),
+        ...(cols.showInsuranceCode ? { 보험코드: m.insuranceCode || "" } : {}),
         ...(cols.showNotes ? { 특이사항: m.notes || "" } : {}),
-        ...(isSalesRep && cols.showRate ? {
-          기본수수료: m.commissionRate != null ? `${m.commissionRate}%` : "",
-          추가수수료: m.additionalRate != null ? `${m.additionalRate}%` : "",
-          합계수수료: m.commissionRate != null ? `${m.commissionRate + (m.additionalRate ?? 0)}%` : "",
-        } : {}),
       }));
       const ws = XLSX.utils.json_to_sheet(rows);
       const wb = XLSX.utils.book_new();

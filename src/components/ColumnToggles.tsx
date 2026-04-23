@@ -11,12 +11,17 @@ interface Props {
 }
 
 const TOGGLES: { key: keyof ColumnVisibility; label: string; salesRepOnly?: boolean }[] = [
+  { key: "showCategoryA", label: "분류(A)" },
+  { key: "showIngredientName", label: "성분명" },
+  { key: "showCategoryB", label: "분류(B)" },
+  { key: "showRate", label: "수수료율", salesRepOnly: true },
+  { key: "showCompanyName", label: "제약사명" },
   { key: "showBioStatus", label: "생동/생산" },
+  { key: "showProductName", label: "품목명" },
+  { key: "showPrice", label: "약가" },
   { key: "showOriginalDrug", label: "오리지날/대조약" },
-  { key: "showCategoryA", label: "분류A" },
-  { key: "showCategoryB", label: "분류B" },
+  { key: "showInsuranceCode", label: "보험코드" },
   { key: "showNotes", label: "특이사항" },
-  { key: "showRate", label: "요율표", salesRepOnly: true },
 ];
 
 export default function ColumnToggles({ cols, setCols, isSalesRep }: Props) {
