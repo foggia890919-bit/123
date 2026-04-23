@@ -44,6 +44,7 @@ export default function FilterListPage() {
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState(1);
   const [cols, setCols] = useState<ColumnVisibility>({
+    showBioStatus: true, showOriginalDrug: true,
     showCategoryA: false, showCategoryB: false, showNotes: false, showRate: true,
   });
   const [proposals, setProposals] = useState<ProposalSummary[]>([]);
@@ -150,10 +151,10 @@ export default function FilterListPage() {
         제약사명: m.companyName,
         품목명: m.productName,
         성분명: m.ingredientName,
-        생동여부: m.bioStatus || "",
-        대조약: m.originalDrug || "",
         보험코드: m.insuranceCode || "",
         약가: m.price || "",
+        ...(cols.showBioStatus ? { "생동/생산": m.bioStatus || "" } : {}),
+        ...(cols.showOriginalDrug ? { "오리지날/대조약": m.originalDrug || "" } : {}),
         ...(cols.showCategoryA ? { 분류A: m.categoryA || "" } : {}),
         ...(cols.showCategoryB ? { 분류B: m.categoryB || "" } : {}),
         ...(cols.showNotes ? { 특이사항: m.notes || "" } : {}),
@@ -317,6 +318,9 @@ export default function FilterListPage() {
               {selected.size === 0 ? "제약사 선택 필요" : `${selected.size}개 조회`}
             </Button>
           </form>
+          <div className="pt-1">
+            <ColumnToggles cols={cols} setCols={setCols} isSalesRep={isSalesRep} />
+          </div>
         </div>
 
         {searched && (() => {
@@ -347,7 +351,6 @@ export default function FilterListPage() {
                   </select>
                 </div>
                 <div className="flex items-center gap-3 flex-wrap">
-                  <ColumnToggles cols={cols} setCols={setCols} isSalesRep={isSalesRep} />
                   <Button size="sm" variant="outline" onClick={exportExcel} disabled={results.length === 0 || downloading}>
                     <Download className="w-4 h-4 mr-1.5" />{downloading ? "다운로드 중…" : "엑셀 다운"}
                   </Button>
