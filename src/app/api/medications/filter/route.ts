@@ -26,11 +26,14 @@ export async function GET(req: NextRequest) {
     ];
   }
 
+  const limitParam = req.nextUrl.searchParams.get("limit");
+  const take = limitParam ? parseInt(limitParam) : 200;
+
   const [medications, total] = await Promise.all([
     prisma.medication.findMany({
       where,
       orderBy: [{ isSettlement: "desc" }, { commissionRate: "desc" }, { companyName: "asc" }],
-      take: 200,
+      take,
     }),
     prisma.medication.count({ where }),
   ]);

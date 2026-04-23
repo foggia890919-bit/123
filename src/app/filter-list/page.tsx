@@ -25,7 +25,7 @@ function StatusBadge({ status }: { status: string }) {
 
 export default function FilterListPage() {
   const { data: session } = useSession();
-  const isSalesRep = session?.user?.role === "SALES_REP";
+  const isSalesRep = session?.user?.role === "SALES_REP" || session?.user?.role === "ADMIN";
 
   const companyMenuRef = useRef<HTMLDivElement>(null);
   const proposalMenuRef = useRef<HTMLDivElement>(null);
@@ -127,28 +127,47 @@ export default function FilterListPage() {
     finally { setLoading(false); }
   }, [selected, productSearch, session, companyTab]);
 
-  function exportExcel() {
-    const rows = results.map((m) => ({
-      제약사명: m.companyName,
-      품목명: m.productName,
-      성분명: m.ingredientName,
-      "생동여부": m.bioStatus || "",
-      "대조약": m.originalDrug || "",
-      보험코드: m.insuranceCode || "",
-      약가: m.price || "",
-      ...(cols.showCategoryA ? { 분류A: m.categoryA || "" } : {}),
-      ...(cols.showCategoryB ? { 분류B: m.categoryB || "" } : {}),
-      ...(cols.showNotes ? { 특이사항: m.notes || "" } : {}),
-      ...(isSalesRep && cols.showRate ? {
-        기본수수료: m.commissionRate != null ? `${m.commissionRate}%` : "",
-        추가수수료: m.additionalRate != null ? `${m.additionalRate}%` : "",
-        합계수수료: m.commissionRate != null ? `${m.commissionRate + (m.additionalRate ?? 0)}%` : "",
-      } : {}),
-    }));
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "제약사리스트");
-    XLSX.writeFile(wb, `제약사별리스트_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  const [downloading, setDownloading] = useState(false);
+
+  async function exportExcel() {
+    if (selected.size === 0) return;
+    setDownloading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("q", productSearch.trim() || " ");
+      params.set("companies", Array.from(selected).join(","));
+      if (session?.user?.id) params.set("userId", session.user.id);
+      if (companyTab === "CSO") params.set("settlementType", "원외");
+      else if (companyTab === "원내") params.set("settlementType", "원내");
+      params.set("limit", "9999");
+      const res = await fetch(`/api/medications/filter?${params.toString()}`);
+      const data = await res.json();
+      const all: MedicationItem[] = data.medications || [];
+
+      const rows = all.map((m) => ({
+        제약사명: m.companyName,
+        품목명: m.productName,
+        성분명: m.ingredientName,
+        생동여부: m.bioStatus || "",
+        대조약: m.originalDrug || "",
+        보험코드: m.insuranceCode || "",
+        약가: m.price || "",
+        ...(cols.showCategoryA ? { 분류A: m.categoryA || "" } : {}),
+        ...(cols.showCategoryB ? { 분류B: m.categoryB || "" } : {}),
+        ...(cols.showNotes ? { 특이사항: m.notes || "" } : {}),
+        ...(isSalesRep && cols.showRate ? {
+          기본수수료: m.commissionRate != null ? `${m.commissionRate}%` : "",
+          추가수수료: m.additionalRate != null ? `${m.additionalRate}%` : "",
+          합계수수료: m.commissionRate != null ? `${m.commissionRate + (m.additionalRate ?? 0)}%` : "",
+        } : {}),
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "제약사리스트");
+      XLSX.writeFile(wb, `제약사별리스트_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } finally {
+      setDownloading(false);
+    }
   }
 
   return (
@@ -304,8 +323,8 @@ export default function FilterListPage() {
               <p className="text-sm text-gray-500">조회 결과 <span className="font-semibold text-gray-900">{total.toLocaleString()}개</span></p>
               <div className="flex items-center gap-3 flex-wrap">
                 <ColumnToggles cols={cols} setCols={setCols} isSalesRep={isSalesRep} />
-                <Button size="sm" variant="outline" onClick={exportExcel} disabled={results.length === 0}>
-                  <Download className="w-4 h-4 mr-1.5" />엑셀 다운
+                <Button size="sm" variant="outline" onClick={exportExcel} disabled={results.length === 0 || downloading}>
+                  <Download className="w-4 h-4 mr-1.5" />{downloading ? "다운로드 중…" : "엑셀 다운"}
                 </Button>
               </div>
             </div>
