@@ -22,7 +22,19 @@ export default function SearchPage() {
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [displayedQuery, setDisplayedQuery] = useState("");
-  const [cols, setCols] = useState<ColumnVisibility>({ showRate: true });
+  const [cols, setCols] = useState<ColumnVisibility>({
+    showIngredientName: true,
+    showBioStatus: true,
+    showOriginalDrug: true,
+    showInsuranceCode: true,
+    showPrice: true,
+    showRate: false,
+    showCategoryA: false,
+    showCategoryB: false,
+    showNotes: false,
+    showStock: false,
+    showCompanyName: false,
+  });
 
   const [companies, setCompanies] = useState<CompanyOpt[]>([]);
   const [selectedCompanies, setSelectedCompanies] = useState<Set<string>>(new Set());

@@ -151,13 +151,13 @@ export default function MedicationTable({ medications, loading, userId, showCate
                 />
               </th>
               <SortTh label="제품명 / 제약사" k="productName" />
-              {showIngredientName !== false && <th className="px-4 py-3 text-left">성분명</th>}
+              {showIngredientName && <th className="px-4 py-3 text-left">성분명</th>}
               <th className="px-4 py-3 text-left">정보</th>
               {showCategoryA && <th className="px-4 py-3 text-left whitespace-nowrap">분류(A)</th>}
               {showCategoryB && <th className="px-4 py-3 text-left whitespace-nowrap">분류(B)</th>}
               {showNotes && <th className="px-4 py-3 text-left whitespace-nowrap">특이사항</th>}
               {showStock && <th className="px-4 py-3 text-right whitespace-nowrap">재고</th>}
-              {showPrice !== false && <SortTh label="약가" k="price" right />}
+              {showPrice && <SortTh label="약가" k="price" right />}
               {showRate && (
                 <>
                   <SortTh label="기본수수료" k="commissionRate" right />
@@ -197,16 +197,16 @@ export default function MedicationTable({ medications, loading, userId, showCate
                   </p>
                   <p className="text-xs text-gray-500 mt-0.5">{med.companyName}</p>
                 </td>
-                {showIngredientName !== false && (
+                {showIngredientName && (
                   <td className="px-4 py-3 text-gray-500 text-xs">
                     <IngredientName name={med.ingredientName} />
                   </td>
                 )}
                 <td className="px-4 py-3">
                   <div className="flex flex-col items-start gap-0.5 text-xs">
-                    {showBioStatus !== false && <span className="text-gray-500">{med.bioStatus || "-"}</span>}
-                    {showOriginalDrug !== false && <span className="text-gray-500">{med.originalDrug || "-"}</span>}
-                    {showInsuranceCode !== false && <span className="font-mono text-gray-500">{med.insuranceCode || "-"}</span>}
+                    {showBioStatus && <span className="text-gray-500">{med.bioStatus || "-"}</span>}
+                    {showOriginalDrug && <span className="text-gray-500">{med.originalDrug || "-"}</span>}
+                    {showInsuranceCode && <span className="font-mono text-gray-500">{med.insuranceCode || "-"}</span>}
                     <button onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.ingredientCode ?? null })}
                       className="mt-0.5 text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 whitespace-nowrap transition-colors inline-flex items-center">
                       <Search className="w-3 h-3 inline mr-1" />동일성분
@@ -223,7 +223,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                       : <span className="text-gray-300">-</span>}
                   </td>
                 )}
-                {showPrice !== false && <td className="px-4 py-3 text-right text-gray-700 whitespace-nowrap">{formatPrice(med.price)}</td>}
+                {showPrice && <td className="px-4 py-3 text-right text-gray-700 whitespace-nowrap">{formatPrice(med.price)}</td>}
                 {showRate && (() => {
                   const base = med.commissionRate ?? null;
                   const extra = med.additionalRate ?? null;
