@@ -1,8 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { signIn } from "next-auth/react";
-// next-auth/react signIn for client-side
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Input } from "@/components/ui/input";
@@ -14,6 +13,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [rememberEmail, setRememberEmail] = useState(false);
+  const [autoLogin, setAutoLogin] = useState(false);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("kmd_saved_email");
+    if (saved) { setEmail(saved); setRememberEmail(true); }
+    setAutoLogin(localStorage.getItem("kmd_no_auto") !== "1");
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -27,6 +34,14 @@ export default function LoginPage() {
     } else if (result?.error) {
       setError("이메일 또는 비밀번호가 올바르지 않아요.");
     } else {
+      if (rememberEmail) localStorage.setItem("kmd_saved_email", email);
+      else localStorage.removeItem("kmd_saved_email");
+
+      if (autoLogin) localStorage.removeItem("kmd_no_auto");
+      else localStorage.setItem("kmd_no_auto", "1");
+
+      sessionStorage.setItem("kmd_alive", "1");
+
       router.push("/");
       router.refresh();
     }
@@ -49,6 +64,27 @@ export default function LoginPage() {
           <div className="space-y-1">
             <label className="text-sm font-medium text-gray-700">비밀번호</label>
             <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required />
+          </div>
+
+          <div className="flex items-center gap-5 pt-1">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={rememberEmail}
+                onChange={(e) => setRememberEmail(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-300 text-blue-600 cursor-pointer"
+              />
+              <span className="text-sm text-gray-600">아이디 저장</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoLogin}
+                onChange={(e) => setAutoLogin(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-300 text-blue-600 cursor-pointer"
+              />
+              <span className="text-sm text-gray-600">자동로그인</span>
+            </label>
           </div>
 
           {error && (
