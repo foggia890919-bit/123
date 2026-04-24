@@ -7,7 +7,7 @@ import type { MedicationItem } from "@/types";
 import SameIngredientModal from "./SameIngredientModal";
 import AddToProposalDialog from "./AddToProposalDialog";
 
-type SortKey = "productName" | "companyName";
+type SortKey = "productName" | "price" | "commissionRate" | "additionalRate" | "totalRate" | "settlement";
 type SortDir = "asc" | "desc";
 
 export interface ColumnVisibility {
@@ -116,9 +116,20 @@ export default function MedicationTable({ medications, loading, userId, showCate
 
   const sorted = [...medications].sort((a, b) => {
     if (!sortKey) return 0;
-    const va = sortKey === "productName" ? a.productName : a.companyName;
-    const vb = sortKey === "productName" ? b.productName : b.companyName;
-    return sortDir === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
+    const getVal = (m: MedicationItem): string | number => {
+      const base = m.commissionRate ?? 0;
+      const extra = m.additionalRate ?? 0;
+      if (sortKey === "productName") return m.productName;
+      if (sortKey === "price") return m.price ?? -1;
+      if (sortKey === "commissionRate") return m.commissionRate ?? -1;
+      if (sortKey === "additionalRate") return m.additionalRate ?? -1;
+      if (sortKey === "totalRate") return m.commissionRate != null ? base + extra : -1;
+      if (sortKey === "settlement") return m.price != null && m.commissionRate != null ? Math.round(m.price * (base + extra) / 100) : -1;
+      return 0;
+    };
+    const va = getVal(a), vb = getVal(b);
+    if (typeof va === "string" && typeof vb === "string") return sortDir === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
+    return sortDir === "asc" ? (va as number) - (vb as number) : (vb as number) - (va as number);
   });
 
   function SortIcon({ k }: { k: SortKey }) {
@@ -126,11 +137,19 @@ export default function MedicationTable({ medications, loading, userId, showCate
     return sortDir === "asc" ? <ChevronUp className="w-3 h-3 inline ml-0.5 text-blue-500" /> : <ChevronDown className="w-3 h-3 inline ml-0.5 text-blue-500" />;
   }
 
+  function SortTh({ label, k, className }: { label: string; k: SortKey; className?: string }) {
+    return (
+      <th onClick={() => toggleSort(k)} className={`px-4 py-3 text-right cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap ${className ?? ""}`}>
+        {label}<SortIcon k={k} />
+      </th>
+    );
+  }
+
   if (loading) return <div className="flex justify-center py-16 text-gray-400 text-sm">검색 중...</div>;
   if (medications.length === 0) return <div className="flex justify-center py-16 text-gray-400 text-sm">검색 결과가 없어요.</div>;
 
-  const hasAnyDetail = showIngredientName || showBioStatus || showOriginalDrug || showInsuranceCode ||
-    showCategoryA || showCategoryB || showNotes || showStock || showPrice || showRate;
+  // detail panel (expanded) has content if any of these are enabled
+  const hasDetailPanel = showIngredientName || showBioStatus || showOriginalDrug || showInsuranceCode || showCategoryA || showCategoryB || showNotes;
 
   return (
     <>
@@ -162,13 +181,20 @@ export default function MedicationTable({ medications, loading, userId, showCate
                   title="전체 선택 / 전체 해제"
                 />
               </th>
-              <th
-                onClick={() => toggleSort("productName")}
-                className="px-4 py-3 text-left cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap"
-              >
+              <th onClick={() => toggleSort("productName")} className="px-4 py-3 text-left cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap">
                 제품명 / 제약사 <SortIcon k="productName" />
               </th>
-              {hasAnyDetail && <th className="px-3 py-3 w-8" />}
+              {showStock && <th className="px-4 py-3 text-right whitespace-nowrap">재고</th>}
+              {showPrice && <SortTh label="약가" k="price" />}
+              {showRate && (
+                <>
+                  <SortTh label="기본수수료" k="commissionRate" />
+                  <SortTh label="추가수수료" k="additionalRate" />
+                  <SortTh label="합계수수료" k="totalRate" />
+                  <SortTh label="정산금액" k="settlement" />
+                </>
+              )}
+              {hasDetailPanel && <th className="px-3 py-3 w-8" />}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -183,10 +209,8 @@ export default function MedicationTable({ medications, loading, userId, showCate
 
               return (
                 <Fragment key={med.id}>
-                  <tr
-                    className={`transition-colors ${isSelected ? "bg-blue-50/40" : "hover:bg-gray-50"} ${hasAnyDetail ? "cursor-pointer" : ""}`}
-                    onClick={() => hasAnyDetail && toggleRow(med.id)}
-                  >
+                  <tr className={`transition-colors ${isSelected ? "bg-blue-50/40" : "hover:bg-gray-50"} ${hasDetailPanel ? "cursor-pointer" : ""}`}
+                    onClick={() => hasDetailPanel && toggleRow(med.id)}>
                     <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
                       <input
                         type="checkbox"
@@ -197,11 +221,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                       />
                     </td>
                     <td className="px-4 py-3">
-                      <div
-                        className="relative inline-block"
-                        data-med-dropdown
-                        onClick={(e) => e.stopPropagation()}
-                      >
+                      <div className="relative inline-block" data-med-dropdown onClick={(e) => e.stopPropagation()}>
                         <button
                           type="button"
                           onClick={() => setOpenDropdown(isDropOpen ? null : med.id)}
@@ -213,21 +233,17 @@ export default function MedicationTable({ medications, loading, userId, showCate
                         {isDropOpen && (
                           <div className="absolute z-30 left-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[148px]">
                             {userId ? (
-                              <button
-                                type="button"
+                              <button type="button"
                                 onClick={() => { setProposalTarget(med); setOpenDropdown(null); }}
-                                className="w-full text-left text-xs px-3 py-2 hover:bg-green-50 text-green-700 flex items-center gap-1.5"
-                              >
+                                className="w-full text-left text-xs px-3 py-2 hover:bg-green-50 text-green-700 flex items-center gap-1.5">
                                 <ShoppingCart className="w-3 h-3" />제안서에 추가
                               </button>
                             ) : (
                               <p className="text-xs px-3 py-2 text-gray-400">로그인 필요</p>
                             )}
-                            <button
-                              type="button"
+                            <button type="button"
                               onClick={() => { setIngredientModal({ name: med.ingredientName, categoryB: med.ingredientCode ?? null }); setOpenDropdown(null); }}
-                              className="w-full text-left text-xs px-3 py-2 hover:bg-blue-50 text-blue-700 flex items-center gap-1.5"
-                            >
+                              className="w-full text-left text-xs px-3 py-2 hover:bg-blue-50 text-blue-700 flex items-center gap-1.5">
                               <Search className="w-3 h-3" />동일성분 검색
                             </button>
                           </div>
@@ -235,19 +251,38 @@ export default function MedicationTable({ medications, loading, userId, showCate
                       </div>
                       <p className="text-xs text-gray-500 mt-0.5">{med.companyName}</p>
                     </td>
-                    {hasAnyDetail && (
+
+                    {/* Always-visible columns */}
+                    {showStock && (
+                      <td className="px-4 py-3 text-right text-xs whitespace-nowrap">
+                        {med.stock != null
+                          ? <span className={med.stock > 0 ? "text-green-700 font-medium" : "text-red-500"}>{med.stock > 0 ? med.stock.toLocaleString() : "품절"}</span>
+                          : <span className="text-gray-300">-</span>}
+                      </td>
+                    )}
+                    {showPrice && (
+                      <td className="px-4 py-3 text-right text-gray-700 whitespace-nowrap">{formatPrice(med.price)}</td>
+                    )}
+                    {showRate && (
+                      <>
+                        <td className="px-4 py-3 text-right text-blue-600 font-medium whitespace-nowrap">{base != null ? `${base}%` : "-"}</td>
+                        <td className="px-4 py-3 text-right text-gray-500 whitespace-nowrap">{extra != null ? `${extra}%` : "-"}</td>
+                        <td className="px-4 py-3 text-right font-semibold text-blue-700 whitespace-nowrap">{total != null ? `${total}%` : "-"}</td>
+                        <td className="px-4 py-3 text-right font-semibold text-green-700 whitespace-nowrap">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</td>
+                      </>
+                    )}
+
+                    {hasDetailPanel && (
                       <td className="px-3 py-3 text-gray-400">
-                        {isExpanded
-                          ? <ChevronUp className="w-4 h-4" />
-                          : <ChevronDown className="w-4 h-4" />}
+                        {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                       </td>
                     )}
                   </tr>
 
-                  {isExpanded && hasAnyDetail && (
+                  {isExpanded && hasDetailPanel && (
                     <tr className={isSelected ? "bg-blue-50/30" : "bg-gray-50/60"}>
                       <td />
-                      <td colSpan={2} className="px-4 pb-3 pt-1">
+                      <td colSpan={2 + (showStock ? 1 : 0) + (showPrice ? 1 : 0) + (showRate ? 4 : 0)} className="px-4 pb-3 pt-1">
                         <div className="rounded-lg border border-gray-100 bg-white px-3 py-2.5 grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2.5 text-xs">
                           {showIngredientName && (
                             <div className="col-span-2 sm:col-span-3">
@@ -291,40 +326,6 @@ export default function MedicationTable({ medications, loading, userId, showCate
                               <p className="text-gray-700">{med.notes || "-"}</p>
                             </div>
                           )}
-                          {showStock && (
-                            <div>
-                              <p className="text-gray-400 mb-0.5">재고</p>
-                              {med.stock != null
-                                ? <p className={med.stock > 0 ? "text-green-700 font-medium" : "text-red-500"}>{med.stock > 0 ? med.stock.toLocaleString() : "품절"}</p>
-                                : <p className="text-gray-300">-</p>}
-                            </div>
-                          )}
-                          {showPrice && (
-                            <div>
-                              <p className="text-gray-400 mb-0.5">약가</p>
-                              <p className="text-gray-700 font-medium">{formatPrice(med.price)}</p>
-                            </div>
-                          )}
-                          {showRate && (
-                            <>
-                              <div>
-                                <p className="text-gray-400 mb-0.5">기본수수료</p>
-                                <p className="text-blue-600 font-medium">{base != null ? `${base}%` : "-"}</p>
-                              </div>
-                              <div>
-                                <p className="text-gray-400 mb-0.5">추가수수료</p>
-                                <p className="text-gray-500">{extra != null ? `${extra}%` : "-"}</p>
-                              </div>
-                              <div>
-                                <p className="text-gray-400 mb-0.5">합계수수료</p>
-                                <p className="text-blue-700 font-semibold">{total != null ? `${total}%` : "-"}</p>
-                              </div>
-                              <div>
-                                <p className="text-gray-400 mb-0.5">정산금액</p>
-                                <p className="text-green-700 font-semibold">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</p>
-                              </div>
-                            </>
-                          )}
                         </div>
                       </td>
                     </tr>
@@ -342,30 +343,16 @@ export default function MedicationTable({ medications, loading, userId, showCate
           ingredientCode={ingredientModal.categoryB ?? undefined}
           userId={userId}
           onClose={() => setIngredientModal(null)}
-          initialCols={{
-            categoryB: false,
-            bioStatus: true,
-            originalDrug: true,
-            insuranceCode: true,
-            notes: false,
-          }}
+          initialCols={{ categoryB: false, bioStatus: true, originalDrug: true, insuranceCode: true, notes: false }}
         />
       )}
 
       {proposalTarget && userId && (
-        <AddToProposalDialog
-          medication={proposalTarget}
-          userId={userId}
-          onClose={() => setProposalTarget(null)}
-        />
+        <AddToProposalDialog medication={proposalTarget} userId={userId} onClose={() => setProposalTarget(null)} />
       )}
 
       {bulkTargets && userId && (
-        <AddToProposalDialog
-          medications={bulkTargets}
-          userId={userId}
-          onClose={() => { setBulkTargets(null); setSelectedIds(new Set()); }}
-        />
+        <AddToProposalDialog medications={bulkTargets} userId={userId} onClose={() => { setBulkTargets(null); setSelectedIds(new Set()); }} />
       )}
     </>
   );
