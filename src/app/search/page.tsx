@@ -6,10 +6,11 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import MedicationTable, { type ColumnVisibility } from "@/components/MedicationTable";
 import ColumnToggles from "@/components/ColumnToggles";
-import RequireAuth from "@/components/RequireAuth";
+import GuestGateModal from "@/components/GuestGateModal";
 import { useSession } from "next-auth/react";
 import type { MedicationItem } from "@/types";
 import { hasRole } from "@/lib/roles";
+import { useGuestLimit } from "@/hooks/useGuestLimit";
 
 interface CompanyOpt { name: string; count: number }
 
@@ -22,6 +23,7 @@ export default function SearchPage() {
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [displayedQuery, setDisplayedQuery] = useState("");
+  const [showGate, setShowGate] = useState(false);
   const [cols, setCols] = useState<ColumnVisibility>({
     showIngredientName: true,
     showBioStatus: true,
@@ -35,6 +37,8 @@ export default function SearchPage() {
     showStock: false,
     showCompanyName: false,
   });
+
+  const { remaining, isBlocked, consume } = useGuestLimit(!!session);
 
   const [companies, setCompanies] = useState<CompanyOpt[]>([]);
   const [selectedCompanies, setSelectedCompanies] = useState<Set<string>>(new Set());
@@ -76,6 +80,7 @@ export default function SearchPage() {
   async function handleSearch(e?: React.FormEvent) {
     e?.preventDefault();
     if (!query.trim() && selectedCompanies.size === 0) return;
+    if (!consume()) { setShowGate(true); return; }
     setLoading(true); setSearched(true); setDisplayedQuery(query);
     try {
       const params = new URLSearchParams();
@@ -115,7 +120,8 @@ export default function SearchPage() {
   }
 
   return (
-    <RequireAuth>
+    <>
+      {showGate && <GuestGateModal onClose={() => setShowGate(false)} />}
       <div className="space-y-5">
         {!searched && (
           <div className="text-center space-y-2 py-10">
@@ -128,6 +134,25 @@ export default function SearchPage() {
             통합 검색 &gt; <span className="font-semibold text-gray-800">{displayedQuery || "전체"}</span>
           </div>
         )}
+
+        {!session && (
+          <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex-wrap">
+            <span className="font-semibold">비로그인 무료 검색</span>
+            <span className="flex gap-1">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <span
+                  key={i}
+                  className={`w-2 h-2 rounded-full transition-colors ${i < (3 - remaining) ? "bg-amber-500" : "bg-amber-200"}`}
+                />
+              ))}
+            </span>
+            <span className={isBlocked ? "text-red-500 font-semibold" : "text-amber-600"}>
+              {isBlocked ? "횟수 소진" : `${remaining}회 남음`}
+            </span>
+            <a href="/register" className="ml-auto underline text-amber-700 hover:text-amber-900 whitespace-nowrap">가입하면 무제한 →</a>
+          </div>
+        )}
+
         <form onSubmit={handleSearch} className="flex gap-2 max-w-2xl items-start">
           <Input value={query} onChange={(e) => setQuery(e.target.value)}
             placeholder="예: 리피토, atorvastatin, 아스피린..." className="h-11 text-base" />
@@ -220,6 +245,6 @@ export default function SearchPage() {
           </>
         )}
       </div>
-    </RequireAuth>
+    </>
   );
 }
