@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, Fragment } from "react";
-import { ShoppingCart, Search, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
+import { ShoppingCart, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import { formatPrice } from "@/lib/utils";
 import type { MedicationItem } from "@/types";
 import SameIngredientModal from "./SameIngredientModal";
@@ -146,7 +146,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
 
   function SortTh({ label, k }: { label: string; k: SortKey }) {
     return (
-      <th onClick={() => toggleSort(k)} className="px-2 py-2.5 text-right cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap">
+      <th onClick={() => toggleSort(k)} className="px-1.5 py-2 text-right cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap">
         {label}<SortIcon k={k} />
       </th>
     );
@@ -163,7 +163,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-200 text-[11px] text-gray-500 font-semibold">
-              <th className="px-2 py-2 text-center w-8">
+              <th className="px-2 py-1.5 text-center w-8">
                 <input
                   type="checkbox"
                   checked={allSelected}
@@ -174,11 +174,11 @@ export default function MedicationTable({ medications, loading, userId, showCate
                   title="전체 선택 / 전체 해제"
                 />
               </th>
-              <th onClick={() => toggleSort("productName")} className="px-2 py-2.5 text-left cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap">
+              <th onClick={() => toggleSort("productName")} className="px-2 py-2 text-left cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap">
                 제품명 / 제약사 <SortIcon k="productName" />
               </th>
-              <th className="px-2 py-2.5 w-16" />
-              {showStock && <th className="px-2 py-2.5 text-right whitespace-nowrap">재고</th>}
+              {showStock && <th className="px-2 py-2 text-right whitespace-nowrap">재고</th>}
+              <th className="px-1.5 py-2 w-20" />
               {showPrice && <SortTh label="약가" k="price" />}
               {showRate && (
                 <>
@@ -203,7 +203,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                 <Fragment key={med.id}>
                   <tr className={`transition-colors ${isSelected ? "bg-blue-50/40" : "hover:bg-gray-50"}`}>
                     {/* 체크박스 */}
-                    <td className="px-2 py-2 text-center">
+                    <td className="px-2 py-1.5 text-center">
                       <input
                         type="checkbox"
                         checked={isSelected}
@@ -214,7 +214,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                     </td>
 
                     {/* 제품명 + 펼침 버튼 */}
-                    <td className="px-2 py-2">
+                    <td className="px-2 py-1.5">
                       <div className="flex items-start gap-1">
                         <div className="min-w-0">
                           <p className="font-medium text-gray-900 leading-snug">
@@ -235,44 +235,45 @@ export default function MedicationTable({ medications, loading, userId, showCate
                       </div>
                     </td>
 
-                    {/* 액션 버튼 (제안서추가 + 동일성분) */}
-                    <td className="px-2 py-2">
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          title="제안서에 추가"
-                          onClick={() => userId ? setProposalTarget(med) : undefined}
-                          className={`rounded p-1.5 transition-colors ${userId ? "text-green-600 hover:bg-green-50" : "text-gray-300 cursor-not-allowed"}`}
-                        >
-                          <ShoppingCart className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          title="동일성분 검색"
-                          onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.ingredientCode ?? null })}
-                          className="text-blue-500 hover:bg-blue-50 rounded p-1.5 transition-colors"
-                        >
-                          <Search className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </td>
-
+                    {/* 재고 */}
                     {showStock && (
-                      <td className="px-2 py-2 text-right whitespace-nowrap">
+                      <td className="px-2 py-1.5 text-right whitespace-nowrap">
                         {med.stock != null
                           ? <span className={med.stock > 0 ? "text-green-700 font-medium" : "text-red-500"}>{med.stock > 0 ? med.stock.toLocaleString() : "품절"}</span>
                           : <span className="text-gray-300">-</span>}
                       </td>
                     )}
+
+                    {/* 액션 버튼 (재고 뒤, 약가 앞) */}
+                    <td className="px-1.5 py-1.5">
+                      <div className="flex flex-col gap-0.5">
+                        <button
+                          type="button"
+                          onClick={() => userId ? setProposalTarget(med) : undefined}
+                          className={`text-[10px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap transition-colors ${userId ? "text-green-700 hover:bg-green-50" : "text-gray-300 cursor-not-allowed"}`}
+                        >
+                          제안서추가
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.ingredientCode ?? null })}
+                          className="text-[10px] font-medium text-blue-600 hover:bg-blue-50 px-1.5 py-0.5 rounded whitespace-nowrap transition-colors"
+                        >
+                          동일성분
+                        </button>
+                      </div>
+                    </td>
+
+                    {/* 약가 */}
                     {showPrice && (
-                      <td className="px-2 py-2 text-right text-gray-700 whitespace-nowrap">{formatPrice(med.price)}</td>
+                      <td className="px-1.5 py-1.5 text-right text-gray-700 whitespace-nowrap">{formatPrice(med.price)}</td>
                     )}
                     {showRate && (
                       <>
-                        <td className="px-2 py-2 text-right text-blue-600 font-medium whitespace-nowrap">{base != null ? `${base}%` : "-"}</td>
-                        <td className="px-2 py-2 text-right text-gray-500 whitespace-nowrap">{extra != null ? `${extra}%` : "-"}</td>
-                        <td className="px-2 py-2 text-right font-semibold text-blue-700 whitespace-nowrap">{total != null ? `${total}%` : "-"}</td>
-                        <td className="px-2 py-2 text-right font-semibold text-green-700 whitespace-nowrap">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</td>
+                        <td className="px-1.5 py-1.5 text-right text-blue-600 font-medium whitespace-nowrap">{base != null ? `${base}%` : "-"}</td>
+                        <td className="px-1.5 py-1.5 text-right text-gray-500 whitespace-nowrap">{extra != null ? `${extra}%` : "-"}</td>
+                        <td className="px-1.5 py-1.5 text-right font-semibold text-blue-700 whitespace-nowrap">{total != null ? `${total}%` : "-"}</td>
+                        <td className="px-1.5 py-1.5 text-right font-semibold text-green-700 whitespace-nowrap">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</td>
                       </>
                     )}
                   </tr>
@@ -280,7 +281,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                   {isExpanded && hasDetailPanel && (
                     <tr className={isSelected ? "bg-blue-50/30" : "bg-gray-50/60"}>
                       <td />
-                      <td colSpan={1 + 1 + (showStock ? 1 : 0) + (showPrice ? 1 : 0) + (showRate ? 4 : 0)} className="px-4 pb-3 pt-1">
+                      <td colSpan={1 + (showStock ? 1 : 0) + 1 + (showPrice ? 1 : 0) + (showRate ? 4 : 0)} className="px-4 pb-3 pt-1">
                         <div className="rounded-lg border border-gray-100 bg-white px-3 py-2.5 grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2.5 text-xs">
                           {showIngredientName && (
                             <div className="col-span-2 sm:col-span-3">
