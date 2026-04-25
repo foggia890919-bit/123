@@ -146,7 +146,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
 
   function SortTh({ label, k }: { label: string; k: SortKey }) {
     return (
-      <th onClick={() => toggleSort(k)} className="px-4 py-3 text-right cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap">
+      <th onClick={() => toggleSort(k)} className="px-2 py-2.5 text-right cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap">
         {label}<SortIcon k={k} />
       </th>
     );
@@ -160,34 +160,34 @@ export default function MedicationTable({ medications, loading, userId, showCate
   return (
     <>
       <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <table className="w-full text-sm">
+        <table className="w-full text-xs">
           <thead>
-            <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500 font-semibold">
-              <th className="px-3 py-3 text-center w-14">
+            <tr className="bg-gray-50 border-b border-gray-200 text-[11px] text-gray-500 font-semibold">
+              <th className="px-2 py-2 text-center w-12">
                 <input
                   type="checkbox"
                   checked={allSelected}
                   ref={(el) => { if (el) el.indeterminate = !allSelected && someSelected; }}
                   onChange={toggleAll}
-                  className="w-4 h-4 rounded border-gray-300 cursor-pointer"
+                  className="w-3.5 h-3.5 rounded border-gray-300 cursor-pointer"
                   aria-label="전체 선택/해제"
                   title="전체 선택 / 전체 해제"
                 />
               </th>
-              <th onClick={() => toggleSort("productName")} className="px-4 py-3 text-left cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap">
+              <th onClick={() => toggleSort("productName")} className="px-2 py-2.5 text-left cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap">
                 제품명 / 제약사 <SortIcon k="productName" />
               </th>
-              {showStock && <th className="px-4 py-3 text-right whitespace-nowrap">재고</th>}
+              {showStock && <th className="px-2 py-2.5 text-right whitespace-nowrap">재고</th>}
               {showPrice && <SortTh label="약가" k="price" />}
               {showRate && (
                 <>
                   <SortTh label="기본수수료" k="commissionRate" />
                   <SortTh label="추가수수료" k="additionalRate" />
-                  <SortTh label="합계수수료" k="totalRate" />
+                  <SortTh label="합계" k="totalRate" />
                   <SortTh label="정산금액" k="settlement" />
                 </>
               )}
-              {hasDetailPanel && <th className="px-3 py-3 w-8" />}
+              {hasDetailPanel && <th className="px-2 py-2 w-6" />}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -203,38 +203,38 @@ export default function MedicationTable({ medications, loading, userId, showCate
                 <Fragment key={med.id}>
                   <tr className={`transition-colors ${isSelected ? "bg-blue-50/40" : "hover:bg-gray-50"}`}>
                     {/* 체크박스 + 액션 버튼 */}
-                    <td className="px-3 py-3 text-center">
-                      <div className="flex flex-col items-center gap-1.5">
+                    <td className="px-2 py-2 text-center">
+                      <div className="flex flex-col items-center gap-1">
                         <input
                           type="checkbox"
                           checked={isSelected}
                           onChange={() => toggleOne(med.id)}
-                          className="w-4 h-4 rounded border-gray-300 cursor-pointer"
+                          className="w-3.5 h-3.5 rounded border-gray-300 cursor-pointer"
                           aria-label={`${med.productName} 선택`}
                         />
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-0.5">
                           <button
                             type="button"
                             title="제안서에 추가"
                             onClick={() => userId ? setProposalTarget(med) : undefined}
-                            className={`rounded p-1 transition-colors ${userId ? "text-green-600 hover:bg-green-50" : "text-gray-300 cursor-not-allowed"}`}
+                            className={`rounded p-0.5 transition-colors ${userId ? "text-green-600 hover:bg-green-50" : "text-gray-300 cursor-not-allowed"}`}
                           >
-                            <ShoppingCart className="w-3.5 h-3.5" />
+                            <ShoppingCart className="w-3 h-3" />
                           </button>
                           <button
                             type="button"
                             title="동일성분 검색"
                             onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.ingredientCode ?? null })}
-                            className="text-blue-500 hover:bg-blue-50 rounded p-1 transition-colors"
+                            className="text-blue-500 hover:bg-blue-50 rounded p-0.5 transition-colors"
                           >
-                            <Search className="w-3.5 h-3.5" />
+                            <Search className="w-3 h-3" />
                           </button>
                         </div>
                       </div>
                     </td>
 
                     {/* 제품명 클릭 → 펼침/접기 */}
-                    <td className="px-4 py-3">
+                    <td className="px-2 py-2">
                       <button
                         type="button"
                         onClick={() => hasDetailPanel && toggleRow(med.id)}
@@ -243,32 +243,32 @@ export default function MedicationTable({ medications, loading, userId, showCate
                         <ProductName name={med.productName} />
                         <SettlementBadge med={med} />
                       </button>
-                      <p className="text-xs text-gray-500 mt-0.5">{med.companyName}</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5">{med.companyName}</p>
                     </td>
 
                     {showStock && (
-                      <td className="px-4 py-3 text-right text-xs whitespace-nowrap">
+                      <td className="px-2 py-2 text-right whitespace-nowrap">
                         {med.stock != null
                           ? <span className={med.stock > 0 ? "text-green-700 font-medium" : "text-red-500"}>{med.stock > 0 ? med.stock.toLocaleString() : "품절"}</span>
                           : <span className="text-gray-300">-</span>}
                       </td>
                     )}
                     {showPrice && (
-                      <td className="px-4 py-3 text-right text-gray-700 whitespace-nowrap">{formatPrice(med.price)}</td>
+                      <td className="px-2 py-2 text-right text-gray-700 whitespace-nowrap">{formatPrice(med.price)}</td>
                     )}
                     {showRate && (
                       <>
-                        <td className="px-4 py-3 text-right text-blue-600 font-medium whitespace-nowrap">{base != null ? `${base}%` : "-"}</td>
-                        <td className="px-4 py-3 text-right text-gray-500 whitespace-nowrap">{extra != null ? `${extra}%` : "-"}</td>
-                        <td className="px-4 py-3 text-right font-semibold text-blue-700 whitespace-nowrap">{total != null ? `${total}%` : "-"}</td>
-                        <td className="px-4 py-3 text-right font-semibold text-green-700 whitespace-nowrap">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</td>
+                        <td className="px-2 py-2 text-right text-blue-600 font-medium whitespace-nowrap">{base != null ? `${base}%` : "-"}</td>
+                        <td className="px-2 py-2 text-right text-gray-500 whitespace-nowrap">{extra != null ? `${extra}%` : "-"}</td>
+                        <td className="px-2 py-2 text-right font-semibold text-blue-700 whitespace-nowrap">{total != null ? `${total}%` : "-"}</td>
+                        <td className="px-2 py-2 text-right font-semibold text-green-700 whitespace-nowrap">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</td>
                       </>
                     )}
 
                     {hasDetailPanel && (
-                      <td className="px-3 py-3 text-gray-400">
+                      <td className="px-1 py-2 text-gray-400">
                         <button type="button" onClick={() => toggleRow(med.id)} className="hover:text-gray-600">
-                          {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                          {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                         </button>
                       </td>
                     )}
