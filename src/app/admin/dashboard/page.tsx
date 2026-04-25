@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { signOut } from "next-auth/react";
-import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut, Building2, Search, X, Mail, Phone, Send, Inbox, Copy, MessageCircle } from "lucide-react";
+import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut, Building2, Search, X, Mail, Phone, Send, Inbox, Copy, MessageCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import * as XLSX from "xlsx";
@@ -681,6 +681,81 @@ function SubmissionUploadTab({ onSaved }: { onSaved?: () => void } = {}) {
   const [result, setResult] = useState<{ created: number; updated: number; errors: string[] } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Tabs & current-status state
+  const [activeTab, setActiveTab] = useState<"upload" | "current">("upload");
+  const [currentRows, setCurrentRows] = useState<SubUploadRow[]>([]);
+  const [currentLoading, setCurrentLoading] = useState(false);
+  const [currentQuery, setCurrentQuery] = useState("");
+  const [currentSavedSet, setCurrentSavedSet] = useState<Set<string>>(new Set());
+  const [currentSavingName, setCurrentSavingName] = useState<string | null>(null);
+
+  useEffect(() => { loadCurrentRows(); }, []);
+
+  async function loadCurrentRows() {
+    setCurrentLoading(true);
+    try {
+      const res = await fetch("/api/admin/company-submissions");
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setCurrentRows(data.map((r: CompanySubmission) => ({
+          companyName: r.companyName || "",
+          submissionEntity: r.submissionEntity || "",
+          contactName: r.contactName || "",
+          email: r.email || "",
+          phone: r.phone || "",
+          fax: r.fax || "",
+          defaultAdditionalRate: r.defaultAdditionalRate != null ? String(r.defaultAdditionalRate) : "",
+          notes: r.notes || "",
+        })));
+      }
+    } catch {}
+    setCurrentLoading(false);
+  }
+
+  function updateCurrentField(companyName: string, field: keyof SubUploadRow, value: string) {
+    setCurrentRows((prev) => prev.map((r) => {
+      if (r.companyName !== companyName) return r;
+      const updated = { ...r, [field]: value } as SubUploadRow;
+      updated._error = validateRow(updated);
+      return updated;
+    }));
+    setCurrentSavedSet((prev) => { const n = new Set(prev); n.delete(companyName); return n; });
+  }
+
+  async function saveCurrentRow(row: SubUploadRow) {
+    if (row._error || !row.companyName) return;
+    setCurrentSavingName(row.companyName);
+    try {
+      const res = await fetch("/api/admin/company-submissions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companyName: row.companyName,
+          submissionEntity: row.submissionEntity || null,
+          contactName: row.contactName || null,
+          email: row.email || null,
+          phone: row.phone || null,
+          fax: row.fax || null,
+          defaultAdditionalRate: row.defaultAdditionalRate !== "" ? Number(row.defaultAdditionalRate) : null,
+          notes: row.notes || null,
+        }),
+      });
+      if (res.ok) { setCurrentSavedSet((prev) => new Set([...prev, row.companyName])); onSaved?.(); }
+      else { const d = await res.json().catch(() => ({})); alert(`저장 실패: ${d.error || "오류"}`); }
+    } finally { setCurrentSavingName(null); }
+  }
+
+  async function deleteCurrentRow(companyName: string) {
+    if (!confirm(`"${companyName}" 제출처 정보를 삭제할까요?`)) return;
+    const res = await fetch("/api/admin/company-submissions", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ companyName }),
+    });
+    if (res.ok) { setCurrentRows((prev) => prev.filter((r) => r.companyName !== companyName)); onSaved?.(); }
+    else alert("삭제 실패");
+  }
+
   function parseFile(f: File) {
     setFile(f);
     setResult(null);
@@ -807,12 +882,34 @@ function SubmissionUploadTab({ onSaved }: { onSaved?: () => void } = {}) {
     setBatchSaving(false);
   }
 
-  function downloadTemplate() {
-    const sample = [
-      { 제약사명: "동아ST", 제출처법인명: "동아쏘시오홀딩스", 담당자: "홍길동", 이메일: "contact@donga.com", 전화번호: "02-1234-5678", 팩스: "02-1234-5679", 추가수수료: "2.5", 비고: "" },
-      { 제약사명: "한미약품", 제출처법인명: "", 담당자: "", 이메일: "", 전화번호: "", 팩스: "", 추가수수료: "", 비고: "" },
-    ];
-    const ws = XLSX.utils.json_to_sheet(sample);
+  async function downloadTemplate() {
+    let templateData: Record<string, string>[];
+    try {
+      const res = await fetch("/api/admin/company-submissions");
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        templateData = (data as CompanySubmission[]).map((r) => ({
+          제약사명: r.companyName || "",
+          제출처법인명: r.submissionEntity || "",
+          담당자: r.contactName || "",
+          이메일: r.email || "",
+          전화번호: r.phone || "",
+          팩스: r.fax || "",
+          추가수수료: r.defaultAdditionalRate != null ? String(r.defaultAdditionalRate) : "",
+          비고: r.notes || "",
+        }));
+      } else {
+        templateData = [
+          { 제약사명: "동아ST", 제출처법인명: "동아쏘시오홀딩스", 담당자: "홍길동", 이메일: "contact@donga.com", 전화번호: "02-1234-5678", 팩스: "02-1234-5679", 추가수수료: "2.5", 비고: "" },
+          { 제약사명: "한미약품", 제출처법인명: "", 담당자: "", 이메일: "", 전화번호: "", 팩스: "", 추가수수료: "", 비고: "" },
+        ];
+      }
+    } catch {
+      templateData = [
+        { 제약사명: "동아ST", 제출처법인명: "동아쏘시오홀딩스", 담당자: "홍길동", 이메일: "contact@donga.com", 전화번호: "02-1234-5678", 팩스: "02-1234-5679", 추가수수료: "2.5", 비고: "" },
+      ];
+    }
+    const ws = XLSX.utils.json_to_sheet(templateData);
     ws["!cols"] = [{ wch: 16 }, { wch: 18 }, { wch: 10 }, { wch: 24 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 20 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "제출처");
@@ -840,104 +937,122 @@ function SubmissionUploadTab({ onSaved }: { onSaved?: () => void } = {}) {
       })
     : preview.map((r, i) => ({ r, i }));
 
+  const currentFiltered = currentQuery.trim()
+    ? currentRows.filter((r) => {
+        const q = currentQuery.toLowerCase();
+        return r.companyName.toLowerCase().includes(q) ||
+          (r.submissionEntity || "").toLowerCase().includes(q) ||
+          (r.contactName || "").toLowerCase().includes(q) ||
+          (r.email || "").toLowerCase().includes(q);
+      })
+    : currentRows;
+
   const inputCls = "w-full bg-transparent border border-transparent hover:border-gray-200 focus:border-blue-400 focus:bg-white rounded px-1.5 py-1 text-xs focus:outline-none transition-colors";
 
+  const tableHead = (
+    <thead className="sticky top-0 bg-gray-50 z-10">
+      <tr className="text-gray-500 font-semibold">
+        <th className="px-2 py-2.5 text-left w-8">#</th>
+        <th className="px-2 py-2.5 text-left w-[160px]">제약사명 *</th>
+        <th className="px-2 py-2.5 text-left w-[160px]">제출처법인명</th>
+        <th className="px-2 py-2.5 text-left w-[100px]">담당자</th>
+        <th className="px-2 py-2.5 text-left w-[180px]">이메일</th>
+        <th className="px-2 py-2.5 text-left w-[120px]">전화</th>
+        <th className="px-2 py-2.5 text-left w-[120px]">팩스</th>
+        <th className="px-2 py-2.5 text-right w-[80px]">수수료%</th>
+        <th className="px-2 py-2.5 text-left">비고</th>
+        <th className="px-2 py-2.5 text-center w-[90px]">저장</th>
+        <th className="px-2 py-2.5 text-center w-[40px]"></th>
+      </tr>
+    </thead>
+  );
+
   return (
-    <div className="space-y-4">
-      <div className="bg-white rounded-lg border border-gray-200 p-5">
-        <div className="flex items-start justify-between mb-4">
+    <div className="space-y-3">
+      {/* Compact header: title + upload button + template download */}
+      <div className="bg-white rounded-lg border border-gray-200 px-4 py-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
-            <h2 className="text-lg font-semibold text-gray-800">제출처 일괄 업로드</h2>
-            <p className="text-xs text-gray-400 mt-0.5">엑셀로 업로드한 내용은 아래 미리보기에서 템플릿처럼 수정·저장할 수 있어요.</p>
+            <h2 className="text-sm font-semibold text-gray-800">제출처 일괄 업로드</h2>
+            <p className="text-xs text-gray-400 mt-0.5">엑셀로 업로드한 내용은 미리보기 탭에서 수정·저장할 수 있어요.</p>
           </div>
-          <button onClick={downloadTemplate} className="flex items-center gap-1.5 text-xs text-blue-600 border border-blue-200 hover:bg-blue-50 rounded px-3 py-2">
-            <Download className="w-3.5 h-3.5" />양식 내려받기
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={downloadTemplate} className="flex items-center gap-1.5 text-xs text-blue-600 border border-blue-200 hover:bg-blue-50 rounded px-3 py-1.5 transition-colors">
+              <Download className="w-3.5 h-3.5" />양식 내려받기
+            </button>
+            <label className="inline-flex items-center gap-1.5 cursor-pointer text-xs border border-gray-200 hover:border-blue-300 hover:bg-blue-50 rounded px-3 py-1.5 text-gray-600 hover:text-blue-600 transition-colors">
+              <Upload className="w-3.5 h-3.5" />
+              {file ? <span className="font-medium text-blue-700 max-w-[140px] truncate">{file.name}</span> : "엑셀 선택 (.xlsx / .xls)"}
+              <input ref={inputRef} type="file" accept=".xlsx,.xls" hidden
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) { parseFile(f); setActiveTab("upload"); } e.target.value = ""; }} />
+            </label>
+            {file && (
+              <button type="button"
+                onClick={() => { setFile(null); setPreview([]); setResult(null); setSavedSet(new Set()); }}
+                className="text-xs text-red-400 hover:text-red-600 transition-colors">× 제거</button>
+            )}
+          </div>
         </div>
-
-        <div
-          className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
-            file ? "border-blue-400 bg-blue-50/40" : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"
-          }`}
-          onClick={() => inputRef.current?.click()}
-        >
-          <input ref={inputRef} type="file" accept=".xlsx,.xls" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) parseFile(f); e.target.value = ""; }} />
-          {file ? (
-            <div className="flex items-center justify-center gap-3 text-sm">
-              <FileSpreadsheet className="w-6 h-6 text-blue-500" />
-              <div className="text-left">
-                <div className="font-medium text-blue-700">{file.name}</div>
-                <div className="text-xs text-gray-400">{preview.length}행 · 유효 {validCount}{errorRows.length > 0 ? ` · 오류 ${errorRows.length}` : ""} · 저장됨 {savedCount}</div>
-              </div>
-              <button
-                type="button"
-                onClick={(ev) => { ev.stopPropagation(); setFile(null); setPreview([]); setResult(null); setSavedSet(new Set()); }}
-                className="text-xs text-red-500 hover:text-red-700 ml-2"
-              >파일 제거</button>
-            </div>
-          ) : (
-            <div className="space-y-1">
-              <Upload className="w-7 h-7 text-gray-300 mx-auto" />
-              <p className="text-sm text-gray-500">엑셀 파일을 클릭하거나 끌어다 놓으세요 (.xlsx / .xls)</p>
-              <p className="text-[11px] text-gray-400">헤더: 제약사명 · 제출처법인명 · 담당자 · 이메일 · 전화번호 · 팩스 · 추가수수료 · 비고</p>
-            </div>
-          )}
-        </div>
-
-        {parseError && <p className="mt-3 text-sm text-red-600 bg-red-50 border border-red-100 rounded px-3 py-2">{parseError}</p>}
+        {parseError && <p className="mt-2 text-xs text-red-600 bg-red-50 border border-red-100 rounded px-3 py-2">{parseError}</p>}
+        {file && !parseError && (
+          <p className="mt-1.5 text-xs text-gray-400">{preview.length}행 · 유효 {validCount}{errorRows.length > 0 ? ` · 오류 ${errorRows.length}` : ""} · 저장됨 {savedCount}</p>
+        )}
       </div>
 
+      {/* Tabbed area */}
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
-          <div className="text-sm font-medium text-gray-700">
-            미리보기 <span className="text-xs text-gray-400">({preview.length}행)</span>
+        {/* Tab bar */}
+        <div className="px-4 py-2 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex gap-0.5">
+            <button type="button" onClick={() => setActiveTab("upload")}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${activeTab === "upload" ? "bg-blue-600 text-white" : "text-gray-600 hover:bg-gray-100"}`}>
+              업로드 미리보기 <span className={activeTab === "upload" ? "opacity-70" : "text-gray-400"}>({preview.length}행)</span>
+            </button>
+            <button type="button" onClick={() => { setActiveTab("current"); loadCurrentRows(); }}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${activeTab === "current" ? "bg-blue-600 text-white" : "text-gray-600 hover:bg-gray-100"}`}>
+              현재 현황 <span className={activeTab === "current" ? "opacity-70" : "text-gray-400"}>({currentRows.length}개)</span>
+            </button>
           </div>
           <div className="flex items-center gap-2">
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
               <input
-                value={previewQuery}
-                onChange={(e) => setPreviewQuery(e.target.value)}
-                placeholder="미리보기 내 검색"
-                className="h-8 w-52 border border-gray-200 rounded pl-8 pr-3 text-xs focus:outline-none focus:ring-2 focus:ring-blue-400"
+                value={activeTab === "upload" ? previewQuery : currentQuery}
+                onChange={(e) => activeTab === "upload" ? setPreviewQuery(e.target.value) : setCurrentQuery(e.target.value)}
+                placeholder="검색"
+                className="h-8 w-44 border border-gray-200 rounded pl-8 pr-3 text-xs focus:outline-none focus:ring-2 focus:ring-blue-400"
               />
             </div>
-            <button
-              onClick={addBlankRow}
-              className="text-xs text-gray-600 border border-gray-200 hover:bg-gray-50 rounded px-2 py-1.5 flex items-center gap-1"
-            ><Plus className="w-3 h-3" />행 추가</button>
-            <button
-              onClick={saveAll}
-              disabled={batchSaving || validCount === savedCount}
-              className="h-8 px-3 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-300 flex items-center gap-1.5"
-            >
-              {batchSaving ? <><RefreshCw className="w-3 h-3 animate-spin" />업로드 중...</> : <><Upload className="w-3 h-3" />{Math.max(0, validCount - savedCount)}행 일괄 저장</>}
-            </button>
+            {activeTab === "upload" ? (
+              <>
+                <button onClick={addBlankRow}
+                  className="text-xs text-gray-600 border border-gray-200 hover:bg-gray-50 rounded px-2 py-1.5 flex items-center gap-1">
+                  <Plus className="w-3 h-3" />행 추가
+                </button>
+                <button onClick={saveAll} disabled={batchSaving || validCount === 0 || validCount === savedCount}
+                  className="h-8 px-3 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-300 flex items-center gap-1.5">
+                  {batchSaving ? <><RefreshCw className="w-3 h-3 animate-spin" />업로드 중...</> : <><Upload className="w-3 h-3" />{Math.max(0, validCount - savedCount)}행 일괄 저장</>}
+                </button>
+              </>
+            ) : (
+              <button onClick={loadCurrentRows} disabled={currentLoading}
+                className="text-xs text-gray-600 border border-gray-200 hover:bg-gray-50 rounded px-2 py-1.5 flex items-center gap-1 disabled:opacity-50">
+                <RefreshCw className={`w-3 h-3 ${currentLoading ? "animate-spin" : ""}`} />새로고침
+              </button>
+            )}
           </div>
         </div>
 
-        {preview.length === 0 ? (
-          <div className="py-16 text-center text-gray-400 text-sm">
-            엑셀을 업로드하면 이 곳에 템플릿 형태로 표시됩니다. 행마다 바로 수정하고 저장할 수 있어요.
-          </div>
-        ) : (
+        {/* Upload preview tab */}
+        {activeTab === "upload" && (
+          preview.length === 0 ? (
+            <div className="py-16 text-center text-gray-400 text-sm">
+              위에서 엑셀을 선택하면 이 곳에 표시됩니다. 행마다 바로 수정하고 저장할 수 있어요.
+            </div>
+          ) : (
             <div className="overflow-x-auto max-h-[560px] overflow-y-auto">
               <table className="w-full text-xs min-w-[1180px]">
-                <thead className="sticky top-0 bg-gray-50 z-10">
-                  <tr className="text-gray-500 font-semibold">
-                    <th className="px-2 py-2.5 text-left w-8">#</th>
-                    <th className="px-2 py-2.5 text-left w-[160px]">제약사명 *</th>
-                    <th className="px-2 py-2.5 text-left w-[160px]">제출처법인명</th>
-                    <th className="px-2 py-2.5 text-left w-[100px]">담당자</th>
-                    <th className="px-2 py-2.5 text-left w-[180px]">이메일</th>
-                    <th className="px-2 py-2.5 text-left w-[120px]">전화</th>
-                    <th className="px-2 py-2.5 text-left w-[120px]">팩스</th>
-                    <th className="px-2 py-2.5 text-right w-[80px]">수수료%</th>
-                    <th className="px-2 py-2.5 text-left">비고</th>
-                    <th className="px-2 py-2.5 text-center w-[90px]">저장</th>
-                    <th className="px-2 py-2.5 text-center w-[40px]"></th>
-                  </tr>
-                </thead>
+                {tableHead}
                 <tbody className="divide-y divide-gray-100">
                   {previewFiltered.map(({ r: row, i }) => {
                     const isSaved = savedSet.has(i);
@@ -958,22 +1073,13 @@ function SubmissionUploadTab({ onSaved }: { onSaved?: () => void } = {}) {
                         <td className="px-1 py-1 align-middle"><input value={row.defaultAdditionalRate} onChange={(e) => updateField(i, "defaultAdditionalRate", e.target.value)} className={`${inputCls} text-right font-mono`} placeholder="0" /></td>
                         <td className="px-1 py-1 align-middle"><input value={row.notes} onChange={(e) => updateField(i, "notes", e.target.value)} className={inputCls} /></td>
                         <td className="px-1 py-1 text-center align-middle">
-                          <button
-                            onClick={() => saveOne(i)}
-                            disabled={hasError || isSaving}
-                            className={`text-[11px] px-2 py-1 rounded font-medium ${
-                              isSaved
-                                ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
-                                : "bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400"
-                            }`}
-                          >
+                          <button onClick={() => saveOne(i)} disabled={hasError || isSaving}
+                            className={`text-[11px] px-2 py-1 rounded font-medium ${isSaved ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : "bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400"}`}>
                             {isSaving ? "..." : isSaved ? "저장됨 ↻" : "저장"}
                           </button>
                         </td>
                         <td className="px-1 py-1 text-center align-middle">
-                          <button onClick={() => deleteRow(i)} className="text-gray-300 hover:text-red-500" title="행 제거">
-                            <X className="w-3.5 h-3.5" />
-                          </button>
+                          <button onClick={() => deleteRow(i)} className="text-gray-300 hover:text-red-500" title="행 제거"><X className="w-3.5 h-3.5" /></button>
                         </td>
                       </tr>
                     );
@@ -984,6 +1090,56 @@ function SubmissionUploadTab({ onSaved }: { onSaved?: () => void } = {}) {
                 </tbody>
               </table>
             </div>
+          )
+        )}
+
+        {/* Current status tab */}
+        {activeTab === "current" && (
+          currentLoading ? (
+            <div className="py-16 text-center text-gray-400 text-sm">불러오는 중...</div>
+          ) : currentRows.length === 0 ? (
+            <div className="py-16 text-center text-gray-400 text-sm">등록된 제출처가 없어요.</div>
+          ) : (
+            <div className="overflow-x-auto max-h-[560px] overflow-y-auto">
+              <table className="w-full text-xs min-w-[1180px]">
+                {tableHead}
+                <tbody className="divide-y divide-gray-100">
+                  {currentFiltered.map((row, idx) => {
+                    const isSaved = currentSavedSet.has(row.companyName);
+                    const hasError = !!row._error;
+                    const isSaving = currentSavingName === row.companyName;
+                    return (
+                      <tr key={row.companyName} className={hasError ? "bg-red-50/60" : isSaved ? "bg-emerald-50/40" : "hover:bg-gray-50"}>
+                        <td className="px-2 py-1 text-gray-400 align-middle">{idx + 1}</td>
+                        <td className="px-1 py-1 align-middle">
+                          <span className="px-1.5 py-1 text-xs font-medium text-gray-900">{row.companyName}</span>
+                        </td>
+                        <td className="px-1 py-1 align-middle"><input value={row.submissionEntity} onChange={(e) => updateCurrentField(row.companyName, "submissionEntity", e.target.value)} className={inputCls} /></td>
+                        <td className="px-1 py-1 align-middle"><input value={row.contactName} onChange={(e) => updateCurrentField(row.companyName, "contactName", e.target.value)} className={inputCls} /></td>
+                        <td className="px-1 py-1 align-middle"><input type="email" value={row.email} onChange={(e) => updateCurrentField(row.companyName, "email", e.target.value)} className={inputCls} /></td>
+                        <td className="px-1 py-1 align-middle"><input value={row.phone} onChange={(e) => updateCurrentField(row.companyName, "phone", e.target.value)} className={inputCls} /></td>
+                        <td className="px-1 py-1 align-middle"><input value={row.fax} onChange={(e) => updateCurrentField(row.companyName, "fax", e.target.value)} className={inputCls} /></td>
+                        <td className="px-1 py-1 align-middle"><input value={row.defaultAdditionalRate} onChange={(e) => updateCurrentField(row.companyName, "defaultAdditionalRate", e.target.value)} className={`${inputCls} text-right font-mono`} placeholder="0" /></td>
+                        <td className="px-1 py-1 align-middle"><input value={row.notes} onChange={(e) => updateCurrentField(row.companyName, "notes", e.target.value)} className={inputCls} /></td>
+                        <td className="px-1 py-1 text-center align-middle">
+                          <button onClick={() => saveCurrentRow(row)} disabled={hasError || isSaving}
+                            className={`text-[11px] px-2 py-1 rounded font-medium ${isSaved ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : "bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400"}`}>
+                            {isSaving ? "..." : isSaved ? "저장됨 ↻" : "저장"}
+                          </button>
+                        </td>
+                        <td className="px-1 py-1 text-center align-middle">
+                          <button onClick={() => deleteCurrentRow(row.companyName)} className="text-gray-300 hover:text-red-500" title="삭제"><X className="w-3.5 h-3.5" /></button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {currentFiltered.length === 0 && currentQuery && (
+                    <tr><td colSpan={11} className="py-10 text-center text-gray-400 text-sm">검색 결과가 없어요.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )
         )}
       </div>
 
@@ -1016,15 +1172,43 @@ function MembersTab() {
   const [newPw, setNewPw] = useState("");
   const [pwLoading, setPwLoading] = useState(false);
   const [docUser, setDocUser] = useState<User | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [total, setTotal] = useState(0);
+  const [bulkApproving, setBulkApproving] = useState(false);
 
-  useEffect(() => { fetchUsers(); }, []);
+  useEffect(() => {
+    const delay = searchQuery ? 300 : 0;
+    const t = setTimeout(() => fetchUsers(searchQuery), delay);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
 
-  async function fetchUsers() {
+  async function fetchUsers(q: string) {
     setLoading(true);
-    const res = await fetch("/api/admin/users?limit=200");
+    const params = new URLSearchParams({ limit: "200" });
+    if (q.trim()) params.set("q", q.trim());
+    const res = await fetch(`/api/admin/users?${params}`);
     const data = await res.json();
-    setUsers(Array.isArray(data) ? data : (data.users ?? []));
+    const list: User[] = Array.isArray(data) ? data : (data.users ?? []);
+    setUsers(list);
+    setTotal(Array.isArray(data) ? list.length : (data.total ?? list.length));
     setLoading(false);
+  }
+
+  async function bulkApprove() {
+    const pendingCount = users.filter((u) => !u.approved).length;
+    if (pendingCount === 0) return;
+    if (!confirm(`미승인 회원 ${pendingCount}명을 모두 승인할까요?`)) return;
+    setBulkApproving(true);
+    try {
+      const res = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "bulkApprove" }),
+      });
+      if (res.ok) await fetchUsers(searchQuery);
+    } finally {
+      setBulkApproving(false);
+    }
   }
 
   async function changeRole(userId: string, role: string) {
@@ -1062,15 +1246,53 @@ function MembersTab() {
     a.click();
   }
 
-  if (loading) return <div className="py-16 text-center text-gray-400 text-sm">불러오는 중...</div>;
-
   return (
     <div className="space-y-4">
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-800">회원 목록 ({users.length}명)</h2>
-          <p className="text-xs text-gray-400 mt-0.5">가입 승인 후 서비스를 이용할 수 있어요.</p>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-800">
+                회원 목록 {total > 0 && <span className="text-base font-normal text-gray-500">({total}명)</span>}
+              </h2>
+              <p className="text-xs text-gray-400 mt-0.5">가입 승인 후 서비스를 이용할 수 있어요.</p>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="이름·이메일·연락처 검색"
+                  className="h-8 pl-7 pr-7 text-xs border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-400 w-52"
+                />
+                {searchQuery && (
+                  <button onClick={() => setSearchQuery("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+              {users.filter((u) => !u.approved).length > 0 && (
+                <button
+                  onClick={bulkApprove}
+                  disabled={bulkApproving}
+                  className="h-8 px-3 text-xs font-medium rounded-md bg-green-600 hover:bg-green-700 text-white disabled:opacity-50 flex items-center gap-1.5 whitespace-nowrap"
+                >
+                  {bulkApproving
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    : <CheckCircle className="w-3.5 h-3.5" />}
+                  일괄 승인 ({users.filter((u) => !u.approved).length}명)
+                </button>
+              )}
+            </div>
+          </div>
         </div>
+        {loading ? (
+          <div className="py-8 text-center text-gray-400 text-sm flex items-center justify-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin" /> 불러오는 중...
+          </div>
+        ) : (
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 text-xs text-gray-500 font-semibold">
@@ -1133,9 +1355,16 @@ function MembersTab() {
                 </td>
               </tr>
             ))}
-            {users.length === 0 && <tr><td colSpan={9} className="py-12 text-center text-gray-400 text-sm">가입 회원이 없어요.</td></tr>}
+            {users.length === 0 && (
+              <tr>
+                <td colSpan={9} className="py-12 text-center text-gray-400 text-sm">
+                  {searchQuery ? `"${searchQuery}" 검색 결과가 없어요.` : "가입 회원이 없어요."}
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
+        )}
       </div>
 
       {/* 비밀번호 초기화 모달 */}

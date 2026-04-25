@@ -84,3 +84,20 @@ export async function PATCH(req: NextRequest) {
 
   return NextResponse.json({ error: "잘못된 요청" }, { status: 400 });
 }
+
+export async function POST(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
+
+  const body = await req.json();
+
+  if (body?.action === "bulkApprove") {
+    const result = await prisma.user.updateMany({
+      where: { approved: false },
+      data: { approved: true, updatedAt: new Date() },
+    });
+    return NextResponse.json({ count: result.count });
+  }
+
+  return NextResponse.json({ error: "잘못된 요청" }, { status: 400 });
+}
