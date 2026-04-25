@@ -177,6 +177,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
               <th onClick={() => toggleSort("productName")} className="px-2 py-2.5 text-left cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap">
                 제품명 / 제약사 <SortIcon k="productName" />
               </th>
+              {hasDetailPanel && <th className="px-1 py-2 w-6" />}
               {showStock && <th className="px-2 py-2.5 text-right whitespace-nowrap">재고</th>}
               {showPrice && <SortTh label="약가" k="price" />}
               {showRate && (
@@ -187,7 +188,6 @@ export default function MedicationTable({ medications, loading, userId, showCate
                   <SortTh label="정산금액" k="settlement" />
                 </>
               )}
-              {hasDetailPanel && <th className="px-2 py-2 w-6" />}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -233,7 +233,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                       </div>
                     </td>
 
-                    {/* 제품명 클릭 → 펼침/접기 */}
+                    {/* 제품명 */}
                     <td className="px-2 py-2">
                       <button
                         type="button"
@@ -245,6 +245,15 @@ export default function MedicationTable({ medications, loading, userId, showCate
                       </button>
                       <p className="text-[11px] text-gray-500 mt-0.5">{med.companyName}</p>
                     </td>
+
+                    {/* 펼침 버튼 — 제품명 바로 오른쪽 */}
+                    {hasDetailPanel && (
+                      <td className="px-1 py-2 text-gray-400">
+                        <button type="button" onClick={() => toggleRow(med.id)} className="hover:text-gray-600">
+                          {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                        </button>
+                      </td>
+                    )}
 
                     {showStock && (
                       <td className="px-2 py-2 text-right whitespace-nowrap">
@@ -264,20 +273,12 @@ export default function MedicationTable({ medications, loading, userId, showCate
                         <td className="px-2 py-2 text-right font-semibold text-green-700 whitespace-nowrap">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</td>
                       </>
                     )}
-
-                    {hasDetailPanel && (
-                      <td className="px-1 py-2 text-gray-400">
-                        <button type="button" onClick={() => toggleRow(med.id)} className="hover:text-gray-600">
-                          {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                        </button>
-                      </td>
-                    )}
                   </tr>
 
                   {isExpanded && hasDetailPanel && (
                     <tr className={isSelected ? "bg-blue-50/30" : "bg-gray-50/60"}>
                       <td />
-                      <td colSpan={1 + (showStock ? 1 : 0) + (showPrice ? 1 : 0) + (showRate ? 4 : 0) + (hasDetailPanel ? 1 : 0)} className="px-4 pb-3 pt-1">
+                      <td colSpan={1 + (hasDetailPanel ? 1 : 0) + (showStock ? 1 : 0) + (showPrice ? 1 : 0) + (showRate ? 4 : 0)} className="px-4 pb-3 pt-1">
                         <div className="rounded-lg border border-gray-100 bg-white px-3 py-2.5 grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2.5 text-xs">
                           {showIngredientName && (
                             <div className="col-span-2 sm:col-span-3">
