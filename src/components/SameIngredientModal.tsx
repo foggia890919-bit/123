@@ -180,8 +180,8 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
           )}
 
           {/* 컬럼 토글 — 체크하면 펼침 패널에 표시 */}
-          <div className="px-4 py-2 border-b bg-gray-50 flex flex-wrap gap-3 text-xs shrink-0">
-            <span className="text-gray-400 self-center">펼쳐보기 항목:</span>
+          <div className="px-4 py-2 border-b bg-gray-50 flex flex-wrap gap-3 text-xs shrink-0 items-center">
+            <span className="text-gray-400">펼쳐보기 항목:</span>
             {([
               ["bioStatus", "생동/생산"],
               ["originalDrug", "오리지날"],
@@ -195,6 +195,14 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
                 {label}
               </label>
             ))}
+            <div className="flex gap-1 ml-1">
+              <button type="button"
+                onClick={() => setCols({ bioStatus: true, originalDrug: true, insuranceCode: true, categoryB: true, notes: true })}
+                className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100">전체선택</button>
+              <button type="button"
+                onClick={() => setCols({ bioStatus: false, originalDrug: false, insuranceCode: false, categoryB: false, notes: false })}
+                className="px-2 py-0.5 rounded bg-gray-100 text-gray-600 hover:bg-gray-200">전체해제</button>
+            </div>
           </div>
 
           {/* 테이블 */}
