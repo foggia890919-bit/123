@@ -186,7 +186,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
               ["bioStatus", "생동/생산"],
               ["originalDrug", "오리지날"],
               ["insuranceCode", "보험코드"],
-              ["categoryB", "분류B"],
+              ["categoryB", "ATC코드"],
               ["notes", "특이사항"],
             ] as [keyof ColVis, string][]).map(([key, label]) => (
               <label key={key} className="flex items-center gap-1.5 cursor-pointer text-gray-600 select-none">
@@ -326,8 +326,8 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
                                 )}
                                 {cols.categoryB && (
                                   <div>
-                                    <p className="text-gray-400 mb-0.5">분류B</p>
-                                    <p className="text-gray-700">{med.categoryB || "-"}</p>
+                                    <p className="text-gray-400 mb-0.5">ATC코드</p>
+                                    <p className="font-mono text-gray-700">{med.ingredientCode || "-"}</p>
                                   </div>
                                 )}
                                 {cols.notes && (

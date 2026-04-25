@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
         return {
           categoryA: String(row["분류(A)"] || row["분류A"] || "").trim() || null,
           ingredientName: String(row["성분명"] || "").trim(),
-          categoryB: String(row["분류(B)"] || row["분류B"] || "").trim() || null,
+          categoryB: null, // 요율표 분류B 무시 — ATC코드(ingredientCode)로 대체
           commissionRate: isNaN(commissionRaw) ? null : commissionRaw,
           companyName: String(row["제약사명"] || "").trim() || "미상",
           bioStatus: String(row["생동/생산"] || "").trim() || null,
@@ -105,7 +105,7 @@ export async function POST(req: NextRequest) {
         if (row.originalDrug) updateData.originalDrug = row.originalDrug;
         if (row.notes) updateData.notes = row.notes;
         if (row.categoryA) updateData.categoryA = row.categoryA;
-        if (row.categoryB) updateData.categoryB = row.categoryB;
+        // categoryB: 요율표 분류B 무시
         await prisma.medication.update({ where: { id: idByCode }, data: updateData });
         updated++;
         continue;

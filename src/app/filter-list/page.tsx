@@ -153,7 +153,7 @@ export default function FilterListPage() {
       const rows = all.map((m) => ({
         ...(cols.showCategoryA ? { "분류(A)": m.categoryA || "" } : {}),
         ...(cols.showIngredientName ? { 성분명: m.ingredientName } : {}),
-        ...(cols.showCategoryB ? { "분류(B)": m.categoryB || "" } : {}),
+        ...(cols.showCategoryB ? { "ATC코드": m.ingredientCode || "" } : {}),
         ...(isSalesRep && cols.showRate ? { 수수료율: m.commissionRate != null ? `${m.commissionRate}%` : "" } : {}),
         ...(cols.showCompanyName ? { 제약사명: m.companyName } : {}),
         ...(cols.showBioStatus ? { "생동/생산": m.bioStatus || "" } : {}),

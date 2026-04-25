@@ -368,7 +368,7 @@ function ProposalsContent() {
       const row: Record<string, string | number> = {
         순번: i + 1, 품목명: m?.productName || "-", 성분명: m?.ingredientName || "-", 제약사: m?.companyName || "-",
       };
-      if (cols.showCategoryB) row["분류B"] = m?.categoryB || "-";
+      if (cols.showCategoryB) row["ATC코드"] = m?.ingredientCode || "-";
       if (cols.showBioStatus) row["생동/생산"] = m?.bioStatus || "-";
       if (cols.showOriginalDrug) row["오리지날"] = m?.originalDrug || "-";
       if (cols.showInsuranceCode) row["보험코드"] = m?.insuranceCode || "-";
@@ -405,7 +405,7 @@ function ProposalsContent() {
         .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
     const head = ["순번", "품목명", "성분명", "제약사"];
-    if (cols.showCategoryB) head.push("분류B");
+    if (cols.showCategoryB) head.push("ATC코드");
     if (cols.showBioStatus) head.push("생동/생산");
     if (cols.showOriginalDrug) head.push("오리지날");
     if (cols.showInsuranceCode) head.push("보험코드");
@@ -420,7 +420,7 @@ function ProposalsContent() {
       const total = base != null ? base + (extra ?? 0) : null;
       const settlement = m?.price != null && total != null ? Math.round(m.price * total / 100) : null;
       const row: (string | number)[] = [i + 1, m?.productName || "-", m?.ingredientName || "-", m?.companyName || "-"];
-      if (cols.showCategoryB) row.push(m?.categoryB || "-");
+      if (cols.showCategoryB) row.push(m?.ingredientCode || "-");
       if (cols.showBioStatus) row.push(m?.bioStatus || "-");
       if (cols.showOriginalDrug) row.push(m?.originalDrug || "-");
       if (cols.showInsuranceCode) row.push(m?.insuranceCode || "-");
@@ -764,7 +764,7 @@ function ProposalsContent() {
                       { k: "ingredient", label: "성분명", align: "left" },
                       { k: "sameIngredient", label: "", align: "center" },
                       { k: "company", label: "제약사", align: "left" },
-                      ...(cols.showCategoryB ? [{ k: "categoryB", label: "분류B", align: "center" as const }] : []),
+                      ...(cols.showCategoryB ? [{ k: "categoryB", label: "ATC코드", align: "center" as const }] : []),
                       ...(cols.showBioStatus ? [{ k: "bioStatus", label: "생동/생산", align: "center" as const }] : []),
                       ...(cols.showOriginalDrug ? [{ k: "originalDrug", label: "오리지날", align: "center" as const }] : []),
                       ...(cols.showInsuranceCode ? [{ k: "insuranceCode", label: "보험코드", align: "left" as const }] : []),
@@ -856,7 +856,7 @@ function ProposalsContent() {
                               )}
                             </td>
                             <td className="px-3 py-2.5 text-xs text-gray-600 truncate" title={m?.companyName || ""}>{m?.companyName || "-"}</td>
-                            {cols.showCategoryB && <td className="px-3 py-2.5 text-center text-xs text-gray-500 truncate">{m?.categoryB || "-"}</td>}
+                            {cols.showCategoryB && <td className="px-3 py-2.5 text-center text-xs font-mono text-gray-500 truncate">{m?.ingredientCode || "-"}</td>}
                             {cols.showBioStatus && <td className="px-3 py-2.5 text-center text-xs text-gray-500 truncate">{m?.bioStatus || "-"}</td>}
                             {cols.showOriginalDrug && <td className="px-3 py-2.5 text-center text-xs text-gray-500 truncate">{m?.originalDrug || "-"}</td>}
                             {cols.showInsuranceCode && <td className="px-3 py-2.5 text-xs font-mono text-gray-500 truncate">{m?.insuranceCode || "-"}</td>}

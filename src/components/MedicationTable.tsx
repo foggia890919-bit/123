@@ -315,8 +315,8 @@ export default function MedicationTable({ medications, loading, userId, showCate
                           )}
                           {showCategoryB && (
                             <div>
-                              <p className="text-gray-400 mb-0.5">분류(B)</p>
-                              <p className="text-gray-700">{med.categoryB || "-"}</p>
+                              <p className="text-gray-400 mb-0.5">ATC코드</p>
+                              <p className="text-gray-700 font-mono">{med.ingredientCode || "-"}</p>
                             </div>
                           )}
                           {showNotes && (

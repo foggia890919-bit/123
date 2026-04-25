@@ -20,7 +20,7 @@ const TOGGLES: { key: keyof ColumnVisibility; label: string; salesRepOnly?: bool
   { key: "showPrice",          label: "약가" },
   { key: "showRate",           label: "기본수수료·합계", salesRepOnly: true },
   { key: "showCategoryA",      label: "분류(A)" },
-  { key: "showCategoryB",      label: "분류(B)" },
+  { key: "showCategoryB",      label: "ATC코드" },
   { key: "showCompanyName",    label: "제약사명" },
   { key: "showNotes",          label: "특이사항" },
   { key: "showStock",          label: "재고" },
