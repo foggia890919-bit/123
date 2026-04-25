@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, Fragment } from "react";
-import { ShoppingCart, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
+import { ShoppingCart, ChevronUp, ChevronDown, ChevronsUpDown, Plus, FileText } from "lucide-react";
 import { formatPrice } from "@/lib/utils";
 import type { MedicationItem } from "@/types";
 import SameIngredientModal from "./SameIngredientModal";
@@ -9,6 +9,17 @@ import AddToProposalDialog from "./AddToProposalDialog";
 
 type SortKey = "productName" | "price" | "commissionRate" | "additionalRate" | "totalRate" | "settlement";
 type SortDir = "asc" | "desc";
+
+interface Proposal { id: string; title: string; _count: { items: number } }
+
+interface DropdownState {
+  medId: string;
+  x: number;
+  y: number;
+  newMode: boolean;
+  newTitle: string;
+  adding: string | null;
+}
 
 export interface ColumnVisibility {
   showCategoryA?: boolean;
@@ -74,12 +85,66 @@ function SettlementBadge({ med }: { med: MedicationItem }) {
 
 export default function MedicationTable({ medications, loading, userId, showCategoryA, showIngredientName, showCategoryB, showRate, showBioStatus, showPrice, showOriginalDrug, showInsuranceCode, showNotes, showStock }: Props) {
   const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null } | null>(null);
-  const [proposalTarget, setProposalTarget] = useState<MedicationItem | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkTargets, setBulkTargets] = useState<MedicationItem[] | null>(null);
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+
+  // 제안서 목록 미리 fetch
+  const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [dropdown, setDropdown] = useState<DropdownState | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!userId) return;
+    fetch(`/api/proposals?userId=${userId}`)
+      .then((r) => r.json())
+      .then((data) => setProposals(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  }, [userId]);
+
+  function openProposalDropdown(e: React.MouseEvent, medId: string) {
+    if (!userId) return;
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setDropdown({ medId, x: rect.left, y: rect.bottom + 4, newMode: false, newTitle: "", adding: null });
+  }
+
+  function showToast(text: string) {
+    setToast(text);
+    setTimeout(() => setToast(null), 2000);
+  }
+
+  async function quickAdd(proposalId: string, medId: string) {
+    setDropdown((d) => d ? { ...d, adding: proposalId } : null);
+    const res = await fetch(`/api/proposals/${proposalId}/items`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ medicationId: medId }),
+    });
+    setDropdown(null);
+    showToast(res.status === 409 ? "이미 추가된 품목이에요" : "제안서에 추가됐어요 ✓");
+    if (res.ok) {
+      setProposals((prev) => prev.map((p) => p.id === proposalId ? { ...p, _count: { items: p._count.items + 1 } } : p));
+    }
+  }
+
+  async function createAndQuickAdd(medId: string, title: string) {
+    if (!title.trim() || !userId) return;
+    setDropdown((d) => d ? { ...d, adding: "new" } : null);
+    const res = await fetch("/api/proposals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: title.trim(), userId }),
+    });
+    if (res.ok) {
+      const p: Proposal = await res.json();
+      setProposals((prev) => [...prev, { ...p, _count: { items: 0 } }]);
+      await quickAdd(p.id, medId);
+    } else {
+      setDropdown(null);
+    }
+  }
 
   const allSelected = medications.length > 0 && medications.every((m) => selectedIds.has(m.id));
   const someSelected = medications.some((m) => selectedIds.has(m.id));
@@ -244,12 +309,12 @@ export default function MedicationTable({ medications, loading, userId, showCate
                       </td>
                     )}
 
-                    {/* 액션 버튼 (재고 뒤, 약가 앞) */}
+                    {/* 액션 버튼 */}
                     <td className="px-1.5 py-1.5">
                       <div className="flex flex-col gap-0.5">
                         <button
                           type="button"
-                          onClick={() => userId ? setProposalTarget(med) : undefined}
+                          onClick={(e) => openProposalDropdown(e, med.id)}
                           className={`text-[10px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap transition-colors ${userId ? "text-green-700 hover:bg-green-50" : "text-gray-300 cursor-not-allowed"}`}
                         >
                           제안서추가
@@ -353,8 +418,88 @@ export default function MedicationTable({ medications, loading, userId, showCate
             : "제품을 선택하면 제안서에 추가할 수 있어요"}
         </button>
       </div>
-      {/* 고정 바 높이만큼 여백 */}
       <div className="h-16" />
+
+      {/* 제안서 선택 드롭다운 */}
+      {dropdown && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setDropdown(null)} />
+          <div
+            className="fixed z-50 bg-white rounded-xl shadow-xl border border-gray-200 w-56 overflow-hidden"
+            style={{ left: dropdown.x, top: dropdown.y }}
+          >
+            {!dropdown.newMode ? (
+              <div className="py-1">
+                <button
+                  type="button"
+                  onClick={() => setDropdown((d) => d ? { ...d, newMode: true } : null)}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-blue-600 hover:bg-blue-50 font-medium"
+                >
+                  <Plus className="w-3.5 h-3.5" /> 새 제안서 만들기
+                </button>
+                {proposals.length > 0 && <div className="border-t border-gray-100 my-0.5" />}
+                <div className="max-h-52 overflow-y-auto">
+                  {proposals.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      disabled={!!dropdown.adding}
+                      onClick={() => quickAdd(p.id, dropdown.medId)}
+                      className="w-full flex items-center justify-between px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      <span className="flex items-center gap-1.5 truncate">
+                        <FileText className="w-3 h-3 text-gray-400 shrink-0" />
+                        <span className="truncate">{p.title}</span>
+                      </span>
+                      <span className="text-gray-400 ml-2 shrink-0">
+                        {dropdown.adding === p.id ? "추가 중..." : `${p._count.items}개`}
+                      </span>
+                    </button>
+                  ))}
+                  {proposals.length === 0 && (
+                    <p className="text-xs text-gray-400 text-center py-3">제안서가 없어요</p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="p-3 space-y-2">
+                <input
+                  autoFocus
+                  value={dropdown.newTitle}
+                  onChange={(e) => setDropdown((d) => d ? { ...d, newTitle: e.target.value } : null)}
+                  onKeyDown={(e) => e.key === "Enter" && createAndQuickAdd(dropdown.medId, dropdown.newTitle)}
+                  placeholder="제안서 이름"
+                  className="w-full text-xs border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                />
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setDropdown((d) => d ? { ...d, newMode: false } : null)}
+                    className="flex-1 text-xs py-1.5 border border-gray-200 rounded text-gray-600 hover:bg-gray-50"
+                  >
+                    취소
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => createAndQuickAdd(dropdown.medId, dropdown.newTitle)}
+                    disabled={!dropdown.newTitle.trim() || !!dropdown.adding}
+                    className="flex-1 text-xs py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {dropdown.adding ? "생성 중..." : "만들고 추가"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* 토스트 */}
+      {toast && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 bg-gray-800 text-white text-xs px-4 py-2 rounded-full shadow-lg pointer-events-none whitespace-nowrap">
+          {toast}
+        </div>
+      )}
 
       {ingredientModal && (
         <SameIngredientModal
@@ -364,10 +509,6 @@ export default function MedicationTable({ medications, loading, userId, showCate
           onClose={() => setIngredientModal(null)}
           initialCols={{ categoryB: false, bioStatus: true, originalDrug: true, insuranceCode: true, notes: false }}
         />
-      )}
-
-      {proposalTarget && userId && (
-        <AddToProposalDialog medication={proposalTarget} userId={userId} onClose={() => setProposalTarget(null)} />
       )}
 
       {bulkTargets && userId && (
