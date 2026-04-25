@@ -30,11 +30,11 @@ export default function SearchPage() {
     showOriginalDrug: true,
     showInsuranceCode: true,
     showPrice: true,
-    showRate: false,
+    showRate: true,
     showCategoryA: false,
     showCategoryB: false,
     showNotes: false,
-    showStock: false,
+    showStock: true,
     showCompanyName: false,
   });
 
