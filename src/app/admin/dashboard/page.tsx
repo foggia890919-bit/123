@@ -1109,7 +1109,15 @@ function SubmissionUploadTab({ onSaved }: { onSaved?: () => void } = {}) {
                     const hasError = !!row._error;
                     const isSaving = currentSavingName === row.companyName;
                     return (
-                      <tr key={row.companyName} className={hasError ? "bg-red-50/60" : isSaved ? "bg-emerald-50/40" : "hover:bg-gray-50"}>
+                      <tr
+                        key={row.companyName}
+                        className={hasError ? "bg-red-50/60" : isSaved ? "bg-emerald-50/40" : "hover:bg-gray-50"}
+                        onBlur={(e) => {
+                          if (!e.currentTarget.contains(e.relatedTarget as Node | null) && !hasError && !isSaving) {
+                            saveCurrentRow(row);
+                          }
+                        }}
+                      >
                         <td className="px-2 py-1 text-gray-400 align-middle">{idx + 1}</td>
                         <td className="px-1 py-1 align-middle">
                           <span className="px-1.5 py-1 text-xs font-medium text-gray-900">{row.companyName}</span>
@@ -2622,9 +2630,10 @@ function CompanySubmissionsTab() {
   const [rows, setRows] = useState<CompanySubmission[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
-  const [editRow, setEditRow] = useState<(CompanySubmission & { isNew?: boolean }) | null>(null);
-  const [saving, setSaving] = useState(false);
   const [deletingName, setDeletingName] = useState<string | null>(null);
+  const [inlineEdits, setInlineEdits] = useState<Map<string, Record<string, string>>>(new Map());
+  const [inlineSavingName, setInlineSavingName] = useState<string | null>(null);
+  const [inlineSavedSet, setInlineSavedSet] = useState<Set<string>>(new Set());
   // 신규 등록 폼
   const [newForm, setNewForm] = useState<CompanySubmission>({ ...emptySubmission() });
   const [savingNew, setSavingNew] = useState(false);
@@ -2665,25 +2674,57 @@ function CompanySubmissionsTab() {
     setSavingNew(false);
   }
 
-  async function save() {
-    if (!editRow) return;
-    const name = editRow.companyName.trim();
-    if (!name) return;
-    setSaving(true);
-    const res = await fetch("/api/admin/company-submissions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(editRow),
+  function getInlineField(companyName: string, field: keyof CompanySubmission): string {
+    const edits = inlineEdits.get(companyName);
+    if (edits && field in edits) return edits[field as string];
+    const row = rows.find((r) => r.companyName === companyName);
+    if (!row) return "";
+    const v = row[field];
+    return v != null ? String(v) : "";
+  }
+
+  function updateInlineField(companyName: string, field: keyof CompanySubmission, value: string) {
+    setInlineEdits((prev) => {
+      const n = new Map(prev);
+      n.set(companyName, { ...(n.get(companyName) ?? {}), [field]: value });
+      return n;
     });
-    if (res.ok) {
-      const saved: CompanySubmission = await res.json();
-      setRows((prev) => {
-        const idx = prev.findIndex((r) => r.companyName === saved.companyName);
-        return idx >= 0 ? prev.map((r, i) => i === idx ? saved : r) : [...prev, saved].sort((a, b) => a.companyName.localeCompare(b.companyName));
+    setInlineSavedSet((prev) => { const n = new Set(prev); n.delete(companyName); return n; });
+  }
+
+  async function saveInlineRow(companyName: string) {
+    if (inlineSavingName === companyName) return;
+    const baseRow = rows.find((r) => r.companyName === companyName);
+    if (!baseRow) return;
+    const edits = inlineEdits.get(companyName) ?? {};
+    const merged: CompanySubmission = {
+      ...baseRow,
+      submissionEntity: "submissionEntity" in edits ? edits.submissionEntity || null : baseRow.submissionEntity,
+      contactName: "contactName" in edits ? edits.contactName || null : baseRow.contactName,
+      email: "email" in edits ? edits.email || null : baseRow.email,
+      phone: "phone" in edits ? edits.phone || null : baseRow.phone,
+      fax: "fax" in edits ? edits.fax || null : baseRow.fax,
+      defaultAdditionalRate: "defaultAdditionalRate" in edits
+        ? (edits.defaultAdditionalRate !== "" ? Number(edits.defaultAdditionalRate) : null)
+        : baseRow.defaultAdditionalRate,
+      notes: "notes" in edits ? edits.notes || null : baseRow.notes,
+    };
+    setInlineSavingName(companyName);
+    try {
+      const res = await fetch("/api/admin/company-submissions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(merged),
       });
-      setEditRow(null);
+      if (res.ok) {
+        const saved: CompanySubmission = await res.json();
+        setRows((prev) => prev.map((r) => r.companyName === saved.companyName ? saved : r));
+        setInlineEdits((prev) => { const n = new Map(prev); n.delete(companyName); return n; });
+        setInlineSavedSet((prev) => new Set([...prev, companyName]));
+      }
+    } finally {
+      setInlineSavingName(null);
     }
-    setSaving(false);
   }
 
   async function deleteRow(companyName: string) {
@@ -2798,49 +2839,58 @@ function CompanySubmissionsTab() {
           loading ? (
             <div className="py-16 text-center text-gray-400 text-sm">불러오는 중...</div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
+            <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+              <table className="w-full text-xs min-w-[1100px]">
+                <thead className="sticky top-0 z-10">
                   <tr className="bg-gray-50 text-xs text-gray-500 font-semibold">
-                    <th className="px-4 py-3 text-left">제약사명</th>
-                    <th className="px-4 py-3 text-left">제출처 법인명</th>
-                    <th className="px-4 py-3 text-left">담당자명</th>
-                    <th className="px-4 py-3 text-right">추가수수료</th>
-                    <th className="px-4 py-3 text-left">이메일</th>
-                    <th className="px-4 py-3 text-left">전화번호</th>
-                    <th className="px-4 py-3 text-left">팩스</th>
-                    <th className="px-4 py-3 text-left">비고</th>
-                    <th className="px-4 py-3 text-center w-20">관리</th>
+                    <th className="px-3 py-2 text-left w-36">제약사명</th>
+                    <th className="px-1 py-2 text-left">제출처 법인명</th>
+                    <th className="px-1 py-2 text-left w-28">담당자명</th>
+                    <th className="px-1 py-2 text-right w-20">추가수수료</th>
+                    <th className="px-1 py-2 text-left">이메일</th>
+                    <th className="px-1 py-2 text-left w-32">전화번호</th>
+                    <th className="px-1 py-2 text-left w-28">팩스</th>
+                    <th className="px-1 py-2 text-left">비고</th>
+                    <th className="px-2 py-2 text-center w-14">상태</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {filtered.map((row) => (
-                    <tr key={row.companyName} className="hover:bg-gray-50 align-top">
-                      <td className="px-4 py-3 font-medium text-gray-900">{row.companyName}</td>
-                      <td className="px-4 py-3 text-gray-600 text-xs">{row.submissionEntity || <span className="text-gray-300">-</span>}</td>
-                      <td className="px-4 py-3 text-gray-700">{row.contactName || <span className="text-gray-300">-</span>}</td>
-                      <td className="px-4 py-3 text-right text-xs font-mono text-emerald-600 font-medium">
-                        {row.defaultAdditionalRate != null ? `${row.defaultAdditionalRate}%` : <span className="text-gray-300">-</span>}
-                      </td>
-                      <td className="px-4 py-3 text-gray-600 text-xs">
-                        {row.email ? <a href={`mailto:${row.email}`} className="flex items-center gap-1 text-blue-600 hover:underline"><Mail className="w-3 h-3" />{row.email}</a> : <span className="text-gray-300">-</span>}
-                      </td>
-                      <td className="px-4 py-3 text-gray-600 text-xs">
-                        {row.phone ? <span className="flex items-center gap-1"><Phone className="w-3 h-3 text-gray-400" />{row.phone}</span> : <span className="text-gray-300">-</span>}
-                      </td>
-                      <td className="px-4 py-3 text-gray-500 text-xs">{row.fax || <span className="text-gray-300">-</span>}</td>
-                      <td className="px-4 py-3 text-gray-500 text-xs max-w-[180px] truncate">{row.notes || <span className="text-gray-300">-</span>}</td>
-                      <td className="px-4 py-3 text-center">
-                        <div className="flex items-center justify-center gap-1">
-                          <button onClick={() => setEditRow({ ...row })} className="text-xs text-blue-600 hover:text-blue-800 px-2 py-1 rounded hover:bg-blue-50">수정</button>
-                          <button onClick={() => deleteRow(row.companyName)} disabled={deletingName === row.companyName}
-                            className="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 disabled:opacity-40">
-                            {deletingName === row.companyName ? "..." : "삭제"}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {filtered.map((row) => {
+                    const isSaving = inlineSavingName === row.companyName;
+                    const isSaved = inlineSavedSet.has(row.companyName);
+                    const hasEdits = inlineEdits.has(row.companyName);
+                    const inCls = "w-full h-7 px-2 text-xs border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white";
+                    return (
+                      <tr
+                        key={row.companyName}
+                        className={isSaved ? "bg-emerald-50/40" : hasEdits ? "bg-amber-50/30" : "hover:bg-gray-50"}
+                        onBlur={(e) => {
+                          if (!e.currentTarget.contains(e.relatedTarget as Node | null) && !isSaving) {
+                            saveInlineRow(row.companyName);
+                          }
+                        }}
+                      >
+                        <td className="px-3 py-1.5 font-medium text-gray-900 text-xs whitespace-nowrap">{row.companyName}</td>
+                        <td className="px-1 py-1"><input value={getInlineField(row.companyName, "submissionEntity")} onChange={(e) => updateInlineField(row.companyName, "submissionEntity", e.target.value)} className={inCls} /></td>
+                        <td className="px-1 py-1"><input value={getInlineField(row.companyName, "contactName")} onChange={(e) => updateInlineField(row.companyName, "contactName", e.target.value)} className={inCls} /></td>
+                        <td className="px-1 py-1"><input type="number" step="0.1" min="0" value={getInlineField(row.companyName, "defaultAdditionalRate")} onChange={(e) => updateInlineField(row.companyName, "defaultAdditionalRate", e.target.value)} className={`${inCls} text-right`} placeholder="0" /></td>
+                        <td className="px-1 py-1"><input type="email" value={getInlineField(row.companyName, "email")} onChange={(e) => updateInlineField(row.companyName, "email", e.target.value)} className={inCls} /></td>
+                        <td className="px-1 py-1"><input value={getInlineField(row.companyName, "phone")} onChange={(e) => updateInlineField(row.companyName, "phone", e.target.value)} className={inCls} /></td>
+                        <td className="px-1 py-1"><input value={getInlineField(row.companyName, "fax")} onChange={(e) => updateInlineField(row.companyName, "fax", e.target.value)} className={inCls} /></td>
+                        <td className="px-1 py-1"><input value={getInlineField(row.companyName, "notes")} onChange={(e) => updateInlineField(row.companyName, "notes", e.target.value)} className={inCls} /></td>
+                        <td className="px-2 py-1 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            {isSaving && <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400" />}
+                            {isSaved && !isSaving && <CheckCircle className="w-3.5 h-3.5 text-emerald-500" />}
+                            <button onClick={() => deleteRow(row.companyName)} disabled={deletingName === row.companyName}
+                              className="text-gray-300 hover:text-red-500 disabled:opacity-40" title="삭제">
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {filtered.length === 0 && (
                     <tr><td colSpan={9} className="py-12 text-center text-gray-400 text-sm">
                       {query ? "검색 결과가 없어요." : "등록된 제출처 정보가 없어요."}
@@ -2852,59 +2902,6 @@ function CompanySubmissionsTab() {
           )
         )}
       </div>
-
-      {editRow && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md">
-            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-              <h3 className="font-semibold text-gray-900">{editRow.companyName} 수정</h3>
-              <button onClick={() => setEditRow(null)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
-            </div>
-            <div className="px-6 py-5 space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">제출처 법인명</label>
-                <input value={editRow.submissionEntity || ""} onChange={(e) => setEditRow((p) => p ? { ...p, submissionEntity: e.target.value } : p)}
-                  placeholder="예) 동아쏘시오홀딩스" className={fieldCls} />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">담당자명</label>
-                  <input value={editRow.contactName || ""} onChange={(e) => setEditRow((p) => p ? { ...p, contactName: e.target.value } : p)} className={fieldCls} />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">기본 추가수수료 (%)</label>
-                  <input type="number" step="0.1" min="0" value={editRow.defaultAdditionalRate ?? ""}
-                    onChange={(e) => setEditRow((p) => p ? { ...p, defaultAdditionalRate: e.target.value !== "" ? Number(e.target.value) : null } : p)} className={fieldCls} />
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">이메일</label>
-                <input type="email" value={editRow.email || ""} onChange={(e) => setEditRow((p) => p ? { ...p, email: e.target.value } : p)} className={fieldCls} />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">전화번호</label>
-                  <input value={editRow.phone || ""} onChange={(e) => setEditRow((p) => p ? { ...p, phone: e.target.value } : p)} className={fieldCls} />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">팩스</label>
-                  <input value={editRow.fax || ""} onChange={(e) => setEditRow((p) => p ? { ...p, fax: e.target.value } : p)} className={fieldCls} />
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">비고</label>
-                <textarea value={editRow.notes || ""} onChange={(e) => setEditRow((p) => p ? { ...p, notes: e.target.value } : p)} rows={2} className={`${fieldCls} resize-none`} />
-              </div>
-            </div>
-            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2">
-              <button onClick={() => setEditRow(null)} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded hover:bg-gray-50">취소</button>
-              <button onClick={save} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-300">
-                {saving ? "저장 중..." : "저장"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
