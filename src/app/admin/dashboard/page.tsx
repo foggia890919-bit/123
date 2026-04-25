@@ -194,6 +194,28 @@ function UploadTab() {
     finally { setMapLoading(false); }
   }
 
+  const [fillPriceLoading, setFillPriceLoading] = useState(false);
+  const [fillPriceResult, setFillPriceResult] = useState<{ success?: boolean; filled?: number; scanned?: number; pageErrors?: number; pagesProcessed?: number; totalMeds?: number; nullPriceMeds?: number; filledPriceMeds?: number; error?: string } | null>(null);
+  const [fillPriceStats, setFillPriceStats] = useState<{ totalMeds?: number; nullPriceMeds?: number; hasPriceMeds?: number; excelWithPrice?: number; apiWithPrice?: number } | null>(null);
+
+  useEffect(() => {
+    fetch("/api/admin/fill-prices")
+      .then((r) => r.json())
+      .then((d) => setFillPriceStats(d))
+      .catch(() => null);
+  }, []);
+
+  async function handleFillPrices() {
+    setFillPriceLoading(true); setFillPriceResult(null);
+    try {
+      const res = await fetch("/api/admin/fill-prices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ maxPages: 200 }) });
+      const data = await res.json();
+      setFillPriceResult(data);
+      if (data.success) setFillPriceStats({ totalMeds: data.totalMeds, nullPriceMeds: data.nullPriceMeds, hasPriceMeds: data.filledPriceMeds });
+    } catch { setFillPriceResult({ error: "약가 채우기 중 오류가 발생했어요." }); }
+    finally { setFillPriceLoading(false); }
+  }
+
   async function handleIngredientSync() {
     setMapLoading(true); setMapResult(null);
     try {
@@ -559,6 +581,39 @@ function UploadTab() {
           <input ref={mapInputRef} type="file" accept=".xlsx,.xls" className="hidden"
             onChange={(e) => { setMapFile(e.target.files?.[0] || null); setMapResult(null); }} />
         </div>
+      </div>
+
+      {/* 공공데이터 약가 채우기 */}
+      <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
+        <div>
+          <h2 className="text-base font-semibold text-gray-800">④ 공공데이터 약가 채우기</h2>
+          <p className="text-xs text-gray-500 mt-0.5">HIRA 급여약가 마스터에서 약가(상한금액)를 가져와 보험코드 기준으로 price가 없는 약품에 채웁니다.</p>
+        </div>
+        {fillPriceStats && (
+          <div className="text-xs text-gray-600 bg-gray-50 rounded p-3 border border-gray-200 grid grid-cols-2 gap-x-6 gap-y-1">
+            <div>전체 약품: <strong>{fillPriceStats.totalMeds?.toLocaleString() ?? "—"}건</strong></div>
+            <div>약가 있음: <strong>{fillPriceStats.hasPriceMeds?.toLocaleString() ?? "—"}건</strong></div>
+            <div>약가 없음: <strong className={fillPriceStats.nullPriceMeds ? "text-amber-600" : ""}>{fillPriceStats.nullPriceMeds?.toLocaleString() ?? "—"}건</strong></div>
+            <div>요율표 약가: <strong>{fillPriceStats.excelWithPrice?.toLocaleString() ?? "—"}건</strong></div>
+            <div>공공데이터 약가: <strong>{fillPriceStats.apiWithPrice?.toLocaleString() ?? "—"}건</strong></div>
+          </div>
+        )}
+        {fillPriceResult && (
+          <div className={`text-xs rounded p-3 border space-y-1 ${fillPriceResult.success ? "bg-green-50 text-green-700 border-green-200" : "bg-red-50 text-red-700 border-red-200"}`}>
+            {fillPriceResult.success ? (
+              <>
+                <div><CheckCircle className="w-3.5 h-3.5 inline mr-1" />약가 채움: <strong>{fillPriceResult.filled?.toLocaleString()}건</strong> / 스캔: {fillPriceResult.scanned?.toLocaleString()}건 ({fillPriceResult.pagesProcessed}페이지)</div>
+                {(fillPriceResult.pageErrors ?? 0) > 0 && <div className="text-amber-600">페이지 오류: {fillPriceResult.pageErrors}건</div>}
+                <div>남은 약가 없음: <strong>{fillPriceResult.nullPriceMeds?.toLocaleString()}건</strong></div>
+              </>
+            ) : (
+              <div><AlertCircle className="w-3.5 h-3.5 inline mr-1" />{fillPriceResult.error}</div>
+            )}
+          </div>
+        )}
+        <Button onClick={handleFillPrices} disabled={fillPriceLoading} className="bg-emerald-600 hover:bg-emerald-700">
+          {fillPriceLoading ? "약가 채우는 중..." : "공공데이터에서 약가 채우기"}
+        </Button>
       </div>
     </div>
   );
