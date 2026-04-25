@@ -335,19 +335,25 @@ export default function MedicationTable({ medications, loading, userId, showCate
         </table>
       </div>
 
-      {/* 하단 고정 체크품목 제안서 추가 바 */}
-      {someSelected && (
-        <div className="fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-gray-200 shadow-lg px-4 py-3 flex justify-center">
-          <button
-            onClick={openBulkAdd}
-            disabled={!userId}
-            className="text-sm text-white bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed rounded-lg px-5 py-2.5 inline-flex items-center gap-2 font-medium transition-colors shadow"
-          >
-            <ShoppingCart className="w-4 h-4" />
-            체크 {selectedCount}개 제안서에 추가
-          </button>
-        </div>
-      )}
+      {/* 하단 고정 제안서 추가 바 — 항상 표시 */}
+      <div className="fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-gray-200 shadow-lg px-4 py-3 flex justify-center">
+        <button
+          onClick={openBulkAdd}
+          disabled={!userId || selectedCount === 0}
+          className={`text-sm rounded-lg px-5 py-2.5 inline-flex items-center gap-2 font-medium transition-all ${
+            selectedCount > 0 && userId
+              ? "text-white bg-green-600 hover:bg-green-700 shadow"
+              : "text-gray-400 bg-gray-100 cursor-default"
+          }`}
+        >
+          <ShoppingCart className="w-4 h-4" />
+          {selectedCount > 0
+            ? `체크 ${selectedCount}개 제안서에 추가`
+            : "제품을 선택하면 제안서에 추가할 수 있어요"}
+        </button>
+      </div>
+      {/* 고정 바 높이만큼 여백 */}
+      <div className="h-16" />
 
       {ingredientModal && (
         <SameIngredientModal
