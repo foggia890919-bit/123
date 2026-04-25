@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Fragment } from "react";
 import { X, ShoppingCart, ChevronUp, ChevronDown, ChevronsUpDown, RefreshCw, Loader2 } from "lucide-react";
 import { formatPrice } from "@/lib/utils";
 import AddToProposalDialog from "./AddToProposalDialog";
@@ -51,13 +51,24 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
   const [replaceError, setReplaceError] = useState<string>("");
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [cols, setCols] = useState<ColVis>({
     categoryB: initialCols?.categoryB ?? false,
-    bioStatus: initialCols?.bioStatus ?? true,
-    originalDrug: initialCols?.originalDrug ?? true,
-    insuranceCode: initialCols?.insuranceCode ?? true,
+    bioStatus: initialCols?.bioStatus ?? false,
+    originalDrug: initialCols?.originalDrug ?? false,
+    insuranceCode: initialCols?.insuranceCode ?? false,
     notes: initialCols?.notes ?? false,
   });
+
+  const hasDetailPanel = cols.bioStatus || cols.originalDrug || cols.insuranceCode || cols.categoryB || cols.notes;
+
+  function toggleRow(id: string) {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
 
   async function replaceItem(med: MedicationItem) {
     if (!replaceContext) return;
@@ -131,6 +142,8 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
   }
 
   const hasRate = sorted.some((m) => m.commissionRate != null);
+  // 제품명 + 펼침 + 약가 + rates + 제안서
+  const totalCols = 1 + (hasDetailPanel ? 1 : 0) + 1 + (hasRate ? 4 : 0) + 1;
 
   return (
     <>
@@ -166,8 +179,9 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
             </div>
           )}
 
-          {/* 컬럼 토글 */}
+          {/* 컬럼 토글 — 체크하면 펼침 패널에 표시 */}
           <div className="px-4 py-2 border-b bg-gray-50 flex flex-wrap gap-3 text-xs shrink-0">
+            <span className="text-gray-400 self-center">펼쳐보기 항목:</span>
             {([
               ["bioStatus", "생동/생산"],
               ["originalDrug", "오리지날"],
@@ -196,11 +210,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
                 <thead className="sticky top-0 bg-gray-50 border-b border-gray-200 text-gray-500 font-semibold">
                   <tr>
                     <SortTh label="제품명 / 제약사" k="productName" />
-                    {cols.bioStatus && <th className="px-2 py-2.5 text-left whitespace-nowrap">생동/생산</th>}
-                    {cols.originalDrug && <th className="px-2 py-2.5 text-left whitespace-nowrap">오리지날</th>}
-                    {cols.insuranceCode && <th className="px-2 py-2.5 text-left whitespace-nowrap">보험코드</th>}
-                    {cols.categoryB && <th className="px-2 py-2.5 text-left whitespace-nowrap">분류B</th>}
-                    {cols.notes && <th className="px-2 py-2.5 text-left whitespace-nowrap">특이사항</th>}
+                    {hasDetailPanel && <th className="px-1 py-2 w-6" />}
                     <SortTh label="약가" k="price" right />
                     {hasRate && (
                       <>
@@ -219,65 +229,110 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
                     const extra = med.additionalRate ?? null;
                     const totalRate = base != null ? base + (extra ?? 0) : null;
                     const settlement = med.price != null && totalRate != null ? Math.round(med.price * totalRate / 100) : null;
+                    const isExpanded = expandedRows.has(med.id);
+                    const [nameBase, dose] = splitDose(med.productName);
+
                     return (
-                      <tr key={med.id} className="hover:bg-gray-50">
-                        <td className="px-2 py-2 min-w-[160px] max-w-[240px]">
-                          {(() => {
-                            const [base, dose] = splitDose(med.productName);
-                            return (
-                              <p className="font-medium text-gray-900 leading-tight">
-                                {base}
-                                {med.isSettlement && (
-                                  <span className={`inline-block text-[9px] border px-1 py-0.5 rounded ml-1 align-middle ${
-                                    med.settlementType === "원외" ? "text-blue-700 bg-blue-50 border-blue-200" :
-                                    "text-indigo-700 bg-indigo-50 border-indigo-200"
-                                  }`}>
-                                    {med.settlementType === "원외" ? "cso" : "원내"}
-                                  </span>
-                                )}
-                                {dose && <span className="block text-[11px] font-normal text-gray-400 mt-0.5">{dose}</span>}
-                                <span className="block text-[11px] font-normal text-gray-500 mt-0.5">{med.companyName}</span>
-                              </p>
-                            );
-                          })()}
-                        </td>
-                        {cols.bioStatus && <td className="px-2 py-2 whitespace-nowrap text-gray-500">{med.bioStatus || "-"}</td>}
-                        {cols.originalDrug && <td className="px-2 py-2 whitespace-nowrap text-gray-500 max-w-[120px] truncate" title={med.originalDrug || ""}>{med.originalDrug || "-"}</td>}
-                        {cols.insuranceCode && <td className="px-2 py-2 whitespace-nowrap font-mono text-gray-500">{med.insuranceCode || "-"}</td>}
-                        {cols.categoryB && <td className="px-2 py-2 whitespace-nowrap text-gray-500">{med.categoryB || "-"}</td>}
-                        {cols.notes && <td className="px-2 py-2 text-gray-500 max-w-[100px] truncate" title={med.notes || ""}>{med.notes || "-"}</td>}
-                        <td className="px-2 py-2 text-right whitespace-nowrap text-gray-700">{formatPrice(med.price)}</td>
-                        {hasRate && (
-                          <>
-                            <td className="px-2 py-2 text-right whitespace-nowrap text-blue-600 font-medium">{base != null ? `${base}%` : "-"}</td>
-                            <td className="px-2 py-2 text-right whitespace-nowrap text-gray-500">{extra != null ? `${extra}%` : "-"}</td>
-                            <td className="px-2 py-2 text-right whitespace-nowrap font-semibold text-blue-700">{totalRate != null ? `${totalRate}%` : "-"}</td>
-                            <td className="px-2 py-2 text-right whitespace-nowrap font-semibold text-green-700">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</td>
-                          </>
-                        )}
-                        <td className="px-2 py-2 text-center">
-                          {selectContext ? (
-                            <button onClick={() => { selectContext.onSelect(med); onClose(); }}
-                              className="text-white bg-emerald-600 hover:bg-emerald-700 rounded px-2 py-1 whitespace-nowrap">
-                              선택
-                            </button>
-                          ) : userId ? (
-                            <div className="flex items-center gap-1 justify-center">
-                              {replaceContext && (
-                                <button onClick={() => replaceItem(med)} disabled={!!replacingId}
-                                  className="text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded px-2 py-1 flex items-center gap-1 whitespace-nowrap">
-                                  {replacingId === med.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                                  대체
-                                </button>
+                      <Fragment key={med.id}>
+                        <tr className="hover:bg-gray-50">
+                          <td className="px-2 py-2 min-w-[160px] max-w-[240px]">
+                            <p className="font-medium text-gray-900 leading-tight">
+                              {nameBase}
+                              {med.isSettlement && (
+                                <span className={`inline-block text-[9px] border px-1 py-0.5 rounded ml-1 align-middle ${
+                                  med.settlementType === "원외" ? "text-blue-700 bg-blue-50 border-blue-200" :
+                                  "text-indigo-700 bg-indigo-50 border-indigo-200"
+                                }`}>
+                                  {med.settlementType === "원외" ? "cso" : "원내"}
+                                </span>
                               )}
-                              <button onClick={() => setProposalTarget(med)}
-                                className="text-white bg-green-600 hover:bg-green-700 rounded px-2 py-1 flex items-center gap-1 whitespace-nowrap">
-                                <ShoppingCart className="w-3 h-3" />추가
+                              {dose && <span className="block text-[11px] font-normal text-gray-400 mt-0.5">{dose}</span>}
+                              <span className="block text-[11px] font-normal text-gray-500 mt-0.5">{med.companyName}</span>
+                            </p>
+                          </td>
+
+                          {/* 펼침 버튼 — 제품명 바로 오른쪽 */}
+                          {hasDetailPanel && (
+                            <td className="px-1 py-2 text-gray-400">
+                              <button type="button" onClick={() => toggleRow(med.id)} className="hover:text-gray-600">
+                                {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                               </button>
-                            </div>
-                          ) : <span className="text-gray-300 whitespace-nowrap">로그인 필요</span>}
-                        </td>
-                      </tr>
+                            </td>
+                          )}
+
+                          <td className="px-2 py-2 text-right whitespace-nowrap text-gray-700">{formatPrice(med.price)}</td>
+                          {hasRate && (
+                            <>
+                              <td className="px-2 py-2 text-right whitespace-nowrap text-blue-600 font-medium">{base != null ? `${base}%` : "-"}</td>
+                              <td className="px-2 py-2 text-right whitespace-nowrap text-gray-500">{extra != null ? `${extra}%` : "-"}</td>
+                              <td className="px-2 py-2 text-right whitespace-nowrap font-semibold text-blue-700">{totalRate != null ? `${totalRate}%` : "-"}</td>
+                              <td className="px-2 py-2 text-right whitespace-nowrap font-semibold text-green-700">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</td>
+                            </>
+                          )}
+                          <td className="px-2 py-2 text-center">
+                            {selectContext ? (
+                              <button onClick={() => { selectContext.onSelect(med); onClose(); }}
+                                className="text-white bg-emerald-600 hover:bg-emerald-700 rounded px-2 py-1 whitespace-nowrap">
+                                선택
+                              </button>
+                            ) : userId ? (
+                              <div className="flex items-center gap-1 justify-center">
+                                {replaceContext && (
+                                  <button onClick={() => replaceItem(med)} disabled={!!replacingId}
+                                    className="text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded px-2 py-1 flex items-center gap-1 whitespace-nowrap">
+                                    {replacingId === med.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                                    대체
+                                  </button>
+                                )}
+                                <button onClick={() => setProposalTarget(med)}
+                                  className="text-white bg-green-600 hover:bg-green-700 rounded px-2 py-1 flex items-center gap-1 whitespace-nowrap">
+                                  <ShoppingCart className="w-3 h-3" />추가
+                                </button>
+                              </div>
+                            ) : <span className="text-gray-300 whitespace-nowrap">로그인 필요</span>}
+                          </td>
+                        </tr>
+
+                        {/* 펼침 상세 패널 */}
+                        {isExpanded && hasDetailPanel && (
+                          <tr className="bg-gray-50/60">
+                            <td colSpan={totalCols} className="px-3 pb-2.5 pt-1">
+                              <div className="rounded-lg border border-gray-100 bg-white px-3 py-2 grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2 text-xs">
+                                {cols.bioStatus && (
+                                  <div>
+                                    <p className="text-gray-400 mb-0.5">생동/생산</p>
+                                    <p className="text-gray-700">{med.bioStatus || "-"}</p>
+                                  </div>
+                                )}
+                                {cols.originalDrug && (
+                                  <div>
+                                    <p className="text-gray-400 mb-0.5">오리지날/대조약</p>
+                                    <p className="text-gray-700">{med.originalDrug || "-"}</p>
+                                  </div>
+                                )}
+                                {cols.insuranceCode && (
+                                  <div>
+                                    <p className="text-gray-400 mb-0.5">보험코드</p>
+                                    <p className="font-mono text-gray-700">{med.insuranceCode || "-"}</p>
+                                  </div>
+                                )}
+                                {cols.categoryB && (
+                                  <div>
+                                    <p className="text-gray-400 mb-0.5">분류B</p>
+                                    <p className="text-gray-700">{med.categoryB || "-"}</p>
+                                  </div>
+                                )}
+                                {cols.notes && (
+                                  <div className="col-span-2 sm:col-span-3">
+                                    <p className="text-gray-400 mb-0.5">특이사항</p>
+                                    <p className="text-gray-700">{med.notes || "-"}</p>
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                     );
                   })}
                 </tbody>
