@@ -314,6 +314,8 @@ function UploadTab() {
       fetch("/api/medications/sync").then((r) => r.json()).then((d) => {
         setSyncResult((prev) => ({ ...(prev || {}), ...d }));
       });
+      // 동기화 완료 후 약가 자동 채우기
+      handleFillPrices();
     } catch (e) {
       setSyncResult({ error: e instanceof Error ? e.message : "동기화 중 오류가 발생했어요." });
     } finally {
@@ -333,7 +335,11 @@ function UploadTab() {
       const res = await fetch("/api/medications/upload", { method: "POST", body: formData });
       const data = await res.json();
       setResult(data);
-      if (data.success) setFile(null);
+      if (data.success) {
+        setFile(null);
+        // 업로드 완료 후 약가 자동 채우기
+        handleFillPrices();
+      }
     } catch { setResult({ error: "업로드 중 오류가 발생했어요." }); }
     finally { setLoading(false); }
   }
@@ -585,9 +591,18 @@ function UploadTab() {
 
       {/* 공공데이터 약가 채우기 */}
       <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
-        <div>
-          <h2 className="text-base font-semibold text-gray-800">④ 공공데이터 약가 채우기</h2>
-          <p className="text-xs text-gray-500 mt-0.5">HIRA 급여약가 마스터에서 약가(상한금액)를 가져와 보험코드 기준으로 price가 없는 약품에 채웁니다.</p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-base font-semibold text-gray-800">④ 공공데이터 약가 채우기</h2>
+            <p className="text-xs text-gray-500 mt-0.5">① 동기화 · ② 요율표 업로드 완료 시 자동 실행됩니다. HIRA 급여약가 마스터 기준으로 보험코드가 일치하는 약품의 약가를 채웁니다.</p>
+          </div>
+          <button
+            onClick={handleFillPrices}
+            disabled={fillPriceLoading}
+            className="shrink-0 text-xs text-emerald-700 hover:text-emerald-900 underline disabled:opacity-50 whitespace-nowrap mt-0.5"
+          >
+            {fillPriceLoading ? "실행 중..." : "지금 수동 실행"}
+          </button>
         </div>
         {fillPriceStats && (
           <div className="text-xs text-gray-600 bg-gray-50 rounded p-3 border border-gray-200 grid grid-cols-2 gap-x-6 gap-y-1">
@@ -611,9 +626,9 @@ function UploadTab() {
             )}
           </div>
         )}
-        <Button onClick={handleFillPrices} disabled={fillPriceLoading} className="bg-emerald-600 hover:bg-emerald-700">
-          {fillPriceLoading ? "약가 채우는 중..." : "공공데이터에서 약가 채우기"}
-        </Button>
+        {fillPriceLoading && (
+          <div className="text-xs text-emerald-600 animate-pulse">HIRA API에서 약가 데이터 수집 중...</div>
+        )}
       </div>
     </div>
   );
