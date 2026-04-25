@@ -31,6 +31,24 @@ interface Props extends ColumnVisibility {
   userId?: string;
 }
 
+const DOSE_RE = /^(.+?)\s+(\d[\d.,/]*\s*(?:mg|mcg|μg|ug|g|ml|mL|IU|iu|%|mEq)[^\s]*.*)$/i;
+
+function splitDose(name: string): [string, string | null] {
+  const m = name.match(DOSE_RE);
+  return m ? [m[1], m[2]] : [name, null];
+}
+
+function ProductName({ name }: { name: string }) {
+  const [base, dose] = splitDose(name);
+  if (!dose) return <span>{name}</span>;
+  return (
+    <span>
+      {base}
+      <span className="block text-[11px] font-normal text-gray-400 mt-0.5">{dose}</span>
+    </span>
+  );
+}
+
 function IngredientName({ name }: { name: string }) {
   const parts = name.split("/").map((p) => p.trim());
   if (parts.length <= 1) return <span>{name}</span>;
@@ -220,9 +238,9 @@ export default function MedicationTable({ medications, loading, userId, showCate
                       <button
                         type="button"
                         onClick={() => hasDetailPanel && toggleRow(med.id)}
-                        className={`font-medium text-gray-900 text-left transition-colors ${hasDetailPanel ? "hover:text-blue-600 cursor-pointer" : ""}`}
+                        className={`font-medium text-gray-900 text-left transition-colors leading-snug ${hasDetailPanel ? "hover:text-blue-600 cursor-pointer" : ""}`}
                       >
-                        {med.productName}
+                        <ProductName name={med.productName} />
                         <SettlementBadge med={med} />
                       </button>
                       <p className="text-xs text-gray-500 mt-0.5">{med.companyName}</p>

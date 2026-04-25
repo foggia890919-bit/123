@@ -36,6 +36,12 @@ interface ColVis {
   insuranceCode: boolean; notes: boolean;
 }
 
+const DOSE_RE = /^(.+?)\s+(\d[\d.,/]*\s*(?:mg|mcg|μg|ug|g|ml|mL|IU|iu|%|mEq)[^\s]*.*)$/i;
+function splitDose(name: string): [string, string | null] {
+  const m = name.match(DOSE_RE);
+  return m ? [m[1], m[2]] : [name, null];
+}
+
 export default function SameIngredientModal({ ingredientName, ingredientCode, userId, onClose, initialCols, replaceContext, selectContext }: Props) {
   const [medications, setMedications] = useState<MedicationItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -189,8 +195,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
               <table className="text-xs" style={{ minWidth: "max-content", width: "100%" }}>
                 <thead className="sticky top-0 bg-gray-50 border-b border-gray-200 text-gray-500 font-semibold">
                   <tr>
-                    <SortTh label="제품명" k="productName" />
-                    <th className="px-2 py-2.5 text-left whitespace-nowrap">제약사</th>
+                    <SortTh label="제품명 / 제약사" k="productName" />
                     {cols.bioStatus && <th className="px-2 py-2.5 text-left whitespace-nowrap">생동/생산</th>}
                     {cols.originalDrug && <th className="px-2 py-2.5 text-left whitespace-nowrap">오리지날</th>}
                     {cols.insuranceCode && <th className="px-2 py-2.5 text-left whitespace-nowrap">보험코드</th>}
@@ -216,20 +221,26 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
                     const settlement = med.price != null && totalRate != null ? Math.round(med.price * totalRate / 100) : null;
                     return (
                       <tr key={med.id} className="hover:bg-gray-50">
-                        <td className="px-2 py-2 min-w-[140px] max-w-[220px]">
-                          <p className="font-medium text-gray-900 break-keep leading-tight">
-                            {med.productName}
-                            {med.isSettlement && (
-                              <span className={`inline-block text-[9px] border px-1 py-0.5 rounded ml-1 align-middle ${
-                                med.settlementType === "원외" ? "text-blue-700 bg-blue-50 border-blue-200" :
-                                "text-indigo-700 bg-indigo-50 border-indigo-200"
-                              }`}>
-                                {med.settlementType === "원외" ? "cso" : "원내"}
-                              </span>
-                            )}
-                          </p>
+                        <td className="px-2 py-2 min-w-[160px] max-w-[240px]">
+                          {(() => {
+                            const [base, dose] = splitDose(med.productName);
+                            return (
+                              <p className="font-medium text-gray-900 leading-tight">
+                                {base}
+                                {med.isSettlement && (
+                                  <span className={`inline-block text-[9px] border px-1 py-0.5 rounded ml-1 align-middle ${
+                                    med.settlementType === "원외" ? "text-blue-700 bg-blue-50 border-blue-200" :
+                                    "text-indigo-700 bg-indigo-50 border-indigo-200"
+                                  }`}>
+                                    {med.settlementType === "원외" ? "cso" : "원내"}
+                                  </span>
+                                )}
+                                {dose && <span className="block text-[11px] font-normal text-gray-400 mt-0.5">{dose}</span>}
+                                <span className="block text-[11px] font-normal text-gray-500 mt-0.5">{med.companyName}</span>
+                              </p>
+                            );
+                          })()}
                         </td>
-                        <td className="px-2 py-2 whitespace-nowrap text-gray-600">{med.companyName}</td>
                         {cols.bioStatus && <td className="px-2 py-2 whitespace-nowrap text-gray-500">{med.bioStatus || "-"}</td>}
                         {cols.originalDrug && <td className="px-2 py-2 whitespace-nowrap text-gray-500 max-w-[120px] truncate" title={med.originalDrug || ""}>{med.originalDrug || "-"}</td>}
                         {cols.insuranceCode && <td className="px-2 py-2 whitespace-nowrap font-mono text-gray-500">{med.insuranceCode || "-"}</td>}
