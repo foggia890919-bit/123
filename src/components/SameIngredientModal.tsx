@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useEffect, Fragment } from "react";
-import { X, ShoppingCart, ChevronUp, ChevronDown, ChevronsUpDown, RefreshCw, Loader2 } from "lucide-react";
+import { X, RefreshCw, ChevronUp, ChevronDown, ChevronsUpDown, Loader2, Plus, FileText } from "lucide-react";
 import { formatPrice } from "@/lib/utils";
-import AddToProposalDialog from "./AddToProposalDialog";
 import type { MedicationItem } from "@/types";
+
+interface Proposal { id: string; title: string; _count: { items: number } }
 
 interface ReplaceContext {
   proposalId: string;
@@ -22,10 +23,18 @@ interface Props {
   ingredientName: string;
   ingredientCode?: string;
   userId?: string;
+  proposals?: Proposal[];
+  onProposalAdded?: (proposalId: string, added: number) => void;
   onClose: () => void;
   initialCols?: Partial<ColVis>;
   replaceContext?: ReplaceContext;
   selectContext?: SelectContext;
+}
+
+interface DropdownState {
+  medId: string;
+  x: number; y: number; above: boolean;
+  newMode: boolean; newTitle: string; adding: string | null;
 }
 
 type SortKey = "productName" | "price" | "commissionRate" | "additionalRate" | "totalRate" | "settlement";
@@ -36,17 +45,23 @@ interface ColVis {
   insuranceCode: boolean; notes: boolean;
 }
 
-const DOSE_RE = /^(.+?)\s+(\d[\d.,/]*\s*(?:mg|mcg|μg|ug|g|ml|mL|IU|iu|%|mEq)[^\s]*.*)$/i;
-function splitDose(name: string): [string, string | null] {
-  const m = name.match(DOSE_RE);
-  return m ? [m[1], m[2]] : [name, null];
+function splitProductName(name: string): [string, string | null, string | null] {
+  let rest = name.trim();
+  let ingredient: string | null = null;
+  const parenMatch = rest.match(/(\([^)]+\))\s*$/);
+  if (parenMatch) {
+    ingredient = parenMatch[1];
+    rest = rest.slice(0, rest.lastIndexOf("(")).trim();
+  }
+  const doseMatch = rest.match(/^(.+?)\s*(\d[\d.,/]*\s*(?:mg|mcg|μg|ug|g|ml|mL|IU|iu|%|mEq)[^\s]*)/i);
+  if (doseMatch) return [doseMatch[1].trim(), doseMatch[2].trim(), ingredient];
+  return [rest, null, ingredient];
 }
 
-export default function SameIngredientModal({ ingredientName, ingredientCode, userId, onClose, initialCols, replaceContext, selectContext }: Props) {
+export default function SameIngredientModal({ ingredientName, ingredientCode, userId, proposals: externalProposals, onProposalAdded, onClose, initialCols, replaceContext, selectContext }: Props) {
   const [medications, setMedications] = useState<MedicationItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [proposalTarget, setProposalTarget] = useState<MedicationItem | null>(null);
   const [replacingId, setReplacingId] = useState<string>("");
   const [replaceError, setReplaceError] = useState<string>("");
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
@@ -59,6 +74,11 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
     insuranceCode: initialCols?.insuranceCode ?? false,
     notes: initialCols?.notes ?? false,
   });
+  const [dropdown, setDropdown] = useState<DropdownState | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [localProposals, setLocalProposals] = useState<Proposal[]>(externalProposals ?? []);
+
+  useEffect(() => { setLocalProposals(externalProposals ?? []); }, [externalProposals]);
 
   const hasDetailPanel = cols.bioStatus || cols.originalDrug || cols.insuranceCode || cols.categoryB || cols.notes;
 
@@ -110,6 +130,51 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
     else { setSortKey(key); setSortDir("asc"); }
   }
 
+  function openDropdown(e: React.MouseEvent, medId: string) {
+    if (!userId) return;
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const above = rect.bottom > window.innerHeight * 0.65;
+    const x = Math.min(rect.left, window.innerWidth - 232);
+    const y = above ? rect.top - 4 : rect.bottom + 4;
+    setDropdown({ medId, x, y, above, newMode: false, newTitle: "", adding: null });
+  }
+
+  function showToast(text: string) {
+    setToast(text);
+    setTimeout(() => setToast(null), 2000);
+  }
+
+  async function quickAdd(proposalId: string, medId: string) {
+    setDropdown((d) => d ? { ...d, adding: proposalId } : null);
+    const res = await fetch(`/api/proposals/${proposalId}/items`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ medicationId: medId }),
+    });
+    const added = res.ok ? 1 : 0;
+    setDropdown(null);
+    showToast(added === 0 ? "이미 추가된 품목이에요" : "제안서에 추가됐어요 ✓");
+    setLocalProposals((prev) => prev.map((p) => p.id === proposalId ? { ...p, _count: { items: p._count.items + added } } : p));
+    onProposalAdded?.(proposalId, added);
+  }
+
+  async function createAndQuickAdd(medId: string, title: string) {
+    if (!title.trim() || !userId) return;
+    setDropdown((d) => d ? { ...d, adding: "new" } : null);
+    const res = await fetch("/api/proposals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: title.trim(), userId }),
+    });
+    if (res.ok) {
+      const p: Proposal = await res.json();
+      setLocalProposals((prev) => [...prev, { ...p, _count: { items: 0 } }]);
+      await quickAdd(p.id, medId);
+    } else {
+      setDropdown(null);
+    }
+  }
+
   const sorted = [...medications].sort((a, b) => {
     if (!sortKey) return 0;
     const getVal = (m: MedicationItem) => {
@@ -142,14 +207,12 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
   }
 
   const hasRate = sorted.some((m) => m.commissionRate != null);
-  // 제품명 + 펼침 + 약가 + rates + 제안서
   const totalCols = 1 + (hasDetailPanel ? 1 : 0) + 1 + (hasRate ? 4 : 0) + 1;
 
   return (
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-2 sm:p-4">
         <div className="bg-white rounded-xl shadow-2xl w-full max-w-6xl max-h-[92vh] flex flex-col">
-          {/* 헤더 */}
           <div className="flex items-center justify-between px-4 py-3 border-b shrink-0">
             <div>
               <h2 className="font-bold text-gray-900 text-sm">동일성분 검색</h2>
@@ -160,7 +223,6 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
             <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 shrink-0"><X className="w-5 h-5" /></button>
           </div>
 
-          {/* 대체 모드 배너 */}
           {replaceContext && (
             <div className="px-4 py-2 bg-blue-50 border-b border-blue-100 text-xs flex items-center justify-between gap-2">
               <div className="text-gray-700 min-w-0">
@@ -179,7 +241,6 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
             </div>
           )}
 
-          {/* 컬럼 토글 — 체크하면 펼침 패널에 표시 */}
           <div className="px-4 py-2 border-b bg-gray-50 flex flex-wrap gap-3 text-xs shrink-0 items-center">
             <span className="text-gray-400">펼쳐보기 항목:</span>
             {([
@@ -205,7 +266,6 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
             </div>
           </div>
 
-          {/* 테이블 */}
           <div className="overflow-auto flex-1">
             {!ingredientCode && !ingredientName ? (
               <div className="flex justify-center py-16 text-gray-400 text-sm">검색 정보가 없습니다.</div>
@@ -228,7 +288,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
                         <SortTh label="정산금액" k="settlement" right />
                       </>
                     )}
-                    <th className="px-2 py-2.5 text-center whitespace-nowrap">제안서</th>
+                    <th className="px-2 py-2.5 text-center whitespace-nowrap text-xs">제안서</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -238,7 +298,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
                     const totalRate = base != null ? base + (extra ?? 0) : null;
                     const settlement = med.price != null && totalRate != null ? Math.round(med.price * totalRate / 100) : null;
                     const isExpanded = expandedRows.has(med.id);
-                    const [nameBase, dose] = splitDose(med.productName);
+                    const [nameBase, dose, ingredient] = splitProductName(med.productName);
 
                     return (
                       <Fragment key={med.id}>
@@ -255,11 +315,11 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
                                 </span>
                               )}
                               {dose && <span className="block text-[11px] font-normal text-gray-400 mt-0.5">{dose}</span>}
+                              {ingredient && <span className="block text-[10px] font-normal text-gray-400 mt-0.5">{ingredient}</span>}
                               <span className="block text-[11px] font-normal text-gray-500 mt-0.5">{med.companyName}</span>
                             </p>
                           </td>
 
-                          {/* 펼침 버튼 — 제품명 바로 오른쪽 */}
                           {hasDetailPanel && (
                             <td className="px-1 py-2 text-gray-400">
                               <button type="button" onClick={() => toggleRow(med.id)} className="hover:text-gray-600">
@@ -280,28 +340,27 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
                           <td className="px-2 py-2 text-center">
                             {selectContext ? (
                               <button onClick={() => { selectContext.onSelect(med); onClose(); }}
-                                className="text-white bg-emerald-600 hover:bg-emerald-700 rounded px-2 py-1 whitespace-nowrap">
+                                className="text-white bg-emerald-600 hover:bg-emerald-700 rounded px-2 py-1 whitespace-nowrap text-xs">
                                 선택
                               </button>
                             ) : userId ? (
                               <div className="flex items-center gap-1 justify-center">
                                 {replaceContext && (
                                   <button onClick={() => replaceItem(med)} disabled={!!replacingId}
-                                    className="text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded px-2 py-1 flex items-center gap-1 whitespace-nowrap">
+                                    className="text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded px-2 py-1 flex items-center gap-1 whitespace-nowrap text-xs">
                                     {replacingId === med.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
                                     대체
                                   </button>
                                 )}
-                                <button onClick={() => setProposalTarget(med)}
-                                  className="text-white bg-green-600 hover:bg-green-700 rounded px-2 py-1 flex items-center gap-1 whitespace-nowrap">
-                                  <ShoppingCart className="w-3 h-3" />추가
+                                <button onClick={(e) => openDropdown(e, med.id)}
+                                  className="text-white bg-green-600 hover:bg-green-700 rounded px-2 py-1 whitespace-nowrap text-xs">
+                                  추가
                                 </button>
                               </div>
-                            ) : <span className="text-gray-300 whitespace-nowrap">로그인 필요</span>}
+                            ) : <span className="text-gray-300 whitespace-nowrap text-xs">로그인 필요</span>}
                           </td>
                         </tr>
 
-                        {/* 펼침 상세 패널 */}
                         {isExpanded && hasDetailPanel && (
                           <tr className="bg-gray-50/60">
                             <td colSpan={totalCols} className="px-3 pb-2.5 pt-1">
@@ -350,8 +409,66 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
         </div>
       </div>
 
-      {proposalTarget && userId && (
-        <AddToProposalDialog medication={proposalTarget} userId={userId} onClose={() => setProposalTarget(null)} />
+      {/* 제안서 드롭다운 — modal(z-50) 위에 표시 */}
+      {dropdown && (
+        <>
+          <div className="fixed inset-0 z-[60]" onClick={() => setDropdown(null)} />
+          <div className="fixed z-[70] bg-white rounded-xl shadow-xl border border-gray-200 w-56 overflow-hidden"
+            style={dropdown.above
+              ? { left: dropdown.x, bottom: window.innerHeight - dropdown.y + 4 }
+              : { left: dropdown.x, top: dropdown.y }
+            }>
+            {!dropdown.newMode ? (
+              <div className="py-1">
+                <button type="button"
+                  onClick={() => setDropdown((d) => d ? { ...d, newMode: true } : null)}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-blue-600 hover:bg-blue-50 font-medium">
+                  <Plus className="w-3.5 h-3.5" /> 새 제안서 만들기
+                </button>
+                {localProposals.length > 0 && <div className="border-t border-gray-100 my-0.5" />}
+                <div className="max-h-52 overflow-y-auto">
+                  {localProposals.map((p) => (
+                    <button key={p.id} type="button" disabled={!!dropdown.adding}
+                      onClick={() => quickAdd(p.id, dropdown.medId)}
+                      className="w-full flex items-center justify-between px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                      <span className="flex items-center gap-1.5 truncate">
+                        <FileText className="w-3 h-3 text-gray-400 shrink-0" />
+                        <span className="truncate">{p.title}</span>
+                      </span>
+                      <span className="text-gray-400 ml-2 shrink-0">
+                        {dropdown.adding === p.id ? "추가 중..." : `${p._count.items}개`}
+                      </span>
+                    </button>
+                  ))}
+                  {localProposals.length === 0 && <p className="text-xs text-gray-400 text-center py-3">제안서가 없어요</p>}
+                </div>
+              </div>
+            ) : (
+              <div className="p-3 space-y-2">
+                <input autoFocus value={dropdown.newTitle}
+                  onChange={(e) => setDropdown((d) => d ? { ...d, newTitle: e.target.value } : null)}
+                  onKeyDown={(e) => e.key === "Enter" && dropdown && createAndQuickAdd(dropdown.medId, dropdown.newTitle)}
+                  placeholder="제안서 이름"
+                  className="w-full text-xs border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                <div className="flex gap-1">
+                  <button type="button" onClick={() => setDropdown((d) => d ? { ...d, newMode: false } : null)}
+                    className="flex-1 text-xs py-1.5 border border-gray-200 rounded text-gray-600 hover:bg-gray-50">취소</button>
+                  <button type="button" onClick={() => dropdown && createAndQuickAdd(dropdown.medId, dropdown.newTitle)}
+                    disabled={!dropdown.newTitle.trim() || !!dropdown.adding}
+                    className="flex-1 text-xs py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+                    {dropdown.adding ? "생성 중..." : "만들고 추가"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[80] bg-gray-800 text-white text-xs px-4 py-2 rounded-full shadow-lg pointer-events-none whitespace-nowrap">
+          {toast}
+        </div>
       )}
     </>
   );
