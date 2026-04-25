@@ -43,7 +43,7 @@ async function fetchPage(pageNo: number): Promise<{ items: HiraItem[]; totalCoun
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await requireAdmin(req);
+  const guard = await requireAdmin();
   if (isNextResponse(guard)) return guard;
 
   const body = await req.json().catch(() => ({}));
@@ -143,7 +143,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  const guard = await requireAdmin(req);
+  const guard = await requireAdmin();
   if (isNextResponse(guard)) return guard;
 
   const [totalMeds, nullPriceMeds, excelWithPrice, apiWithPrice] = await Promise.all([
