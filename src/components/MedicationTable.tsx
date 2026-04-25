@@ -163,7 +163,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-200 text-[11px] text-gray-500 font-semibold">
-              <th className="px-2 py-2 text-center w-12">
+              <th className="px-2 py-2 text-center w-8">
                 <input
                   type="checkbox"
                   checked={allSelected}
@@ -177,7 +177,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
               <th onClick={() => toggleSort("productName")} className="px-2 py-2.5 text-left cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap">
                 제품명 / 제약사 <SortIcon k="productName" />
               </th>
-              {hasDetailPanel && <th className="px-1 py-2 w-6" />}
+              <th className="px-2 py-2.5 w-16" />
               {showStock && <th className="px-2 py-2.5 text-right whitespace-nowrap">재고</th>}
               {showPrice && <SortTh label="약가" k="price" />}
               {showRate && (
@@ -202,58 +202,60 @@ export default function MedicationTable({ medications, loading, userId, showCate
               return (
                 <Fragment key={med.id}>
                   <tr className={`transition-colors ${isSelected ? "bg-blue-50/40" : "hover:bg-gray-50"}`}>
-                    {/* 체크박스 + 액션 버튼 */}
+                    {/* 체크박스 */}
                     <td className="px-2 py-2 text-center">
-                      <div className="flex flex-col items-center gap-1">
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => toggleOne(med.id)}
-                          className="w-3.5 h-3.5 rounded border-gray-300 cursor-pointer"
-                          aria-label={`${med.productName} 선택`}
-                        />
-                        <div className="flex items-center gap-0.5">
-                          <button
-                            type="button"
-                            title="제안서에 추가"
-                            onClick={() => userId ? setProposalTarget(med) : undefined}
-                            className={`rounded p-0.5 transition-colors ${userId ? "text-green-600 hover:bg-green-50" : "text-gray-300 cursor-not-allowed"}`}
-                          >
-                            <ShoppingCart className="w-3 h-3" />
-                          </button>
-                          <button
-                            type="button"
-                            title="동일성분 검색"
-                            onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.ingredientCode ?? null })}
-                            className="text-blue-500 hover:bg-blue-50 rounded p-0.5 transition-colors"
-                          >
-                            <Search className="w-3 h-3" />
-                          </button>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleOne(med.id)}
+                        className="w-3.5 h-3.5 rounded border-gray-300 cursor-pointer"
+                        aria-label={`${med.productName} 선택`}
+                      />
+                    </td>
+
+                    {/* 제품명 + 펼침 버튼 */}
+                    <td className="px-2 py-2">
+                      <div className="flex items-start gap-1">
+                        <div className="min-w-0">
+                          <p className="font-medium text-gray-900 leading-snug">
+                            <ProductName name={med.productName} />
+                            <SettlementBadge med={med} />
+                          </p>
+                          <p className="text-[11px] text-gray-500 mt-0.5">{med.companyName}</p>
                         </div>
+                        {hasDetailPanel && (
+                          <button
+                            type="button"
+                            onClick={() => toggleRow(med.id)}
+                            className="shrink-0 p-1.5 -mr-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors mt-0.5"
+                          >
+                            {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                          </button>
+                        )}
                       </div>
                     </td>
 
-                    {/* 제품명 */}
+                    {/* 액션 버튼 (제안서추가 + 동일성분) */}
                     <td className="px-2 py-2">
-                      <button
-                        type="button"
-                        onClick={() => hasDetailPanel && toggleRow(med.id)}
-                        className={`font-medium text-gray-900 text-left transition-colors leading-snug ${hasDetailPanel ? "hover:text-blue-600 cursor-pointer" : ""}`}
-                      >
-                        <ProductName name={med.productName} />
-                        <SettlementBadge med={med} />
-                      </button>
-                      <p className="text-[11px] text-gray-500 mt-0.5">{med.companyName}</p>
-                    </td>
-
-                    {/* 펼침 버튼 — 제품명 바로 오른쪽 */}
-                    {hasDetailPanel && (
-                      <td className="px-1 py-2 text-gray-400">
-                        <button type="button" onClick={() => toggleRow(med.id)} className="hover:text-gray-600">
-                          {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          title="제안서에 추가"
+                          onClick={() => userId ? setProposalTarget(med) : undefined}
+                          className={`rounded p-1.5 transition-colors ${userId ? "text-green-600 hover:bg-green-50" : "text-gray-300 cursor-not-allowed"}`}
+                        >
+                          <ShoppingCart className="w-3.5 h-3.5" />
                         </button>
-                      </td>
-                    )}
+                        <button
+                          type="button"
+                          title="동일성분 검색"
+                          onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.ingredientCode ?? null })}
+                          className="text-blue-500 hover:bg-blue-50 rounded p-1.5 transition-colors"
+                        >
+                          <Search className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </td>
 
                     {showStock && (
                       <td className="px-2 py-2 text-right whitespace-nowrap">
@@ -278,7 +280,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                   {isExpanded && hasDetailPanel && (
                     <tr className={isSelected ? "bg-blue-50/30" : "bg-gray-50/60"}>
                       <td />
-                      <td colSpan={1 + (hasDetailPanel ? 1 : 0) + (showStock ? 1 : 0) + (showPrice ? 1 : 0) + (showRate ? 4 : 0)} className="px-4 pb-3 pt-1">
+                      <td colSpan={1 + 1 + (showStock ? 1 : 0) + (showPrice ? 1 : 0) + (showRate ? 4 : 0)} className="px-4 pb-3 pt-1">
                         <div className="rounded-lg border border-gray-100 bg-white px-3 py-2.5 grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2.5 text-xs">
                           {showIngredientName && (
                             <div className="col-span-2 sm:col-span-3">
