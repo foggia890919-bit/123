@@ -42,14 +42,19 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-  if (codes.length > 50) {
-    return NextResponse.json({ error: "max 50 codes per request" }, { status: 400 });
-  }
-
   const live = req.nextUrl.searchParams.get("live") === "1";
   const sites = Array.isArray(body.sites)
     ? body.sites.filter((s): s is string => typeof s === "string")
     : undefined;
+
+  // Live path proxies to the worker (slow per-code) so cap at 50.
+  // Snapshot path is just a DB query; allow up to 1000 codes.
+  if (live && codes.length > 50) {
+    return NextResponse.json({ error: "max 50 codes per live request" }, { status: 400 });
+  }
+  if (!live && codes.length > 1000) {
+    return NextResponse.json({ error: "max 1000 codes per request" }, { status: 400 });
+  }
 
   if (!live) {
     // DB path — read latest snapshot per (siteKey, insuranceCode)

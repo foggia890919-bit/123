@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { normalizeCompanyKey } from "@/lib/utils";
-import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type MedRow = Record<string, any>;
@@ -128,15 +127,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ results: rows.map((r) => ({ rowId: r.id, medication: null })) });
     }
 
-    const client = new Anthropic();
-    const response = await client.messages.parse({
-      model: "claude-opus-4-7",
-      max_tokens: 16000,
-      thinking: { type: "adaptive" },
-      messages: [
-        {
-          role: "user",
-          content: `당신은 의약품 영업 전문가입니다. 각 품목에 대해 동일성분 대체 의약품 후보 중에서 최적의 한 가지를 선택해주세요.
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY ?? "" });
+    const prompt = `당신은 의약품 영업 전문가입니다. 각 품목에 대해 동일성분 대체 의약품 후보 중에서 최적의 한 가지를 선택해주세요.
 
 선택 기준:
 1. 수수료율(totalRate)이 높을수록 좋습니다.
@@ -146,18 +138,29 @@ export async function POST(req: NextRequest) {
 품목 목록:
 ${JSON.stringify(rowsForAI, null, 2)}
 
-각 rowId에 대해 가장 적합한 medicationId를 하나 선택하세요. 적합한 후보가 없으면 null을 반환하세요.`,
-        },
-      ],
-      output_config: { format: zodOutputFormat(SelectionSchema) },
+각 rowId에 대해 가장 적합한 medicationId를 하나 선택하세요. 적합한 후보가 없으면 medicationId를 null로 반환하세요.
+
+다음 JSON 형식만 출력 (다른 텍스트 없이):
+{"selections": [{"rowId": "<id>", "medicationId": "<id>" | null}, ...]}`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+      config: { responseMimeType: "application/json" },
     });
 
-    const parsed = response.parsed_output;
+    const text = response.text ?? "";
     const selectionMap = new Map<string, string | null>();
-    if (parsed) {
-      for (const sel of parsed.selections) {
-        selectionMap.set(sel.rowId, sel.medicationId);
+    try {
+      const json = JSON.parse(text);
+      const result = SelectionSchema.safeParse(json);
+      if (result.success) {
+        for (const sel of result.data.selections) {
+          selectionMap.set(sel.rowId, sel.medicationId);
+        }
       }
+    } catch {
+      // empty selectionMap → all null fallback
     }
 
     const results = rows.map((row) => {

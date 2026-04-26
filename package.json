@@ -14,8 +14,8 @@
     "scrape:inspect": "tsx src/scrapers/inspect.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.90.0",
     "@auth/prisma-adapter": "^2.11.2",
+    "@google/genai": "^1.0.0",
     "@aws-sdk/client-lambda": "^3.1037.0",
     "@prisma/adapter-pg": "^7.7.0",
     "@prisma/client": "^7.7.0",
@@ -40,7 +40,8 @@
     "react-dom": "19.2.4",
     "shadcn": "^4.3.0",
     "tailwind-merge": "^3.5.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

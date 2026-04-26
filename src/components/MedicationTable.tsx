@@ -301,9 +301,9 @@ export default function MedicationTable({ medications, loading, userId, showCate
     if (sortKey !== k) return <ChevronsUpDown className="w-3 h-3 inline ml-0.5 text-gray-300" />;
     return sortDir === "asc" ? <ChevronUp className="w-3 h-3 inline ml-0.5 text-blue-500" /> : <ChevronDown className="w-3 h-3 inline ml-0.5 text-blue-500" />;
   }
-  function SortTh({ label, k }: { label: string; k: SortKey }) {
+  function SortTh({ label, k, widthClass = "" }: { label: string; k: SortKey; widthClass?: string }) {
     return (
-      <th onClick={() => toggleSort(k)} className="px-1.5 py-2 text-right cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap">
+      <th onClick={() => toggleSort(k)} className={`px-1.5 py-2 text-right cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap ${widthClass}`}>
         {label}<SortIcon k={k} />
       </th>
     );
@@ -326,17 +326,17 @@ export default function MedicationTable({ medications, loading, userId, showCate
                   onChange={toggleAll} className="w-3.5 h-3.5 rounded border-gray-300 cursor-pointer"
                   aria-label="전체 선택/해제" title="전체 선택 / 전체 해제" />
               </th>
-              <th onClick={() => toggleSort("productName")} className="px-2 py-2 text-left cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap w-48">
+              <th onClick={() => toggleSort("productName")} className="px-2 py-2 text-left cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap w-auto">
                 제품명 / 제약사 <SortIcon k="productName" />
               </th>
-              {showStock && <th className="px-2 py-2 text-right whitespace-nowrap">재고</th>}
-              {showPrice && <SortTh label="약가" k="price" />}
+              {showStock && <th className="px-2 py-2 text-right whitespace-nowrap w-16">재고</th>}
+              {showPrice && <SortTh label="약가" k="price" widthClass="w-20" />}
               {showRate && (
                 <>
-                  <SortTh label="기본수수료" k="commissionRate" />
-                  <SortTh label="추가수수료" k="additionalRate" />
-                  <SortTh label="합계" k="totalRate" />
-                  <SortTh label="정산금액" k="settlement" />
+                  <SortTh label="기본수수료" k="commissionRate" widthClass="w-24" />
+                  <SortTh label="추가수수료" k="additionalRate" widthClass="w-24" />
+                  <SortTh label="합계" k="totalRate" widthClass="w-16" />
+                  <SortTh label="정산금액" k="settlement" widthClass="w-24" />
                 </>
               )}
             </tr>
