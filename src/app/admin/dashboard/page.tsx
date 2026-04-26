@@ -226,6 +226,8 @@ function UploadTab() {
       .catch(() => null);
   }, []);
 
+  const [fillPriceDebug, setFillPriceDebug] = useState<string | null>(null);
+
   async function handleFillPrices() {
     setFillPriceLoading(true); setFillPriceResult(null);
     try {
@@ -235,6 +237,15 @@ function UploadTab() {
       if (data.success) setFillPriceStats({ totalMeds: data.totalMeds, nullPriceMeds: data.nullPriceMeds, hasPriceMeds: data.filledPriceMeds });
     } catch { setFillPriceResult({ error: "약가 채우기 중 오류가 발생했어요." }); }
     finally { setFillPriceLoading(false); }
+  }
+
+  async function handleFillPricesDebug() {
+    setFillPriceDebug("조회 중...");
+    try {
+      const res = await fetch("/api/admin/fill-prices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ debug: true }) });
+      const data = await res.json();
+      setFillPriceDebug(JSON.stringify(data, null, 2));
+    } catch (e) { setFillPriceDebug("오류: " + String(e)); }
   }
 
   async function handleIngredientSync() {
@@ -649,6 +660,14 @@ function UploadTab() {
         )}
         {fillPriceLoading && (
           <div className="text-xs text-emerald-600 animate-pulse">HIRA API에서 약가 데이터 수집 중...</div>
+        )}
+        <div className="flex items-center gap-2">
+          <button onClick={handleFillPricesDebug} className="text-xs text-gray-400 hover:text-gray-600 underline">
+            API 응답 샘플 확인 (디버그)
+          </button>
+        </div>
+        {fillPriceDebug && (
+          <pre className="text-[10px] bg-gray-900 text-green-300 rounded p-3 overflow-auto max-h-64 whitespace-pre-wrap">{fillPriceDebug}</pre>
         )}
       </div>
 

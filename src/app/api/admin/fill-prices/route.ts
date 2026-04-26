@@ -71,6 +71,22 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const maxPages = Math.min(parseInt(body?.maxPages) || 50, 200);
 
+  // 디버그 모드: 첫 페이지 원본 XML 샘플 반환
+  if (body?.debug) {
+    try {
+      const url = new URL(HIRA_PRICE_URL);
+      url.searchParams.set("serviceKey", API_KEY);
+      url.searchParams.set("pageNo", "1");
+      url.searchParams.set("numOfRows", "3");
+      const res = await fetch(url.toString(), { cache: "no-store" });
+      const rawText = await res.text().catch(() => "");
+      const { items, totalCount } = await fetchPage(1);
+      return NextResponse.json({ debug: true, rawSample: rawText.slice(0, 3000), parsedSample: items.slice(0, 3), totalCount });
+    } catch (err) {
+      return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+    }
+  }
+
   let filled = 0;
   let scanned = 0;
   let pageErrors = 0;
