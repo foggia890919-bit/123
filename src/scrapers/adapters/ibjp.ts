@@ -77,21 +77,45 @@ export const ibjp: WholesaleAdapter = {
   },
 
   async searchByCode(page: Page, insuranceCode: string): Promise<InventoryItem[]> {
-    if (!page.url().includes(SEL.orderPath)) {
-      await page.goto(this.baseUrl + SEL.orderPath, { waitUntil: "domcontentloaded", timeout: 20_000 });
+    // After login, ibjp lands on the integrated order page (통합주문).
+    // Only navigate if the search input isn't already present, to avoid
+    // wiping a perfectly good page state.
+    const inputAlreadyVisible = await page.locator(SEL.searchInput).first().isVisible().catch(() => false);
+    if (!inputAlreadyVisible) {
+      await page.goto(this.baseUrl + SEL.orderPath, { waitUntil: "commit", timeout: 30_000 });
+      await page.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => {});
     }
 
     const input = await waitAny(page, SEL.searchInput);
     await input.click();
     await input.fill("");
-    await input.fill(insuranceCode);
-    await page.keyboard.press("Enter");
+    await input.type(insuranceCode, { delay: 30 });
 
-    // Wait for either rows to appear or "no result" text; fall back to timeout
+    // Prefer clicking 검색 button over Enter — Enter behaviour varies by SPA.
+    const btn = page.locator(SEL.searchBtn).first();
+    if (await btn.isVisible().catch(() => false)) {
+      await btn.click();
+    } else {
+      await page.keyboard.press("Enter");
+    }
+
+    // Result table is updated via AJAX, not navigation. Wait for either
+    // a populated row or the "no results" text to appear.
     await page
-      .waitForSelector(SEL.resultRows, { timeout: 8_000, state: "attached" })
+      .waitForFunction(
+        () => {
+          const rows = document.querySelectorAll("table tbody tr");
+          if (rows.length === 0) return false;
+          for (const r of Array.from(rows)) {
+            const tds = r.querySelectorAll("td");
+            if (tds.length > 0) return true;
+          }
+          return false;
+        },
+        { timeout: 10_000 }
+      )
       .catch(() => {});
-    await page.waitForTimeout(600);
+    await page.waitForTimeout(800);
 
     const rows = await page.locator(SEL.resultRows).all();
     const items: InventoryItem[] = [];

@@ -73,6 +73,12 @@ async function main() {
     await page.waitForTimeout(1500);
     await dump(outDir, "02-after-login", page);
 
+    // Tap into the page mid-search so we can see what the SPA looked like
+    // at each phase — useful for diagnosing blank-page captures.
+    page.on("framenavigated", f => {
+      if (f === page.mainFrame()) console.log(`[nav] ${f.url()}`);
+    });
+
     let items: Awaited<ReturnType<typeof adapter.searchByCode>> = [];
     try {
       items = await adapter.searchByCode(page, code);
