@@ -6,8 +6,8 @@ export const maxDuration = 300;
 
 const API_KEY = process.env.PUBLIC_DATA_API_KEY!;
 
-// 건강보험심사평가원_약가기준정보조회서비스
-const HIRA_PRICE_URL = "https://apis.data.go.kr/B551182/dgamtCrtInfoService1.2/getDgamtList";
+// 건강보험심사평가원_약가기준정보조회서비스 (HTTP — HTTPS 차단 우회)
+const HIRA_PRICE_URL = "http://apis.data.go.kr/B551182/dgamtCrtInfoService1.2/getDgamtList";
 
 interface HiraItem { [key: string]: string | undefined }
 
@@ -28,7 +28,7 @@ function extractCode(item: HiraItem): string | null {
 
 // data.go.kr: serviceKey는 반드시 직접 append (URLSearchParams 사용 시 이중인코딩 발생)
 function buildHiraUrl(pageNo: number, numOfRows = 1000): string {
-  return `${HIRA_PRICE_URL}?serviceKey=${API_KEY}&pageNo=${pageNo}&numOfRows=${numOfRows}`;
+  return `${HIRA_PRICE_URL}?serviceKey=${API_KEY}&pageNo=${pageNo}&numOfRows=${numOfRows}&type=xml`;
 }
 
 async function fetchPage(pageNo: number): Promise<{ items: HiraItem[]; totalCount: number }> {
