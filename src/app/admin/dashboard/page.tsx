@@ -198,6 +198,27 @@ function UploadTab() {
   const [fillPriceResult, setFillPriceResult] = useState<{ success?: boolean; filled?: number; scanned?: number; pageErrors?: number; pagesProcessed?: number; totalMeds?: number; nullPriceMeds?: number; filledPriceMeds?: number; error?: string } | null>(null);
   const [fillPriceStats, setFillPriceStats] = useState<{ totalMeds?: number; nullPriceMeds?: number; hasPriceMeds?: number; excelWithPrice?: number; apiWithPrice?: number } | null>(null);
 
+  const [priceImportFile, setPriceImportFile] = useState<File | null>(null);
+  const [priceImportLoading, setPriceImportLoading] = useState(false);
+  const [priceImportResult, setPriceImportResult] = useState<{ success?: boolean; parsed?: number; updated?: number; nullPriceMeds?: number; message?: string; error?: string } | null>(null);
+
+  async function handlePriceImport() {
+    if (!priceImportFile) return;
+    setPriceImportLoading(true); setPriceImportResult(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", priceImportFile);
+      const res = await fetch("/api/admin/price-import", { method: "POST", body: fd });
+      const data = await res.json();
+      setPriceImportResult(data);
+      if (data.success) {
+        setPriceImportFile(null);
+        setFillPriceStats((prev) => prev ? { ...prev, nullPriceMeds: data.nullPriceMeds } : prev);
+      }
+    } catch { setPriceImportResult({ error: "업로드 중 오류가 발생했어요." }); }
+    finally { setPriceImportLoading(false); }
+  }
+
   useEffect(() => {
     fetch("/api/admin/fill-prices")
       .then((r) => r.json())
@@ -628,6 +649,40 @@ function UploadTab() {
         )}
         {fillPriceLoading && (
           <div className="text-xs text-emerald-600 animate-pulse">HIRA API에서 약가 데이터 수집 중...</div>
+        )}
+      </div>
+
+      {/* 약가 엑셀 직접 업로드 */}
+      <div className="border border-gray-200 rounded-lg p-4 space-y-3">
+        <div>
+          <h2 className="text-base font-semibold text-gray-800">⑤ 약가 엑셀 직접 업로드</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            HIRA API 미연동 시 대안. <strong>보험코드</strong>·<strong>약가</strong> 컬럼이 있는 엑셀 업로드 시 매칭되는 약품 약가를 일괄 업데이트합니다.
+            <br />HIRA 홈페이지(hira.or.kr) → 공개자료실 → 급여의약품 목록 다운로드 후 업로드하세요.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="flex-1 flex items-center gap-2 border border-dashed border-gray-300 rounded-lg px-3 py-2 cursor-pointer hover:bg-gray-50 text-xs text-gray-500">
+            <FileSpreadsheet className="w-4 h-4 text-gray-400 shrink-0" />
+            {priceImportFile ? <span className="text-gray-800 font-medium truncate">{priceImportFile.name}</span> : "엑셀 파일 선택 (보험코드+약가)"}
+            <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => setPriceImportFile(e.target.files?.[0] ?? null)} />
+          </label>
+          <button onClick={handlePriceImport} disabled={!priceImportFile || priceImportLoading}
+            className="shrink-0 px-3 py-2 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5">
+            {priceImportLoading ? <><Loader2 className="w-3.5 h-3.5 animate-spin" />처리 중...</> : <><Upload className="w-3.5 h-3.5" />약가 업로드</>}
+          </button>
+        </div>
+        {priceImportResult && (
+          <div className={`text-xs rounded p-3 border space-y-1 ${priceImportResult.success ? "bg-green-50 text-green-700 border-green-200" : "bg-red-50 text-red-700 border-red-200"}`}>
+            {priceImportResult.success ? (
+              <>
+                <div><CheckCircle className="w-3.5 h-3.5 inline mr-1" />파싱: <strong>{priceImportResult.parsed?.toLocaleString()}건</strong> → 업데이트: <strong>{priceImportResult.updated?.toLocaleString()}건</strong></div>
+                <div>남은 약가 없음: <strong>{priceImportResult.nullPriceMeds?.toLocaleString()}건</strong></div>
+              </>
+            ) : (
+              <div><AlertCircle className="w-3.5 h-3.5 inline mr-1" />{priceImportResult.error ?? priceImportResult.message}</div>
+            )}
+          </div>
         )}
       </div>
     </div>
