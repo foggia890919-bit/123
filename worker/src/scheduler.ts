@@ -23,6 +23,7 @@ interface RunJobDeps {
     error?: string;
   }>;
   getCreds: (siteKey: string) => Credentials | null;
+  releaseSession?: (siteKey: string) => Promise<void>;
 }
 
 interface RunOptions {
@@ -78,43 +79,45 @@ export async function runScheduledJob(
     perSiteStats.set(site.key, { done: 0, failed: 0 });
   }
 
-  // Process each site as its own concurrent loop. Within a site we serialize
-  // (one code at a time) so we honour the per-site rate budget; across sites
-  // we run in parallel because each site has its own browser context.
-  await Promise.all(
-    sitesWithCreds.map(async site => {
-      const stats = perSiteStats.get(site.key)!;
-      try {
-        for (const { insuranceCode } of codes) {
-          const row = await deps.scrapeOne(site, insuranceCode);
-          if (row.error) {
+  // Sites run sequentially (not in parallel) to keep peak memory low —
+  // running multiple Playwright contexts at once OOM-kills small instances.
+  // Within a site, codes are serialized to honour the per-site rate budget.
+  for (const site of sitesWithCreds) {
+    const stats = perSiteStats.get(site.key)!;
+    try {
+      for (const { insuranceCode } of codes) {
+        const row = await deps.scrapeOne(site, insuranceCode);
+        if (row.error) {
+          stats.failed++;
+        } else if (row.items.length > 0) {
+          const inserts: SnapshotInsert[] = row.items.map(item => ({
+            siteKey: site.key,
+            insuranceCode,
+            item,
+          }));
+          try {
+            await saveSnapshots(inserts);
+          } catch (err) {
+            console.error(`[scheduler] db write failed for ${site.key}/${insuranceCode}:`, (err as Error).message);
             stats.failed++;
-          } else if (row.items.length > 0) {
-            const inserts: SnapshotInsert[] = row.items.map(item => ({
-              siteKey: site.key,
-              insuranceCode,
-              item,
-            }));
-            try {
-              await saveSnapshots(inserts);
-            } catch (err) {
-              console.error(`[scheduler] db write failed for ${site.key}/${insuranceCode}:`, (err as Error).message);
-              stats.failed++;
-              continue;
-            }
-            stats.done++;
-          } else {
-            // No results found — still counts as done (out-of-stock / unlisted)
-            stats.done++;
+            continue;
           }
-          await new Promise(r => setTimeout(r, PER_SITE_DELAY_MS));
+          stats.done++;
+        } else {
+          // No results found — still counts as done (out-of-stock / unlisted)
+          stats.done++;
         }
-      } catch (err) {
-        stats.error = (err as Error).message;
-        console.error(`[scheduler] site ${site.key} aborted:`, stats.error);
+        await new Promise(r => setTimeout(r, PER_SITE_DELAY_MS));
       }
-    })
-  );
+    } catch (err) {
+      stats.error = (err as Error).message;
+      console.error(`[scheduler] site ${site.key} aborted:`, stats.error);
+    }
+    // Free this site's browser context before moving on so peak RAM stays low.
+    if (deps.releaseSession) {
+      await deps.releaseSession(site.key).catch(() => {});
+    }
+  }
 
   // Finalize job rows
   for (const [siteKey, stats] of perSiteStats) {

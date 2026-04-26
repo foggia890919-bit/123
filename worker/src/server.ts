@@ -27,7 +27,14 @@ async function ensureBrowser() {
   if (browser) return browser;
   browser = await chromium.launch({
     headless: true,
-    args: ["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--disable-extensions",
+      "--no-zygote",
+    ],
   });
   return browser;
 }
@@ -168,7 +175,7 @@ app.post("/scrape-batch", async (req, res) => {
   const mode = typeof modeRaw === "string" ? modeRaw : "manual";
 
   // Fire-and-forget so the HTTP request doesn't time out for hours-long runs
-  triggerJobNow({ scrapeOne, getCreds }, { limit, sites, mode }).catch(err =>
+  triggerJobNow({ scrapeOne, getCreds, releaseSession: invalidate }, { limit, sites, mode }).catch(err =>
     console.error("[server] manual batch failed:", err)
   );
   res.json({ ok: true, started: true, limit, sites, mode });
@@ -200,14 +207,15 @@ app.post("/scrape", async (req, res) => {
     return;
   }
 
-  // Sites are scraped in parallel for each code; codes are still sequential
-  // so we don't open dozens of contexts on the same site at once.
+  // Sites and codes are both serialized to keep peak RAM low — small
+  // instances (e.g. 512MB Lightsail) OOM-kill if multiple browser contexts
+  // render search pages simultaneously.
   const results: ScrapeRow[] = [];
   for (const code of codes) {
-    const rows = await Promise.all(
-      targetKeys.map(key => scrapeOne(ALL_ADAPTERS[key], code))
-    );
-    results.push(...rows);
+    for (const key of targetKeys) {
+      const row = await scrapeOne(ALL_ADAPTERS[key], code);
+      results.push(row);
+    }
   }
   res.json({ results });
 });
@@ -231,7 +239,7 @@ const server = app.listen(PORT, () => {
   console.log(`[worker] listening on :${PORT}`);
   console.log(`[worker] adapters: ${Object.keys(ALL_ADAPTERS).join(", ")}`);
   console.log(`[worker] db: ${hasDb() ? "configured" : "NOT configured (scheduler will skip)"}`);
-  startScheduler({ scrapeOne, getCreds });
+  startScheduler({ scrapeOne, getCreds, releaseSession: invalidate });
 });
 
 async function shutdown() {
