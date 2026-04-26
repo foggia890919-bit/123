@@ -3,7 +3,7 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { Upload, Trash2, FileSpreadsheet, FileDown, X, AlertCircle, Loader2, Search, Save } from "lucide-react";
+import { Upload, Trash2, FileSpreadsheet, FileDown, X, AlertCircle, Loader2, Search, Save, Building2, FileText, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatPrice } from "@/lib/utils";
@@ -26,6 +26,35 @@ interface UserClient {
   bizNumber: string;
   approved: boolean;
 }
+
+interface ProposalItem {
+  id: string;
+  title: string;
+  createdAt: string;
+  _count?: { items: number };
+  client?: { clientName: string } | null;
+}
+
+interface FilterRequestItem {
+  id: string;
+  companyName: string;
+  status: string;
+}
+
+const CRITERIA_PAIRS = [
+  { group: "stock", label: "재고", options: [
+    { key: "stock_high", label: "많은순" },
+    { key: "stock_low", label: "적은순" },
+  ]},
+  { group: "commission", label: "수수료", options: [
+    { key: "commission_high", label: "높은순" },
+    { key: "commission_low", label: "낮은순" },
+  ]},
+  { group: "price", label: "약가", options: [
+    { key: "price_low", label: "낮은순" },
+    { key: "price_high", label: "높은순" },
+  ]},
+] as const;
 
 function uid() {
   return Math.random().toString(36).slice(2, 10);
@@ -64,9 +93,12 @@ function BulkRegisterInner() {
   const [newBizNumber, setNewBizNumber] = useState("");
   const [addClientError, setAddClientError] = useState("");
   const [addClientSaving, setAddClientSaving] = useState(false);
-  const [autoSwitching, setAutoSwitching] = useState<"commission" | "stock" | "settlement" | "ai" | null>(null);
-  const [activeCriteria, setActiveCriteria] = useState<"commission" | "stock" | "settlement" | null>(null);
+  const [autoSwitching, setAutoSwitching] = useState(false);
+  const [criteriaSet, setCriteriaSet] = useState<Record<string, boolean>>({});
   const [autoSwitchResult, setAutoSwitchResult] = useState<{ applied: number; skipped: number } | null>(null);
+  const [savedProposals, setSavedProposals] = useState<ProposalItem[]>([]);
+  const [filterRequests, setFilterRequests] = useState<FilterRequestItem[]>([]);
+  const [expandedCompanies, setExpandedCompanies] = useState<Set<string>>(new Set());
   const fileRef = useRef<HTMLInputElement>(null);
 
   function refreshClients() {
@@ -99,10 +131,22 @@ function BulkRegisterInner() {
     finally { setAddClientSaving(false); }
   }
 
-  async function handleAutoSwitch(criteria: "commission" | "stock" | "settlement" | "ai") {
+  function toggleCriteria(group: string, key: string) {
+    setCriteriaSet((prev) => {
+      const pair = CRITERIA_PAIRS.find((p) => p.group === group);
+      const next = { ...prev };
+      if (pair) for (const opt of pair.options) delete next[opt.key];
+      if (!prev[key]) next[key] = true;
+      return next;
+    });
+  }
+
+  async function handleAutoSwitch() {
+    const criteriaList = Object.entries(criteriaSet).filter(([, v]) => v).map(([k]) => k);
+    if (criteriaList.length === 0) return;
     const eligibleRows = rows.filter((r) => r.original?.ingredientCode);
     if (eligibleRows.length === 0) return;
-    setAutoSwitching(criteria);
+    setAutoSwitching(true);
     setAutoSwitchResult(null);
     try {
       const payload = {
@@ -113,7 +157,7 @@ function BulkRegisterInner() {
           originalProductName: r.original!.productName,
           ingredientName: r.original!.ingredientName,
         })),
-        criteria,
+        criteria: criteriaList,
         userId: userId ?? null,
       };
       const res = await fetch("/api/ai/auto-switch", {
@@ -134,7 +178,7 @@ function BulkRegisterInner() {
       );
       setAutoSwitchResult({ applied, skipped });
     } finally {
-      setAutoSwitching(null);
+      setAutoSwitching(false);
     }
   }
 
@@ -145,6 +189,50 @@ function BulkRegisterInner() {
       .then((d) => { if (Array.isArray(d)) setClients(d); })
       .catch(() => {});
   }, [userId]);
+
+  useEffect(() => {
+    if (!userId) return;
+    fetch(`/api/proposals`)
+      .then((r) => r.json())
+      .then((d) => { if (Array.isArray(d)) setSavedProposals(d); })
+      .catch(() => {});
+    fetch(`/api/filter-request`)
+      .then((r) => r.json())
+      .then((d) => { if (Array.isArray(d)) setFilterRequests(d); })
+      .catch(() => {});
+  }, [userId]);
+
+  const companySummary = useMemo(() => {
+    const map = new Map<string, { count: number; products: Set<string> }>();
+    for (const r of rows) {
+      const name = r.alternative?.companyName;
+      if (!name) continue;
+      if (!map.has(name)) map.set(name, { count: 0, products: new Set() });
+      const e = map.get(name)!;
+      e.count++;
+      if (r.alternative?.productName) e.products.add(r.alternative.productName);
+    }
+    const statusMap = new Map<string, string>();
+    for (const fr of filterRequests) {
+      if (!statusMap.has(fr.companyName)) statusMap.set(fr.companyName, fr.status);
+    }
+    return Array.from(map.entries())
+      .map(([name, d]) => ({
+        name,
+        count: d.count,
+        products: Array.from(d.products),
+        status: statusMap.get(name) ?? null,
+      }))
+      .sort((a, b) => b.count - a.count);
+  }, [rows, filterRequests]);
+
+  function toggleCompanyExpand(name: string) {
+    setExpandedCompanies((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+  }
 
   // 선택한 거래처명 자동으로 clientName 입력칸에 채워줌 (출력용)
   useEffect(() => {
@@ -467,7 +555,9 @@ function BulkRegisterInner() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="max-w-7xl mx-auto p-4 md:p-6 space-y-4">
+      <div className="max-w-[1600px] mx-auto p-4 md:p-6">
+        <div className="flex gap-4 items-start">
+          <div className="flex-1 min-w-0 space-y-4">
         {/* 헤더 */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
           <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -564,59 +654,59 @@ function BulkRegisterInner() {
 
         {/* 자동 선택 */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
-            <p className="text-xs font-semibold text-gray-500 mb-3">자동 대체 선택 기준</p>
-            <div className="flex items-center gap-3 flex-wrap">
-              {(
-                [
-                  { key: "stock", label: "재고 많은순" },
-                  { key: "commission", label: "수수료 높은순" },
-                  { key: "settlement", label: "정산금 높은순" },
-                ] as const
-              ).map(({ key, label }) => {
-                const isActive = activeCriteria === key;
-                return (
-                  <label
-                    key={key}
-                    className={`flex items-center gap-2 px-4 py-2.5 rounded-lg border cursor-pointer select-none transition-colors ${
-                      isActive
-                        ? "border-blue-500 bg-blue-50 text-blue-700"
-                        : "border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300 hover:bg-gray-100"
-                    } ${autoSwitching !== null ? "pointer-events-none opacity-60" : ""}`}
-                  >
-                    <input
-                      type="radio"
-                      name="auto-criteria"
-                      className="sr-only"
-                      checked={isActive}
-                      onChange={() => setActiveCriteria(key)}
-                      disabled={autoSwitching !== null}
-                    />
-                    <span
-                      className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ${
-                        isActive ? "border-blue-500 bg-blue-500" : "border-gray-300"
-                      }`}
-                    >
-                      {isActive && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
-                    </span>
-                    <span className="text-sm font-medium">{label}</span>
-                  </label>
-                );
-              })}
+            <p className="text-xs font-semibold text-gray-500 mb-3">자동 대체 선택 기준 (여러 기준 조합 가능, 우선순위 순)</p>
+            <div className="flex flex-col gap-2">
+              {CRITERIA_PAIRS.map((pair) => (
+                <div key={pair.group} className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-medium text-gray-500 w-12 shrink-0">{pair.label}</span>
+                  {pair.options.map((opt) => {
+                    const isActive = !!criteriaSet[opt.key];
+                    return (
+                      <label
+                        key={opt.key}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md border cursor-pointer select-none transition-colors text-xs ${
+                          isActive
+                            ? "border-blue-500 bg-blue-50 text-blue-700"
+                            : "border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300"
+                        } ${autoSwitching ? "pointer-events-none opacity-60" : ""}`}
+                      >
+                        <input
+                          type="checkbox"
+                          className="sr-only"
+                          checked={isActive}
+                          onChange={() => toggleCriteria(pair.group, opt.key)}
+                          disabled={autoSwitching}
+                        />
+                        <span
+                          className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
+                            isActive ? "border-blue-500 bg-blue-500" : "border-gray-300 bg-white"
+                          }`}
+                        >
+                          {isActive && <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>}
+                        </span>
+                        <span className="font-medium">{opt.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center gap-3 mt-3 pt-3 border-t border-gray-100 flex-wrap">
               <button
-                onClick={() => activeCriteria && handleAutoSwitch(activeCriteria)}
-                disabled={!activeCriteria || autoSwitching !== null || rows.length === 0}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                onClick={handleAutoSwitch}
+                disabled={Object.keys(criteriaSet).length === 0 || autoSwitching || rows.length === 0}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
-                {autoSwitching !== null ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                {autoSwitching ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                 자동 선택 실행
               </button>
+              {autoSwitchResult && (
+                <p className="text-xs text-gray-500">
+                  <span className="text-emerald-700 font-medium">{autoSwitchResult.applied}건</span> 선택됨
+                  {autoSwitchResult.skipped > 0 && <span className="text-gray-400"> · {autoSwitchResult.skipped}건 대체품 없음</span>}
+                </p>
+              )}
             </div>
-            {autoSwitchResult && (
-              <p className="mt-2 text-xs text-gray-500">
-                <span className="text-emerald-700 font-medium">{autoSwitchResult.applied}건</span> 선택됨
-                {autoSwitchResult.skipped > 0 && <span className="text-gray-400"> · {autoSwitchResult.skipped}건 대체품 없음</span>}
-              </p>
-            )}
         </div>
 
         {/* 표 */}
@@ -723,6 +813,106 @@ function BulkRegisterInner() {
             </div>
           </div>
         )}
+          </div>
+
+          {/* 우측 사이드바 */}
+          <aside className="w-72 xl:w-80 shrink-0 sticky top-4 space-y-3 max-h-[calc(100vh-2rem)] overflow-y-auto">
+            {/* 제안서 목록 */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">
+                  <FileText className="w-4 h-4 text-gray-500" />
+                  제안서 목록 <span className="text-xs text-gray-400">({savedProposals.length})</span>
+                </h3>
+              </div>
+              <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                {savedProposals.length === 0 ? (
+                  <p className="text-xs text-gray-400 py-3 text-center">저장된 제안서가 없습니다.</p>
+                ) : (
+                  savedProposals.map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => router.push(`/proposals?id=${p.id}`)}
+                      className="w-full text-left p-2.5 rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50/40 transition-colors group"
+                    >
+                      <div className="flex items-start gap-2">
+                        <FileText className="w-3.5 h-3.5 text-gray-400 mt-0.5 shrink-0 group-hover:text-blue-500" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-gray-900 truncate">{p.title}</p>
+                          <p className="text-[11px] text-gray-500 mt-0.5">
+                            {p._count?.items ?? 0}개 품목 · {p.client?.clientName ?? "미지정"}
+                          </p>
+                        </div>
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* 제약사 현황 */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">
+                  <Building2 className="w-4 h-4 text-gray-500" />
+                  제약사 현황
+                </h3>
+                <span className="text-xs text-gray-400">{companySummary.length}개사</span>
+              </div>
+              <div className="space-y-1.5 max-h-96 overflow-y-auto">
+                {companySummary.length === 0 ? (
+                  <p className="text-xs text-gray-400 py-3 text-center">대체 품목을 선택하면 제약사가 집계됩니다.</p>
+                ) : (
+                  companySummary.map((c) => {
+                    const isExpanded = expandedCompanies.has(c.name);
+                    const statusColor =
+                      c.status === "REVIEWING" || c.status === "검토중"
+                        ? "bg-amber-100 text-amber-700"
+                        : c.status
+                        ? "bg-blue-100 text-blue-700"
+                        : "bg-gray-100 text-gray-500";
+                    const statusLabel = c.status
+                      ? (c.status === "REVIEWING" ? "검토중" : "요청됨")
+                      : "미요청";
+                    return (
+                      <div key={c.name} className="rounded-lg border border-gray-200">
+                        <button
+                          onClick={() => toggleCompanyExpand(c.name)}
+                          className="w-full flex items-center justify-between p-2 hover:bg-gray-50 transition-colors"
+                        >
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="text-xs font-medium text-gray-900 truncate">{c.name}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="text-xs text-gray-500">{c.count}개</span>
+                            {isExpanded ? <ChevronUp className="w-3.5 h-3.5 text-gray-400" /> : <ChevronDown className="w-3.5 h-3.5 text-gray-400" />}
+                          </div>
+                        </button>
+                        <div className="px-2 pb-2 flex items-center gap-1 flex-wrap">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${statusColor}`}>{statusLabel}</span>
+                          {!c.status && (
+                            <button
+                              onClick={() => router.push(`/filter-request?company=${encodeURIComponent(c.name)}`)}
+                              className="text-[10px] px-1.5 py-0.5 rounded bg-rose-50 text-rose-600 hover:bg-rose-100"
+                              title="필터링 요청"
+                            >♡ 필터링 요청</button>
+                          )}
+                        </div>
+                        {isExpanded && c.products.length > 0 && (
+                          <ul className="px-2 pb-2 space-y-0.5 border-t border-gray-100 pt-1.5">
+                            {c.products.map((prod) => (
+                              <li key={prod} className="text-[11px] text-gray-600 truncate">· {prod}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </aside>
+        </div>
       </div>
 
       {altModal && altModal.row.original && (
