@@ -5,6 +5,8 @@ import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 
 export const maxDuration = 300;
 
+const CRON_SECRET = process.env.CRON_SECRET;
+
 const lambda = new LambdaClient({
   region: "ap-northeast-2",
   credentials: {
@@ -58,8 +60,13 @@ function normalizeCompanyForSearch(name: string): string {
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await requireAdmin();
-  if (isNextResponse(guard)) return guard;
+  // 크론 내부 호출 허용
+  const cronHeader = req.headers.get("x-cron-secret");
+  const isCron = CRON_SECRET && cronHeader === CRON_SECRET;
+  if (!isCron) {
+    const guard = await requireAdmin();
+    if (isNextResponse(guard)) return guard;
+  }
 
   const body = await req.json().catch(() => ({}));
 
