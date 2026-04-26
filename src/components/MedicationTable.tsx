@@ -355,15 +355,15 @@ export default function MedicationTable({ medications, loading, userId, showCate
                         className="w-3.5 h-3.5 rounded border-gray-300 cursor-pointer" aria-label={`${med.productName} 선택`} />
                     </td>
                     <td className="px-2 py-1.5">
-                      <div className="flex items-start gap-2">
-                        <div className="min-w-0 flex-1">
+                      <div className="flex items-start gap-1.5">
+                        <div className="min-w-0">
                           <p className="font-medium text-gray-900 leading-snug">
                             <ProductName name={med.productName} />
                             <SettlementBadge med={med} />
                           </p>
                           <p className="text-[11px] text-gray-500 mt-0.5">{med.companyName}</p>
                         </div>
-                        <div className="flex flex-col gap-0.5 shrink-0 items-end">
+                        <div className="flex flex-col gap-0.5 shrink-0 items-start">
                           <button type="button" onClick={(e) => openDropdown(e, [med.id])}
                             className={`text-[10px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap transition-colors ${userId ? "text-green-700 hover:bg-green-50" : "text-gray-300 cursor-not-allowed"}`}>
                             제안서추가
