@@ -6,20 +6,22 @@ export const maxDuration = 300;
 
 const API_KEY = process.env.PUBLIC_DATA_API_KEY!;
 
-// HIRA 급여 약가 마스터 (품목별 상한금액 포함)
-const HIRA_PRICE_URL = "https://apis.data.go.kr/B551182/msuprdlstInfoService/getMsuPrdlstInfo";
+// 건강보험심사평가원_약가기준정보조회서비스
+const HIRA_PRICE_URL = "https://apis.data.go.kr/B551182/dgamtCrtInfoService1.2/getDgamtList";
 
 interface HiraItem { [key: string]: string | undefined }
 
 function extractPrice(item: HiraItem): number | null {
-  const raw = item["상한금액"] ?? item["mxPrc"] ?? item["약가"] ?? item["prc"] ?? "";
-  const n = parseInt(raw.replace(/,/g, ""));
+  // dgamtCrtInfoService1.2 필드 우선, 기존 필드 fallback
+  const raw = item["상한가"] ?? item["mxPrc"] ?? item["상한금액"] ?? item["약가"] ?? item["prc"] ?? "";
+  const n = parseInt(String(raw).replace(/,/g, ""));
   return isNaN(n) || n <= 0 ? null : n;
 }
 
 function extractCode(item: HiraItem): string | null {
+  // dgamtCrtInfoService1.2: ediCode, 제품코드, itemCd 등
   const code = (
-    item["급여코드"] ?? item["ediCode"] ?? item["품목기준코드"] ?? item["itemSeq"] ?? ""
+    item["ediCode"] ?? item["제품코드"] ?? item["itemCd"] ?? item["급여코드"] ?? item["품목기준코드"] ?? item["itemSeq"] ?? ""
   ).trim();
   return code || null;
 }
@@ -29,37 +31,36 @@ async function fetchPage(pageNo: number): Promise<{ items: HiraItem[]; totalCoun
   url.searchParams.set("serviceKey", API_KEY);
   url.searchParams.set("pageNo", String(pageNo));
   url.searchParams.set("numOfRows", "1000");
-  url.searchParams.set("type", "json");
+  // XML 전용 API — type 파라미터 없음
 
   const res = await fetch(url.toString(), { cache: "no-store" });
   const rawText = await res.text().catch(() => "");
 
   if (!res.ok) {
-    // 응답 내용 전체 반환 (디버깅용)
     throw new Error(`HIRA API ${res.status}: ${rawText.slice(0, 500)}`);
   }
 
-  // JSON 파싱 시도
-  let json: Record<string, unknown>;
-  try {
-    json = JSON.parse(rawText);
-  } catch {
-    throw new Error(`HIRA API JSON 파싱 실패: ${rawText.slice(0, 300)}`);
-  }
+  // XML 파싱
+  const totalCountMatch = rawText.match(/<totalCount>(\d+)<\/totalCount>/);
+  const totalCount = totalCountMatch ? parseInt(totalCountMatch[1]) : 0;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const j = json as any;
+  // item 블록 추출
+  const itemBlocks = rawText.match(/<item>([\s\S]*?)<\/item>/g) ?? [];
+  const items: HiraItem[] = itemBlocks.map((block) => {
+    const get = (tag: string) => {
+      const m = block.match(new RegExp(`<${tag}>([^<]*)<\/${tag}>`));
+      return m ? m[1].trim() : undefined;
+    };
+    return {
+      ediCode: get("ediCode"),
+      제품코드: get("itemCd") ?? get("제품코드"),
+      상한가: get("mxPrc") ?? get("상한가") ?? get("상한금액"),
+      mxPrc: get("mxPrc"),
+      품목명: get("itemName") ?? get("품목명"),
+      itemName: get("itemName"),
+    } as HiraItem;
+  });
 
-  // 응답 내 에러 코드 확인 (200이어도 오류 반환하는 경우)
-  const errMsg = j?.response?.header?.resultMsg ?? j?.cmmMsgHeader?.errMsg;
-  if (errMsg && String(errMsg).toLowerCase() !== "ok" && String(errMsg).toLowerCase() !== "정상") {
-    throw new Error(`HIRA API 오류: ${errMsg} (원문: ${rawText.slice(0, 300)})`);
-  }
-
-  const body = j?.body ?? j?.response?.body ?? j;
-  const rawItems = body?.items?.item ?? body?.items ?? body?.item ?? [];
-  const items: HiraItem[] = Array.isArray(rawItems) ? rawItems : (rawItems ? [rawItems] : []);
-  const totalCount = parseInt(String(body?.totalCount ?? body?.numOfRows ?? "0"));
   return { items, totalCount };
 }
 
