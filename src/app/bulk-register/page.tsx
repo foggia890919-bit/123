@@ -926,9 +926,9 @@ function BulkRegisterInner() {
                           <span className={`text-[10px] px-1.5 py-0.5 rounded ${statusColor}`}>{statusLabel}</span>
                           {!c.status && (
                             <button
-                              onClick={() => router.push(`/filter-request?company=${encodeURIComponent(c.name)}`)}
+                              onClick={() => router.push(`/filter`)}
                               className="text-[10px] px-1.5 py-0.5 rounded bg-rose-50 text-rose-600 hover:bg-rose-100"
-                              title="필터링 요청"
+                              title={`${c.name} 필터링 요청`}
                             >♡ 필터링 요청</button>
                           )}
                         </div>
