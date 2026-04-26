@@ -126,6 +126,41 @@ export async function POST(req: NextRequest) {
       );
     }
     const data = await r.json();
+
+    // Persist live results to InventorySnapshot so subsequent default-path
+    // requests see the data without re-scraping (shared cache for all users).
+    if (Array.isArray(data?.results)) {
+      const snapshots: Array<{
+        siteKey: string;
+        insuranceCode: string;
+        productName: string | null;
+        spec: string | null;
+        manufacturer: string | null;
+        unitPrice: number | null;
+        stock: number | null;
+      }> = [];
+      for (const row of data.results) {
+        if (!row || row.error || !Array.isArray(row.items)) continue;
+        for (const item of row.items) {
+          if (!row.siteKey || !row.insuranceCode) continue;
+          snapshots.push({
+            siteKey: row.siteKey,
+            insuranceCode: row.insuranceCode,
+            productName: item.productName ?? null,
+            spec: item.spec ?? null,
+            manufacturer: item.manufacturer ?? null,
+            unitPrice: item.unitPrice ?? null,
+            stock: item.stock ?? null,
+          });
+        }
+      }
+      if (snapshots.length > 0) {
+        await prisma.inventorySnapshot.createMany({ data: snapshots }).catch(err => {
+          console.error("[inventory/check] persist live snapshots failed:", err);
+        });
+      }
+    }
+
     return NextResponse.json({ ...data, source: "live" });
   } catch (err) {
     return NextResponse.json(
