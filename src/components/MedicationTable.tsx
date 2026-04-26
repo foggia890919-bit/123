@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, Fragment } from "react";
-import { ShoppingCart, ChevronUp, ChevronDown, ChevronsUpDown, Plus, FileText } from "lucide-react";
+import { ShoppingCart, ChevronUp, ChevronDown, ChevronsUpDown, Plus, FileText, Loader2 } from "lucide-react";
+import type { IcdResult } from "@/app/api/medications/icd-analysis/route";
 import { formatPrice } from "@/lib/utils";
 import type { MedicationItem } from "@/types";
 import SameIngredientModal from "./SameIngredientModal";
@@ -81,6 +82,77 @@ function IngredientName({ name }: { name: string }) {
   );
 }
 
+interface IcdPanelProps {
+  medId: string;
+  productName: string;
+  ingredientName: string;
+  icdResults: Record<string, IcdResult[] | "loading" | "error">;
+  fetchIcd: (medId: string, productName: string, ingredientName: string, type: "frequent" | "combination") => void;
+}
+
+function IcdPanel({ medId, productName, ingredientName, icdResults, fetchIcd }: IcdPanelProps) {
+  const freqKey = `${medId}_frequent`;
+  const combKey = `${medId}_combination`;
+  const freqData = icdResults[freqKey];
+  const combData = icdResults[combKey];
+
+  function renderResult(data: IcdResult[] | "loading" | "error" | undefined, type: "frequent" | "combination") {
+    if (!data) return null;
+    if (data === "loading") return <div className="flex items-center gap-1 text-gray-400 py-1"><Loader2 className="w-3 h-3 animate-spin" />조회 중...</div>;
+    if (data === "error") return <p className="text-red-500 text-[11px] py-1">조회 실패. API 키를 확인해주세요.</p>;
+    return (
+      <div className="mt-1.5 space-y-1">
+        {data.map((r, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <span className="font-mono text-blue-700 font-semibold w-16 shrink-0">{r.code}</span>
+            <span className="text-gray-700 flex-1">{r.name}</span>
+            <span className="text-gray-500 shrink-0">{r.ratio.toFixed(1)}%</span>
+            <div className="w-16 h-1.5 bg-gray-100 rounded-full overflow-hidden shrink-0">
+              <div className="h-full bg-blue-400 rounded-full" style={{ width: `${Math.min(r.ratio, 100)}%` }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-t border-gray-100 pt-2.5">
+      <p className="text-[11px] font-semibold text-gray-500 mb-2">상병코드 조회 (AI)</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="bg-gray-50 rounded-lg p-2.5">
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-[11px] font-medium text-gray-600">다빈도 처방</p>
+            {!freqData || freqData === "error" ? (
+              <button type="button"
+                onClick={() => fetchIcd(medId, productName, ingredientName, "frequent")}
+                className="text-[10px] text-blue-600 hover:bg-blue-50 px-1.5 py-0.5 rounded font-medium transition-colors">
+                조회
+              </button>
+            ) : null}
+          </div>
+          {renderResult(freqData, "frequent")}
+          {!freqData && <p className="text-[11px] text-gray-400">조회 버튼을 누르면 상위 5개 상병코드를 보여줍니다</p>}
+        </div>
+        <div className="bg-gray-50 rounded-lg p-2.5">
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-[11px] font-medium text-gray-600">병용처방</p>
+            {!combData || combData === "error" ? (
+              <button type="button"
+                onClick={() => fetchIcd(medId, productName, ingredientName, "combination")}
+                className="text-[10px] text-blue-600 hover:bg-blue-50 px-1.5 py-0.5 rounded font-medium transition-colors">
+                조회
+              </button>
+            ) : null}
+          </div>
+          {renderResult(combData, "combination")}
+          {!combData && <p className="text-[11px] text-gray-400">조회 버튼을 누르면 상위 5개 상병코드를 보여줍니다</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SettlementBadge({ med }: { med: MedicationItem }) {
   if (!med.isSettlement) return null;
   const type = med.settlementType;
@@ -99,6 +171,26 @@ export default function MedicationTable({ medications, loading, userId, showCate
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [dropdown, setDropdown] = useState<DropdownState | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+
+  type IcdKey = `${string}_${"frequent" | "combination"}`;
+  const [icdResults, setIcdResults] = useState<Record<IcdKey, IcdResult[] | "loading" | "error">>({});
+
+  async function fetchIcd(medId: string, productName: string, ingredientName: string, type: "frequent" | "combination") {
+    const key: IcdKey = `${medId}_${type}`;
+    setIcdResults((prev) => ({ ...prev, [key]: "loading" }));
+    try {
+      const res = await fetch("/api/medications/icd-analysis", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productName, ingredientName, type }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setIcdResults((prev) => ({ ...prev, [key]: data.results }));
+    } catch {
+      setIcdResults((prev) => ({ ...prev, [key]: "error" }));
+    }
+  }
 
   useEffect(() => {
     if (!userId) return;
@@ -236,7 +328,6 @@ export default function MedicationTable({ medications, loading, userId, showCate
                 제품명 / 제약사 <SortIcon k="productName" />
               </th>
               {showStock && <th className="px-2 py-2 text-right whitespace-nowrap">재고</th>}
-              <th className="px-1 py-2 whitespace-nowrap" />
               {showPrice && <SortTh label="약가" k="price" />}
               {showRate && (
                 <>
@@ -265,12 +356,23 @@ export default function MedicationTable({ medications, loading, userId, showCate
                     </td>
                     <td className="px-2 py-1.5">
                       <div className="flex items-start gap-1">
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <p className="font-medium text-gray-900 leading-snug">
                             <ProductName name={med.productName} />
                             <SettlementBadge med={med} />
                           </p>
                           <p className="text-[11px] text-gray-500 mt-0.5">{med.companyName}</p>
+                          <div className="flex gap-1 mt-1">
+                            <button type="button" onClick={(e) => openDropdown(e, [med.id])}
+                              className={`text-[10px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap transition-colors ${userId ? "text-green-700 hover:bg-green-50" : "text-gray-300 cursor-not-allowed"}`}>
+                              제안서추가
+                            </button>
+                            <button type="button"
+                              onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.ingredientCode ?? null })}
+                              className="text-[10px] font-medium text-blue-600 hover:bg-blue-50 px-1.5 py-0.5 rounded whitespace-nowrap transition-colors">
+                              동일성분
+                            </button>
+                          </div>
                         </div>
                         {hasDetailPanel && (
                           <button type="button" onClick={() => toggleRow(med.id)}
@@ -287,19 +389,6 @@ export default function MedicationTable({ medications, loading, userId, showCate
                           : <span className="text-gray-300">-</span>}
                       </td>
                     )}
-                    <td className="px-1 py-1.5">
-                      <div className="flex flex-col gap-0.5 items-start">
-                        <button type="button" onClick={(e) => openDropdown(e, [med.id])}
-                          className={`text-[10px] font-medium px-1 py-0.5 rounded whitespace-nowrap transition-colors ${userId ? "text-green-700 hover:bg-green-50" : "text-gray-300 cursor-not-allowed"}`}>
-                          제안서추가
-                        </button>
-                        <button type="button"
-                          onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.ingredientCode ?? null })}
-                          className="text-[10px] font-medium text-blue-600 hover:bg-blue-50 px-1 py-0.5 rounded whitespace-nowrap transition-colors">
-                          동일성분
-                        </button>
-                      </div>
-                    </td>
                     {showPrice && <td className="px-1.5 py-1.5 text-right text-gray-700 whitespace-nowrap">{formatPrice(med.price)}</td>}
                     {showRate && (
                       <>
@@ -313,15 +402,25 @@ export default function MedicationTable({ medications, loading, userId, showCate
                   {isExpanded && hasDetailPanel && (
                     <tr className={isSelected ? "bg-blue-50/30" : "bg-gray-50/60"}>
                       <td />
-                      <td colSpan={1 + (showStock ? 1 : 0) + 1 + (showPrice ? 1 : 0) + (showRate ? 4 : 0)} className="px-4 pb-3 pt-1">
-                        <div className="rounded-lg border border-gray-100 bg-white px-3 py-2.5 grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2.5 text-xs">
-                          {showIngredientName && <div className="col-span-2 sm:col-span-3"><p className="text-gray-400 mb-0.5">성분명</p><p className="text-gray-700"><IngredientName name={med.ingredientName} /></p></div>}
-                          {showBioStatus && <div><p className="text-gray-400 mb-0.5">생동/생산</p><p className="text-gray-700">{med.bioStatus || "-"}</p></div>}
-                          {showOriginalDrug && <div><p className="text-gray-400 mb-0.5">오리지날/대조약</p><p className="text-gray-700">{med.originalDrug || "-"}</p></div>}
-                          {showInsuranceCode && <div><p className="text-gray-400 mb-0.5">보험코드</p><p className="font-mono text-gray-700">{med.insuranceCode || "-"}</p></div>}
-                          {showCategoryA && <div><p className="text-gray-400 mb-0.5">분류(A)</p><p className="text-gray-700">{med.categoryA || "-"}</p></div>}
-                          {showCategoryB && <div><p className="text-gray-400 mb-0.5">ATC코드</p><p className="text-gray-700 font-mono">{med.ingredientCode || "-"}</p></div>}
-                          {showNotes && <div className="col-span-2 sm:col-span-3"><p className="text-gray-400 mb-0.5">특이사항</p><p className="text-gray-700">{med.notes || "-"}</p></div>}
+                      <td colSpan={(showStock ? 1 : 0) + 1 + (showPrice ? 1 : 0) + (showRate ? 4 : 0)} className="px-4 pb-3 pt-1">
+                        <div className="rounded-lg border border-gray-100 bg-white px-3 py-2.5 space-y-3 text-xs">
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2.5">
+                            {showIngredientName && <div className="col-span-2 sm:col-span-3"><p className="text-gray-400 mb-0.5">성분명</p><p className="text-gray-700"><IngredientName name={med.ingredientName} /></p></div>}
+                            {showBioStatus && <div><p className="text-gray-400 mb-0.5">생동/생산</p><p className="text-gray-700">{med.bioStatus || "-"}</p></div>}
+                            {showOriginalDrug && <div><p className="text-gray-400 mb-0.5">오리지날/대조약</p><p className="text-gray-700">{med.originalDrug || "-"}</p></div>}
+                            {showInsuranceCode && <div><p className="text-gray-400 mb-0.5">보험코드</p><p className="font-mono text-gray-700">{med.insuranceCode || "-"}</p></div>}
+                            {showCategoryA && <div><p className="text-gray-400 mb-0.5">분류(A)</p><p className="text-gray-700">{med.categoryA || "-"}</p></div>}
+                            {showCategoryB && <div><p className="text-gray-400 mb-0.5">ATC코드</p><p className="text-gray-700 font-mono">{med.ingredientCode || "-"}</p></div>}
+                            {showNotes && <div className="col-span-2 sm:col-span-3"><p className="text-gray-400 mb-0.5">특이사항</p><p className="text-gray-700">{med.notes || "-"}</p></div>}
+                          </div>
+                          {/* 상병코드 조회 */}
+                          <IcdPanel
+                            medId={med.id}
+                            productName={med.productName}
+                            ingredientName={med.ingredientName}
+                            icdResults={icdResults}
+                            fetchIcd={fetchIcd}
+                          />
                         </div>
                       </td>
                     </tr>
