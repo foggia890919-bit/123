@@ -138,18 +138,29 @@ export const ibjp: WholesaleAdapter = {
       const cells = (await row.locator("td").allTextContents()).map(c => c.trim()).filter(Boolean);
       if (cells.length === 0) continue;
 
-      const code = cells.find(c => /^\d{9,12}$/.test(c));
-      if (!code) continue;
+      // Only accept rows where the first cell is the insurance code itself.
+      // This excludes the 제품정보 panel below the table, whose rows look
+      // like ["보험코드", "643703630", ...].
+      const code = cells[0];
+      if (!/^\d{9,12}$/.test(code)) continue;
 
-      const numericCells = cells.filter(c => c !== code && /^[\d,]+$/.test(c.replace(/\s/g, "")));
+      const numericCells = cells
+        .slice(1)
+        .filter(c => /^[\d,]+$/.test(c.replace(/\s/g, "")));
       const [priceRaw, stockRaw] = numericCells;
       const priceStr = priceRaw?.replace(/[^\d]/g, "") ?? "";
       const stockStr = stockRaw?.replace(/[^\d]/g, "") ?? "";
 
-      const nameCandidates = cells.filter(
-        c => c !== code && !/^(전문|일반|급여|비급여)$/.test(c) && !/^[\d,\s]+$/.test(c)
-      );
-      const productName = nameCandidates[0] ?? "";
+      const nameCandidates = cells
+        .slice(1)
+        .filter(c => !/^(전문|일반|급여|비급여|담기|반품|이력|관심)$/.test(c) && !/^[\d,\s]+$/.test(c));
+
+      // 전문/급여 badges sometimes get concatenated with the product name
+      // (e.g. "전문급여플라그렐정(병)"). Strip leading badge prefixes.
+      const stripBadges = (s: string) =>
+        s.replace(/^(전문|일반|급여|비급여)+/g, "").trim();
+
+      const productName = stripBadges(nameCandidates[0] ?? "");
       const spec = nameCandidates[1] ?? null;
       const manufacturer = nameCandidates[2] ?? null;
 
