@@ -982,7 +982,7 @@ function ProposalsContent() {
         <StockCheckBatchModal
           open={batchStockOpen}
           onClose={() => setBatchStockOpen(false)}
-          items={selected.items
+          items={(selected.items ?? [])
             .map(it => it.altMedication)
             .filter((m): m is Medication => !!m && !!m.insuranceCode)
             .map(m => ({ insuranceCode: m.insuranceCode!, productName: m.productName }))}

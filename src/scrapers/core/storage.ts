@@ -1,5 +1,7 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import * as XLSX from "xlsx";
 import { Prisma } from "@prisma/client";
-import { prisma } from "../../lib/prisma";
 import type { ScrapeResult, WholesaleAdapter } from "./types";
 
 interface OutputRow {
