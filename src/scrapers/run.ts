@@ -3,7 +3,7 @@ import { resolveAdapters } from "./adapters";
 import { enabledSiteKeys, loadCredentialsFromEnv } from "./core/env";
 import { Scheduler } from "./core/scheduler";
 import { Session } from "./core/session";
-import { ensureSite, finishJob, saveResults, startJob } from "./core/storage";
+import { ensureSite, finishJob, saveResults, saveResultsToCsv, startJob } from "./core/storage";
 import type { DistributionMode, ScrapeResult } from "./core/types";
 import { loadCodesFromDB, loadFrequentCodes, loadPocCodes } from "./codes/loader";
 
@@ -50,11 +50,15 @@ async function main() {
   const codes = args.limit ? allCodes.slice(0, args.limit) : allCodes;
   console.log(`[info] mode=${args.mode} sites=${keys.join(",")} codes=${codes.length} interval=${args.intervalMs}ms distribution=${args.distribution}`);
 
-  for (const a of adapters) await ensureSite(a);
+  const useDb = !!process.env.DATABASE_URL;
+  console.log(`[info] DB save: ${useDb ? "ON" : "OFF"} (CSV save is always on)`);
 
   const jobIds: Record<string, string> = {};
-  for (const a of adapters.filter(a => credentials[a.key])) {
-    jobIds[a.key] = await startJob(a.key, args.mode, codes.length);
+  if (useDb) {
+    for (const a of adapters) await ensureSite(a);
+    for (const a of adapters.filter(a => credentials[a.key])) {
+      jobIds[a.key] = await startJob(a.key, args.mode, codes.length);
+    }
   }
 
   const perSite: Record<string, { done: number; failed: number }> = {};
@@ -79,11 +83,20 @@ async function main() {
     });
     const out = await scheduler.run(codes, args.distribution);
     results.push(...out);
-    const saved = await saveResults(results);
-    console.log(`[done] scraped=${results.length} saved=${saved} errors=${results.filter(r => r.error).length}`);
+
+    const csvPath = await saveResultsToCsv(results);
+    console.log(`[csv] saved -> ${csvPath}`);
+
+    if (useDb) {
+      const saved = await saveResults(results);
+      console.log(`[db]  saved ${saved} rows`);
+    }
+    console.log(`[done] scraped=${results.length} errors=${results.filter(r => r.error).length}`);
   } finally {
-    for (const [key, stats] of Object.entries(perSite)) {
-      if (jobIds[key]) await finishJob(jobIds[key], stats).catch(() => {});
+    if (useDb) {
+      for (const [key, stats] of Object.entries(perSite)) {
+        if (jobIds[key]) await finishJob(jobIds[key], stats).catch(() => {});
+      }
     }
     await session.stop();
   }
