@@ -3,6 +3,8 @@ import express, { type Request, type Response, type NextFunction } from "express
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { ALL_ADAPTERS } from "../../src/scrapers/adapters/index.ts";
 import type { Credentials, InventoryItem, WholesaleAdapter } from "../../src/scrapers/core/types.ts";
+import { startScheduler, triggerJobNow, isJobRunning } from "./scheduler.ts";
+import { hasDb } from "./db.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const TOKEN = process.env.WORKER_TOKEN ?? "";
@@ -135,7 +137,27 @@ app.get("/health", (_req, res) => {
     time: new Date().toISOString(),
     adapters: Object.keys(ALL_ADAPTERS),
     activeSessions: Array.from(sessions.keys()),
+    db: hasDb(),
+    jobRunning: isJobRunning(),
   });
+});
+
+// Manually trigger a scheduled batch run. Useful for testing and for the
+// admin "지금 새로 긁기" button. Authenticated via the same Bearer token.
+app.post("/scrape-batch", async (_req, res) => {
+  if (!hasDb()) {
+    res.status(503).json({ error: "DATABASE_URL not configured on worker" });
+    return;
+  }
+  if (isJobRunning()) {
+    res.status(409).json({ error: "a job is already running" });
+    return;
+  }
+  // Fire-and-forget so the HTTP request doesn't time out for hours-long runs
+  triggerJobNow({ scrapeOne, getCreds }).catch(err =>
+    console.error("[server] manual batch failed:", err)
+  );
+  res.json({ ok: true, started: true });
 });
 
 app.get("/sites", (_req, res) => {
@@ -164,11 +186,14 @@ app.post("/scrape", async (req, res) => {
     return;
   }
 
+  // Sites are scraped in parallel for each code; codes are still sequential
+  // so we don't open dozens of contexts on the same site at once.
   const results: ScrapeRow[] = [];
   for (const code of codes) {
-    for (const key of targetKeys) {
-      results.push(await scrapeOne(ALL_ADAPTERS[key], code));
-    }
+    const rows = await Promise.all(
+      targetKeys.map(key => scrapeOne(ALL_ADAPTERS[key], code))
+    );
+    results.push(...rows);
   }
   res.json({ results });
 });
@@ -191,6 +216,8 @@ app.post("/scrape-one", async (req, res) => {
 const server = app.listen(PORT, () => {
   console.log(`[worker] listening on :${PORT}`);
   console.log(`[worker] adapters: ${Object.keys(ALL_ADAPTERS).join(", ")}`);
+  console.log(`[worker] db: ${hasDb() ? "configured" : "NOT configured (scheduler will skip)"}`);
+  startScheduler({ scrapeOne, getCreds });
 });
 
 async function shutdown() {

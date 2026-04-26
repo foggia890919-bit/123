@@ -44,7 +44,10 @@ cd "${WORKER_DIR}"
 npm install --no-audit --no-fund
 
 echo "==> installing chromium + system libs for Playwright"
-sudo npx playwright install --with-deps chromium
+sudo apt-get install -y \
+  libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libxcomposite1 libxdamage1 \
+  libxrandr2 libgbm1 libpango-1.0-0 libasound2 libxshmfence1 libdrm2 || true
+sudo npx playwright install --with-deps chromium || npx playwright install chromium
 
 echo "==> writing .env if missing"
 if [ ! -f "${WORKER_DIR}/.env" ]; then
