@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import * as XLSX from "xlsx";
+import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
+
+function normalizeCode(code: string): string {
+  return code.replace(/[\s\-]/g, "").toUpperCase();
+}
 
 export async function POST(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   try {
     const formData = await req.formData();
     const file = formData.get("file") as File;
@@ -18,7 +25,13 @@ export async function POST(req: NextRequest) {
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: "buffer" });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json<Record<string, string | number>>(sheet, { defval: "" });
+    const rawRows = XLSX.utils.sheet_to_json<Record<string, string | number>>(sheet, { defval: "" });
+    // 컬럼명 앞뒤 공백 제거 (Excel 헤더에 공백이 들어있는 경우 대비)
+    const rows = rawRows.map((row) => {
+      const normalized: Record<string, string | number> = {};
+      for (const [k, v] of Object.entries(row)) normalized[k.trim()] = v as string | number;
+      return normalized;
+    });
 
     const rateRows = rows
       .filter((row) => row["보험코드"] || row["급여코드"] || row["성분명"] || row["품목명"])
@@ -29,7 +42,7 @@ export async function POST(req: NextRequest) {
         return {
           categoryA: String(row["분류(A)"] || row["분류A"] || "").trim() || null,
           ingredientName: String(row["성분명"] || "").trim(),
-          categoryB: String(row["분류(B)"] || row["분류B"] || "").trim() || null,
+          categoryB: null, // 요율표 분류B 무시 — ATC코드(ingredientCode)로 대체
           commissionRate: isNaN(commissionRaw) ? null : commissionRaw,
           companyName: String(row["제약사명"] || "").trim() || "미상",
           bioStatus: String(row["생동/생산"] || "").trim() || null,
@@ -48,43 +61,82 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "유효한 데이터가 없어요. 컬럼명을 확인해주세요." }, { status: 400 });
     }
 
-    // 보험코드 있는 것: 기존 레코드(PUBLIC_API) 수수료율 업데이트 시도
-    const codes = rateRows.map((r) => r.insuranceCode).filter(Boolean) as string[];
-    const existingMap = new Map<string, string>();
+    // 보험코드 매칭: 양쪽 정규화(하이픈·공백 제거, 대문자화)해서 비교
+    // DB에 '123-456' 으로 저장되고 엑셀에 '123456' 이어도 매칭되도록 raw SQL 사용
+    const normalizedCodes = Array.from(
+      new Set(
+        rateRows
+          .map((r) => r.insuranceCode)
+          .filter(Boolean)
+          .map((c) => normalizeCode(c as string))
+      )
+    );
 
-    if (codes.length > 0) {
-      const existing = await prisma.medication.findMany({
-        where: { insuranceCode: { in: codes } },
-        select: { id: true, insuranceCode: true },
+    const existingByCode = new Map<string, string>(); // normalizedCode → id
+    const existingPriceByCode = new Map<string, number | null>(); // normalizedCode → price
+
+    if (normalizedCodes.length > 0) {
+      // DB의 insuranceCode는 "A,B,C" 형태로 여러 EDI가 들어있을 수 있음
+      // 각 코드를 분리·정규화(하이픈·공백·탭 제거, 대문자화)해서 엑셀 코드와 매칭
+      const rows = await prisma.$queryRaw<{ id: string; matched: string; price: number | null }[]>`
+        SELECT m.id, m.price,
+               UPPER(REPLACE(REPLACE(REPLACE(TRIM(code), '-', ''), ' ', ''), E'\t', '')) AS matched
+        FROM "Medication" m,
+             UNNEST(string_to_array(m."insuranceCode", ',')) AS code
+        WHERE m."insuranceCode" IS NOT NULL
+          AND UPPER(REPLACE(REPLACE(REPLACE(TRIM(code), '-', ''), ' ', ''), E'\t', '')) = ANY(${normalizedCodes})
+      `;
+      // 같은 코드가 여러 레코드에 매칭되면 첫 번째 것 사용
+      rows.forEach((r) => {
+        if (!existingByCode.has(r.matched)) {
+          existingByCode.set(r.matched, r.id);
+          existingPriceByCode.set(r.matched, r.price ?? null);
+        }
       });
-      existing.forEach((e) => { if (e.insuranceCode) existingMap.set(e.insuranceCode, e.id); });
     }
 
     let updated = 0;
     const toCreate: typeof rateRows = [];
+    const skippedItems: { code: string; productName: string; companyName: string }[] = [];
 
     for (const row of rateRows) {
-      if (row.insuranceCode && existingMap.has(row.insuranceCode)) {
-        // 기존 공공데이터 레코드에 수수료율 업데이트
+      const codeKey = row.insuranceCode ? normalizeCode(row.insuranceCode) : null;
+      const idByCode = codeKey ? existingByCode.get(codeKey) : undefined;
+
+      if (idByCode) {
+        // 보험코드 매칭된 기존 레코드에 수수료율 업데이트
         const updateData: Record<string, unknown> = {
           commissionRate: row.commissionRate,
           isSettlement,
           settlementType,
           updatedAt: new Date(),
         };
-        // 엑셀에 추가 메타 있으면 보완 (공공데이터에 없는 정보)
         if (row.bioStatus) updateData.bioStatus = row.bioStatus;
         if (row.originalDrug) updateData.originalDrug = row.originalDrug;
         if (row.notes) updateData.notes = row.notes;
         if (row.categoryA) updateData.categoryA = row.categoryA;
-        if (row.categoryB) updateData.categoryB = row.categoryB;
-        await prisma.medication.update({ where: { id: existingMap.get(row.insuranceCode)! }, data: updateData });
+        // 공공데이터 약가가 없는(null) 경우에만 요율표 약가로 채움 (비급여 품목)
+        if (row.price != null && (existingPriceByCode.get(codeKey!) ?? null) === null) {
+          updateData.price = row.price;
+        }
+        // categoryB: 요율표 분류B 무시
+        await prisma.medication.update({ where: { id: idByCode }, data: updateData });
         updated++;
-      } else if (row.productName && row.ingredientName) {
-        // 공공데이터 매칭 없고 품목명/성분명 있으면 EXCEL 레코드로 신규 생성
-        toCreate.push(row);
+        continue;
       }
-      // 보험코드만 있고 공공데이터에 없으면 스킵 (공공데이터 sync 후 재업로드 필요)
+
+      // 보험코드 미매칭
+      if (row.productName && row.ingredientName) {
+        // 품목명/성분명 있으면 EXCEL 레코드로 신규 생성
+        toCreate.push(row);
+      } else {
+        // 보험코드만 있고 공공데이터 미매칭 → 스킵 (공공데이터 sync 후 재업로드 필요)
+        skippedItems.push({
+          code: row.insuranceCode ?? "",
+          productName: row.productName,
+          companyName: row.companyName,
+        });
+      }
     }
 
     let created = 0;
@@ -99,13 +151,60 @@ export async function POST(req: NextRequest) {
       created += batch.length;
     }
 
-    const skipped = rateRows.length - updated - toCreate.length;
+    // isSettlement=true 요율표라면 PUBLIC_API 레코드에도 동일하게 머지
+    // (공공데이터 sync 전에 업로드한 경우 등 이전에 스킵된 코드까지 커버)
+    let merged = 0;
+    if (isSettlement && settlementType) {
+      const normalizedCodes = Array.from(
+        new Set(
+          rateRows
+            .map((r) => r.insuranceCode)
+            .filter(Boolean)
+            .map((c) => c!.replace(/[\s\-]/g, "").toUpperCase())
+        )
+      );
+
+      if (normalizedCodes.length > 0) {
+        const MCHUNK = 200;
+        for (let i = 0; i < normalizedCodes.length; i += MCHUNK) {
+          const slice = normalizedCodes.slice(i, i + MCHUNK);
+          // 각 정규화 코드에 해당하는 EXCEL 레코드의 수수료율 찾기
+          const rateByCode = new Map<string, number | null>();
+          for (const row of rateRows) {
+            if (!row.insuranceCode) continue;
+            const norm = row.insuranceCode.replace(/[\s\-]/g, "").toUpperCase();
+            if (slice.includes(norm)) rateByCode.set(norm, row.commissionRate);
+          }
+
+          const params: unknown[] = [isSettlement, settlementType];
+          const codeList = slice.map((_, idx) => `$${idx + 3}`).join(", ");
+          const result = await prisma.$executeRawUnsafe(
+            `UPDATE "Medication"
+             SET "isSettlement" = $1,
+                 "settlementType" = $2,
+                 "updatedAt" = NOW()
+             WHERE source = 'PUBLIC_API'
+               AND "insuranceCode" IS NOT NULL
+               AND EXISTS (
+                 SELECT 1
+                 FROM UNNEST(string_to_array("insuranceCode", ',')) AS raw_code
+                 WHERE UPPER(REPLACE(REPLACE(TRIM(raw_code), '-', ''), ' ', '')) = ANY(ARRAY[${codeList}]::text[])
+               )`,
+            ...params, ...slice
+          );
+          merged += Number(result);
+        }
+      }
+    }
+
     return NextResponse.json({
       success: true,
       count: rateRows.length,
-      updated,   // 공공데이터와 머지된 건수
-      created,   // 새로 생성된 건수
-      skipped,   // 보험코드만 있고 공공데이터 미매칭 (공공데이터 sync 후 재시도 필요)
+      updated,
+      created,
+      merged,
+      skipped: skippedItems.length,
+      skippedItems: skippedItems.length > 0 ? skippedItems : undefined,
     });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);

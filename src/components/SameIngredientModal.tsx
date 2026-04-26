@@ -1,17 +1,40 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { X, ShoppingCart, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
+import { useState, useEffect, Fragment } from "react";
+import { X, RefreshCw, ChevronUp, ChevronDown, ChevronsUpDown, Loader2, Plus, FileText } from "lucide-react";
 import { formatPrice } from "@/lib/utils";
-import AddToProposalDialog from "./AddToProposalDialog";
 import type { MedicationItem } from "@/types";
+
+interface Proposal { id: string; title: string; _count: { items: number } }
+
+interface ReplaceContext {
+  proposalId: string;
+  itemId: string;
+  originalProductName: string;
+  onDone?: () => void;
+}
+
+interface SelectContext {
+  originalProductName: string;
+  onSelect: (med: MedicationItem) => void;
+}
 
 interface Props {
   ingredientName: string;
-  categoryBCode?: string;
+  ingredientCode?: string;
   userId?: string;
+  proposals?: Proposal[];
+  onProposalAdded?: (proposalId: string, added: number) => void;
   onClose: () => void;
   initialCols?: Partial<ColVis>;
+  replaceContext?: ReplaceContext;
+  selectContext?: SelectContext;
+}
+
+interface DropdownState {
+  medId: string;
+  x: number; y: number; above: boolean;
+  newMode: boolean; newTitle: string; adding: string | null;
 }
 
 type SortKey = "productName" | "price" | "commissionRate" | "additionalRate" | "totalRate" | "settlement";
@@ -22,33 +45,134 @@ interface ColVis {
   insuranceCode: boolean; notes: boolean;
 }
 
-export default function SameIngredientModal({ ingredientName, categoryBCode, userId, onClose, initialCols }: Props) {
+function splitProductName(name: string): [string, string | null, string | null] {
+  let rest = name.trim();
+  let ingredient: string | null = null;
+  const parenMatch = rest.match(/(\([^)]+\))\s*$/);
+  if (parenMatch) {
+    ingredient = parenMatch[1];
+    rest = rest.slice(0, rest.lastIndexOf("(")).trim();
+  }
+  const doseMatch = rest.match(/^(.+?)\s*(\d[\d.,/]*\s*(?:mg|mcg|μg|ug|g|ml|mL|IU|iu|%|mEq)[^\s]*)/i);
+  if (doseMatch) return [doseMatch[1].trim(), doseMatch[2].trim(), ingredient];
+  return [rest, null, ingredient];
+}
+
+export default function SameIngredientModal({ ingredientName, ingredientCode, userId, proposals: externalProposals, onProposalAdded, onClose, initialCols, replaceContext, selectContext }: Props) {
   const [medications, setMedications] = useState<MedicationItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [proposalTarget, setProposalTarget] = useState<MedicationItem | null>(null);
+  const [replacingId, setReplacingId] = useState<string>("");
+  const [replaceError, setReplaceError] = useState<string>("");
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [cols, setCols] = useState<ColVis>({
     categoryB: initialCols?.categoryB ?? false,
     bioStatus: initialCols?.bioStatus ?? false,
     originalDrug: initialCols?.originalDrug ?? false,
-    insuranceCode: initialCols?.insuranceCode ?? true,
+    insuranceCode: initialCols?.insuranceCode ?? false,
     notes: initialCols?.notes ?? false,
   });
+  const [dropdown, setDropdown] = useState<DropdownState | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [localProposals, setLocalProposals] = useState<Proposal[]>(externalProposals ?? []);
+
+  useEffect(() => { setLocalProposals(externalProposals ?? []); }, [externalProposals]);
+
+  const hasDetailPanel = cols.bioStatus || cols.originalDrug || cols.insuranceCode || cols.categoryB || cols.notes;
+
+  function toggleRow(id: string) {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function replaceItem(med: MedicationItem) {
+    if (!replaceContext) return;
+    setReplaceError(""); setReplacingId(med.id);
+    try {
+      const res = await fetch(`/api/proposals/${replaceContext.proposalId}/items`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemId: replaceContext.itemId, newMedicationId: med.id }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        if (d.error === "already_exists") setReplaceError("이미 제안서에 있어요");
+        else if (d.error === "same_medication") setReplaceError("원본과 동일해요");
+        else setReplaceError("대체 실패");
+        return;
+      }
+      replaceContext.onDone?.();
+      onClose();
+    } finally {
+      setReplacingId("");
+    }
+  }
 
   useEffect(() => {
-    if (!categoryBCode) { setLoading(false); return; }
+    if (!ingredientCode && !ingredientName) { setLoading(false); return; }
     const uid = userId ? `&userId=${userId}` : "";
-    fetch(`/api/medications/search?categoryBCode=${encodeURIComponent(categoryBCode)}${uid}&limit=500`)
+    const url = ingredientCode
+      ? `/api/medications/search?ingredientCode=${encodeURIComponent(ingredientCode)}${uid}&limit=500`
+      : `/api/medications/search?q=${encodeURIComponent(ingredientName)}${uid}&ingredientOnly=true&limit=500`;
+    fetch(url)
       .then((r) => r.json())
       .then((d) => { setMedications(d.medications || []); setTotal(d.total || 0); })
       .finally(() => setLoading(false));
-  }, [categoryBCode, userId]);
+  }, [ingredientCode, ingredientName, userId]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => d === "asc" ? "desc" : "asc");
     else { setSortKey(key); setSortDir("asc"); }
+  }
+
+  function openDropdown(e: React.MouseEvent, medId: string) {
+    if (!userId) return;
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const above = rect.bottom > window.innerHeight * 0.65;
+    const x = Math.min(rect.left, window.innerWidth - 232);
+    const y = above ? rect.top - 4 : rect.bottom + 4;
+    setDropdown({ medId, x, y, above, newMode: false, newTitle: "", adding: null });
+  }
+
+  function showToast(text: string) {
+    setToast(text);
+    setTimeout(() => setToast(null), 2000);
+  }
+
+  async function quickAdd(proposalId: string, medId: string) {
+    setDropdown((d) => d ? { ...d, adding: proposalId } : null);
+    const res = await fetch(`/api/proposals/${proposalId}/items`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ medicationId: medId }),
+    });
+    const added = res.ok ? 1 : 0;
+    setDropdown(null);
+    showToast(added === 0 ? "이미 추가된 품목이에요" : "제안서에 추가됐어요 ✓");
+    setLocalProposals((prev) => prev.map((p) => p.id === proposalId ? { ...p, _count: { items: p._count.items + added } } : p));
+    onProposalAdded?.(proposalId, added);
+  }
+
+  async function createAndQuickAdd(medId: string, title: string) {
+    if (!title.trim() || !userId) return;
+    setDropdown((d) => d ? { ...d, adding: "new" } : null);
+    const res = await fetch("/api/proposals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: title.trim(), userId }),
+    });
+    if (res.ok) {
+      const p: Proposal = await res.json();
+      setLocalProposals((prev) => [...prev, { ...p, _count: { items: 0 } }]);
+      await quickAdd(p.id, medId);
+    } else {
+      setDropdown(null);
+    }
   }
 
   const sorted = [...medications].sort((a, b) => {
@@ -56,12 +180,11 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
     const getVal = (m: MedicationItem) => {
       const base = m.commissionRate ?? 0;
       const extra = m.additionalRate ?? 0;
-      const total = base + extra;
-      if (sortKey === "price") return m.price ?? 0;
+      if (sortKey === "price") return m.price ?? -1;
       if (sortKey === "commissionRate") return m.commissionRate ?? -1;
       if (sortKey === "additionalRate") return m.additionalRate ?? -1;
-      if (sortKey === "totalRate") return (m.commissionRate != null ? total : -1);
-      if (sortKey === "settlement") return m.price != null && m.commissionRate != null ? Math.round(m.price * total / 100) : -1;
+      if (sortKey === "totalRate") return m.commissionRate != null ? base + extra : -1;
+      if (sortKey === "settlement") return m.price != null && m.commissionRate != null ? Math.round(m.price * (base + extra) / 100) : -1;
       if (sortKey === "productName") return m.productName;
       return 0;
     };
@@ -77,80 +200,95 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
 
   function SortTh({ label, k, right }: { label: string; k: SortKey; right?: boolean }) {
     return (
-      <th onClick={() => toggleSort(k)} className={`px-4 py-3 cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap ${right ? "text-right" : "text-left"}`}>
+      <th onClick={() => toggleSort(k)} className={`px-2 py-2.5 cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap text-xs ${right ? "text-right" : "text-left"}`}>
         {label}<SortIcon k={k} />
       </th>
     );
   }
 
   const hasRate = sorted.some((m) => m.commissionRate != null);
+  const totalCols = 1 + (hasDetailPanel ? 1 : 0) + 1 + (hasRate ? 4 : 0) + 1;
 
   return (
     <>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-        <div className="bg-white rounded-xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col">
-          {/* 헤더 */}
-          <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-2 sm:p-4">
+        <div className="bg-white rounded-xl shadow-2xl w-full max-w-6xl max-h-[92vh] flex flex-col">
+          <div className="flex items-center justify-between px-4 py-3 border-b shrink-0">
             <div>
-              <h2 className="font-bold text-gray-900">동일성분 검색</h2>
-              <p className="text-xs text-gray-500 mt-0.5">
-                {categoryBCode ? `주성분코드: ${categoryBCode}` : ingredientName} · 총 {total}개 품목
+              <h2 className="font-bold text-gray-900 text-sm">동일성분 검색</h2>
+              <p className="text-xs text-gray-500 mt-0.5 break-all">
+                {ingredientCode ? `주성분코드: ${ingredientCode}` : ingredientName} · 총 {total}개
               </p>
             </div>
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X className="w-5 h-5" /></button>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 shrink-0"><X className="w-5 h-5" /></button>
           </div>
 
-          {/* 컬럼 토글 */}
-          <div className="px-6 py-2 border-b bg-gray-50 flex flex-wrap gap-3 text-xs">
+          {replaceContext && (
+            <div className="px-4 py-2 bg-blue-50 border-b border-blue-100 text-xs flex items-center justify-between gap-2">
+              <div className="text-gray-700 min-w-0">
+                <span className="font-semibold">대체 모드:</span>{" "}
+                <span className="text-gray-500 line-through truncate">{replaceContext.originalProductName}</span>{" "}
+                을(를) 선택한 품목으로 교체
+              </div>
+              {replaceError && <span className="text-red-600 shrink-0">{replaceError}</span>}
+            </div>
+          )}
+          {selectContext && !replaceContext && (
+            <div className="px-4 py-2 bg-emerald-50 border-b border-emerald-100 text-xs">
+              <span className="font-semibold text-gray-700">대체품 선택 모드:</span>{" "}
+              <span className="text-gray-500 line-through">{selectContext.originalProductName}</span>{" "}
+              의 대체 품목을 선택하세요.
+            </div>
+          )}
+
+          <div className="px-4 py-2 border-b bg-gray-50 flex flex-wrap gap-3 text-xs shrink-0 items-center">
+            <span className="text-gray-400">펼쳐보기 항목:</span>
             {([
-              ["categoryB", "분류B"],
               ["bioStatus", "생동/생산"],
               ["originalDrug", "오리지날"],
               ["insuranceCode", "보험코드"],
+              ["categoryB", "ATC코드"],
               ["notes", "특이사항"],
             ] as [keyof ColVis, string][]).map(([key, label]) => (
-              <label key={key} className="flex items-center gap-1.5 cursor-pointer text-gray-600">
+              <label key={key} className="flex items-center gap-1.5 cursor-pointer text-gray-600 select-none">
                 <input type="checkbox" checked={cols[key]} onChange={(e) => setCols((c) => ({ ...c, [key]: e.target.checked }))}
                   className="w-3.5 h-3.5 rounded" />
                 {label}
               </label>
             ))}
+            <div className="flex gap-1 ml-1">
+              <button type="button"
+                onClick={() => setCols({ bioStatus: true, originalDrug: true, insuranceCode: true, categoryB: true, notes: true })}
+                className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100">전체선택</button>
+              <button type="button"
+                onClick={() => setCols({ bioStatus: false, originalDrug: false, insuranceCode: false, categoryB: false, notes: false })}
+                className="px-2 py-0.5 rounded bg-gray-100 text-gray-600 hover:bg-gray-200">전체해제</button>
+            </div>
           </div>
 
-          {/* 테이블 */}
           <div className="overflow-auto flex-1">
-            {!categoryBCode ? (
-              <div className="flex flex-col items-center justify-center py-16 gap-2 text-gray-400 text-sm">
-                <p>주성분코드 정보가 없어 동일성분 검색이 불가합니다.</p>
-                <p className="text-xs text-gray-300">요율표 엑셀에 분류(B) 주성분코드를 포함해 업로드하면 검색됩니다.</p>
-              </div>
+            {!ingredientCode && !ingredientName ? (
+              <div className="flex justify-center py-16 text-gray-400 text-sm">검색 정보가 없습니다.</div>
             ) : loading ? (
               <div className="flex justify-center py-16 text-gray-400 text-sm">검색 중...</div>
             ) : sorted.length === 0 ? (
               <div className="flex justify-center py-16 text-gray-400 text-sm">결과가 없어요.</div>
             ) : (
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-gray-50 border-b border-gray-200 text-xs text-gray-500 font-semibold">
+              <table className="text-xs" style={{ minWidth: "max-content", width: "100%" }}>
+                <thead className="sticky top-0 bg-gray-50 border-b border-gray-200 text-gray-500 font-semibold">
                   <tr>
-                    <SortTh label="제품명" k="productName" />
-                    <th className="px-4 py-3 text-left">성분명</th>
-                    <th className="px-4 py-3 text-left">제약사</th>
-                    {cols.categoryB && <th className="px-4 py-3 text-center">분류B</th>}
-                    {cols.bioStatus && <th className="px-4 py-3 text-center">생동/생산</th>}
-                    {cols.originalDrug && <th className="px-4 py-3 text-center">오리지날</th>}
-                    {cols.insuranceCode && <th className="px-4 py-3 text-left">보험코드</th>}
-                    {cols.notes && <th className="px-4 py-3 text-left">특이사항</th>}
-                    <th className="px-4 py-3 text-center">재고</th>
+                    <SortTh label="제품명 / 제약사" k="productName" />
+                    {hasDetailPanel && <th className="px-1 py-2 w-6" />}
                     <SortTh label="약가" k="price" right />
                     {hasRate && (
                       <>
                         <SortTh label="기본수수료" k="commissionRate" right />
                         <SortTh label="추가수수료" k="additionalRate" right />
-                        <SortTh label="합계수수료" k="totalRate" right />
-                        <SortTh label="수수료금액" k="settlement" right />
+                        <SortTh label="합계" k="totalRate" right />
+                        <SortTh label="정산금액" k="settlement" right />
                       </>
                     )}
-                    <th className="px-4 py-3 text-center w-16">제안서</th>
+                    <th className="px-2 py-2.5 text-center whitespace-nowrap text-xs">제안서</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -159,47 +297,109 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
                     const extra = med.additionalRate ?? null;
                     const totalRate = base != null ? base + (extra ?? 0) : null;
                     const settlement = med.price != null && totalRate != null ? Math.round(med.price * totalRate / 100) : null;
+                    const isExpanded = expandedRows.has(med.id);
+                    const [nameBase, dose, ingredient] = splitProductName(med.productName);
+
                     return (
-                      <tr key={med.id} className="hover:bg-gray-50">
-                        <td className="px-4 py-2.5">
-                          <p className="font-medium text-gray-900 text-xs">
-                            {med.productName}
-                            {med.isSettlement && (med.settlementType === "원외" || med.settlementType === "원내") && (
-                              <span className={`inline-block text-[10px] border px-1 py-0.5 rounded ml-1 align-middle ${
-                                med.settlementType === "원외" ? "text-blue-700 bg-blue-50 border-blue-200" :
-                                "text-indigo-700 bg-indigo-50 border-indigo-200"
-                              }`}>
-                                {med.settlementType === "원외" ? "cso" : "원내가능"}
-                              </span>
-                            )}
-                          </p>
-                        </td>
-                        <td className="px-4 py-2.5 text-xs text-gray-500 max-w-[140px] truncate">{med.ingredientName}</td>
-                        <td className="px-4 py-2.5 text-xs text-gray-600 whitespace-nowrap">{med.companyName}</td>
-                        {cols.categoryB && <td className="px-4 py-2.5 text-center text-xs text-gray-500">{med.categoryB || "-"}</td>}
-                        {cols.bioStatus && <td className="px-4 py-2.5 text-center text-xs text-gray-500">{med.bioStatus || "-"}</td>}
-                        {cols.originalDrug && <td className="px-4 py-2.5 text-center text-xs text-gray-500">{med.originalDrug || "-"}</td>}
-                        {cols.insuranceCode && <td className="px-4 py-2.5 text-xs font-mono text-gray-500">{med.insuranceCode || "-"}</td>}
-                        {cols.notes && <td className="px-4 py-2.5 text-xs text-gray-500 max-w-[100px] truncate">{med.notes || "-"}</td>}
-                        <td className="px-4 py-2.5 text-center text-xs text-gray-400">-</td>
-                        <td className="px-4 py-2.5 text-right text-xs text-gray-700 whitespace-nowrap">{formatPrice(med.price)}</td>
-                        {hasRate && (
-                          <>
-                            <td className="px-4 py-2.5 text-right text-xs text-blue-600 font-medium">{base != null ? `${base}%` : "-"}</td>
-                            <td className="px-4 py-2.5 text-right text-xs text-gray-500">{extra != null ? `${extra}%` : "-"}</td>
-                            <td className="px-4 py-2.5 text-right text-xs font-semibold text-blue-700">{totalRate != null ? `${totalRate}%` : "-"}</td>
-                            <td className="px-4 py-2.5 text-right text-xs font-semibold text-green-700 whitespace-nowrap">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</td>
-                          </>
+                      <Fragment key={med.id}>
+                        <tr className="hover:bg-gray-50">
+                          <td className="px-2 py-2 min-w-[160px] max-w-[240px]">
+                            <p className="font-medium text-gray-900 leading-tight">
+                              {nameBase}
+                              {med.isSettlement && (
+                                <span className={`inline-block text-[9px] border px-1 py-0.5 rounded ml-1 align-middle ${
+                                  med.settlementType === "원외" ? "text-blue-700 bg-blue-50 border-blue-200" :
+                                  "text-indigo-700 bg-indigo-50 border-indigo-200"
+                                }`}>
+                                  {med.settlementType === "원외" ? "cso" : "원내"}
+                                </span>
+                              )}
+                              {dose && <span className="block text-[11px] font-normal text-gray-400 mt-0.5">{dose}</span>}
+                              {ingredient && <span className="block text-[10px] font-normal text-gray-400 mt-0.5">{ingredient}</span>}
+                              <span className="block text-[11px] font-normal text-gray-500 mt-0.5">{med.companyName}</span>
+                            </p>
+                          </td>
+
+                          {hasDetailPanel && (
+                            <td className="px-1 py-2 text-gray-400">
+                              <button type="button" onClick={() => toggleRow(med.id)} className="hover:text-gray-600">
+                                {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                              </button>
+                            </td>
+                          )}
+
+                          <td className="px-2 py-2 text-right whitespace-nowrap text-gray-700">{formatPrice(med.price)}</td>
+                          {hasRate && (
+                            <>
+                              <td className="px-2 py-2 text-right whitespace-nowrap text-blue-600 font-medium">{base != null ? `${base}%` : "-"}</td>
+                              <td className="px-2 py-2 text-right whitespace-nowrap text-gray-500">{extra != null ? `${extra}%` : "-"}</td>
+                              <td className="px-2 py-2 text-right whitespace-nowrap font-semibold text-blue-700">{totalRate != null ? `${totalRate}%` : "-"}</td>
+                              <td className="px-2 py-2 text-right whitespace-nowrap font-semibold text-green-700">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</td>
+                            </>
+                          )}
+                          <td className="px-2 py-2 text-center">
+                            {selectContext ? (
+                              <button onClick={() => { selectContext.onSelect(med); onClose(); }}
+                                className="text-white bg-emerald-600 hover:bg-emerald-700 rounded px-2 py-1 whitespace-nowrap text-xs">
+                                선택
+                              </button>
+                            ) : userId ? (
+                              <div className="flex items-center gap-1 justify-center">
+                                {replaceContext && (
+                                  <button onClick={() => replaceItem(med)} disabled={!!replacingId}
+                                    className="text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded px-2 py-1 flex items-center gap-1 whitespace-nowrap text-xs">
+                                    {replacingId === med.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                                    대체
+                                  </button>
+                                )}
+                                <button onClick={(e) => openDropdown(e, med.id)}
+                                  className="text-white bg-green-600 hover:bg-green-700 rounded px-2 py-1 whitespace-nowrap text-xs">
+                                  추가
+                                </button>
+                              </div>
+                            ) : <span className="text-gray-300 whitespace-nowrap text-xs">로그인 필요</span>}
+                          </td>
+                        </tr>
+
+                        {isExpanded && hasDetailPanel && (
+                          <tr className="bg-gray-50/60">
+                            <td colSpan={totalCols} className="px-3 pb-2.5 pt-1">
+                              <div className="rounded-lg border border-gray-100 bg-white px-3 py-2 grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2 text-xs">
+                                {cols.bioStatus && (
+                                  <div>
+                                    <p className="text-gray-400 mb-0.5">생동/생산</p>
+                                    <p className="text-gray-700">{med.bioStatus || "-"}</p>
+                                  </div>
+                                )}
+                                {cols.originalDrug && (
+                                  <div>
+                                    <p className="text-gray-400 mb-0.5">오리지날/대조약</p>
+                                    <p className="text-gray-700">{med.originalDrug || "-"}</p>
+                                  </div>
+                                )}
+                                {cols.insuranceCode && (
+                                  <div>
+                                    <p className="text-gray-400 mb-0.5">보험코드</p>
+                                    <p className="font-mono text-gray-700">{med.insuranceCode || "-"}</p>
+                                  </div>
+                                )}
+                                {cols.categoryB && (
+                                  <div>
+                                    <p className="text-gray-400 mb-0.5">ATC코드</p>
+                                    <p className="font-mono text-gray-700">{med.ingredientCode || "-"}</p>
+                                  </div>
+                                )}
+                                {cols.notes && (
+                                  <div className="col-span-2 sm:col-span-3">
+                                    <p className="text-gray-400 mb-0.5">특이사항</p>
+                                    <p className="text-gray-700">{med.notes || "-"}</p>
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
                         )}
-                        <td className="px-4 py-2.5 text-center">
-                          {userId ? (
-                            <button onClick={() => setProposalTarget(med)}
-                              className="text-xs text-white bg-green-600 hover:bg-green-700 rounded px-2 py-1 flex items-center gap-1 mx-auto whitespace-nowrap">
-                              <ShoppingCart className="w-3 h-3" />추가
-                            </button>
-                          ) : <span className="text-xs text-gray-300">로그인 필요</span>}
-                        </td>
-                      </tr>
+                      </Fragment>
                     );
                   })}
                 </tbody>
@@ -209,8 +409,66 @@ export default function SameIngredientModal({ ingredientName, categoryBCode, use
         </div>
       </div>
 
-      {proposalTarget && userId && (
-        <AddToProposalDialog medication={proposalTarget} userId={userId} onClose={() => setProposalTarget(null)} />
+      {/* 제안서 드롭다운 — modal(z-50) 위에 표시 */}
+      {dropdown && (
+        <>
+          <div className="fixed inset-0 z-[60]" onClick={() => setDropdown(null)} />
+          <div className="fixed z-[70] bg-white rounded-xl shadow-xl border border-gray-200 w-56 overflow-hidden"
+            style={dropdown.above
+              ? { left: dropdown.x, bottom: window.innerHeight - dropdown.y + 4 }
+              : { left: dropdown.x, top: dropdown.y }
+            }>
+            {!dropdown.newMode ? (
+              <div className="py-1">
+                <button type="button"
+                  onClick={() => setDropdown((d) => d ? { ...d, newMode: true } : null)}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-blue-600 hover:bg-blue-50 font-medium">
+                  <Plus className="w-3.5 h-3.5" /> 새 제안서 만들기
+                </button>
+                {localProposals.length > 0 && <div className="border-t border-gray-100 my-0.5" />}
+                <div className="max-h-52 overflow-y-auto">
+                  {localProposals.map((p) => (
+                    <button key={p.id} type="button" disabled={!!dropdown.adding}
+                      onClick={() => quickAdd(p.id, dropdown.medId)}
+                      className="w-full flex items-center justify-between px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                      <span className="flex items-center gap-1.5 truncate">
+                        <FileText className="w-3 h-3 text-gray-400 shrink-0" />
+                        <span className="truncate">{p.title}</span>
+                      </span>
+                      <span className="text-gray-400 ml-2 shrink-0">
+                        {dropdown.adding === p.id ? "추가 중..." : `${p._count.items}개`}
+                      </span>
+                    </button>
+                  ))}
+                  {localProposals.length === 0 && <p className="text-xs text-gray-400 text-center py-3">제안서가 없어요</p>}
+                </div>
+              </div>
+            ) : (
+              <div className="p-3 space-y-2">
+                <input autoFocus value={dropdown.newTitle}
+                  onChange={(e) => setDropdown((d) => d ? { ...d, newTitle: e.target.value } : null)}
+                  onKeyDown={(e) => e.key === "Enter" && dropdown && createAndQuickAdd(dropdown.medId, dropdown.newTitle)}
+                  placeholder="제안서 이름"
+                  className="w-full text-xs border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                <div className="flex gap-1">
+                  <button type="button" onClick={() => setDropdown((d) => d ? { ...d, newMode: false } : null)}
+                    className="flex-1 text-xs py-1.5 border border-gray-200 rounded text-gray-600 hover:bg-gray-50">취소</button>
+                  <button type="button" onClick={() => dropdown && createAndQuickAdd(dropdown.medId, dropdown.newTitle)}
+                    disabled={!dropdown.newTitle.trim() || !!dropdown.adding}
+                    className="flex-1 text-xs py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+                    {dropdown.adding ? "생성 중..." : "만들고 추가"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[80] bg-gray-800 text-white text-xs px-4 py-2 rounded-full shadow-lg pointer-events-none whitespace-nowrap">
+          {toast}
+        </div>
       )}
     </>
   );

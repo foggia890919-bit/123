@@ -1,26 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { normalizeCompanyKey } from "@/lib/utils";
+import { safeParseInt } from "@/lib/auth-guard";
 
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q")?.trim() || "";
-  const categoryBCode = req.nextUrl.searchParams.get("categoryBCode")?.trim() || "";
+  const ingredientCodeParam = req.nextUrl.searchParams.get("ingredientCode")?.trim() || "";
   const settlementOnly = req.nextUrl.searchParams.get("settlement") === "true";
   const userId = req.nextUrl.searchParams.get("userId") || null;
-  const page = parseInt(req.nextUrl.searchParams.get("page") || "1");
-  const limit = Math.min(parseInt(req.nextUrl.searchParams.get("limit") || "50"), 500);
+  const page = safeParseInt(req.nextUrl.searchParams.get("page"), 1, 1, 10000);
+  const limit = safeParseInt(req.nextUrl.searchParams.get("limit"), 50, 1, 200);
   const ingredientOnly = req.nextUrl.searchParams.get("ingredientOnly") === "true";
   const companiesRaw = req.nextUrl.searchParams.get("companies") || "";
   const companyList = companiesRaw.split(",").map((s) => s.trim()).filter(Boolean);
 
-  if (!q && !categoryBCode && companyList.length === 0) return NextResponse.json({ medications: [], total: 0 });
+  if (!q && !ingredientCodeParam && companyList.length === 0) return NextResponse.json({ medications: [], total: 0 });
 
   const where = {
     AND: [
       settlementOnly ? { isSettlement: true } : {},
       companyList.length > 0 ? { companyName: { in: companyList } } : {},
-      categoryBCode
-        ? { categoryB: categoryBCode }
+      ingredientCodeParam
+        ? { ingredientCode: ingredientCodeParam }
         : q
           ? ingredientOnly
             ? { ingredientName: { contains: q, mode: "insensitive" as const } }

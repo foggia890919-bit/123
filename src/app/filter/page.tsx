@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, Fragment } from "react";
 import { Building2, Filter, X, Upload, Send, FileText, ChevronDown, Plus, Trash2, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import RequireAuth from "@/components/RequireAuth";
+import RequireRole from "@/components/RequireRole";
 import { useSession } from "next-auth/react";
 
 interface Company { name: string; isSettlement: boolean; count: number; }
@@ -218,7 +218,7 @@ export default function FilterPage() {
   }
 
   return (
-    <RequireAuth>
+    <RequireRole minRole="BIZ">
       <div className="max-w-2xl mx-auto space-y-5">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
@@ -480,6 +480,6 @@ export default function FilterPage() {
           )}
         </div>
       </div>
-    </RequireAuth>
+    </RequireRole>
   );
 }

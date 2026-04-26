@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import * as XLSX from "xlsx";
+import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 
 // 특정 회원의 제약사별 추가수수료 조회
 export async function GET(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   const userId = req.nextUrl.searchParams.get("userId");
   if (!userId) return NextResponse.json({ error: "userId 필요" }, { status: 400 });
 
@@ -29,6 +32,8 @@ export async function GET(req: NextRequest) {
 
 // 엑셀 업로드 또는 일괄 설정으로 추가수수료 등록
 export async function POST(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   const contentType = req.headers.get("content-type") || "";
 
   // JSON 요청 = 일괄 설정 { userId, bulkRate }
@@ -43,16 +48,17 @@ export async function POST(req: NextRequest) {
       select: { companyName: true },
       distinct: ["companyName"],
     });
-    let count = 0;
-    for (const { companyName } of companies) {
-      await prisma.memberCompanyRate.upsert({
-        where: { userId_companyName: { userId, companyName } },
-        update: { additionalRate: rate, updatedAt: new Date() },
-        create: { userId, companyName, additionalRate: rate, updatedAt: new Date() },
-      });
-      count++;
-    }
-    return NextResponse.json({ success: true, count, mode: "bulk", rate });
+    // Bulk upsert via transaction — single round-trip per company, no serial awaits in UI path
+    await prisma.$transaction(
+      companies.map(({ companyName }) =>
+        prisma.memberCompanyRate.upsert({
+          where: { userId_companyName: { userId, companyName } },
+          update: { additionalRate: rate, updatedAt: new Date() },
+          create: { userId, companyName, additionalRate: rate, updatedAt: new Date() },
+        })
+      )
+    );
+    return NextResponse.json({ success: true, count: companies.length, mode: "bulk", rate });
   }
 
   // FormData = 엑셀 업로드
@@ -73,17 +79,17 @@ export async function POST(req: NextRequest) {
     .filter((r) => r.A && r.B != null && r.B !== "" && !isNaN(Number(r.B)))
     .map((r) => ({ companyName: String(r.A).trim(), additionalRate: Number(r.B) }));
 
-  let count = 0;
-  const samples: { companyName: string; additionalRate: number }[] = [];
-  for (const { companyName, additionalRate } of data) {
-    await prisma.memberCompanyRate.upsert({
-      where: { userId_companyName: { userId, companyName } },
-      update: { additionalRate, updatedAt: new Date() },
-      create: { userId, companyName, additionalRate, updatedAt: new Date() },
-    });
-    if (samples.length < 5) samples.push({ companyName, additionalRate });
-    count++;
-  }
+  const samples = data.slice(0, 5);
+  await prisma.$transaction(
+    data.map(({ companyName, additionalRate }) =>
+      prisma.memberCompanyRate.upsert({
+        where: { userId_companyName: { userId, companyName } },
+        update: { additionalRate, updatedAt: new Date() },
+        create: { userId, companyName, additionalRate, updatedAt: new Date() },
+      })
+    )
+  );
+  const count = data.length;
 
   const saved = await prisma.memberCompanyRate.count({ where: { userId } });
   return NextResponse.json({ success: true, count, saved, samples, parsedRows: rows.length });
@@ -91,6 +97,8 @@ export async function POST(req: NextRequest) {
 
 // 단건 추가수수료 수정 (인라인 편집용)
 export async function PATCH(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   const { userId, companyName, additionalRate } = await req.json();
   if (!userId || !companyName || additionalRate == null || isNaN(Number(additionalRate))) {
     return NextResponse.json({ error: "필수 항목 누락" }, { status: 400 });
@@ -106,6 +114,8 @@ export async function PATCH(req: NextRequest) {
 
 // 제약사 목록 엑셀 다운로드
 export async function PUT(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   const { userId } = await req.json();
 
   const companies = await prisma.medication.findMany({

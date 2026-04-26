@@ -6,14 +6,14 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import MedicationTable, { type ColumnVisibility } from "@/components/MedicationTable";
 import ColumnToggles from "@/components/ColumnToggles";
-import RequireAuth from "@/components/RequireAuth";
+import RequireRole from "@/components/RequireRole";
 import { useSession } from "next-auth/react";
 import type { MedicationItem } from "@/types";
 import * as XLSX from "xlsx";
 
 interface Company { name: string; isSettlement: boolean; count: number; hasOutpatient?: boolean; hasInpatient?: boolean; }
 interface ProposalSummary { id: string; title: string; _count?: { items: number }; }
-type CompanyTab = "전체" | "원외" | "원내";
+type CompanyTab = "전체" | "CSO" | "원내";
 
 function StatusBadge({ status }: { status: string }) {
   if (status === "APPROVED") return <span className="text-xs text-green-700 bg-green-50 border border-green-200 px-1.5 py-0.5 rounded shrink-0">거래가능</span>;
@@ -25,7 +25,7 @@ function StatusBadge({ status }: { status: string }) {
 
 export default function FilterListPage() {
   const { data: session } = useSession();
-  const isSalesRep = session?.user?.role === "SALES_REP";
+  const isSalesRep = session?.user?.role === "SALES_REP" || session?.user?.role === "ADMIN";
 
   const companyMenuRef = useRef<HTMLDivElement>(null);
   const proposalMenuRef = useRef<HTMLDivElement>(null);
@@ -41,9 +41,13 @@ export default function FilterListPage() {
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [productSearch, setProductSearch] = useState("");
+  const [pageSize, setPageSize] = useState(20);
+  const [page, setPage] = useState(1);
   const [cols, setCols] = useState<ColumnVisibility>({
-    showCategoryB: true, showBioStatus: true, showOriginalDrug: true,
-    showInsuranceCode: true, showNotes: true, showRate: true,
+    showCategoryA: false, showIngredientName: true, showCategoryB: false,
+    showRate: false, showCompanyName: true, showBioStatus: true,
+    showProductName: true, showPrice: true, showOriginalDrug: true,
+    showInsuranceCode: true, showNotes: false, showStock: false,
   });
   const [proposals, setProposals] = useState<ProposalSummary[]>([]);
   const [showProposalMenu, setShowProposalMenu] = useState(false);
@@ -97,7 +101,7 @@ export default function FilterListPage() {
   }
 
   const tabCompanies = companies.filter((c) => {
-    if (companyTab === "원외") return c.hasOutpatient;
+    if (companyTab === "CSO") return c.hasOutpatient;
     if (companyTab === "원내") return c.hasInpatient;
     return true;
   });
@@ -113,13 +117,15 @@ export default function FilterListPage() {
   const handleSearch = useCallback(async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (selected.size === 0) return alert("제약사를 1개 이상 선택해주세요.");
-    setLoading(true); setSearched(true);
+    setLoading(true); setSearched(true); setPage(1);
     try {
       const params = new URLSearchParams();
       params.set("q", productSearch.trim() || " ");
       params.set("companies", Array.from(selected).join(","));
       if (session?.user?.id) params.set("userId", session.user.id);
-      if (companyTab === "원외" || companyTab === "원내") params.set("settlementType", companyTab);
+      if (companyTab === "CSO") params.set("settlementType", "원외");
+      else if (companyTab === "원내") params.set("settlementType", "원내");
+      params.set("limit", "9999");
       const res = await fetch(`/api/medications/filter?${params.toString()}`);
       const data = await res.json();
       setResults(data.medications || []); setTotal(data.total || 0);
@@ -127,29 +133,81 @@ export default function FilterListPage() {
     finally { setLoading(false); }
   }, [selected, productSearch, session, companyTab]);
 
-  function exportExcel() {
-    const rows = results.map((m) => ({
-      분류A: m.categoryA || "", 성분명: m.ingredientName, 분류B: m.categoryB || "",
-      수수료율: m.commissionRate != null ? `${m.commissionRate}%` : "",
-      제약사명: m.companyName, "생동/생산": m.bioStatus || "", 품목명: m.productName,
-      약가: m.price || "", "오리지날/대조약": m.originalDrug || "",
-      보험코드: m.insuranceCode || "", 특이사항: m.notes || "",
-      ...(isSalesRep ? { 추가수수료: m.additionalRate != null ? `${m.additionalRate}%` : "" } : {}),
+  const [downloading, setDownloading] = useState(false);
+  const [downloadingAll, setDownloadingAll] = useState(false);
+
+  function medsToRows(all: MedicationItem[]) {
+    return all.map((m) => ({
+      "분류(A)": m.categoryA || "",
+      성분명: m.ingredientName,
+      "분류(B)": m.categoryB || "",
+      ...(isSalesRep ? { 코드: m.commissionRate ?? "" } : {}),
+      제약사명: m.companyName,
+      "생동/생산": m.bioStatus || "",
+      품목명: m.productName,
+      약가: m.price ?? "",
+      "오리지날/대조약": m.originalDrug || "",
+      보험코드: m.insuranceCode || "",
+      특이사항: m.notes || "",
     }));
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "제약사리스트");
-    XLSX.writeFile(wb, `제약사별리스트_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
+
+  async function exportExcel() {
+    if (selected.size === 0) return;
+    setDownloading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("q", productSearch.trim() || " ");
+      params.set("companies", Array.from(selected).join(","));
+      if (session?.user?.id) params.set("userId", session.user.id);
+      if (companyTab === "CSO") params.set("settlementType", "원외");
+      else if (companyTab === "원내") params.set("settlementType", "원내");
+      params.set("limit", "9999");
+      const res = await fetch(`/api/medications/filter?${params.toString()}`);
+      const data = await res.json();
+      const all: MedicationItem[] = data.medications || [];
+      const ws = XLSX.utils.json_to_sheet(medsToRows(all));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "제약사리스트");
+      XLSX.writeFile(wb, `제약사별리스트_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  async function downloadAllSettlement() {
+    setDownloadingAll(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("isSettlement", "true");
+      params.set("limit", "99999");
+      const res = await fetch(`/api/medications/filter?${params.toString()}`);
+      const data = await res.json();
+      const all: MedicationItem[] = data.medications || [];
+      const ws = XLSX.utils.json_to_sheet(medsToRows(all));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "전체요율표");
+      XLSX.writeFile(wb, `전체요율표_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } finally {
+      setDownloadingAll(false);
+    }
   }
 
   return (
-    <RequireAuth>
+    <RequireRole minRole="SALES_REP">
       <div className="space-y-5">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Download className="w-6 h-6 text-blue-600" />제약사별 리스트 다운
-          </h1>
-          <p className="text-gray-500 text-sm mt-1">제약사를 선택해서 품목 리스트를 조회하고 엑셀로 다운로드하세요</p>
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+              <Download className="w-6 h-6 text-blue-600" />제약사별 리스트 다운
+            </h1>
+            <p className="text-gray-500 text-sm mt-1">제약사를 선택해서 품목 리스트를 조회하고 엑셀로 다운로드하세요</p>
+          </div>
+          {isSalesRep && (
+            <Button variant="outline" size="sm" onClick={downloadAllSettlement} disabled={downloadingAll} className="shrink-0 mt-1">
+              <FileText className="w-4 h-4 mr-1.5" />{downloadingAll ? "다운로드 중…" : "전체 요율표 내려받기"}
+            </Button>
+          )}
         </div>
 
         <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
@@ -174,9 +232,9 @@ export default function FilterListPage() {
                   {/* 원외/원내/전체 탭 */}
                   <div className="px-3 pt-2.5 pb-2 border-b border-gray-100">
                     <div className="flex gap-0.5 bg-gray-100 rounded-lg p-0.5 text-xs mb-2">
-                      {(["전체", "원외", "원내"] as CompanyTab[]).map((tab) => {
+                      {(["전체", "CSO", "원내"] as CompanyTab[]).map((tab) => {
                         const count = tab === "전체" ? companies.length
-                          : tab === "원외" ? companies.filter((c) => c.hasOutpatient).length
+                          : tab === "CSO" ? companies.filter((c) => c.hasOutpatient).length
                           : companies.filter((c) => c.hasInpatient).length;
                         return (
                           <button key={tab} type="button"
@@ -260,7 +318,7 @@ export default function FilterListPage() {
 
           {/* 선택된 제약사 칩 */}
           {selected.size > 0 && (
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-1.5 items-center">
               {Array.from(selected).map((name) => (
                 <span key={name} className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded-full">
                   <Building2 className="w-3 h-3 shrink-0" />{name}
@@ -268,6 +326,13 @@ export default function FilterListPage() {
                   <button type="button" onClick={() => toggleCompany(name)} className="hover:text-red-500 ml-0.5">×</button>
                 </span>
               ))}
+              <button
+                type="button"
+                onClick={() => { setSelected(new Set()); setResults([]); setSearched(false); }}
+                className="inline-flex items-center gap-1 text-xs text-red-500 hover:text-red-700 border border-red-200 bg-red-50 hover:bg-red-100 px-2 py-1 rounded-full transition-colors whitespace-nowrap"
+              >
+                <X className="w-3 h-3" />전체 해제
+              </button>
             </div>
           )}
 
@@ -282,28 +347,84 @@ export default function FilterListPage() {
           </form>
         </div>
 
-        {searched && (
-          <>
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <p className="text-sm text-gray-500">조회 결과 <span className="font-semibold text-gray-900">{total.toLocaleString()}개</span></p>
-              <div className="flex items-center gap-3 flex-wrap">
-                <ColumnToggles cols={cols} setCols={setCols} isSalesRep={isSalesRep} />
-                <Button size="sm" variant="outline" onClick={exportExcel} disabled={results.length === 0}>
-                  <Download className="w-4 h-4 mr-1.5" />엑셀 다운
-                </Button>
+        {searched && (() => {
+          const totalPages = Math.max(1, Math.ceil(results.length / pageSize));
+          const pageItems = results.slice((page - 1) * pageSize, page * pageSize);
+          const WINDOW = 10;
+          const pageNums: (number | "…")[] = [];
+          if (totalPages <= WINDOW) {
+            for (let i = 1; i <= totalPages; i++) pageNums.push(i);
+          } else {
+            const half = Math.floor(WINDOW / 2);
+            let start = Math.max(1, page - half);
+            let end = start + WINDOW - 1;
+            if (end > totalPages) { end = totalPages; start = Math.max(1, end - WINDOW + 1); }
+            if (start > 1) { pageNums.push(1); if (start > 2) pageNums.push("…"); }
+            for (let i = start; i <= end; i++) pageNums.push(i);
+            if (end < totalPages) { if (end < totalPages - 1) pageNums.push("…"); pageNums.push(totalPages); }
+          }
+          return (
+            <>
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div className="flex items-center gap-3">
+                  <p className="text-sm text-gray-500">
+                    조회 결과 <span className="font-semibold text-gray-900">{results.length.toLocaleString()}개</span>
+                  </p>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+                    className="text-xs border border-gray-300 rounded px-2 py-1 text-gray-600 bg-white"
+                  >
+                    {[10, 20, 50, 100].map((n) => <option key={n} value={n}>{n}개씩</option>)}
+                  </select>
+                </div>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <Button size="sm" variant="outline" onClick={exportExcel} disabled={results.length === 0 || downloading}>
+                    <Download className="w-4 h-4 mr-1.5" />{downloading ? "다운로드 중…" : "엑셀 다운"}
+                  </Button>
+                </div>
               </div>
-            </div>
-            <MedicationTable medications={results} loading={loading} {...cols} showRate={isSalesRep ? cols.showRate : false} userId={session?.user?.id} />
-          </>
-        )}
+              <MedicationTable medications={pageItems} loading={loading} {...cols} showRate={isSalesRep ? cols.showRate : false} userId={session?.user?.id} />
+              {totalPages > 1 && (
+                <div className="flex items-center justify-center gap-1 pt-1">
+                  <button
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                    className="px-2.5 py-1.5 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >이전</button>
+                  {pageNums.map((n, i) =>
+                    n === "…" ? (
+                      <span key={`ellipsis-${i}`} className="px-1.5 text-xs text-gray-400">…</span>
+                    ) : (
+                      <button
+                        key={n}
+                        onClick={() => setPage(n as number)}
+                        className={`px-2.5 py-1.5 text-xs rounded border ${page === n ? "bg-gray-900 text-white border-gray-900 font-semibold" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}
+                      >{n}</button>
+                    )
+                  )}
+                  <button
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={page === totalPages}
+                    className="px-2.5 py-1.5 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >다음</button>
+                </div>
+              )}
+            </>
+          );
+        })()}
 
-        {!searched && (
-          <div className="flex flex-col items-center justify-center py-16 text-gray-400 bg-white rounded-lg border border-gray-200">
-            <Download className="w-8 h-8 mb-2 text-gray-300" />
-            <p className="text-sm">위에서 제약사를 선택하고 조회하세요</p>
-          </div>
-        )}
+        <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+          <p className="text-xs font-semibold text-gray-500">출력 항목 선택</p>
+          <ColumnToggles cols={cols} setCols={setCols} isSalesRep={isSalesRep} />
+          {!searched && (
+            <div className="flex items-center gap-2 pt-2 text-gray-400 text-sm">
+              <Download className="w-4 h-4 text-gray-300 shrink-0" />
+              위에서 제약사를 선택하고 조회하세요
+            </div>
+          )}
+        </div>
       </div>
-    </RequireAuth>
+    </RequireRole>
   );
 }

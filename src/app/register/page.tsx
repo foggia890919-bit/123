@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Upload } from "lucide-react";
+import { Upload, CheckCircle2, Loader2 } from "lucide-react";
 
 const roles = [
   { value: "SALES_REP", label: "영업사원 (CSO)", docLabel: "CSO 신고증" },
@@ -23,8 +23,24 @@ export default function RegisterPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // SMS 인증 상태
+  const [otpCode, setOtpCode] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpSending, setOtpSending] = useState(false);
+  const [otpVerifying, setOtpVerifying] = useState(false);
+  const [phoneVerified, setPhoneVerified] = useState(false);
+  const [otpError, setOtpError] = useState("");
+  const [cooldown, setCooldown] = useState(0);
+
   function update(field: string, value: string) {
     setForm((prev) => ({ ...prev, [field]: value }));
+    // 전화번호 바뀌면 인증 초기화
+    if (field === "phone") {
+      setPhoneVerified(false);
+      setOtpSent(false);
+      setOtpCode("");
+      setOtpError("");
+    }
   }
 
   function formatPhone(value: string) {
@@ -38,13 +54,67 @@ export default function RegisterPage() {
     return /^010-\d{4}-\d{4}$/.test(phone);
   }
 
+  async function sendOtp() {
+    setOtpError("");
+    if (!isValidPhone(form.phone)) {
+      setOtpError("올바른 전화번호를 먼저 입력해주세요. (010-XXXX-XXXX)");
+      return;
+    }
+    setOtpSending(true);
+    try {
+      const res = await fetch("/api/auth/send-sms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: form.phone }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setOtpError(data.error || "발송 실패");
+        return;
+      }
+      setOtpSent(true);
+      setOtpCode("");
+      // 60초 쿨다운
+      setCooldown(60);
+      const interval = setInterval(() => {
+        setCooldown((v) => {
+          if (v <= 1) { clearInterval(interval); return 0; }
+          return v - 1;
+        });
+      }, 1000);
+    } finally {
+      setOtpSending(false);
+    }
+  }
+
+  async function verifyOtp() {
+    setOtpError("");
+    if (!otpCode.trim()) { setOtpError("인증코드를 입력해주세요."); return; }
+    setOtpVerifying(true);
+    try {
+      const res = await fetch("/api/auth/verify-sms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: form.phone, code: otpCode.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setOtpError(data.error || "인증 실패");
+        return;
+      }
+      setPhoneVerified(true);
+      setOtpError("");
+    } finally {
+      setOtpVerifying(false);
+    }
+  }
+
   const selectedRole = roles.find((r) => r.value === form.role);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!phoneVerified) { setError("휴대폰 본인인증을 완료해주세요."); return; }
     if (!file) { setError("첨부파일을 업로드해주세요."); return; }
-    if (!form.phone) { setError("전화번호를 입력해주세요."); return; }
-    if (!isValidPhone(form.phone)) { setError("올바른 전화번호 형식이 아니에요. (010-XXXX-XXXX)"); return; }
 
     setLoading(true);
     setError("");
@@ -95,23 +165,86 @@ export default function RegisterPage() {
             <Input type="password" value={form.password} onChange={(e) => update("password", e.target.value)} placeholder="8자 이상" minLength={8} required />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label className="text-sm font-medium text-gray-700">통신사</label>
-              <select
-                value={form.carrier}
-                onChange={(e) => update("carrier", e.target.value)}
-                required
-                className="flex h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">선택</option>
-                {carriers.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+          {/* 통신사 + 전화번호 + 인증 */}
+          <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-sm font-medium text-gray-700">통신사</label>
+                <select
+                  value={form.carrier}
+                  onChange={(e) => update("carrier", e.target.value)}
+                  required
+                  className="flex h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">선택</option>
+                  {carriers.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-sm font-medium text-gray-700">전화번호</label>
+                <div className="flex gap-2">
+                  <Input
+                    value={form.phone}
+                    onChange={(e) => update("phone", formatPhone(e.target.value))}
+                    placeholder="010-0000-0000"
+                    maxLength={13}
+                    required
+                    className={phoneVerified ? "border-green-400 bg-green-50" : ""}
+                  />
+                </div>
+              </div>
             </div>
-            <div className="space-y-1">
-              <label className="text-sm font-medium text-gray-700">전화번호</label>
-              <Input value={form.phone} onChange={(e) => update("phone", formatPhone(e.target.value))} placeholder="010-0000-0000" maxLength={13} required />
-            </div>
+
+            {/* 인증코드 발송 버튼 + 상태 */}
+            {phoneVerified ? (
+              <div className="flex items-center gap-2 text-sm text-green-600 font-medium">
+                <CheckCircle2 className="w-4 h-4" />
+                휴대폰 인증 완료
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={sendOtp}
+                  disabled={otpSending || cooldown > 0 || !isValidPhone(form.phone)}
+                  className="w-full h-9 text-sm font-medium rounded-md border border-blue-300 text-blue-700 bg-blue-50 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {otpSending ? (
+                    <span className="flex items-center justify-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" />발송 중...</span>
+                  ) : cooldown > 0 ? (
+                    `재발송 대기 (${cooldown}초)`
+                  ) : otpSent ? (
+                    "인증코드 재발송"
+                  ) : (
+                    "인증코드 발송"
+                  )}
+                </button>
+
+                {otpSent && (
+                  <div className="flex gap-2">
+                    <Input
+                      value={otpCode}
+                      onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                      placeholder="인증코드 6자리"
+                      maxLength={6}
+                      className="text-center tracking-widest font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={verifyOtp}
+                      disabled={otpVerifying || otpCode.length !== 6}
+                      className="shrink-0 px-4 h-10 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {otpVerifying ? <Loader2 className="w-4 h-4 animate-spin" /> : "확인"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {otpError && (
+              <p className="text-xs text-red-600">{otpError}</p>
+            )}
           </div>
 
           <div className="space-y-1">
@@ -149,7 +282,7 @@ export default function RegisterPage() {
             ⚠️ 실제 사용하는 이메일로 가입해주세요. 등록한 이메일이 없으면 비밀번호 찾기 서비스를 이용할 수 없어요.
           </div>
 
-          <Button type="submit" className="w-full" disabled={loading}>
+          <Button type="submit" className="w-full" disabled={loading || !phoneVerified}>
             {loading ? "처리 중..." : "회원가입 신청"}
           </Button>
         </form>

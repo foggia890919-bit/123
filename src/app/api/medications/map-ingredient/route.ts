@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import * as XLSX from "xlsx";
+import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 
 export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   try {
     const formData = await req.formData();
     const file = formData.get("file") as File;
@@ -35,18 +38,25 @@ export async function POST(req: NextRequest) {
 
     for (let i = 0; i < allCodes.length; i += BATCH) {
       const batch = allCodes.slice(i, i + BATCH);
-      const found = await prisma.medication.findMany({
-        where: { insuranceCode: { in: batch } },
-        select: { id: true, insuranceCode: true },
-      });
+      // insuranceCode가 쉼표 구분 다중값일 수 있으므로 UNNEST로 각 코드 매칭
+      const matchRows = await prisma.$queryRaw<{ id: string; matched: string }[]>`
+        SELECT m.id, TRIM(code) AS matched
+        FROM "Medication" m,
+             UNNEST(string_to_array(m."insuranceCode", ',')) AS code
+        WHERE m."insuranceCode" IS NOT NULL
+          AND TRIM(code) = ANY(${batch})
+      `;
 
-      for (const med of found) {
-        if (!med.insuranceCode) continue;
-        const categoryB = codeMap.get(med.insuranceCode);
+      // 같은 id에 여러 코드가 매칭될 수 있으므로 첫 번째만 사용
+      const seen = new Set<string>();
+      for (const row of matchRows) {
+        if (seen.has(row.id)) continue;
+        const categoryB = codeMap.get(row.matched);
         if (!categoryB) continue;
+        seen.add(row.id);
         await prisma.medication.update({
-          where: { id: med.id },
-          data: { categoryB, updatedAt: new Date() },
+          where: { id: row.id },
+          data: { ingredientCode: categoryB, updatedAt: new Date() },
         });
         updated++;
       }

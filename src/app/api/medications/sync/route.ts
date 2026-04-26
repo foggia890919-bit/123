@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireAdmin, requireAdminOrService, isNextResponse } from "@/lib/auth-guard";
 
 export const maxDuration = 300;
 
@@ -43,7 +44,8 @@ async function fetchPageWithRetry(pageNo: number, retries = 3): Promise<{ items:
 function mapDrug(item: PublicDrug) {
   const ediRaw = (item.EDI_CODE ?? "").trim();
   const ediCodes = ediRaw ? ediRaw.split(",").map((s) => s.trim()).filter(Boolean) : [];
-  const insuranceCode = ediCodes[0] || null;
+  // 여러 EDI 코드를 모두 저장 (엑셀 업로드 시 어떤 코드로든 매칭되도록)
+  const insuranceCode = ediCodes.length > 0 ? ediCodes.join(",") : null;
 
   return {
     categoryA: (item.PRODUCT_TYPE ?? "").trim() || null,
@@ -153,6 +155,8 @@ async function processPage(pageItems: PublicDrug[]): Promise<number> {
 }
 
 export async function POST(req: NextRequest) {
+  const guard = await requireAdminOrService(req);
+  if (isNextResponse(guard)) return guard;
   const body = await req.json().catch(() => ({}));
   const testMode = body?.mode === "test";
   const startPage = Math.max(1, parseInt(body?.startPage) || 1);
@@ -252,6 +256,8 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET() {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   const [publicCount, excelCount, syncRows] = await Promise.all([
     prisma.medication.count({ where: { source: "PUBLIC_API" } }),
     prisma.medication.count({ where: { source: "EXCEL" } }),

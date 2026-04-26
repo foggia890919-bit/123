@@ -23,6 +23,24 @@ model User {
   filterRequests        FilterRequest[]
   userClients           UserClient[]
   prescriptionReports   PrescriptionReport[]
+  loginLogs             LoginLog[]
+  posts                 Post[]
+  boardEditorOf         BoardEditor[]
+}
+
+model LoginLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  email     String
+  success   Boolean
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([userId])
+  @@index([email])
 }
 
 model UserClient {
@@ -31,19 +49,24 @@ model UserClient {
   user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   clientName  String
   bizNumber   String
-  bizDocument String?
+  bizDocument String?   // legacy base64 — preferred storage is Supabase Storage via bizFileKey
+  bizFileKey  String?   // Supabase Storage path (bucket: client-documents)
   bizFileName String?
   approved    Boolean    @default(false)
   createdAt   DateTime   @default(now())
-  proposals   Proposal[]
+  proposals             Proposal[]
+  prescriptionReports   PrescriptionReport[]
 
   @@index([userId])
+  @@index([approved])
   @@unique([userId, bizNumber])
 }
 
 enum Role {
   ADMIN
   SALES_REP
+  BIZ
+  BASIC
   DOCTOR
   PHARMACIST
 }
@@ -67,7 +90,8 @@ model UserDocument {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   docType   String
   fileName  String
-  fileData  String
+  fileData  String?  // legacy base64 — preferred storage is Supabase Storage via fileKey
+  fileKey   String?  // Supabase Storage path (bucket: user-documents)
   createdAt DateTime @default(now())
 }
 
@@ -75,7 +99,8 @@ model Medication {
   id             String    @id @default(cuid())
   categoryA      String?
   ingredientName String
-  categoryB      String?
+  categoryB      String?   // 식약분류 (엑셀 분류B 컬럼, 숫자)
+  ingredientCode String?   // HIRA 주성분코드 (ATC 매핑 파일, 영문+숫자 예: 641400ATR)
   commissionRate Float?
   companyName    String
   bioStatus      String?
@@ -97,6 +122,9 @@ model Medication {
   @@index([productName])
   @@index([insuranceCode])
   @@index([companyName])
+  @@index([ingredientCode])
+  @@index([source])
+  @@index([settlementType])
 }
 
 enum MedSource {
@@ -152,21 +180,27 @@ enum FilterStatus {
 }
 
 model PrescriptionReport {
-  id           String   @id @default(cuid())
-  userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  year         Int
-  month        Int
-  hospitalName String?
-  companyName  String?
-  imageData    String?
-  ocrData      Json?
-  status       String   @default("PENDING_REVIEW")
-  totalFee     Float?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                   String      @id @default(cuid())
+  userId               String
+  clientId             String?
+  user                 User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  client               UserClient? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  year                 Int
+  month                Int
+  hospitalName         String?
+  companyName          String?
+  imageData            String?   // legacy base64 — preferred storage is Supabase Storage via imageKey
+  imageKey             String?   // Supabase Storage path (bucket: prescription-images)
+  ocrData              Json?
+  status               String      @default("PENDING_REVIEW")
+  totalFee             Float?
+  clientApprovedAtSave Boolean     @default(false)
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
 
   @@index([userId])
+  @@index([clientId])
+  @@index([status])
 }
 
 model FilterRequest {
@@ -176,7 +210,8 @@ model FilterRequest {
   userName    String
   clientName  String
   bizNumber   String
-  bizDocument String?
+  bizDocument String?   // legacy base64
+  bizFileKey  String?   // Supabase Storage path (bucket: filter-request-docs)
   bizFileName String?
   companyName String
   status      FilterStatus @default(PENDING)
@@ -230,4 +265,109 @@ model ScrapeJob {
   error       String?
 
   @@index([siteKey, startedAt])
+}
+
+model Notice {
+  id          String    @id @default(cuid())
+  title       String
+  content     String
+  category    String    @default("공지")
+  isPinned    Boolean   @default(false)
+  showAsPopup Boolean   @default(false)
+  popupUntil  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([showAsPopup, popupUntil])
+}
+
+model HomeBanner {
+  id          String   @id @default(cuid())
+  title       String
+  subtitle    String?
+  description String?
+  buttonText  String?
+  buttonLink  String?
+  imageKey    String?
+  bgColor     String?
+  order       Int      @default(0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([active, order])
+}
+
+enum BoardType {
+  TEXT
+  IMAGE
+  MIXED
+}
+
+model Board {
+  id          String        @id @default(cuid())
+  slug        String        @unique
+  name        String
+  description String?
+  type        BoardType     @default(MIXED)
+  order       Int           @default(0)
+  active      Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  posts       Post[]
+  editors     BoardEditor[]
+
+  @@index([active, order])
+}
+
+model Post {
+  id        String   @id @default(cuid())
+  boardId   String
+  board     Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  content   String?
+  images    String[] @default([])
+  views     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([boardId, createdAt])
+  @@index([userId])
+}
+
+model BoardEditor {
+  id      String @id @default(cuid())
+  boardId String
+  board   Board  @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([boardId, userId])
+  @@index([userId])
+}
+
+model CompanySubmission {
+  companyName           String   @id
+  submissionEntity      String?
+  contactName           String?
+  email                 String?
+  phone                 String?
+  fax                   String?
+  defaultAdditionalRate Float?
+  notes                 String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+model SubmissionEntity {
+  name        String   @id
+  contactName String?
+  email       String?
+  phone       String?
+  fax         String?
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }

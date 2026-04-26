@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 
 const API_KEY = process.env.PUBLIC_DATA_API_KEY!;
 
 export async function POST(req: NextRequest) {
+  const guard = await requireAdmin();
+  if (isNextResponse(guard)) return guard;
   try {
     const { url } = await req.json();
     if (!url) return NextResponse.json({ error: "URL이 없어요." }, { status: 400 });

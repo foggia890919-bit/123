@@ -6,9 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import MedicationTable, { type ColumnVisibility } from "@/components/MedicationTable";
 import ColumnToggles from "@/components/ColumnToggles";
-import RequireAuth from "@/components/RequireAuth";
+import GuestGateModal from "@/components/GuestGateModal";
 import { useSession } from "next-auth/react";
 import type { MedicationItem } from "@/types";
+import { useGuestLimit } from "@/hooks/useGuestLimit";
 
 export default function SettlementSearchPage() {
   const { data: session } = useSession();
@@ -19,11 +20,15 @@ export default function SettlementSearchPage() {
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [displayedQuery, setDisplayedQuery] = useState("");
+  const [showGate, setShowGate] = useState(false);
   const [cols, setCols] = useState<ColumnVisibility>({ showRate: true });
+
+  const { remaining, isBlocked, consume } = useGuestLimit(!!session);
 
   async function handleSearch(e?: React.FormEvent) {
     e?.preventDefault();
     if (!query.trim()) return;
+    if (!consume()) { setShowGate(true); return; }
     setLoading(true); setSearched(true); setDisplayedQuery(query);
     try {
       const userId = session?.user?.id ? `&userId=${session.user.id}` : "";
@@ -35,7 +40,8 @@ export default function SettlementSearchPage() {
   }
 
   return (
-    <RequireAuth>
+    <>
+      {showGate && <GuestGateModal onClose={() => setShowGate(false)} />}
       <div className="space-y-5">
         {!searched && (
           <div className="text-center space-y-2 py-10">
@@ -56,6 +62,25 @@ export default function SettlementSearchPage() {
             검색 &gt; <span className="font-semibold text-gray-800">{displayedQuery}</span>
           </div>
         )}
+
+        {!session && (
+          <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex-wrap">
+            <span className="font-semibold">비로그인 무료 검색</span>
+            <span className="flex gap-1">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <span
+                  key={i}
+                  className={`w-2 h-2 rounded-full transition-colors ${i < (3 - remaining) ? "bg-amber-500" : "bg-amber-200"}`}
+                />
+              ))}
+            </span>
+            <span className={isBlocked ? "text-red-500 font-semibold" : "text-amber-600"}>
+              {isBlocked ? "횟수 소진" : `${remaining}회 남음`}
+            </span>
+            <a href="/register" className="ml-auto underline text-amber-700 hover:text-amber-900 whitespace-nowrap">가입하면 무제한 →</a>
+          </div>
+        )}
+
         <form onSubmit={handleSearch} className="flex gap-2 max-w-2xl">
           <Input value={query} onChange={(e) => setQuery(e.target.value)}
             placeholder="제품명, 성분명, 제약사명으로 검색..." className="h-11 text-base" />
@@ -71,6 +96,6 @@ export default function SettlementSearchPage() {
           </>
         )}
       </div>
-    </RequireAuth>
+    </>
   );
 }
