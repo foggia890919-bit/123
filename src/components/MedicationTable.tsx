@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { ShoppingCart, Search, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
+import { ShoppingCart, Search, ChevronUp, ChevronDown, ChevronsUpDown, Package } from "lucide-react";
 import { formatPrice } from "@/lib/utils";
 import type { MedicationItem } from "@/types";
 import SameIngredientModal from "./SameIngredientModal";
 import AddToProposalDialog from "./AddToProposalDialog";
+import StockCheckModal from "./StockCheckModal";
 
 type SortKey = "productName" | "companyName" | "price" | "commissionRate" | "additionalRate" | "totalRate" | "settlement";
 type SortDir = "asc" | "desc";
@@ -51,6 +52,7 @@ function SettlementBadge({ med }: { med: MedicationItem }) {
 
 export default function MedicationTable({ medications, loading, userId, showBioStatus, showOriginalDrug, showRate }: Props) {
   const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null } | null>(null);
+  const [stockModal, setStockModal] = useState<{ insuranceCode: string; productName: string } | null>(null);
   const [proposalTarget, setProposalTarget] = useState<MedicationItem | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkTargets, setBulkTargets] = useState<MedicationItem[] | null>(null);
@@ -195,10 +197,19 @@ export default function MedicationTable({ medications, loading, userId, showBioS
                     {showBioStatus && med.bioStatus && <span className="text-gray-500">{med.bioStatus}</span>}
                     {showOriginalDrug && med.originalDrug && <span className="text-gray-500">{med.originalDrug}</span>}
                     <span className="font-mono text-gray-500">{med.insuranceCode || "-"}</span>
-                    <button onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.categoryB })}
-                      className="text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 whitespace-nowrap transition-colors inline-flex items-center">
-                      <Search className="w-3 h-3 inline mr-1" />동일성분
-                    </button>
+                    <div className="flex flex-wrap gap-1">
+                      <button onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.categoryB })}
+                        className="text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 whitespace-nowrap transition-colors inline-flex items-center">
+                        <Search className="w-3 h-3 inline mr-1" />동일성분
+                      </button>
+                      {med.insuranceCode && (
+                        <button onClick={() => setStockModal({ insuranceCode: med.insuranceCode!, productName: med.productName })}
+                          className="text-emerald-700 border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 rounded px-2 py-1 whitespace-nowrap transition-colors inline-flex items-center"
+                          title="도매상에서 실시간 재고 조회">
+                          <Package className="w-3 h-3 inline mr-1" />재고확인
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </td>
                 <td className="px-4 py-3 text-center text-xs text-gray-400">-</td>
@@ -256,6 +267,14 @@ export default function MedicationTable({ medications, loading, userId, showBioS
           onClose={() => setProposalTarget(null)}
         />
       )}
+
+      <StockCheckModal
+        open={!!stockModal}
+        onClose={() => setStockModal(null)}
+        insuranceCode={stockModal?.insuranceCode ?? null}
+        productName={stockModal?.productName ?? null}
+      />
+
 
       {bulkTargets && userId && (
         <AddToProposalDialog

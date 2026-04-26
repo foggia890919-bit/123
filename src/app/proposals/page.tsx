@@ -4,13 +4,15 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
-import { Plus, Trash2, FileSpreadsheet, FileDown, FileText, X, Edit2, Check, Building2, Search, ChevronDown, ChevronUp, Filter, Loader2, UserPlus } from "lucide-react";
+import { Plus, Trash2, FileSpreadsheet, FileDown, FileText, X, Edit2, Check, Building2, Search, ChevronDown, ChevronUp, Filter, Loader2, UserPlus, Package } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatPrice } from "@/lib/utils";
 import RequireAuth from "@/components/RequireAuth";
 import ColumnToggles from "@/components/ColumnToggles";
 import SameIngredientModal from "@/components/SameIngredientModal";
+import StockCheckModal from "@/components/StockCheckModal";
+import StockCheckBatchModal from "@/components/StockCheckBatchModal";
 import type { ColumnVisibility } from "@/components/MedicationTable";
 import * as XLSX from "xlsx";
 
@@ -57,6 +59,8 @@ function ProposalsContent() {
   const [companyStatuses, setCompanyStatuses] = useState<Record<string, string>>({});
   const [cols, setCols] = useState<ColumnVisibility>({ showRate: true, showInsuranceCode: true });
   const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null } | null>(null);
+  const [stockModal, setStockModal] = useState<{ insuranceCode: string; productName: string } | null>(null);
+  const [batchStockOpen, setBatchStockOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [expandedCompanies, setExpandedCompanies] = useState<Set<string>>(new Set());
   const [requestingFilter, setRequestingFilter] = useState<Set<string>>(new Set());
@@ -526,6 +530,11 @@ function ProposalsContent() {
                 )}
               </div>
               <div className="flex gap-2 shrink-0">
+                <Button variant="outline" size="sm" onClick={() => setBatchStockOpen(true)}
+                  disabled={!selected.items?.length}
+                  className="text-emerald-700 border-emerald-200 hover:bg-emerald-50">
+                  <Package className="w-3.5 h-3.5 mr-1" />재고확인
+                </Button>
                 <Button variant="outline" size="sm" onClick={exportExcel} disabled={!selected.items?.length}>
                   <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />엑셀
                 </Button>
@@ -593,10 +602,19 @@ function ProposalsContent() {
                             <td className="px-3 py-2.5 text-xs text-gray-500 max-w-[140px] truncate">{m?.ingredientName || "-"}</td>
                             <td className="px-3 py-2.5 text-center">
                               {m && (
-                                <button onClick={() => setIngredientModal({ name: m.ingredientName, categoryB: m.categoryB })}
-                                  className="text-xs text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 whitespace-nowrap">
-                                  <Search className="w-3 h-3 inline mr-0.5" />동일성분
-                                </button>
+                                <div className="inline-flex flex-wrap gap-1">
+                                  <button onClick={() => setIngredientModal({ name: m.ingredientName, categoryB: m.categoryB })}
+                                    className="text-xs text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 whitespace-nowrap">
+                                    <Search className="w-3 h-3 inline mr-0.5" />동일성분
+                                  </button>
+                                  {m.insuranceCode && (
+                                    <button onClick={() => setStockModal({ insuranceCode: m.insuranceCode!, productName: m.productName })}
+                                      className="text-xs text-emerald-700 border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 rounded px-2 py-1 whitespace-nowrap"
+                                      title="도매상에서 실시간 재고 조회">
+                                      <Package className="w-3 h-3 inline mr-0.5" />재고
+                                    </button>
+                                  )}
+                                </div>
                               )}
                             </td>
                             <td className="px-3 py-2.5 text-xs text-gray-600 whitespace-nowrap">{m?.companyName || "-"}</td>
@@ -693,6 +711,24 @@ function ProposalsContent() {
             </div>
           </div>
         </div>
+      )}
+
+      <StockCheckModal
+        open={!!stockModal}
+        onClose={() => setStockModal(null)}
+        insuranceCode={stockModal?.insuranceCode ?? null}
+        productName={stockModal?.productName ?? null}
+      />
+
+      {batchStockOpen && selected && (
+        <StockCheckBatchModal
+          open={batchStockOpen}
+          onClose={() => setBatchStockOpen(false)}
+          items={selected.items
+            .map(it => it.altMedication)
+            .filter((m): m is Medication => !!m && !!m.insuranceCode)
+            .map(m => ({ insuranceCode: m.insuranceCode!, productName: m.productName }))}
+        />
       )}
 
       {ingredientModal && (

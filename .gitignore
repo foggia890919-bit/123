@@ -48,3 +48,8 @@ next-env.d.ts
 
 # scraper CSV output
 /output
+
+# worker artifacts (worker has its own node_modules + .env on the server)
+/worker/node_modules
+/worker/.env
+/worker/.env.local
