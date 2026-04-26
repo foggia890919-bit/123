@@ -2,17 +2,15 @@ import type { WholesaleAdapter } from "../core/types";
 import { ibjp } from "./ibjp";
 import { inchun } from "./inchun";
 import { family } from "./family";
-import { picomall } from "./picomall";
-import { goy } from "./goy";
 
-// Registry of all supported wholesale sites. Up to 5 sites per plan.
-// Add new adapters by implementing WholesaleAdapter and registering here.
+// Registry of all supported wholesale sites.
+// picomall and goy were dropped because they don't support insurance-code
+// search (picomall is product-name only) — keeping the worker focused on
+// the three sites that actually return structured stock data.
 export const ALL_ADAPTERS: Record<string, WholesaleAdapter> = {
   ibjp,
   inchun,
   family,
-  picomall,
-  goy,
 };
 
 export function resolveAdapters(keys: string[]): WholesaleAdapter[] {

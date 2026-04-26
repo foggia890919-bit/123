@@ -144,7 +144,12 @@ app.get("/health", (_req, res) => {
 
 // Manually trigger a scheduled batch run. Useful for testing and for the
 // admin "지금 새로 긁기" button. Authenticated via the same Bearer token.
-app.post("/scrape-batch", async (_req, res) => {
+//
+// Query params:
+//   ?limit=N         only scrape the first N codes (smoke test)
+//   ?sites=ibjp,family   only these adapter keys
+//   ?mode=label      override ScrapeJob.mode (default "manual")
+app.post("/scrape-batch", async (req, res) => {
   if (!hasDb()) {
     res.status(503).json({ error: "DATABASE_URL not configured on worker" });
     return;
@@ -153,11 +158,20 @@ app.post("/scrape-batch", async (_req, res) => {
     res.status(409).json({ error: "a job is already running" });
     return;
   }
+  const limitRaw = req.query.limit;
+  const sitesRaw = req.query.sites;
+  const modeRaw = req.query.mode;
+  const limit = typeof limitRaw === "string" ? Number(limitRaw) : undefined;
+  const sites = typeof sitesRaw === "string"
+    ? sitesRaw.split(",").map(s => s.trim()).filter(Boolean)
+    : undefined;
+  const mode = typeof modeRaw === "string" ? modeRaw : "manual";
+
   // Fire-and-forget so the HTTP request doesn't time out for hours-long runs
-  triggerJobNow({ scrapeOne, getCreds }).catch(err =>
+  triggerJobNow({ scrapeOne, getCreds }, { limit, sites, mode }).catch(err =>
     console.error("[server] manual batch failed:", err)
   );
-  res.json({ ok: true, started: true });
+  res.json({ ok: true, started: true, limit, sites, mode });
 });
 
 app.get("/sites", (_req, res) => {
