@@ -25,7 +25,13 @@ export async function POST(req: NextRequest) {
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: "buffer" });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json<Record<string, string | number>>(sheet, { defval: "" });
+    const rawRows = XLSX.utils.sheet_to_json<Record<string, string | number>>(sheet, { defval: "" });
+    // 컬럼명 앞뒤 공백 제거 (Excel 헤더에 공백이 들어있는 경우 대비)
+    const rows = rawRows.map((row) => {
+      const normalized: Record<string, string | number> = {};
+      for (const [k, v] of Object.entries(row)) normalized[k.trim()] = v as string | number;
+      return normalized;
+    });
 
     const rateRows = rows
       .filter((row) => row["보험코드"] || row["급여코드"] || row["성분명"] || row["품목명"])
