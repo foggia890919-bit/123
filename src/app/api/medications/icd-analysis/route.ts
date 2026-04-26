@@ -28,19 +28,21 @@ export async function POST(req: NextRequest) {
 
 약품명: ${productName}${ingredientName ? `\n성분명: ${ingredientName}` : ""}
 
-이 약품의 한국 ${topic} 상병코드(KCD/ICD-10) 상위 5개를 알려주세요.
-다음 JSON 배열 형식만 응답하세요 (다른 텍스트 없이):
+이 약품의 한국 ${topic} 상병코드(KCD/ICD-10) 상위 5개를 추정해주세요.
 
-[
-  { "code": "K21.0", "name": "위식도역류병", "ratio": 23.5 },
-  ...
-]
+엄격한 규칙:
+- 약품의 적응증과 직접 연관된 상병코드만 답변 (간접 동반질환은 제외)
+- 비율(ratio)은 정확한 통계가 없으면 0~100 사이 임의 추정값 — 5단위/10단위로 떨어지는 값은 금지
+- 정확한 데이터 출처가 없으면 results 를 빈 배열 [] 로 반환
+- 환자 동반질환(예: 고지혈증약에 당뇨병, 고혈압) 같이 약품 자체의 직접 적응증이 아닌 코드는 제외
 
-- code: KCD 코드 (예: K21.0)
-- name: 상병명 (한글)
-- ratio: 전체 처방 중 비율(%) — 합계가 100 이하
-- 비율 높은 순 정렬
-- 실제 한국 처방 데이터 기반으로 합리적으로 추정`;
+응답은 다음 JSON 객체 형식 (배열은 results 안에):
+{
+  "results": [
+    { "code": "K21.0", "name": "위식도역류병", "ratio": 23.5 },
+    ...
+  ]
+}`;
 
   try {
     const response = await ai.models.generateContent({
@@ -50,11 +52,30 @@ export async function POST(req: NextRequest) {
     });
 
     const text = response.text ?? "";
+    if (!text) throw new Error("AI 응답 없음");
 
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) throw new Error("JSON 파싱 실패");
+    // Parse flexibly — direct array, {results:[...]}, or any object with first array value
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      const m = text.match(/\[[\s\S]*\]/);
+      if (!m) throw new Error(`JSON 파싱 실패 — 응답: ${text.slice(0, 200)}`);
+      parsed = JSON.parse(m[0]);
+    }
 
-    const results: IcdResult[] = JSON.parse(jsonMatch[0]);
+    let arr: unknown;
+    if (Array.isArray(parsed)) {
+      arr = parsed;
+    } else if (parsed && typeof parsed === "object") {
+      const obj = parsed as Record<string, unknown>;
+      arr = Array.isArray(obj.results) ? obj.results : Object.values(obj).find((v) => Array.isArray(v));
+    }
+    if (!Array.isArray(arr)) {
+      throw new Error(`응답에 배열 없음 — ${text.slice(0, 200)}`);
+    }
+
+    const results = arr as IcdResult[];
     const top5 = results.slice(0, 5).map((r) => ({
       code: String(r.code),
       name: String(r.name),
