@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { resolveAdapters } from "./adapters";
 import { enabledSiteKeys, loadCredentialsFromEnv } from "./core/env";
 import { Scheduler } from "./core/scheduler";
