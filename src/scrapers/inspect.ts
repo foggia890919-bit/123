@@ -56,7 +56,9 @@ async function main() {
   const page = await ctx.newPage();
 
   try {
-    await page.goto(adapter.loginUrl, { waitUntil: "domcontentloaded" });
+    console.log(`[goto] ${adapter.loginUrl}`);
+    await page.goto(adapter.loginUrl, { waitUntil: "commit", timeout: 60_000 });
+    await page.waitForLoadState("domcontentloaded", { timeout: 30_000 }).catch(() => {});
     await page.waitForTimeout(1500);
     await dump(outDir, "01-login-page", page);
 
