@@ -63,11 +63,25 @@ async function main() {
     await page.waitForTimeout(1500);
     await dump(outDir, "01-login-page", page);
 
-    await adapter.login(page, creds);
+    try {
+      await adapter.login(page, creds);
+    } catch (err) {
+      await dump(outDir, "02-after-login-FAILED", page);
+      await writeFile(resolve(outDir, "error.txt"), `LOGIN FAILED:\n${(err as Error).stack ?? err}`, "utf8");
+      throw err;
+    }
     await page.waitForTimeout(1500);
     await dump(outDir, "02-after-login", page);
 
-    const items = await adapter.searchByCode(page, code);
+    let items: Awaited<ReturnType<typeof adapter.searchByCode>> = [];
+    try {
+      items = await adapter.searchByCode(page, code);
+    } catch (err) {
+      await page.waitForTimeout(500);
+      await dump(outDir, "03-after-search-FAILED", page);
+      await writeFile(resolve(outDir, "error.txt"), `SEARCH FAILED:\n${(err as Error).stack ?? err}`, "utf8");
+      throw err;
+    }
     await page.waitForTimeout(500);
     await dump(outDir, "03-after-search", page);
 
