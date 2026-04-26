@@ -45,3 +45,6 @@ next-env.d.ts
 
 # scraper debug dumps (screenshots + HTML from inspect harness)
 /debug
+
+# google sheet sync cache (Stop hook output)
+/.sheet_tasks.json
