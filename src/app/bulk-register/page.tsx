@@ -109,12 +109,20 @@ function BulkRegisterInner() {
       if (!res.ok) return;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data = await res.json() as { title: string; clientId?: string | null; client?: { clientName: string } | null; items: any[] };
-      const newRows: SwapRow[] = data.items.map((item) => ({
-        id: uid(),
-        originalCode: item.originalCode ?? item.originalMedication?.insuranceCode ?? "",
-        original: item.originalMedication ?? null,
-        alternative: item.altMedication ?? null,
-      }));
+      const newRows: SwapRow[] = data.items.map((item) => {
+        const hasOriginal = item.originalMedication != null;
+        const hasAlt = item.altMedication != null;
+        const isSameMed = hasOriginal && hasAlt && item.altMedication.id === item.originalMedication.id;
+        return {
+          id: uid(),
+          // originalCode: note 필드에 보험코드가 저장됨 (미매칭 행), 또는 original/alt에서 추출
+          originalCode: item.note ?? item.originalMedication?.insuranceCode ?? item.altMedication?.insuranceCode ?? "",
+          // originalMedication이 null이면 altMedication을 원본으로 간주 (저장 시 fallback 이슈)
+          original: hasOriginal ? item.originalMedication : (hasAlt ? item.altMedication : null),
+          // 둘 다 있고 다른 경우만 대체품으로, 같거나 original이 없었으면 null
+          alternative: hasOriginal && hasAlt && !isSameMed ? item.altMedication : null,
+        };
+      });
       setRows(newRows);
       setTitle(data.title ?? "대체제안서");
       if (data.client) setClientName(data.client.clientName ?? "");
