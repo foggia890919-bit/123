@@ -3,7 +3,7 @@ import { resolveAdapters } from "./adapters";
 import { enabledSiteKeys, loadCredentialsFromEnv } from "./core/env";
 import { Scheduler } from "./core/scheduler";
 import { Session } from "./core/session";
-import { ensureSite, finishJob, saveResults, saveResultsToCsv, startJob } from "./core/storage";
+import { ensureSite, finishJob, saveResults, saveResultsToCsv, saveResultsToXlsx, startJob } from "./core/storage";
 import type { DistributionMode, ScrapeResult } from "./core/types";
 import { loadCodesFromDB, loadFrequentCodes, loadPocCodes } from "./codes/loader";
 
@@ -76,16 +76,23 @@ async function main() {
         perSite[r.siteKey] ??= { done: 0, failed: 0 };
         if (r.error) perSite[r.siteKey].failed += 1;
         else perSite[r.siteKey].done += 1;
-        if ((perSite[r.siteKey].done + perSite[r.siteKey].failed) % 25 === 0) {
-          console.log(`[progress] ${r.siteKey} done=${perSite[r.siteKey].done} failed=${perSite[r.siteKey].failed}`);
+        const stats = perSite[r.siteKey];
+        const total = stats.done + stats.failed;
+        // Per-code progress for small runs (<100); summary every 25 for large.
+        const verbose = codes.length < 100;
+        if (verbose || total % 25 === 0) {
+          const status = r.error ? `ERR ${r.error}` : `${r.items.length} item(s)`;
+          console.log(`[${r.siteKey} ${total}/${codes.length}] ${r.insuranceCode} → ${status}`);
         }
       },
     });
     const out = await scheduler.run(codes, args.distribution);
     results.push(...out);
 
+    const xlsxPath = await saveResultsToXlsx(results);
+    console.log(`[xlsx] saved -> ${xlsxPath}`);
     const csvPath = await saveResultsToCsv(results);
-    console.log(`[csv] saved -> ${csvPath}`);
+    console.log(`[csv]  saved -> ${csvPath}`);
 
     if (useDb) {
       const saved = await saveResults(results);
