@@ -31,7 +31,9 @@ export async function GET(req: NextRequest) {
     ];
   }
 
-  const take = safeParseInt(req.nextUrl.searchParams.get("limit"), 200, 1, 1000);
+  const take = allSettlement
+    ? safeParseInt(req.nextUrl.searchParams.get("limit"), 100_000, 1, 200_000)
+    : safeParseInt(req.nextUrl.searchParams.get("limit"), 200, 1, 1000);
   const skip = safeParseInt(req.nextUrl.searchParams.get("skip"), 0, 0, 1_000_000);
 
   const [medications, total] = await Promise.all([
