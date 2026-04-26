@@ -32,7 +32,10 @@ async function fetchPage(pageNo: number): Promise<{ items: HiraItem[]; totalCoun
   url.searchParams.set("type", "json");
 
   const res = await fetch(url.toString(), { cache: "no-store" });
-  if (!res.ok) throw new Error(`HIRA API ${res.status}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`HIRA API ${res.status}: ${body.slice(0, 300)}`);
+  }
 
   const json = await res.json();
   const body = json?.body ?? json?.response?.body ?? json;
