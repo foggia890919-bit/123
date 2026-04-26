@@ -50,6 +50,10 @@ function buildComparator(criteriaList: string[]) {
         const aRate = (a.commissionRate ?? 0) + (a.additionalRate ?? 0);
         const bRate = (b.commissionRate ?? 0) + (b.additionalRate ?? 0);
         diff = ((b.price ?? 0) * bRate / 100) - ((a.price ?? 0) * aRate / 100);
+      } else if (c === "settlement_low") {
+        const aRate = (a.commissionRate ?? 0) + (a.additionalRate ?? 0);
+        const bRate = (b.commissionRate ?? 0) + (b.additionalRate ?? 0);
+        diff = ((a.price ?? 0) * aRate / 100) - ((b.price ?? 0) * bRate / 100);
       }
       if (diff !== 0) return diff;
     }

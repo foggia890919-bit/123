@@ -46,9 +46,13 @@ const CRITERIA_PAIRS = [
     { key: "stock_high", label: "많은순" },
     { key: "stock_low", label: "적은순" },
   ]},
-  { group: "commission", label: "수수료", options: [
+  { group: "commission", label: "수수료율", options: [
     { key: "commission_high", label: "높은순" },
     { key: "commission_low", label: "낮은순" },
+  ]},
+  { group: "settlement", label: "수수료금액", options: [
+    { key: "settlement", label: "높은순" },
+    { key: "settlement_low", label: "낮은순" },
   ]},
   { group: "price", label: "약가", options: [
     { key: "price_low", label: "낮은순" },
