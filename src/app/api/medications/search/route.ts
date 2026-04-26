@@ -61,5 +61,28 @@ export async function GET(req: NextRequest) {
     additionalRate: rateMap[normalizeCompanyKey(med.companyName)] ?? null,
   }));
 
+  const insuranceCodes = result.map((m) => m.insuranceCode).filter((c): c is string => !!c);
+  if (insuranceCodes.length > 0) {
+    const rows = await prisma.$queryRaw<Array<{ insuranceCode: string; stock: number }>>`
+      SELECT DISTINCT ON ("siteKey", "insuranceCode")
+             "insuranceCode",
+             COALESCE("stock", 0)::int AS stock
+      FROM "InventorySnapshot"
+      WHERE "insuranceCode" = ANY(${insuranceCodes}::text[])
+        AND "siteKey" IN ('ibjp', 'family')
+        AND "scrapedAt" > NOW() - INTERVAL '24 hours'
+      ORDER BY "siteKey", "insuranceCode", "scrapedAt" DESC
+    `;
+    const stockByCode = new Map<string, number>();
+    for (const r of rows) {
+      stockByCode.set(r.insuranceCode, (stockByCode.get(r.insuranceCode) ?? 0) + Number(r.stock));
+    }
+    for (const m of result) {
+      if (m.insuranceCode && stockByCode.has(m.insuranceCode)) {
+        m.stock = stockByCode.get(m.insuranceCode)!;
+      }
+    }
+  }
+
   return NextResponse.json({ medications: result, total });
 }
