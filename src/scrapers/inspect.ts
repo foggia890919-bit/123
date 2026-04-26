@@ -73,6 +73,26 @@ async function main() {
     await page.waitForTimeout(1500);
     await dump(outDir, "02-after-login", page);
 
+    // Enumerate every input on the page so we can match selectors offline
+    // even if the search step fails.
+    const inputs = await page.$$eval("input, textarea", els =>
+      els.map((el, i) => {
+        const e = el as HTMLInputElement;
+        return {
+          i,
+          tag: e.tagName.toLowerCase(),
+          type: e.type ?? null,
+          name: e.name ?? null,
+          id: e.id ?? null,
+          placeholder: e.placeholder ?? null,
+          className: e.className ?? null,
+          visible: !!(e.offsetWidth || e.offsetHeight),
+        };
+      })
+    );
+    await writeFile(resolve(outDir, "page-inputs.json"), JSON.stringify(inputs, null, 2), "utf8");
+    console.log(`[inputs] dumped ${inputs.length} input(s)`);
+
     // Tap into the page mid-search so we can see what the SPA looked like
     // at each phase — useful for diagnosing blank-page captures.
     page.on("framenavigated", f => {

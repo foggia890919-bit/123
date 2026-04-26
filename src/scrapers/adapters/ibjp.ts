@@ -23,13 +23,21 @@ const SEL = {
     'input[type="submit"][value*="로그인"]',
     'button[type="submit"]',
   ].join(", "),
-  orderPath: "/dist/order",
+  orderPath: "/dist/comOrd",
   searchInput: [
     'input[placeholder*="품목명"]',
     'input[placeholder*="보험코드"]',
     'input[type="search"]',
+    'input.search-input',
+    'input[name="searchKeyword"]',
+    'input[name="keyword"]',
   ].join(", "),
-  searchBtn: 'button:has-text("검색")',
+  searchBtn: [
+    'button:has-text("검색")',
+    'a:has-text("검색")',
+    'button.btn-search',
+    'button[type="submit"]:has-text("검색")',
+  ].join(", "),
   resultRows: "table tbody tr, table tr:has(td)",
 };
 
@@ -77,16 +85,22 @@ export const ibjp: WholesaleAdapter = {
   },
 
   async searchByCode(page: Page, insuranceCode: string): Promise<InventoryItem[]> {
-    // After login, ibjp lands on the integrated order page (통합주문).
-    // Only navigate if the search input isn't already present, to avoid
-    // wiping a perfectly good page state.
-    const inputAlreadyVisible = await page.locator(SEL.searchInput).first().isVisible().catch(() => false);
+    // Make sure the SPA has finished rendering after login before we
+    // probe for the input.
+    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+
+    let inputAlreadyVisible = await page.locator(SEL.searchInput).first().isVisible().catch(() => false);
     if (!inputAlreadyVisible) {
+      // /dist/comOrd is the integrated-order route observed after login.
       await page.goto(this.baseUrl + SEL.orderPath, { waitUntil: "commit", timeout: 30_000 });
       await page.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => {});
+      await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+      await page.waitForTimeout(1500);
+      inputAlreadyVisible = await page.locator(SEL.searchInput).first().isVisible().catch(() => false);
     }
 
-    const input = await waitAny(page, SEL.searchInput);
+    const input = await waitAny(page, SEL.searchInput, 30_000);
     await input.click();
     await input.fill("");
     await input.type(insuranceCode, { delay: 30 });
