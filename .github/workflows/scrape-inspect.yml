@@ -37,6 +37,20 @@ jobs:
       - name: Install Chromium for Playwright
         run: npx playwright install --with-deps chromium
 
+      - name: Reachability probe
+        run: |
+          echo "== GitHub runner public IP =="
+          curl -s https://api.ipify.org && echo
+          echo ""
+          echo "== DNS for ibjp.co.kr =="
+          getent hosts ibjp.co.kr || echo "(dns failed)"
+          echo ""
+          echo "== HTTP HEAD / =="
+          curl -v -m 20 -o /dev/null -I https://ibjp.co.kr/ 2>&1 | tail -30 || true
+          echo ""
+          echo "== HTTP HEAD /dist/login =="
+          curl -v -m 20 -o /dev/null -I https://ibjp.co.kr/dist/login 2>&1 | tail -30 || true
+
       - name: Run inspector
         env:
           SCRAPER_IBJP_ID: ${{ secrets.SCRAPER_IBJP_ID }}

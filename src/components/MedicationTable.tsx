@@ -6,6 +6,7 @@ import type { IcdResult } from "@/app/api/medications/icd-analysis/route";
 import { formatPrice } from "@/lib/utils";
 import type { MedicationItem } from "@/types";
 import SameIngredientModal from "./SameIngredientModal";
+import StockCheckModal from "./StockCheckModal";
 
 type SortKey = "productName" | "price" | "commissionRate" | "additionalRate" | "totalRate" | "settlement";
 type SortDir = "asc" | "desc";
@@ -163,6 +164,7 @@ function SettlementBadge({ med }: { med: MedicationItem }) {
 
 export default function MedicationTable({ medications, loading, userId, showCategoryA, showIngredientName, showCategoryB, showRate, showBioStatus, showPrice, showOriginalDrug, showInsuranceCode, showNotes, showStock }: Props) {
   const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null } | null>(null);
+  const [stockModal, setStockModal] = useState<{ insuranceCode: string; productName: string } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -373,6 +375,14 @@ export default function MedicationTable({ medications, loading, userId, showCate
                             className="text-[10px] font-medium text-blue-600 hover:bg-blue-50 px-1.5 py-0.5 rounded whitespace-nowrap transition-colors">
                             동일성분
                           </button>
+                          {med.insuranceCode && (
+                            <button type="button"
+                              onClick={() => setStockModal({ insuranceCode: med.insuranceCode!, productName: med.productName })}
+                              className="text-[10px] font-medium text-emerald-700 hover:bg-emerald-50 px-1.5 py-0.5 rounded whitespace-nowrap transition-colors"
+                              title="도매상에서 실시간 재고 조회">
+                              재고확인
+                            </button>
+                          )}
                         </div>
                         {hasDetailPanel && (
                           <button type="button" onClick={() => toggleRow(med.id)}
@@ -521,6 +531,13 @@ export default function MedicationTable({ medications, loading, userId, showCate
           initialCols={{ categoryB: false, bioStatus: true, originalDrug: true, insuranceCode: true, notes: false }}
         />
       )}
+
+      <StockCheckModal
+        open={!!stockModal}
+        onClose={() => setStockModal(null)}
+        insuranceCode={stockModal?.insuranceCode ?? null}
+        productName={stockModal?.productName ?? null}
+      />
     </>
   );
 }

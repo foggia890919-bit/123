@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium, type Page } from "playwright";
@@ -56,15 +57,57 @@ async function main() {
   const page = await ctx.newPage();
 
   try {
-    await page.goto(adapter.loginUrl, { waitUntil: "domcontentloaded" });
+    console.log(`[goto] ${adapter.loginUrl}`);
+    await page.goto(adapter.loginUrl, { waitUntil: "commit", timeout: 60_000 });
+    await page.waitForLoadState("domcontentloaded", { timeout: 30_000 }).catch(() => {});
     await page.waitForTimeout(1500);
     await dump(outDir, "01-login-page", page);
 
-    await adapter.login(page, creds);
+    try {
+      await adapter.login(page, creds);
+    } catch (err) {
+      await dump(outDir, "02-after-login-FAILED", page);
+      await writeFile(resolve(outDir, "error.txt"), `LOGIN FAILED:\n${(err as Error).stack ?? err}`, "utf8");
+      throw err;
+    }
     await page.waitForTimeout(1500);
     await dump(outDir, "02-after-login", page);
 
-    const items = await adapter.searchByCode(page, code);
+    // Enumerate every input on the page so we can match selectors offline
+    // even if the search step fails.
+    const inputs = await page.$$eval("input, textarea", els =>
+      els.map((el, i) => {
+        const e = el as HTMLInputElement;
+        return {
+          i,
+          tag: e.tagName.toLowerCase(),
+          type: e.type ?? null,
+          name: e.name ?? null,
+          id: e.id ?? null,
+          placeholder: e.placeholder ?? null,
+          className: e.className ?? null,
+          visible: !!(e.offsetWidth || e.offsetHeight),
+        };
+      })
+    );
+    await writeFile(resolve(outDir, "page-inputs.json"), JSON.stringify(inputs, null, 2), "utf8");
+    console.log(`[inputs] dumped ${inputs.length} input(s)`);
+
+    // Tap into the page mid-search so we can see what the SPA looked like
+    // at each phase — useful for diagnosing blank-page captures.
+    page.on("framenavigated", f => {
+      if (f === page.mainFrame()) console.log(`[nav] ${f.url()}`);
+    });
+
+    let items: Awaited<ReturnType<typeof adapter.searchByCode>> = [];
+    try {
+      items = await adapter.searchByCode(page, code);
+    } catch (err) {
+      await page.waitForTimeout(500);
+      await dump(outDir, "03-after-search-FAILED", page);
+      await writeFile(resolve(outDir, "error.txt"), `SEARCH FAILED:\n${(err as Error).stack ?? err}`, "utf8");
+      throw err;
+    }
     await page.waitForTimeout(500);
     await dump(outDir, "03-after-search", page);
 

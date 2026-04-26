@@ -1,14 +1,18 @@
 import type { WholesaleAdapter } from "../core/types";
 import { ibjp } from "./ibjp";
+import { inchun } from "./inchun";
+import { family } from "./family";
+import { picomall } from "./picomall";
+import { goy } from "./goy";
 
 // Registry of all supported wholesale sites. Up to 5 sites per plan.
 // Add new adapters by implementing WholesaleAdapter and registering here.
 export const ALL_ADAPTERS: Record<string, WholesaleAdapter> = {
   ibjp,
-  // site2: <adapter>,
-  // site3: <adapter>,
-  // site4: <adapter>,
-  // site5: <adapter>,
+  inchun,
+  family,
+  picomall,
+  goy,
 };
 
 export function resolveAdapters(keys: string[]): WholesaleAdapter[] {
