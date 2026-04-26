@@ -5,6 +5,9 @@ import { authOptions } from "@/lib/auth";
 // Real-time stock check: proxies to the worker running in Korea.
 // Worker URL + token are set in Vercel env (WORKER_URL, WORKER_TOKEN).
 
+// Vercel Pro tier max — Playwright across 5 sites can take a while on cold sessions.
+export const maxDuration = 300;
+
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
@@ -45,7 +48,7 @@ export async function POST(req: NextRequest) {
         Authorization: `Bearer ${workerToken}`,
       },
       body: JSON.stringify({ codes, sites }),
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(280_000),
     });
 
     if (!r.ok) {

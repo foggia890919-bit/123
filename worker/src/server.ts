@@ -164,11 +164,14 @@ app.post("/scrape", async (req, res) => {
     return;
   }
 
+  // Sites are scraped in parallel for each code; codes are still sequential
+  // so we don't open dozens of contexts on the same site at once.
   const results: ScrapeRow[] = [];
   for (const code of codes) {
-    for (const key of targetKeys) {
-      results.push(await scrapeOne(ALL_ADAPTERS[key], code));
-    }
+    const rows = await Promise.all(
+      targetKeys.map(key => scrapeOne(ALL_ADAPTERS[key], code))
+    );
+    results.push(...rows);
   }
   res.json({ results });
 });
