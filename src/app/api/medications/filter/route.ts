@@ -39,12 +39,24 @@ export async function GET(req: NextRequest) {
   const [medications, total] = await Promise.all([
     prisma.medication.findMany({
       where,
-      orderBy: [{ isSettlement: "desc" }, { commissionRate: "desc" }, { companyName: "asc" }],
+      orderBy: [{ isSettlement: "desc" }, { commissionRate: "desc" }, { companyName: "asc" }, { source: "asc" }],
       take,
       skip,
     }),
     prisma.medication.count({ where }),
   ]);
+
+  // 전체 요율표 다운로드 시 동일 보험코드 중복 제거 (EXCEL 우선, 없으면 PUBLIC_API)
+  let result_medications = medications;
+  if (allSettlement) {
+    const seen = new Set<string>();
+    result_medications = medications.filter((m) => {
+      const key = m.insuranceCode ? m.insuranceCode.trim() : `__nk_${m.id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
 
   const rateMap: Record<string, number> = {};
   if (userId) {
@@ -54,10 +66,10 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const result = medications.map((med) => ({
+  const result = result_medications.map((med) => ({
     ...med,
     additionalRate: rateMap[normalizeCompanyKey(med.companyName)] ?? null,
   }));
 
-  return NextResponse.json({ medications: result, total });
+  return NextResponse.json({ medications: result, total: result.length });
 }
