@@ -67,12 +67,13 @@ export async function POST(req: NextRequest) {
     );
 
     const existingByCode = new Map<string, string>(); // normalizedCode → id
+    const existingPriceByCode = new Map<string, number | null>(); // normalizedCode → price
 
     if (normalizedCodes.length > 0) {
       // DB의 insuranceCode는 "A,B,C" 형태로 여러 EDI가 들어있을 수 있음
       // 각 코드를 분리·정규화(하이픈·공백·탭 제거, 대문자화)해서 엑셀 코드와 매칭
-      const rows = await prisma.$queryRaw<{ id: string; matched: string }[]>`
-        SELECT m.id,
+      const rows = await prisma.$queryRaw<{ id: string; matched: string; price: number | null }[]>`
+        SELECT m.id, m.price,
                UPPER(REPLACE(REPLACE(REPLACE(TRIM(code), '-', ''), ' ', ''), E'\t', '')) AS matched
         FROM "Medication" m,
              UNNEST(string_to_array(m."insuranceCode", ',')) AS code
@@ -81,7 +82,10 @@ export async function POST(req: NextRequest) {
       `;
       // 같은 코드가 여러 레코드에 매칭되면 첫 번째 것 사용
       rows.forEach((r) => {
-        if (!existingByCode.has(r.matched)) existingByCode.set(r.matched, r.id);
+        if (!existingByCode.has(r.matched)) {
+          existingByCode.set(r.matched, r.id);
+          existingPriceByCode.set(r.matched, r.price ?? null);
+        }
       });
     }
 
@@ -105,6 +109,10 @@ export async function POST(req: NextRequest) {
         if (row.originalDrug) updateData.originalDrug = row.originalDrug;
         if (row.notes) updateData.notes = row.notes;
         if (row.categoryA) updateData.categoryA = row.categoryA;
+        // 공공데이터 약가가 없는(null) 경우에만 요율표 약가로 채움 (비급여 품목)
+        if (row.price != null && (existingPriceByCode.get(codeKey!) ?? null) === null) {
+          updateData.price = row.price;
+        }
         // categoryB: 요율표 분류B 무시
         await prisma.medication.update({ where: { id: idByCode }, data: updateData });
         updated++;
