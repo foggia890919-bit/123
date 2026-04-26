@@ -25,14 +25,31 @@ interface RunJobDeps {
   getCreds: (siteKey: string) => Credentials | null;
 }
 
-export async function runScheduledJob(deps: RunJobDeps): Promise<{ totalCodes: number; sitesRun: string[]; written: number; failed: number }> {
+interface RunOptions {
+  limit?: number;        // first N codes only (for smoke testing)
+  sites?: string[];      // only these adapter keys
+  mode?: string;         // ScrapeJob.mode label, default "scheduled"
+}
+
+export async function runScheduledJob(
+  deps: RunJobDeps,
+  opts: RunOptions = {}
+): Promise<{ totalCodes: number; sitesRun: string[]; written: number; failed: number }> {
   if (!hasDb()) {
     console.warn("[scheduler] DATABASE_URL not set — skipping scheduled run");
     return { totalCodes: 0, sitesRun: [], written: 0, failed: 0 };
   }
 
-  const codes = await loadExcelMedicationCodes();
-  const sitesWithCreds = Object.values(ALL_ADAPTERS).filter(a => deps.getCreds(a.key));
+  let codes = await loadExcelMedicationCodes();
+  if (opts.limit && opts.limit > 0) {
+    codes = codes.slice(0, opts.limit);
+  }
+
+  let sitesWithCreds = Object.values(ALL_ADAPTERS).filter(a => deps.getCreds(a.key));
+  if (opts.sites && opts.sites.length > 0) {
+    const want = new Set(opts.sites);
+    sitesWithCreds = sitesWithCreds.filter(a => want.has(a.key));
+  }
 
   if (codes.length === 0) {
     console.warn("[scheduler] no Excel medications with insurance codes — skipping");
@@ -48,10 +65,11 @@ export async function runScheduledJob(deps: RunJobDeps): Promise<{ totalCodes: n
   );
   const startedAt = Date.now();
 
+  const jobMode = opts.mode ?? "scheduled";
   // One ScrapeJob row per site so we can see per-site progress later
   const jobIds = new Map<string, string>();
   for (const site of sitesWithCreds) {
-    const id = await startJob({ siteKey: site.key, mode: "scheduled", totalCodes: codes.length });
+    const id = await startJob({ siteKey: site.key, mode: jobMode, totalCodes: codes.length });
     jobIds.set(site.key, id);
   }
 
@@ -166,11 +184,11 @@ export function isJobRunning() {
   return isRunning;
 }
 
-export async function triggerJobNow(deps: RunJobDeps) {
+export async function triggerJobNow(deps: RunJobDeps, opts?: RunOptions) {
   if (isRunning) throw new Error("a job is already running");
   isRunning = true;
   try {
-    return await runScheduledJob(deps);
+    return await runScheduledJob(deps, opts);
   } finally {
     isRunning = false;
   }
