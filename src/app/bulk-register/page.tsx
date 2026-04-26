@@ -97,9 +97,34 @@ function BulkRegisterInner() {
   const [criteriaSet, setCriteriaSet] = useState<Record<string, boolean>>({});
   const [autoSwitchResult, setAutoSwitchResult] = useState<{ applied: number; skipped: number } | null>(null);
   const [savedProposals, setSavedProposals] = useState<ProposalItem[]>([]);
+  const [loadingProposal, setLoadingProposal] = useState<string | null>(null);
   const [filterRequests, setFilterRequests] = useState<FilterRequestItem[]>([]);
   const [expandedCompanies, setExpandedCompanies] = useState<Set<string>>(new Set());
   const fileRef = useRef<HTMLInputElement>(null);
+
+  async function loadProposal(proposalId: string) {
+    setLoadingProposal(proposalId);
+    try {
+      const res = await fetch(`/api/proposals/${proposalId}`);
+      if (!res.ok) return;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const data = await res.json() as { title: string; clientId?: string | null; client?: { clientName: string } | null; items: any[] };
+      const newRows: SwapRow[] = data.items.map((item) => ({
+        id: uid(),
+        originalCode: item.originalCode ?? item.originalMedication?.insuranceCode ?? "",
+        original: item.originalMedication ?? null,
+        alternative: item.altMedication ?? null,
+      }));
+      setRows(newRows);
+      setTitle(data.title ?? "대체제안서");
+      if (data.client) setClientName(data.client.clientName ?? "");
+      if (data.clientId) setSelectedClientId(data.clientId);
+      const matched = newRows.filter((r) => r.original).length;
+      setLastSummary({ total: newRows.length, matched, unmatched: newRows.length - matched });
+    } finally {
+      setLoadingProposal(null);
+    }
+  }
 
   function refreshClients() {
     if (!userId) return;
@@ -829,11 +854,15 @@ function BulkRegisterInner() {
                   savedProposals.map((p) => (
                     <button
                       key={p.id}
-                      onClick={() => router.push(`/proposals?id=${p.id}`)}
-                      className="w-full text-left p-2.5 rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50/40 transition-colors group"
+                      onClick={() => loadProposal(p.id)}
+                      disabled={loadingProposal !== null}
+                      className="w-full text-left p-2.5 rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50/40 transition-colors group disabled:opacity-50"
                     >
                       <div className="flex items-start gap-2">
-                        <FileText className="w-3.5 h-3.5 text-gray-400 mt-0.5 shrink-0 group-hover:text-blue-500" />
+                        {loadingProposal === p.id
+                          ? <Loader2 className="w-3.5 h-3.5 text-blue-500 mt-0.5 shrink-0 animate-spin" />
+                          : <FileText className="w-3.5 h-3.5 text-gray-400 mt-0.5 shrink-0 group-hover:text-blue-500" />
+                        }
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-medium text-gray-900 truncate">{p.title}</p>
                           <p className="text-[11px] text-gray-500 mt-0.5">
