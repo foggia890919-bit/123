@@ -355,28 +355,28 @@ export default function MedicationTable({ medications, loading, userId, showCate
                         className="w-3.5 h-3.5 rounded border-gray-300 cursor-pointer" aria-label={`${med.productName} 선택`} />
                     </td>
                     <td className="px-2 py-1.5">
-                      <div className="flex items-start gap-1">
+                      <div className="flex items-start gap-2">
                         <div className="min-w-0 flex-1">
                           <p className="font-medium text-gray-900 leading-snug">
                             <ProductName name={med.productName} />
                             <SettlementBadge med={med} />
                           </p>
                           <p className="text-[11px] text-gray-500 mt-0.5">{med.companyName}</p>
-                          <div className="flex gap-1 mt-1">
-                            <button type="button" onClick={(e) => openDropdown(e, [med.id])}
-                              className={`text-[10px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap transition-colors ${userId ? "text-green-700 hover:bg-green-50" : "text-gray-300 cursor-not-allowed"}`}>
-                              제안서추가
-                            </button>
-                            <button type="button"
-                              onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.ingredientCode ?? null })}
-                              className="text-[10px] font-medium text-blue-600 hover:bg-blue-50 px-1.5 py-0.5 rounded whitespace-nowrap transition-colors">
-                              동일성분
-                            </button>
-                          </div>
+                        </div>
+                        <div className="flex flex-col gap-0.5 shrink-0 items-end">
+                          <button type="button" onClick={(e) => openDropdown(e, [med.id])}
+                            className={`text-[10px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap transition-colors ${userId ? "text-green-700 hover:bg-green-50" : "text-gray-300 cursor-not-allowed"}`}>
+                            제안서추가
+                          </button>
+                          <button type="button"
+                            onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.ingredientCode ?? null })}
+                            className="text-[10px] font-medium text-blue-600 hover:bg-blue-50 px-1.5 py-0.5 rounded whitespace-nowrap transition-colors">
+                            동일성분
+                          </button>
                         </div>
                         {hasDetailPanel && (
                           <button type="button" onClick={() => toggleRow(med.id)}
-                            className="shrink-0 p-1.5 -mr-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors mt-0.5">
+                            className="shrink-0 p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors mt-0.5">
                             {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                           </button>
                         )}
