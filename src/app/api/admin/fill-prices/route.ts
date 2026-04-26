@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
   try {
     // 약가 없는 약품의 고유 제약사 목록 조회
     const companiesRaw = await prisma.medication.findMany({
-      where: { price: null, companyName: { not: undefined } },
+      where: { companyName: { not: undefined } },
       select: { companyName: true },
       distinct: ["companyName"],
     });
@@ -141,11 +141,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "HIRA에서 가격 데이터를 가져오지 못했습니다.", scanned, companyErrors });
     }
 
-    // DB에서 insuranceCode가 mdsCd와 일치하는 약품 조회 (price null인 것)
+    // DB에서 insuranceCode가 mdsCd와 일치하는 약품 전체 조회 (기존 약가도 갱신)
     const codes = Array.from(priceMap.keys());
     const targets = await prisma.medication.findMany({
-      where: { insuranceCode: { in: codes }, price: null },
-      select: { id: true, insuranceCode: true },
+      where: { insuranceCode: { in: codes } },
+      select: { id: true, insuranceCode: true, price: true },
     });
 
     // 배치 업데이트
@@ -158,6 +158,7 @@ export async function POST(req: NextRequest) {
       for (const t of slice) {
         const price = priceMap.get(t.insuranceCode!);
         if (!price) continue;
+        if (t.price === price) continue; // 동일하면 스킵
         tuples.push(`($${p++}::text, $${p++}::int)`);
         params.push(t.id, price);
       }
