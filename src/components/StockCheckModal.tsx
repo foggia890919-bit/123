@@ -129,14 +129,16 @@ export default function StockCheckModal({ open, onClose, insuranceCode, productN
             const validRows = results.filter(r => r.error !== "no snapshot yet");
             const errors = validRows.filter(r => r.error);
             const allItems = validRows.flatMap(r => r.items);
-            const groupedMap = new Map<string, { productName: string; spec: string | null; manufacturer: string | null; unitPrice: number | null; stock: number }>();
-            for (const item of allItems) {
-              const key = `${item.productName}|${item.spec ?? ""}|${item.manufacturer ?? ""}`;
-              const existing = groupedMap.get(key);
-              if (existing) existing.stock += item.stock ?? 0;
-              else groupedMap.set(key, { productName: item.productName, spec: item.spec, manufacturer: item.manufacturer, unitPrice: item.unitPrice, stock: item.stock ?? 0 });
-            }
-            const aggregated = Array.from(groupedMap.values());
+            const totalStock = allItems.reduce((sum, i) => sum + (i.stock ?? 0), 0);
+            const aggregated = allItems.length > 0
+              ? [{
+                  productName: allItems.find(i => i.productName)?.productName ?? (productName ?? ""),
+                  spec: allItems.find(i => i.spec)?.spec ?? null,
+                  manufacturer: allItems.find(i => i.manufacturer)?.manufacturer ?? null,
+                  unitPrice: allItems.find(i => i.unitPrice != null)?.unitPrice ?? null,
+                  stock: totalStock,
+                }]
+              : [];
             return (
               <div className="space-y-4">
                 <div className="border rounded-md">
