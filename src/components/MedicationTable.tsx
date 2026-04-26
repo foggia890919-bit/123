@@ -324,7 +324,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                   onChange={toggleAll} className="w-3.5 h-3.5 rounded border-gray-300 cursor-pointer"
                   aria-label="전체 선택/해제" title="전체 선택 / 전체 해제" />
               </th>
-              <th onClick={() => toggleSort("productName")} className="px-2 py-2 text-left cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap">
+              <th onClick={() => toggleSort("productName")} className="px-2 py-2 text-left cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap w-48">
                 제품명 / 제약사 <SortIcon k="productName" />
               </th>
               {showStock && <th className="px-2 py-2 text-right whitespace-nowrap">재고</th>}
