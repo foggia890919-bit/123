@@ -26,18 +26,17 @@ function extractCode(item: HiraItem): string | null {
   return code || null;
 }
 
-async function fetchPage(pageNo: number): Promise<{ items: HiraItem[]; totalCount: number }> {
-  const url = new URL(HIRA_PRICE_URL);
-  url.searchParams.set("serviceKey", API_KEY);
-  url.searchParams.set("pageNo", String(pageNo));
-  url.searchParams.set("numOfRows", "1000");
-  // XML 전용 API — type 파라미터 없음
+// data.go.kr: serviceKey는 반드시 직접 append (URLSearchParams 사용 시 이중인코딩 발생)
+function buildHiraUrl(pageNo: number, numOfRows = 1000): string {
+  return `${HIRA_PRICE_URL}?serviceKey=${API_KEY}&pageNo=${pageNo}&numOfRows=${numOfRows}`;
+}
 
-  const res = await fetch(url.toString(), { cache: "no-store" });
+async function fetchPage(pageNo: number): Promise<{ items: HiraItem[]; totalCount: number }> {
+  const res = await fetch(buildHiraUrl(pageNo), { cache: "no-store" });
   const rawText = await res.text().catch(() => "");
 
   if (!res.ok) {
-    throw new Error(`HIRA API ${res.status}: ${rawText.slice(0, 500)}`);
+    throw new Error(`HIRA API ${res.status}: ${rawText.slice(0, 2000)}`);
   }
 
   // XML 파싱
@@ -71,20 +70,19 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const maxPages = Math.min(parseInt(body?.maxPages) || 50, 200);
 
-  // 디버그 모드: 첫 페이지 원본 XML 샘플 반환
+  // 디버그 모드: 원본 응답 전체 반환 (에러 포함)
   if (body?.debug) {
-    try {
-      const url = new URL(HIRA_PRICE_URL);
-      url.searchParams.set("serviceKey", API_KEY);
-      url.searchParams.set("pageNo", "1");
-      url.searchParams.set("numOfRows", "3");
-      const res = await fetch(url.toString(), { cache: "no-store" });
-      const rawText = await res.text().catch(() => "");
-      const { items, totalCount } = await fetchPage(1);
-      return NextResponse.json({ debug: true, rawSample: rawText.slice(0, 3000), parsedSample: items.slice(0, 3), totalCount });
-    } catch (err) {
-      return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
-    }
+    const debugUrl = buildHiraUrl(1, 3);
+    const res = await fetch(debugUrl, { cache: "no-store" });
+    const rawText = await res.text().catch(() => "(응답 없음)");
+    // 키 일부만 마스킹해서 확인 (앞 8자만 노출)
+    const keyHint = API_KEY ? `${API_KEY.slice(0, 8)}...` : "(키 없음)";
+    return NextResponse.json({
+      debug: true,
+      status: res.status,
+      keyHint,
+      rawResponse: rawText.slice(0, 5000),
+    });
   }
 
   let filled = 0;
