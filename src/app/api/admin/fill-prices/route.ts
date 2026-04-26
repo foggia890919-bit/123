@@ -100,32 +100,40 @@ export async function POST(req: NextRequest) {
     // 전체 HIRA 가격 맵: mdsCd → price
     const priceMap = new Map<string, number>();
 
-    for (const company of companies) {
+    async function processCompany(company: string): Promise<{ items: number; errors: number }> {
       const searchName = normalizeCompanyForSearch(company);
-      if (!searchName) continue;
-
+      if (!searchName) return { items: 0, errors: 0 };
       try {
-        // 첫 페이지로 totalCount 파악
         const first = await fetchHiraByCompany(searchName, 1);
         const pages = Math.ceil(first.totalCount / 1000);
         const allItems = [...first.items];
-
-        for (let p = 2; p <= Math.min(pages, 10); p++) {
+        for (let p = 2; p <= Math.min(pages, 5); p++) {
           const { items } = await fetchHiraByCompany(searchName, p);
           allItems.push(...items);
         }
-
-        scanned += allItems.length;
-
         for (const item of allItems) {
           if (!item.mdsCd || !item.mxCprc) continue;
           const price = parseInt(item.mxCprc.replace(/,/g, ""));
-          if (!isNaN(price) && price > 0) {
-            priceMap.set(item.mdsCd, price);
-          }
+          if (!isNaN(price) && price > 0) priceMap.set(item.mdsCd, price);
         }
+        return { items: allItems.length, errors: 0 };
       } catch {
-        companyErrors++;
+        return { items: 0, errors: 1 };
+      }
+    }
+
+    // 5개씩 병렬 처리
+    const CONCURRENCY = 5;
+    for (let i = 0; i < companies.length; i += CONCURRENCY) {
+      const batch = companies.slice(i, i + CONCURRENCY);
+      const results = await Promise.allSettled(batch.map(processCompany));
+      for (const r of results) {
+        if (r.status === "fulfilled") {
+          scanned += r.value.items;
+          companyErrors += r.value.errors;
+        } else {
+          companyErrors++;
+        }
       }
     }
 

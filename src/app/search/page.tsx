@@ -60,42 +60,75 @@ export default function SearchPage() {
   const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
   const [historyOpen, setHistoryOpen] = useState(true);
 
+  // 로그인 시 DB에서, 비로그인 시 localStorage에서 불러오기
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("med_search_history");
-      if (saved) setSearchHistory(JSON.parse(saved));
-    } catch {}
-  }, []);
+    if (session?.user?.id) {
+      fetch("/api/search-history")
+        .then((r) => r.json())
+        .then((data) => { if (Array.isArray(data)) setSearchHistory(data); })
+        .catch(() => {});
+    } else {
+      try {
+        const saved = localStorage.getItem("med_search_history");
+        if (saved) setSearchHistory(JSON.parse(saved));
+      } catch {}
+    }
+  }, [session?.user?.id]);
 
   function saveHistory(q: string, companies: Set<string>, count: number) {
+    const entry: SearchHistoryItem = {
+      id: Date.now().toString(),
+      query: q,
+      companies: Array.from(companies),
+      resultCount: count,
+      searchedAt: new Date().toISOString(),
+    };
     setSearchHistory((prev) => {
-      const entry: SearchHistoryItem = {
-        id: Date.now().toString(),
-        query: q,
-        companies: Array.from(companies),
-        resultCount: count,
-        searchedAt: new Date().toISOString(),
-      };
       const filtered = prev.filter(
         (h) => !(h.query === q && JSON.stringify([...h.companies].sort()) === JSON.stringify([...companies].sort()))
       );
-      const next = [entry, ...filtered].slice(0, 20);
-      try { localStorage.setItem("med_search_history", JSON.stringify(next)); } catch {}
-      return next;
+      return [entry, ...filtered].slice(0, 20);
     });
+    if (session?.user?.id) {
+      fetch("/api/search-history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: q, companies: Array.from(companies), resultCount: count }),
+      }).catch(() => {});
+    } else {
+      try {
+        const prev = JSON.parse(localStorage.getItem("med_search_history") || "[]");
+        const filtered = prev.filter(
+          (h: SearchHistoryItem) => !(h.query === q && JSON.stringify([...h.companies].sort()) === JSON.stringify([...companies].sort()))
+        );
+        localStorage.setItem("med_search_history", JSON.stringify([entry, ...filtered].slice(0, 20)));
+      } catch {}
+    }
   }
 
   function removeHistory(id: string) {
-    setSearchHistory((prev) => {
-      const next = prev.filter((h) => h.id !== id);
-      try { localStorage.setItem("med_search_history", JSON.stringify(next)); } catch {}
-      return next;
-    });
+    setSearchHistory((prev) => prev.filter((h) => h.id !== id));
+    if (session?.user?.id) {
+      fetch("/api/search-history", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      }).catch(() => {});
+    } else {
+      try {
+        const prev = JSON.parse(localStorage.getItem("med_search_history") || "[]");
+        localStorage.setItem("med_search_history", JSON.stringify(prev.filter((h: SearchHistoryItem) => h.id !== id)));
+      } catch {}
+    }
   }
 
   function clearHistory() {
     setSearchHistory([]);
-    try { localStorage.removeItem("med_search_history"); } catch {}
+    if (session?.user?.id) {
+      fetch("/api/search-history", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }).catch(() => {});
+    } else {
+      try { localStorage.removeItem("med_search_history"); } catch {}
+    }
   }
 
   const [companies, setCompanies] = useState<CompanyOpt[]>([]);
