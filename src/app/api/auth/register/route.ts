@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
       role: safeRole,
       phone: phone || null,
       carrier: carrier || null,
-      approved: false,
+      approved: true,
       updatedAt: new Date(),
     },
     select: { id: true, email: true, name: true, role: true },
