@@ -32,13 +32,31 @@ async function fetchPage(pageNo: number): Promise<{ items: HiraItem[]; totalCoun
   url.searchParams.set("type", "json");
 
   const res = await fetch(url.toString(), { cache: "no-store" });
+  const rawText = await res.text().catch(() => "");
+
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`HIRA API ${res.status}: ${body.slice(0, 300)}`);
+    // 응답 내용 전체 반환 (디버깅용)
+    throw new Error(`HIRA API ${res.status}: ${rawText.slice(0, 500)}`);
   }
 
-  const json = await res.json();
-  const body = json?.body ?? json?.response?.body ?? json;
+  // JSON 파싱 시도
+  let json: Record<string, unknown>;
+  try {
+    json = JSON.parse(rawText);
+  } catch {
+    throw new Error(`HIRA API JSON 파싱 실패: ${rawText.slice(0, 300)}`);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const j = json as any;
+
+  // 응답 내 에러 코드 확인 (200이어도 오류 반환하는 경우)
+  const errMsg = j?.response?.header?.resultMsg ?? j?.cmmMsgHeader?.errMsg;
+  if (errMsg && String(errMsg).toLowerCase() !== "ok" && String(errMsg).toLowerCase() !== "정상") {
+    throw new Error(`HIRA API 오류: ${errMsg} (원문: ${rawText.slice(0, 300)})`);
+  }
+
+  const body = j?.body ?? j?.response?.body ?? j;
   const rawItems = body?.items?.item ?? body?.items ?? body?.item ?? [];
   const items: HiraItem[] = Array.isArray(rawItems) ? rawItems : (rawItems ? [rawItems] : []);
   const totalCount = parseInt(String(body?.totalCount ?? body?.numOfRows ?? "0"));
