@@ -9,12 +9,16 @@ export async function GET(req: NextRequest) {
   const userId = req.nextUrl.searchParams.get("userId") || null;
   const settlementType = req.nextUrl.searchParams.get("settlementType") || "";
 
+  const allSettlement = req.nextUrl.searchParams.get("isSettlement") === "true";
   const companyList = companiesParam.split(",").map((s) => s.trim()).filter(Boolean);
-  if (companyList.length === 0) return NextResponse.json({ medications: [], total: 0 });
+  if (companyList.length === 0 && !allSettlement) return NextResponse.json({ medications: [], total: 0 });
 
-  const where: Record<string, unknown> = {
-    companyName: { in: companyList },
-  };
+  const where: Record<string, unknown> = {};
+  if (allSettlement) {
+    where.isSettlement = true;
+  } else {
+    where.companyName = { in: companyList };
+  }
   if (settlementType === "원외" || settlementType === "원내") {
     where.settlementType = settlementType;
   }

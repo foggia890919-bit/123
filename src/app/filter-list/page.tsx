@@ -134,6 +134,23 @@ export default function FilterListPage() {
   }, [selected, productSearch, session, companyTab]);
 
   const [downloading, setDownloading] = useState(false);
+  const [downloadingAll, setDownloadingAll] = useState(false);
+
+  function medsToRows(all: MedicationItem[]) {
+    return all.map((m) => ({
+      "분류(A)": m.categoryA || "",
+      성분명: m.ingredientName,
+      "분류(B)": m.categoryB || "",
+      ...(isSalesRep ? { 코드: m.commissionRate ?? "" } : {}),
+      제약사명: m.companyName,
+      "생동/생산": m.bioStatus || "",
+      품목명: m.productName,
+      약가: m.price ?? "",
+      "오리지날/대조약": m.originalDrug || "",
+      보험코드: m.insuranceCode || "",
+      특이사항: m.notes || "",
+    }));
+  }
 
   async function exportExcel() {
     if (selected.size === 0) return;
@@ -149,22 +166,7 @@ export default function FilterListPage() {
       const res = await fetch(`/api/medications/filter?${params.toString()}`);
       const data = await res.json();
       const all: MedicationItem[] = data.medications || [];
-
-      const rows = all.map((m) => ({
-        ...(cols.showCategoryA ? { "분류(A)": m.categoryA || "" } : {}),
-        ...(cols.showIngredientName ? { 성분명: m.ingredientName } : {}),
-        ...(cols.showCategoryB ? { "ATC코드": m.ingredientCode || "" } : {}),
-        ...(isSalesRep && cols.showRate ? { 수수료율: m.commissionRate != null ? `${m.commissionRate}%` : "" } : {}),
-        ...(cols.showCompanyName ? { 제약사명: m.companyName } : {}),
-        ...(cols.showBioStatus ? { "생동/생산": m.bioStatus || "" } : {}),
-        ...(cols.showProductName ? { 품목명: m.productName } : {}),
-        ...(cols.showPrice ? { 약가: m.price || "" } : {}),
-        ...(cols.showOriginalDrug ? { "오리지날/대조약": m.originalDrug || "" } : {}),
-        ...(cols.showInsuranceCode ? { 보험코드: m.insuranceCode || "" } : {}),
-        ...(cols.showNotes ? { 특이사항: m.notes || "" } : {}),
-        ...(cols.showStock ? { 재고: m.stock != null ? m.stock : "" } : {}),
-      }));
-      const ws = XLSX.utils.json_to_sheet(rows);
+      const ws = XLSX.utils.json_to_sheet(medsToRows(all));
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "제약사리스트");
       XLSX.writeFile(wb, `제약사별리스트_${new Date().toISOString().slice(0, 10)}.xlsx`);
@@ -173,14 +175,39 @@ export default function FilterListPage() {
     }
   }
 
+  async function downloadAllSettlement() {
+    setDownloadingAll(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("isSettlement", "true");
+      params.set("limit", "99999");
+      const res = await fetch(`/api/medications/filter?${params.toString()}`);
+      const data = await res.json();
+      const all: MedicationItem[] = data.medications || [];
+      const ws = XLSX.utils.json_to_sheet(medsToRows(all));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "전체요율표");
+      XLSX.writeFile(wb, `전체요율표_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } finally {
+      setDownloadingAll(false);
+    }
+  }
+
   return (
     <RequireRole minRole="SALES_REP">
       <div className="space-y-5">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Download className="w-6 h-6 text-blue-600" />제약사별 리스트 다운
-          </h1>
-          <p className="text-gray-500 text-sm mt-1">제약사를 선택해서 품목 리스트를 조회하고 엑셀로 다운로드하세요</p>
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+              <Download className="w-6 h-6 text-blue-600" />제약사별 리스트 다운
+            </h1>
+            <p className="text-gray-500 text-sm mt-1">제약사를 선택해서 품목 리스트를 조회하고 엑셀로 다운로드하세요</p>
+          </div>
+          {isSalesRep && (
+            <Button variant="outline" size="sm" onClick={downloadAllSettlement} disabled={downloadingAll} className="shrink-0 mt-1">
+              <FileText className="w-4 h-4 mr-1.5" />{downloadingAll ? "다운로드 중…" : "전체 요율표 내려받기"}
+            </Button>
+          )}
         </div>
 
         <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
