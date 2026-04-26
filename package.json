@@ -16,6 +16,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.90.0",
     "@auth/prisma-adapter": "^2.11.2",
+    "@aws-sdk/client-lambda": "^3.1037.0",
     "@prisma/adapter-pg": "^7.7.0",
     "@prisma/client": "^7.7.0",
     "@types/bcryptjs": "^2.4.6",

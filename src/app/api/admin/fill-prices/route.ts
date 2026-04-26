@@ -1,66 +1,60 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
+import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 
 export const maxDuration = 300;
 
-const API_KEY = process.env.PUBLIC_DATA_API_KEY!;
+const lambda = new LambdaClient({
+  region: "ap-northeast-2",
+  credentials: {
+    accessKeyId: process.env.AWS_HIRA_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.AWS_HIRA_SECRET_ACCESS_KEY!,
+  },
+});
 
-// 건강보험심사평가원_약가기준정보조회서비스 (HTTP — HTTPS 차단 우회)
-const HIRA_PRICE_URL = "http://apis.data.go.kr/B551182/dgamtCrtInfoService1.2/getDgamtList";
+// Lambda(서울)를 통해 HIRA API 호출 (한국 IP 필요)
+async function fetchHiraByCompany(
+  mnfEntpNm: string,
+  pageNo: number,
+  numOfRows = 1000
+): Promise<{ items: HiraItem[]; totalCount: number }> {
+  const payload = JSON.stringify({ mnfEntpNm, pageNo, numOfRows });
+  const cmd = new InvokeCommand({
+    FunctionName: "hira-price-proxy",
+    Payload: Buffer.from(payload),
+  });
+  const res = await lambda.send(cmd);
+  const body = JSON.parse(Buffer.from(res.Payload!).toString());
+  const xml: string = body.body ?? "";
 
-interface HiraItem { [key: string]: string | undefined }
-
-function extractPrice(item: HiraItem): number | null {
-  // dgamtCrtInfoService1.2 필드 우선, 기존 필드 fallback
-  const raw = item["상한가"] ?? item["mxPrc"] ?? item["상한금액"] ?? item["약가"] ?? item["prc"] ?? "";
-  const n = parseInt(String(raw).replace(/,/g, ""));
-  return isNaN(n) || n <= 0 ? null : n;
-}
-
-function extractCode(item: HiraItem): string | null {
-  // dgamtCrtInfoService1.2: ediCode, 제품코드, itemCd 등
-  const code = (
-    item["ediCode"] ?? item["제품코드"] ?? item["itemCd"] ?? item["급여코드"] ?? item["품목기준코드"] ?? item["itemSeq"] ?? ""
-  ).trim();
-  return code || null;
-}
-
-// data.go.kr: serviceKey는 반드시 직접 append (URLSearchParams 사용 시 이중인코딩 발생)
-function buildHiraUrl(pageNo: number, numOfRows = 1000): string {
-  return `${HIRA_PRICE_URL}?serviceKey=${API_KEY}&pageNo=${pageNo}&numOfRows=${numOfRows}&type=xml`;
-}
-
-async function fetchPage(pageNo: number): Promise<{ items: HiraItem[]; totalCount: number }> {
-  const res = await fetch(buildHiraUrl(pageNo), { cache: "no-store" });
-  const rawText = await res.text().catch(() => "");
-
-  if (!res.ok) {
-    throw new Error(`HIRA API ${res.status}: ${rawText.slice(0, 2000)}`);
-  }
-
-  // XML 파싱
-  const totalCountMatch = rawText.match(/<totalCount>(\d+)<\/totalCount>/);
+  const totalCountMatch = xml.match(/<totalCount>(\d+)<\/totalCount>/);
   const totalCount = totalCountMatch ? parseInt(totalCountMatch[1]) : 0;
 
-  // item 블록 추출
-  const itemBlocks = rawText.match(/<item>([\s\S]*?)<\/item>/g) ?? [];
+  const itemBlocks = xml.match(/<item>([\s\S]*?)<\/item>/g) ?? [];
   const items: HiraItem[] = itemBlocks.map((block) => {
-    const get = (tag: string) => {
-      const m = block.match(new RegExp(`<${tag}>([^<]*)<\/${tag}>`));
-      return m ? m[1].trim() : undefined;
-    };
-    return {
-      ediCode: get("ediCode"),
-      제품코드: get("itemCd") ?? get("제품코드"),
-      상한가: get("mxPrc") ?? get("상한가") ?? get("상한금액"),
-      mxPrc: get("mxPrc"),
-      품목명: get("itemName") ?? get("품목명"),
-      itemName: get("itemName"),
-    } as HiraItem;
+    const get = (tag: string) => block.match(new RegExp(`<${tag}>([^<]*)</${tag}>`))?.[1]?.trim();
+    return { mdsCd: get("mdsCd"), mxCprc: get("mxCprc"), payTpNm: get("payTpNm") };
   });
 
   return { items, totalCount };
+}
+
+interface HiraItem {
+  mdsCd?: string;
+  mxCprc?: string;
+  payTpNm?: string;
+}
+
+// "(주)", "㈜", "주식회사" 제거해서 검색용 이름 추출
+function normalizeCompanyForSearch(name: string): string {
+  return name
+    .replace(/주식회사\s*/g, "")
+    .replace(/\s*\(주\)/g, "")
+    .replace(/\s*㈜/g, "")
+    .replace(/\s*\(유\)/g, "")
+    .trim()
+    .slice(0, 15); // HIRA API partial match
 }
 
 export async function POST(req: NextRequest) {
@@ -68,92 +62,100 @@ export async function POST(req: NextRequest) {
   if (isNextResponse(guard)) return guard;
 
   const body = await req.json().catch(() => ({}));
-  const maxPages = Math.min(parseInt(body?.maxPages) || 50, 200);
 
-  // 디버그 모드: 원본 응답 전체 반환 (에러 포함)
+  // 디버그: 특정 회사명으로 테스트
   if (body?.debug) {
-    const debugUrl = buildHiraUrl(1, 3);
-    const res = await fetch(debugUrl, { cache: "no-store" });
-    const rawText = await res.text().catch(() => "(응답 없음)");
-    // 키 일부만 마스킹해서 확인 (앞 8자만 노출)
-    const keyHint = API_KEY ? `${API_KEY.slice(0, 8)}...` : "(키 없음)";
-    return NextResponse.json({
-      debug: true,
-      status: res.status,
-      keyHint,
-      rawResponse: rawText.slice(0, 5000),
-    });
+    const testCompany = body.company ?? "한미약품";
+    try {
+      const result = await fetchHiraByCompany(testCompany, 1, 5);
+      return NextResponse.json({ debug: true, company: testCompany, ...result });
+    } catch (err) {
+      return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+    }
   }
 
   let filled = 0;
   let scanned = 0;
-  let pageErrors = 0;
+  let companyErrors = 0;
 
   try {
-    // 1페이지로 totalCount 파악
-    const first = await fetchPage(1);
-    const totalCount = first.totalCount || 0;
-    const totalPages = totalCount > 0 ? Math.ceil(totalCount / 1000) : maxPages;
-    const pagesToProcess = Math.min(totalPages, maxPages);
+    // 약가 없는 약품의 고유 제약사 목록 조회
+    const companiesRaw = await prisma.medication.findMany({
+      where: { price: null, companyName: { not: null } },
+      select: { companyName: true },
+      distinct: ["companyName"],
+    });
 
-    async function processItems(items: HiraItem[]) {
-      // 가격과 코드가 있는 항목만
-      const priceMap = new Map<string, number>();
-      for (const item of items) {
-        const code = extractCode(item);
-        const price = extractPrice(item);
-        if (code && price) priceMap.set(code, price);
-      }
-      if (priceMap.size === 0) return;
+    const companies = companiesRaw
+      .map((c) => c.companyName!)
+      .filter(Boolean);
 
-      const codes = Array.from(priceMap.keys());
+    // 전체 HIRA 가격 맵: mdsCd → price
+    const priceMap = new Map<string, number>();
 
-      // 해당 코드 중 price가 null인 것만 조회
-      const targets = await prisma.medication.findMany({
-        where: { insuranceCode: { in: codes }, price: null },
-        select: { id: true, insuranceCode: true },
-      });
+    for (const company of companies) {
+      const searchName = normalizeCompanyForSearch(company);
+      if (!searchName) continue;
 
-      if (targets.length === 0) return;
-
-      // 약가만 업데이트 (다른 필드 건드리지 않음)
-      const CHUNK = 200;
-      for (let i = 0; i < targets.length; i += CHUNK) {
-        const slice = targets.slice(i, i + CHUNK);
-        const tuples: string[] = [];
-        const params: (string | number)[] = [];
-        let p = 1;
-        for (const t of slice) {
-          const price = priceMap.get(t.insuranceCode!);
-          if (!price) continue;
-          tuples.push(`($${p++}::text, $${p++}::int)`);
-          params.push(t.id, price);
-        }
-        if (tuples.length === 0) continue;
-        const sql = `
-          UPDATE "Medication" AS m
-          SET "price" = v.price, "updatedAt" = NOW()
-          FROM (VALUES ${tuples.join(", ")}) AS v(id, price)
-          WHERE m.id = v.id
-        `;
-        await prisma.$executeRawUnsafe(sql, ...params);
-        filled += slice.length;
-      }
-      scanned += items.length;
-    }
-
-    await processItems(first.items);
-
-    for (let p = 2; p <= pagesToProcess; p++) {
       try {
-        const { items } = await fetchPage(p);
-        await processItems(items);
+        // 첫 페이지로 totalCount 파악
+        const first = await fetchHiraByCompany(searchName, 1);
+        const pages = Math.ceil(first.totalCount / 1000);
+        const allItems = [...first.items];
+
+        for (let p = 2; p <= Math.min(pages, 10); p++) {
+          const { items } = await fetchHiraByCompany(searchName, p);
+          allItems.push(...items);
+        }
+
+        scanned += allItems.length;
+
+        for (const item of allItems) {
+          if (!item.mdsCd || !item.mxCprc) continue;
+          const price = parseInt(item.mxCprc.replace(/,/g, ""));
+          if (!isNaN(price) && price > 0) {
+            priceMap.set(item.mdsCd, price);
+          }
+        }
       } catch {
-        pageErrors++;
+        companyErrors++;
       }
     }
 
-    // 처리 후 통계
+    if (priceMap.size === 0) {
+      return NextResponse.json({ success: false, error: "HIRA에서 가격 데이터를 가져오지 못했습니다.", scanned, companyErrors });
+    }
+
+    // DB에서 insuranceCode가 mdsCd와 일치하는 약품 조회 (price null인 것)
+    const codes = Array.from(priceMap.keys());
+    const targets = await prisma.medication.findMany({
+      where: { insuranceCode: { in: codes }, price: null },
+      select: { id: true, insuranceCode: true },
+    });
+
+    // 배치 업데이트
+    const CHUNK = 200;
+    for (let i = 0; i < targets.length; i += CHUNK) {
+      const slice = targets.slice(i, i + CHUNK);
+      const tuples: string[] = [];
+      const params: (string | number)[] = [];
+      let p = 1;
+      for (const t of slice) {
+        const price = priceMap.get(t.insuranceCode!);
+        if (!price) continue;
+        tuples.push(`($${p++}::text, $${p++}::int)`);
+        params.push(t.id, price);
+      }
+      if (tuples.length === 0) continue;
+      await prisma.$executeRawUnsafe(`
+        UPDATE "Medication" AS m
+        SET "price" = v.price, "updatedAt" = NOW()
+        FROM (VALUES ${tuples.join(", ")}) AS v(id, price)
+        WHERE m.id = v.id
+      `, ...params);
+      filled += slice.length;
+    }
+
     const [totalMeds, nullPriceMeds] = await Promise.all([
       prisma.medication.count(),
       prisma.medication.count({ where: { price: null } }),
@@ -163,8 +165,9 @@ export async function POST(req: NextRequest) {
       success: true,
       filled,
       scanned,
-      pageErrors,
-      pagesProcessed: pagesToProcess,
+      companyErrors,
+      companiesProcessed: companies.length,
+      priceMapSize: priceMap.size,
       totalMeds,
       nullPriceMeds,
       filledPriceMeds: totalMeds - nullPriceMeds,

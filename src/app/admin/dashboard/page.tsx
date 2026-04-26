@@ -240,9 +240,9 @@ function UploadTab() {
   }
 
   async function handleFillPricesDebug() {
-    setFillPriceDebug("조회 중...");
+    setFillPriceDebug("한미약품 약가 3건 조회 중...");
     try {
-      const res = await fetch("/api/admin/fill-prices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ debug: true }) });
+      const res = await fetch("/api/admin/fill-prices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ debug: true, company: "한미약품" }) });
       const data = await res.json();
       setFillPriceDebug(JSON.stringify(data, null, 2));
     } catch (e) { setFillPriceDebug("오류: " + String(e)); }
