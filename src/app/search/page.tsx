@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import { Search, Filter, ChevronDown, X } from "lucide-react";
+import { Search, Filter, ChevronDown, X, Clock, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import MedicationTable, { type ColumnVisibility } from "@/components/MedicationTable";
@@ -13,6 +13,23 @@ import { hasRole } from "@/lib/roles";
 import { useGuestLimit } from "@/hooks/useGuestLimit";
 
 interface CompanyOpt { name: string; count: number }
+interface SearchHistoryItem {
+  id: string;
+  query: string;
+  companies: string[];
+  resultCount: number;
+  searchedAt: string;
+}
+
+function formatRelativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return "방금";
+  if (m < 60) return `${m}분 전`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}시간 전`;
+  return `${Math.floor(h / 24)}일 전`;
+}
 
 export default function SearchPage() {
   const { data: session } = useSession();
@@ -39,6 +56,47 @@ export default function SearchPage() {
   });
 
   const { remaining, isBlocked, consume } = useGuestLimit(!!session);
+
+  const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(true);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("med_search_history");
+      if (saved) setSearchHistory(JSON.parse(saved));
+    } catch {}
+  }, []);
+
+  function saveHistory(q: string, companies: Set<string>, count: number) {
+    setSearchHistory((prev) => {
+      const entry: SearchHistoryItem = {
+        id: Date.now().toString(),
+        query: q,
+        companies: Array.from(companies),
+        resultCount: count,
+        searchedAt: new Date().toISOString(),
+      };
+      const filtered = prev.filter(
+        (h) => !(h.query === q && JSON.stringify([...h.companies].sort()) === JSON.stringify([...companies].sort()))
+      );
+      const next = [entry, ...filtered].slice(0, 20);
+      try { localStorage.setItem("med_search_history", JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }
+
+  function removeHistory(id: string) {
+    setSearchHistory((prev) => {
+      const next = prev.filter((h) => h.id !== id);
+      try { localStorage.setItem("med_search_history", JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }
+
+  function clearHistory() {
+    setSearchHistory([]);
+    try { localStorage.removeItem("med_search_history"); } catch {}
+  }
 
   const [companies, setCompanies] = useState<CompanyOpt[]>([]);
   const [selectedCompanies, setSelectedCompanies] = useState<Set<string>>(new Set());
@@ -77,22 +135,35 @@ export default function SearchPage() {
   }
   function clearCompanies() { setSelectedCompanies(new Set()); }
 
-  async function handleSearch(e?: React.FormEvent) {
-    e?.preventDefault();
-    if (!query.trim() && selectedCompanies.size === 0) return;
+  async function runSearch(q: string, cos: Set<string>) {
+    if (!q.trim() && cos.size === 0) return;
     if (!consume()) { setShowGate(true); return; }
-    setLoading(true); setSearched(true); setDisplayedQuery(query);
+    setLoading(true); setSearched(true); setDisplayedQuery(q);
     try {
       const params = new URLSearchParams();
-      if (query.trim()) params.set("q", query);
+      if (q.trim()) params.set("q", q);
       if (session?.user?.id) params.set("userId", session.user.id);
-      if (selectedCompanies.size > 0) params.set("companies", Array.from(selectedCompanies).join(","));
+      if (cos.size > 0) params.set("companies", Array.from(cos).join(","));
       params.set("limit", "500");
       const res = await fetch(`/api/medications/search?${params.toString()}`);
       const data = await res.json();
-      setResults(data.medications || []); setTotal(data.total || 0);
+      const count = data.total || 0;
+      setResults(data.medications || []); setTotal(count);
+      saveHistory(q, cos, count);
     } catch { setResults([]); }
     finally { setLoading(false); }
+  }
+
+  async function handleSearch(e?: React.FormEvent) {
+    e?.preventDefault();
+    await runSearch(query, selectedCompanies);
+  }
+
+  async function applyHistory(item: SearchHistoryItem) {
+    const cos = new Set(item.companies);
+    setQuery(item.query);
+    setSelectedCompanies(cos);
+    await runSearch(item.query, cos);
   }
 
   async function refetchWithCompanies(nextSet: Set<string>) {
@@ -107,7 +178,9 @@ export default function SearchPage() {
       params.set("limit", "500");
       const res = await fetch(`/api/medications/search?${params.toString()}`);
       const data = await res.json();
-      setResults(data.medications || []); setTotal(data.total || 0);
+      const count = data.total || 0;
+      setResults(data.medications || []); setTotal(count);
+      saveHistory(query, nextSet, count);
     } catch { setResults([]); }
     finally { setLoading(false); }
   }
@@ -235,6 +308,75 @@ export default function SearchPage() {
               className="text-xs text-gray-500 hover:text-gray-700 underline ml-1">모두 지우기</button>
           </div>
         )}
+
+        {/* 검색 히스토리 */}
+        {searchHistory.length > 0 && (
+          <div className="max-w-2xl">
+            <div className="flex items-center justify-between mb-1.5">
+              <button
+                type="button"
+                onClick={() => setHistoryOpen((v) => !v)}
+                className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-gray-700"
+              >
+                <Clock className="w-3.5 h-3.5" />
+                최근 검색
+                <span className="text-gray-400 font-normal">({searchHistory.length})</span>
+                <ChevronDown className={`w-3 h-3 transition-transform ${historyOpen ? "" : "-rotate-90"}`} />
+              </button>
+              {historyOpen && (
+                <button
+                  type="button"
+                  onClick={clearHistory}
+                  className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-500 transition-colors"
+                >
+                  <Trash2 className="w-3 h-3" /> 전체 삭제
+                </button>
+              )}
+            </div>
+            {historyOpen && (
+              <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
+                {searchHistory.map((item) => (
+                  <div
+                    key={item.id}
+                    className="group flex items-center gap-2 bg-white rounded-lg border border-gray-100 px-3 py-2 hover:border-blue-200 hover:bg-blue-50/30 transition-colors"
+                  >
+                    <Search className="w-3.5 h-3.5 text-gray-300 shrink-0" />
+                    <button
+                      type="button"
+                      className="flex-1 min-w-0 text-left"
+                      onClick={() => applyHistory(item)}
+                    >
+                      <span className="text-sm font-medium text-gray-800 truncate block">
+                        {item.query || <span className="text-gray-400 font-normal">(검색어 없음)</span>}
+                      </span>
+                      {item.companies.length > 0 && (
+                        <span className="text-xs text-gray-400 truncate block">
+                          {item.companies.slice(0, 3).join(" · ")}
+                          {item.companies.length > 3 && ` 외 ${item.companies.length - 3}개`}
+                        </span>
+                      )}
+                    </button>
+                    <span className="text-xs text-gray-400 shrink-0 tabular-nums">
+                      {item.resultCount.toLocaleString()}건
+                    </span>
+                    <span className="text-xs text-gray-300 shrink-0">
+                      {formatRelativeTime(item.searchedAt)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeHistory(item.id)}
+                      className="text-gray-200 hover:text-red-400 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="삭제"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {searched && (
           <>
             <div className="flex items-center justify-between flex-wrap gap-3">
