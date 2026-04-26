@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
   try {
     // 약가 없는 약품의 고유 제약사 목록 조회
     const companiesRaw = await prisma.medication.findMany({
-      where: { price: null, companyName: { not: null } },
+      where: { price: null, companyName: { not: undefined } },
       select: { companyName: true },
       distinct: ["companyName"],
     });
