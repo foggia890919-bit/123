@@ -1,0 +1,111 @@
+/**
+ * 구글시트 동기화. Service Account 자격증명이 환경변수로 설정되어야 동작.
+ * 미설정 시 no-op 으로 통과 (사장님이 시트 공유 후 키만 채우면 자동으로 켜짐).
+ */
+export interface SheetRow {
+  values: (string | number)[];
+}
+
+interface SheetsConfig {
+  sheetId: string;
+  email: string;
+  privateKey: string;
+}
+
+function getConfig(): SheetsConfig | null {
+  const sheetId = process.env.GOOGLE_SHEETS_ID;
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+  const privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g, "\n");
+  if (!sheetId || !email || !privateKey) return null;
+  return { sheetId, email, privateKey };
+}
+
+async function getAccessToken(cfg: SheetsConfig): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "RS256", typ: "JWT" };
+  const claim = {
+    iss: cfg.email,
+    scope: "https://www.googleapis.com/auth/spreadsheets",
+    aud: "https://oauth2.googleapis.com/token",
+    exp: now + 3600,
+    iat: now,
+  };
+  const encode = (obj: object) =>
+    Buffer.from(JSON.stringify(obj))
+      .toString("base64")
+      .replace(/=/g, "")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_");
+  const unsigned = `${encode(header)}.${encode(claim)}`;
+  const { createSign, createPrivateKey } = await import("node:crypto");
+  const key = createPrivateKey(cfg.privateKey);
+  const sig = createSign("RSA-SHA256")
+    .update(unsigned)
+    .sign(key)
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+  const jwt = `${unsigned}.${sig}`;
+
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: jwt,
+    }),
+  });
+  if (!res.ok) throw new Error(`Sheets token ${res.status}: ${await res.text()}`);
+  const json = (await res.json()) as { access_token: string };
+  return json.access_token;
+}
+
+export async function appendRows(
+  rangeA1: string,
+  rows: (string | number)[][],
+): Promise<{ ok: boolean; skipped?: boolean; error?: string }> {
+  const cfg = getConfig();
+  if (!cfg) return { ok: true, skipped: true };
+  try {
+    const token = await getAccessToken(cfg);
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${cfg.sheetId}/values/${encodeURIComponent(rangeA1)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ values: rows }),
+    });
+    if (!res.ok) return { ok: false, error: `${res.status} ${await res.text()}` };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function overwriteSheet(
+  rangeA1: string,
+  rows: (string | number)[][],
+): Promise<{ ok: boolean; skipped?: boolean; error?: string }> {
+  const cfg = getConfig();
+  if (!cfg) return { ok: true, skipped: true };
+  try {
+    const token = await getAccessToken(cfg);
+    const clearUrl = `https://sheets.googleapis.com/v4/spreadsheets/${cfg.sheetId}/values/${encodeURIComponent(rangeA1)}:clear`;
+    await fetch(clearUrl, { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+    const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${cfg.sheetId}/values/${encodeURIComponent(rangeA1)}?valueInputOption=USER_ENTERED`;
+    const res = await fetch(updateUrl, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ values: rows }),
+    });
+    if (!res.ok) return { ok: false, error: `${res.status} ${await res.text()}` };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export function getSheetUrl(): string | null {
+  const id = process.env.GOOGLE_SHEETS_ID;
+  return id ? `https://docs.google.com/spreadsheets/d/${id}/edit` : null;
+}

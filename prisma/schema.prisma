@@ -149,3 +149,102 @@ model FilterRequest {
 
   @@index([userId])
 }
+
+// ──────────────────────────────────────────────
+// 네이버 매출 자동화
+// ──────────────────────────────────────────────
+
+model NaverStore {
+  id           String         @id @default(cuid())
+  code         String         @unique
+  bizName      String
+  storeName    String
+  clientId     String
+  clientSecret String
+  enabled      Boolean        @default(true)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  products     NaverProduct[]
+  orders       NaverOrder[]
+}
+
+model NaverProduct {
+  id               String           @id @default(cuid())
+  storeId          String
+  store            NaverStore       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  channelProductNo String
+  productName      String
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  costs            ProductCost[]
+  items            NaverOrderItem[]
+
+  @@unique([storeId, channelProductNo])
+  @@index([storeId])
+}
+
+model ProductCost {
+  id            String       @id @default(cuid())
+  productId     String
+  product       NaverProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  optionName    String       @default("")
+  unitCost      Int          @default(0)
+  shippingCost  Int          @default(0)
+  fulfillCost   Int          @default(0)
+  packagingCost Int          @default(0)
+  etcCost       Int          @default(0)
+  effectiveAt   DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@unique([productId, optionName, effectiveAt])
+  @@index([productId])
+}
+
+model NaverOrder {
+  id          String           @id @default(cuid())
+  storeId     String
+  store       NaverStore       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  orderId     String
+  paymentDate DateTime
+  buyerName   String?
+  totalAmount Int              @default(0)
+  status      String?
+  raw         Json?
+  createdAt   DateTime         @default(now())
+  items       NaverOrderItem[]
+
+  @@unique([storeId, orderId])
+  @@index([storeId, paymentDate])
+}
+
+model NaverOrderItem {
+  id                String        @id @default(cuid())
+  orderId           String
+  order             NaverOrder    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId         String?
+  product           NaverProduct? @relation(fields: [productId], references: [id])
+  productOrderId    String        @unique
+  channelProductNo  String?
+  productName       String
+  optionName        String        @default("")
+  quantity          Int           @default(1)
+  unitPrice         Int           @default(0)
+  salesAmount       Int           @default(0)
+  channelCommission Int           @default(0)
+  payCommission     Int           @default(0)
+  status            String?
+  paymentDate       DateTime
+
+  @@index([orderId])
+  @@index([productId])
+  @@index([paymentDate])
+}
+
+model DailyReportLog {
+  id         String   @id @default(cuid())
+  reportDate DateTime @unique
+  sentAt     DateTime @default(now())
+  channel    String
+  ok         Boolean
+  message    String?
+}
