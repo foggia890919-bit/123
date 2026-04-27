@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 interface Body {
   productId?: string;
   optionName?: string;
+  keyword?: string;
+  bottlesPerUnit?: number;
   unitCost?: number;
   shippingCost?: number;
   fulfillCost?: number;
@@ -16,6 +18,8 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   const body = (await req.json()) as Body;
   const data = {
     optionName: body.optionName ?? "",
+    keyword: body.keyword ?? "",
+    bottlesPerUnit: body.bottlesPerUnit ?? 1,
     unitCost: body.unitCost ?? 0,
     shippingCost: body.shippingCost ?? 0,
     fulfillCost: body.fulfillCost ?? 0,

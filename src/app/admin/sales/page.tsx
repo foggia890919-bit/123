@@ -11,22 +11,36 @@ interface Store {
   enabled: boolean;
 }
 
-interface ReportRow {
+interface KeywordRow {
   storeName: string;
-  productName: string;
-  optionName: string;
-  quantity: number;
+  keyword: string;
+  optionUnits: number;
+  bottles: number;
+  shipments: number;
   salesAmount: number;
   totalCommission: number;
   totalCost: number;
   profit: number;
 }
 
+interface DetailRow {
+  storeName: string;
+  productName: string;
+  optionName: string;
+  keyword: string;
+  bottlesPerUnit: number;
+  quantity: number;
+  bottles: number;
+  salesAmount: number;
+  profit: number;
+}
+
 interface ReportSummary {
   reportDate: string;
-  totals: { quantity: number; salesAmount: number; totalCommission: number; totalCost: number; profit: number };
-  byStore: { storeName: string; salesAmount: number; profit: number; quantity: number }[];
-  rows: ReportRow[];
+  totals: { optionUnits: number; bottles: number; shipments: number; salesAmount: number; totalCommission: number; totalCost: number; profit: number };
+  byStore: { storeName: string; salesAmount: number; profit: number; bottles: number; shipments: number }[];
+  byKeyword: KeywordRow[];
+  details: DetailRow[];
 }
 
 export default function SalesAdminPage() {
@@ -164,34 +178,74 @@ export default function SalesAdminPage() {
       </section>
 
       <section className="rounded-md border bg-white p-4">
-        <h2 className="font-semibold mb-3">최근 일일 요약</h2>
+        <h2 className="font-semibold mb-3">최근 일일 요약 — {report?.reportDate}</h2>
         {!report ? (
           <div className="text-sm text-gray-500">데이터 없음</div>
         ) : (
           <>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
               <Card label="매출" value={won(report.totals.salesAmount)} />
               <Card label="이익" value={won(report.totals.profit)} />
               <Card label="비용" value={won(report.totals.totalCost)} />
-              <Card label="수량" value={`${report.totals.quantity}개`} />
+              <Card label="배송 건수" value={`${report.totals.shipments}건`} />
+              <Card label="출고 병수" value={`${report.totals.bottles}병`} />
             </div>
+
+            <h3 className="text-sm font-semibold mt-4 mb-2">품종(키워드)별</h3>
+            <table className="w-full text-sm mb-6">
+              <thead className="text-left text-gray-500">
+                <tr>
+                  <th>스토어</th>
+                  <th>키워드</th>
+                  <th className="text-right">옵션수</th>
+                  <th className="text-right">병수</th>
+                  <th className="text-right">배송건수</th>
+                  <th className="text-right">매출</th>
+                  <th className="text-right">이익</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.byKeyword.map((r, i) => (
+                  <tr key={i} className="border-t">
+                    <td>{r.storeName}</td>
+                    <td className="font-medium">{r.keyword}</td>
+                    <td className="text-right">{r.optionUnits}</td>
+                    <td className="text-right">{r.bottles}</td>
+                    <td className="text-right">{r.shipments}</td>
+                    <td className="text-right">{won(r.salesAmount)}</td>
+                    <td className="text-right">{won(r.profit)}</td>
+                  </tr>
+                ))}
+                {report.byKeyword.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="py-3 text-gray-500">집계 대상 매출 없음</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+
+            <h3 className="text-sm font-semibold mt-4 mb-2">상세 (옵션별)</h3>
             <table className="w-full text-sm">
               <thead className="text-left text-gray-500">
                 <tr>
                   <th>스토어</th>
                   <th>상품</th>
                   <th>옵션</th>
+                  <th>키워드</th>
+                  <th className="text-right">병수/단위</th>
                   <th className="text-right">수량</th>
                   <th className="text-right">매출</th>
                   <th className="text-right">이익</th>
                 </tr>
               </thead>
               <tbody>
-                {report.rows.map((r, i) => (
+                {report.details.map((r, i) => (
                   <tr key={i} className="border-t">
                     <td>{r.storeName}</td>
                     <td>{r.productName}</td>
                     <td>{r.optionName}</td>
+                    <td>{r.keyword}</td>
+                    <td className="text-right">{r.bottlesPerUnit}</td>
                     <td className="text-right">{r.quantity}</td>
                     <td className="text-right">{won(r.salesAmount)}</td>
                     <td className="text-right">{won(r.profit)}</td>

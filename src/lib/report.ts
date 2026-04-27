@@ -2,27 +2,43 @@ import { prisma } from "@/lib/prisma";
 
 const KST_OFFSET_MIN = 9 * 60;
 
-/** KST 자정 기준 [전일 00:00, 당일 00:00) 의 ISO 범위 (UTC ISO 문자열) 반환 */
 export function previousDayKstRange(now: Date = new Date()): { fromIso: string; toIso: string; reportDate: Date } {
   const utc = now.getTime();
   const kstNow = new Date(utc + KST_OFFSET_MIN * 60_000);
-  const kstYear = kstNow.getUTCFullYear();
-  const kstMonth = kstNow.getUTCMonth();
-  const kstDate = kstNow.getUTCDate();
-  const startKstMs = Date.UTC(kstYear, kstMonth, kstDate - 1) - KST_OFFSET_MIN * 60_000;
-  const endKstMs = Date.UTC(kstYear, kstMonth, kstDate) - KST_OFFSET_MIN * 60_000;
+  const y = kstNow.getUTCFullYear();
+  const m = kstNow.getUTCMonth();
+  const d = kstNow.getUTCDate();
+  const startKstMs = Date.UTC(y, m, d - 1) - KST_OFFSET_MIN * 60_000;
+  const endKstMs = Date.UTC(y, m, d) - KST_OFFSET_MIN * 60_000;
   return {
     fromIso: new Date(startKstMs).toISOString(),
     toIso: new Date(endKstMs).toISOString(),
-    reportDate: new Date(Date.UTC(kstYear, kstMonth, kstDate - 1)),
+    reportDate: new Date(Date.UTC(y, m, d - 1)),
   };
 }
 
-export interface AggregatedRow {
+/** 키워드별 집계 행 — 한 스토어 안의 한 품종 (e.g. 비타앤오리진 × 피쿠알) */
+export interface KeywordRow {
+  storeName: string;
+  keyword: string;
+  optionUnits: number;        // 옵션 단위 수량 (주문된 옵션 인스턴스 합)
+  bottles: number;            // 환산 병/개수 (qty × bottlesPerUnit)
+  shipments: number;          // distinct 주문번호 수
+  salesAmount: number;
+  totalCommission: number;
+  totalCost: number;          // 원가+물류+입출고+부자재+기타 (수수료 별도)
+  profit: number;
+}
+
+/** 옵션 단위 상세 행 — 시트 일일집계 탭에 그대로 들어감 */
+export interface DetailRow {
   storeName: string;
   productName: string;
   optionName: string;
+  keyword: string;
+  bottlesPerUnit: number;
   quantity: number;
+  bottles: number;
   salesAmount: number;
   totalCommission: number;
   unitCost: number;
@@ -38,15 +54,18 @@ export interface ReportSummary {
   reportDate: Date;
   fromIso: string;
   toIso: string;
-  rows: AggregatedRow[];
+  details: DetailRow[];
+  byKeyword: KeywordRow[];
+  byStore: { storeName: string; salesAmount: number; profit: number; bottles: number; shipments: number }[];
   totals: {
-    quantity: number;
+    optionUnits: number;
+    bottles: number;
+    shipments: number;
     salesAmount: number;
     totalCommission: number;
     totalCost: number;
     profit: number;
   };
-  byStore: { storeName: string; salesAmount: number; profit: number; quantity: number }[];
 }
 
 export async function buildDailyReport(fromIso: string, toIso: string, reportDate: Date): Promise<ReportSummary> {
@@ -58,101 +77,143 @@ export async function buildDailyReport(fromIso: string, toIso: string, reportDat
     },
   });
 
-  const map = new Map<string, AggregatedRow>();
+  const details: DetailRow[] = [];
+  // 키워드별 집계 + distinct orderId 추적
+  const keywordMap = new Map<string, { row: KeywordRow; orderIds: Set<string> }>();
 
   for (const it of items) {
     const storeName = it.order.store.storeName;
-    const key = `${storeName}::${it.productName}::${it.optionName}`;
     const cost = pickCost(it.product?.costs ?? [], it.optionName, it.paymentDate);
+    const keyword = cost.keyword || it.productName; // 미매핑이면 상품명을 키워드로 폴백
+    const bottlesPerUnit = cost.bottlesPerUnit || 1;
+    const bottles = it.quantity * bottlesPerUnit;
     const totalCommission = it.channelCommission + it.payCommission;
-    const perUnitCost =
-      cost.unitCost + cost.shippingCost + cost.fulfillCost + cost.packagingCost + cost.etcCost;
-    const totalCost = perUnitCost * it.quantity + totalCommission;
+    const perUnitCost = cost.unitCost + cost.shippingCost + cost.fulfillCost + cost.packagingCost + cost.etcCost;
+    const totalCostExFee = perUnitCost * it.quantity;
+    const totalCost = totalCostExFee + totalCommission;
     const profit = it.salesAmount - totalCost;
 
-    const prev = map.get(key);
-    if (prev) {
-      prev.quantity += it.quantity;
-      prev.salesAmount += it.salesAmount;
-      prev.totalCommission += totalCommission;
-      prev.unitCost += cost.unitCost * it.quantity;
-      prev.shippingCost += cost.shippingCost * it.quantity;
-      prev.fulfillCost += cost.fulfillCost * it.quantity;
-      prev.packagingCost += cost.packagingCost * it.quantity;
-      prev.etcCost += cost.etcCost * it.quantity;
-      prev.totalCost += totalCost;
-      prev.profit += profit;
+    details.push({
+      storeName,
+      productName: it.productName,
+      optionName: it.optionName,
+      keyword,
+      bottlesPerUnit,
+      quantity: it.quantity,
+      bottles,
+      salesAmount: it.salesAmount,
+      totalCommission,
+      unitCost: cost.unitCost * it.quantity,
+      shippingCost: cost.shippingCost * it.quantity,
+      fulfillCost: cost.fulfillCost * it.quantity,
+      packagingCost: cost.packagingCost * it.quantity,
+      etcCost: cost.etcCost * it.quantity,
+      totalCost,
+      profit,
+    });
+
+    const key = `${storeName}::${keyword}`;
+    const existing = keywordMap.get(key);
+    if (existing) {
+      existing.row.optionUnits += it.quantity;
+      existing.row.bottles += bottles;
+      existing.row.salesAmount += it.salesAmount;
+      existing.row.totalCommission += totalCommission;
+      existing.row.totalCost += totalCost;
+      existing.row.profit += profit;
+      existing.orderIds.add(it.order.orderId);
     } else {
-      map.set(key, {
-        storeName,
-        productName: it.productName,
-        optionName: it.optionName,
-        quantity: it.quantity,
-        salesAmount: it.salesAmount,
-        totalCommission,
-        unitCost: cost.unitCost * it.quantity,
-        shippingCost: cost.shippingCost * it.quantity,
-        fulfillCost: cost.fulfillCost * it.quantity,
-        packagingCost: cost.packagingCost * it.quantity,
-        etcCost: cost.etcCost * it.quantity,
-        totalCost,
-        profit,
+      keywordMap.set(key, {
+        row: {
+          storeName,
+          keyword,
+          optionUnits: it.quantity,
+          bottles,
+          shipments: 0,
+          salesAmount: it.salesAmount,
+          totalCommission,
+          totalCost,
+          profit,
+        },
+        orderIds: new Set([it.order.orderId]),
       });
     }
   }
 
-  const rows = Array.from(map.values()).sort(
-    (a, b) => b.salesAmount - a.salesAmount,
-  );
+  const byKeyword = Array.from(keywordMap.values())
+    .map(({ row, orderIds }) => ({ ...row, shipments: orderIds.size }))
+    .sort((a, b) => b.salesAmount - a.salesAmount);
 
-  const totals = rows.reduce(
+  // 스토어별 요약
+  const storeMap = new Map<string, { storeName: string; salesAmount: number; profit: number; bottles: number; orderIds: Set<string> }>();
+  for (const it of items) {
+    const storeName = it.order.store.storeName;
+    const cost = pickCost(it.product?.costs ?? [], it.optionName, it.paymentDate);
+    const bottles = it.quantity * (cost.bottlesPerUnit || 1);
+    const totalCommission = it.channelCommission + it.payCommission;
+    const totalCost = (cost.unitCost + cost.shippingCost + cost.fulfillCost + cost.packagingCost + cost.etcCost) * it.quantity + totalCommission;
+    const cur = storeMap.get(storeName);
+    if (cur) {
+      cur.salesAmount += it.salesAmount;
+      cur.profit += it.salesAmount - totalCost;
+      cur.bottles += bottles;
+      cur.orderIds.add(it.order.orderId);
+    } else {
+      storeMap.set(storeName, {
+        storeName,
+        salesAmount: it.salesAmount,
+        profit: it.salesAmount - totalCost,
+        bottles,
+        orderIds: new Set([it.order.orderId]),
+      });
+    }
+  }
+  const byStore = Array.from(storeMap.values())
+    .map((s) => ({ storeName: s.storeName, salesAmount: s.salesAmount, profit: s.profit, bottles: s.bottles, shipments: s.orderIds.size }))
+    .sort((a, b) => b.salesAmount - a.salesAmount);
+
+  // 전체 합계 — distinct orderId 전체
+  const allOrderIds = new Set<string>();
+  for (const it of items) allOrderIds.add(it.order.orderId);
+  const totals = byKeyword.reduce(
     (acc, r) => ({
-      quantity: acc.quantity + r.quantity,
+      optionUnits: acc.optionUnits + r.optionUnits,
+      bottles: acc.bottles + r.bottles,
+      shipments: 0,
       salesAmount: acc.salesAmount + r.salesAmount,
       totalCommission: acc.totalCommission + r.totalCommission,
       totalCost: acc.totalCost + r.totalCost,
       profit: acc.profit + r.profit,
     }),
-    { quantity: 0, salesAmount: 0, totalCommission: 0, totalCost: 0, profit: 0 },
+    { optionUnits: 0, bottles: 0, shipments: 0, salesAmount: 0, totalCommission: 0, totalCost: 0, profit: 0 },
   );
+  totals.shipments = allOrderIds.size;
 
-  const storeMap = new Map<string, { storeName: string; salesAmount: number; profit: number; quantity: number }>();
-  for (const r of rows) {
-    const cur = storeMap.get(r.storeName);
-    if (cur) {
-      cur.salesAmount += r.salesAmount;
-      cur.profit += r.profit;
-      cur.quantity += r.quantity;
-    } else {
-      storeMap.set(r.storeName, {
-        storeName: r.storeName,
-        salesAmount: r.salesAmount,
-        profit: r.profit,
-        quantity: r.quantity,
-      });
-    }
-  }
+  return { reportDate, fromIso, toIso, details, byKeyword, byStore, totals };
+}
 
-  return {
-    reportDate,
-    fromIso,
-    toIso,
-    rows,
-    totals,
-    byStore: Array.from(storeMap.values()).sort((a, b) => b.salesAmount - a.salesAmount),
-  };
+interface CostMatch {
+  keyword: string;
+  bottlesPerUnit: number;
+  unitCost: number;
+  shippingCost: number;
+  fulfillCost: number;
+  packagingCost: number;
+  etcCost: number;
 }
 
 function pickCost(
-  costs: { optionName: string; effectiveAt: Date; unitCost: number; shippingCost: number; fulfillCost: number; packagingCost: number; etcCost: number }[],
+  costs: { optionName: string; effectiveAt: Date; keyword: string; bottlesPerUnit: number; unitCost: number; shippingCost: number; fulfillCost: number; packagingCost: number; etcCost: number }[],
   optionName: string,
   asOf: Date,
-): { unitCost: number; shippingCost: number; fulfillCost: number; packagingCost: number; etcCost: number } {
+): CostMatch {
   const exact = costs.find((c) => c.optionName === optionName && c.effectiveAt <= asOf);
   const fallback = costs.find((c) => c.optionName === "" && c.effectiveAt <= asOf);
   const c = exact ?? fallback;
-  if (!c) return { unitCost: 0, shippingCost: 0, fulfillCost: 0, packagingCost: 0, etcCost: 0 };
+  if (!c) return { keyword: "", bottlesPerUnit: 1, unitCost: 0, shippingCost: 0, fulfillCost: 0, packagingCost: 0, etcCost: 0 };
   return {
+    keyword: c.keyword,
+    bottlesPerUnit: c.bottlesPerUnit,
     unitCost: c.unitCost,
     shippingCost: c.shippingCost,
     fulfillCost: c.fulfillCost,
@@ -168,57 +229,47 @@ export function formatTelegramMessage(s: ReportSummary): string {
   lines.push(`<b>📊 일일 매출 보고 — ${date}</b>`);
   lines.push("");
   lines.push(`총 매출: <b>${won(s.totals.salesAmount)}</b>`);
-  lines.push(`총 비용: ${won(s.totals.totalCost)}  (수수료 ${won(s.totals.totalCommission)} 포함)`);
+  lines.push(`총 비용: ${won(s.totals.totalCost)} (수수료 ${won(s.totals.totalCommission)} 포함)`);
   lines.push(`총 이익: <b>${won(s.totals.profit)}</b>`);
-  lines.push(`총 수량: ${s.totals.quantity}개`);
+  lines.push(`배송 건수: ${s.totals.shipments}건 / 출고 ${s.totals.bottles}병`);
   lines.push("");
-  lines.push("<b>스토어별</b>");
+  lines.push("<b>스토어 요약</b>");
   for (const st of s.byStore) {
-    lines.push(`• ${st.storeName} — 매출 ${won(st.salesAmount)} / 이익 ${won(st.profit)} / ${st.quantity}개`);
+    lines.push(`• ${st.storeName} — 매출 ${won(st.salesAmount)} / 이익 ${won(st.profit)} / ${st.bottles}병 / ${st.shipments}건`);
   }
   lines.push("");
-  lines.push("<b>상품·옵션 TOP 10</b>");
-  for (const r of s.rows.slice(0, 10)) {
-    const opt = r.optionName ? ` [${r.optionName}]` : "";
-    lines.push(`• ${r.storeName} | ${r.productName}${opt} — ${r.quantity}개 / 매출 ${won(r.salesAmount)} / 이익 ${won(r.profit)}`);
+  lines.push("<b>품종(키워드)별</b>");
+  for (const r of s.byKeyword) {
+    lines.push(
+      `• [${r.storeName}] ${r.keyword} — ${r.bottles}병 / 매출 ${won(r.salesAmount)} / 이익 ${won(r.profit)} / ${r.shipments}건 배송`,
+    );
   }
-  if (s.rows.length > 10) lines.push(`…외 ${s.rows.length - 10}건`);
+  if (s.byKeyword.length === 0) lines.push("• (매출 없음)");
   return lines.join("\n");
 }
 
-export function buildSheetRows(s: ReportSummary): (string | number)[][] {
+export const DAILY_DETAIL_HEADERS = [
+  "보고일","스토어","상품명","옵션","키워드","병수/단위","수량","총병수","매출","수수료","원가","물류비","입출고비","부자재비","기타비","총비용","이익",
+];
+
+export const DAILY_KEYWORD_HEADERS = [
+  "보고일","스토어","키워드","옵션수","병수","배송건수","매출","수수료","총비용","이익",
+];
+
+export function buildDetailRows(s: ReportSummary): (string | number)[][] {
   const date = s.reportDate.toISOString().slice(0, 10);
-  const header = [
-    "보고일",
-    "스토어",
-    "상품명",
-    "옵션",
-    "수량",
-    "매출",
-    "수수료",
-    "원가",
-    "물류비",
-    "입출고비",
-    "부자재비",
-    "기타비",
-    "총비용",
-    "이익",
-  ];
-  const rows = s.rows.map((r) => [
-    date,
-    r.storeName,
-    r.productName,
-    r.optionName,
-    r.quantity,
-    r.salesAmount,
-    r.totalCommission,
-    r.unitCost,
-    r.shippingCost,
-    r.fulfillCost,
-    r.packagingCost,
-    r.etcCost,
-    r.totalCost,
-    r.profit,
+  return s.details.map((r) => [
+    date, r.storeName, r.productName, r.optionName, r.keyword, r.bottlesPerUnit,
+    r.quantity, r.bottles, r.salesAmount, r.totalCommission,
+    r.unitCost, r.shippingCost, r.fulfillCost, r.packagingCost, r.etcCost,
+    r.totalCost, r.profit,
   ]);
-  return [header, ...rows];
+}
+
+export function buildKeywordRows(s: ReportSummary): (string | number)[][] {
+  const date = s.reportDate.toISOString().slice(0, 10);
+  return s.byKeyword.map((r) => [
+    date, r.storeName, r.keyword, r.optionUnits, r.bottles, r.shipments,
+    r.salesAmount, r.totalCommission, r.totalCost, r.profit,
+  ]);
 }

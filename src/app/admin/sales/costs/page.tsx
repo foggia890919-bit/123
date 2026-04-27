@@ -5,10 +5,13 @@ import Link from "next/link";
 
 interface CostRow {
   id: string;
+  productId: string;
   storeName: string;
   productName: string;
   channelProductNo: string;
   optionName: string;
+  keyword: string;
+  bottlesPerUnit: number;
   unitCost: number;
   shippingCost: number;
   fulfillCost: number;
@@ -22,6 +25,7 @@ export default function CostsPage() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [filter, setFilter] = useState("");
 
   async function load() {
     const r = await fetch("/api/sales/costs");
@@ -55,9 +59,16 @@ export default function CostsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(row),
     });
-    setMsg(r.ok ? "저장됨" : "저장 실패");
+    setMsg(r.ok ? `저장됨: ${row.productName} / ${row.optionName || "(기본)"}` : "저장 실패");
     setBusy(false);
+    load();
   }
+
+  const filtered = filter
+    ? rows.filter((r) =>
+        [r.storeName, r.productName, r.optionName, r.keyword].some((s) => s.toLowerCase().includes(filter.toLowerCase())),
+      )
+    : rows;
 
   return (
     <div className="space-y-5">
@@ -66,7 +77,7 @@ export default function CostsPage() {
           <Link href="/admin/sales" className="text-sm text-gray-500 hover:underline">
             ← 매출 홈
           </Link>
-          <h1 className="text-2xl font-bold">원가 관리</h1>
+          <h1 className="text-2xl font-bold">원가 · 키워드 매핑</h1>
         </div>
         {sheetUrl && (
           <a
@@ -80,10 +91,15 @@ export default function CostsPage() {
         )}
       </div>
 
+      <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+        <b>키워드</b> = 매출보고에서 합산할 품종 단위. 같은 「피쿠알」을 옵션 여러개에 동일하게 적으면 합쳐서 집계됩니다.<br />
+        <b>병수/단위</b> = 옵션 1회 판매 시 출고되는 병(개) 수. 1병 옵션은 1, 3병 세트는 3.
+      </div>
+
       <section className="rounded-md border bg-white p-4">
         <h2 className="font-semibold mb-2">엑셀/CSV 업로드</h2>
         <p className="text-xs text-gray-500 mb-2">
-          헤더: 스토어코드, 채널상품번호, 상품명, 옵션, 원가, 물류비, 입출고비, 부자재비, 기타비
+          헤더: 스토어코드, 채널상품번호 (또는 상품명), 옵션, 키워드, 병수, 원가, 물류비, 입출고비, 부자재비, 기타비
         </p>
         <div className="flex gap-2 items-center">
           <input
@@ -99,18 +115,26 @@ export default function CostsPage() {
           >
             업로드
           </button>
+          <input
+            placeholder="검색 (스토어/상품/옵션/키워드)"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="ml-auto border rounded px-2 py-1 text-sm w-72"
+          />
         </div>
         {msg && <div className="text-sm text-gray-700 mt-2">{msg}</div>}
       </section>
 
       <section className="rounded-md border bg-white p-4 overflow-x-auto">
-        <h2 className="font-semibold mb-3">원가 테이블 ({rows.length})</h2>
-        <table className="w-full text-sm">
+        <h2 className="font-semibold mb-3">원가 매핑 ({filtered.length}/{rows.length})</h2>
+        <table className="text-sm min-w-[1200px]">
           <thead className="text-left text-gray-500">
             <tr>
               <th>스토어</th>
               <th>상품</th>
               <th>옵션</th>
+              <th>키워드</th>
+              <th>병수</th>
               <th className="text-right">원가</th>
               <th className="text-right">물류</th>
               <th className="text-right">입출고</th>
@@ -120,36 +144,47 @@ export default function CostsPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => (
+            {filtered.map((r, i) => (
               <tr key={r.id} className="border-t">
-                <td className="py-1">{r.storeName}</td>
-                <td>{r.productName}</td>
-                <td>
+                <td className="py-1 pr-2">{r.storeName}</td>
+                <td className="pr-2">{r.productName}</td>
+                <td className="pr-2">
                   <input
-                    className="border rounded px-1 w-24"
+                    className="border rounded px-1 w-40"
                     value={r.optionName}
-                    onChange={(e) =>
-                      setRows((rs) => rs.map((x, j) => (j === i ? { ...x, optionName: e.target.value } : x)))
-                    }
+                    onChange={(e) => updateField(setRows, rows, r.id, "optionName", e.target.value)}
+                  />
+                </td>
+                <td className="pr-2">
+                  <input
+                    className="border rounded px-1 w-28"
+                    placeholder="피쿠알"
+                    value={r.keyword}
+                    onChange={(e) => updateField(setRows, rows, r.id, "keyword", e.target.value)}
+                  />
+                </td>
+                <td className="pr-2">
+                  <input
+                    type="number"
+                    min={1}
+                    className="border rounded px-1 w-16 text-right"
+                    value={r.bottlesPerUnit}
+                    onChange={(e) => updateField(setRows, rows, r.id, "bottlesPerUnit", Number(e.target.value))}
                   />
                 </td>
                 {(["unitCost", "shippingCost", "fulfillCost", "packagingCost", "etcCost"] as const).map((k) => (
-                  <td key={k} className="text-right">
+                  <td key={k} className="pr-2 text-right">
                     <input
                       type="number"
                       className="border rounded px-1 w-20 text-right"
                       value={r[k]}
-                      onChange={(e) =>
-                        setRows((rs) =>
-                          rs.map((x, j) => (j === i ? { ...x, [k]: Number(e.target.value) } : x)),
-                        )
-                      }
+                      onChange={(e) => updateField(setRows, rows, r.id, k, Number(e.target.value))}
                     />
                   </td>
                 ))}
                 <td>
                   <button
-                    onClick={() => saveRow(r)}
+                    onClick={() => saveRow(filtered[i])}
                     disabled={busy}
                     className="px-2 py-1 rounded bg-gray-900 text-white text-xs disabled:opacity-50"
                   >
@@ -158,10 +193,10 @@ export default function CostsPage() {
                 </td>
               </tr>
             ))}
-            {rows.length === 0 && (
+            {filtered.length === 0 && (
               <tr>
-                <td colSpan={9} className="py-3 text-gray-500">
-                  원가 데이터가 없습니다. 위에서 업로드하거나, 매출 동기화 후 자동 생성된 상품에 값을 입력하세요.
+                <td colSpan={11} className="py-3 text-gray-500">
+                  데이터 없음. 매출 동기화 후 자동 생성된 상품에 키워드/원가를 입력하거나, 위에서 일괄 업로드하세요.
                 </td>
               </tr>
             )}
@@ -170,4 +205,14 @@ export default function CostsPage() {
       </section>
     </div>
   );
+}
+
+function updateField<K extends keyof CostRow>(
+  setRows: React.Dispatch<React.SetStateAction<CostRow[]>>,
+  _rows: CostRow[],
+  id: string,
+  key: K,
+  value: CostRow[K],
+) {
+  setRows((rs) => rs.map((x) => (x.id === id ? { ...x, [key]: value } : x)));
 }

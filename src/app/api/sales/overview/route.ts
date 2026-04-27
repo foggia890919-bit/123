@@ -19,7 +19,8 @@ export async function GET() {
       reportDate: report.reportDate.toISOString().slice(0, 10),
       totals: report.totals,
       byStore: report.byStore,
-      rows: report.rows.slice(0, 50),
+      byKeyword: report.byKeyword,
+      details: report.details.slice(0, 50),
     },
     sheetUrl: getSheetUrl(),
   });

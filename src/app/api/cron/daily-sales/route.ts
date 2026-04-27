@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { syncStoreOrders } from "@/lib/naver/sync";
-import { buildDailyReport, formatTelegramMessage, buildSheetRows, previousDayKstRange } from "@/lib/report";
+import {
+  buildDailyReport,
+  formatTelegramMessage,
+  buildDetailRows,
+  buildKeywordRows,
+  DAILY_DETAIL_HEADERS,
+  DAILY_KEYWORD_HEADERS,
+  previousDayKstRange,
+} from "@/lib/report";
 import { sendTelegram } from "@/lib/telegram";
 import { appendRows, SHEET_TABS, ensureTabExists } from "@/lib/sheets";
-
-const DAILY_HEADERS = ["보고일","스토어","상품명","옵션","수량","매출","수수료","원가","물류비","입출고비","부자재비","기타비","총비용","이익"];
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
@@ -32,27 +38,23 @@ export async function GET(req: NextRequest) {
   const text = formatTelegramMessage(summary);
   const tg = await sendTelegram(text);
 
-  const sheetRows = buildSheetRows(summary).slice(1);
-  let sheet: Awaited<ReturnType<typeof appendRows>> = { ok: true, skipped: true };
-  if (sheetRows.length > 0) {
-    await ensureTabExists(SHEET_TABS.daily, DAILY_HEADERS);
-    sheet = await appendRows(`${SHEET_TABS.daily}!A2`, sheetRows);
+  const detailRows = buildDetailRows(summary);
+  const keywordRows = buildKeywordRows(summary);
+  let sheetDetail: Awaited<ReturnType<typeof appendRows>> = { ok: true, skipped: true };
+  let sheetKeyword: Awaited<ReturnType<typeof appendRows>> = { ok: true, skipped: true };
+  if (detailRows.length > 0) {
+    await ensureTabExists(SHEET_TABS.daily, DAILY_DETAIL_HEADERS);
+    sheetDetail = await appendRows(`${SHEET_TABS.daily}!A2`, detailRows);
+  }
+  if (keywordRows.length > 0) {
+    await ensureTabExists("키워드집계", DAILY_KEYWORD_HEADERS);
+    sheetKeyword = await appendRows("키워드집계!A2", keywordRows);
   }
 
   await prisma.dailyReportLog.upsert({
     where: { reportDate: summary.reportDate },
-    create: {
-      reportDate: summary.reportDate,
-      channel: "telegram",
-      ok: tg.ok,
-      message: tg.error ?? null,
-    },
-    update: {
-      sentAt: new Date(),
-      channel: "telegram",
-      ok: tg.ok,
-      message: tg.error ?? null,
-    },
+    create: { reportDate: summary.reportDate, channel: "telegram", ok: tg.ok, message: tg.error ?? null },
+    update: { sentAt: new Date(), channel: "telegram", ok: tg.ok, message: tg.error ?? null },
   });
 
   return NextResponse.json({
@@ -60,7 +62,8 @@ export async function GET(req: NextRequest) {
     range,
     sync: syncResults,
     telegram: tg,
-    sheet,
+    sheet: { detail: sheetDetail, keyword: sheetKeyword },
     totals: summary.totals,
+    byKeyword: summary.byKeyword,
   });
 }

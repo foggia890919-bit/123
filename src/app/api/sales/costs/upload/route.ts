@@ -29,6 +29,18 @@ export async function POST(req: NextRequest) {
       update: { productName: productName || undefined },
     });
 
+    const keyword = pick(r, ["키워드", "품종", "카테고리"]);
+    const bottlesPerUnit = toInt(pick(r, ["병수", "병/단위", "단위병수", "개수"])) || 1;
+    const costData = {
+      keyword,
+      bottlesPerUnit,
+      unitCost: toInt(pick(r, ["원가", "단가원가", "사입가"])),
+      shippingCost: toInt(pick(r, ["물류비", "배송비"])),
+      fulfillCost: toInt(pick(r, ["입출고비", "창고비", "3PL"])),
+      packagingCost: toInt(pick(r, ["부자재비", "포장비"])),
+      etcCost: toInt(pick(r, ["기타", "기타비"])),
+    };
+
     await prisma.productCost.upsert({
       where: {
         productId_optionName_effectiveAt: {
@@ -37,23 +49,8 @@ export async function POST(req: NextRequest) {
           effectiveAt: new Date(0),
         },
       },
-      create: {
-        productId: product.id,
-        optionName,
-        unitCost: toInt(pick(r, ["원가", "단가원가", "사입가"])),
-        shippingCost: toInt(pick(r, ["물류비", "배송비"])),
-        fulfillCost: toInt(pick(r, ["입출고비", "창고비", "3PL"])),
-        packagingCost: toInt(pick(r, ["부자재비", "포장비"])),
-        etcCost: toInt(pick(r, ["기타", "기타비"])),
-        effectiveAt: new Date(0),
-      },
-      update: {
-        unitCost: toInt(pick(r, ["원가", "단가원가", "사입가"])),
-        shippingCost: toInt(pick(r, ["물류비", "배송비"])),
-        fulfillCost: toInt(pick(r, ["입출고비", "창고비", "3PL"])),
-        packagingCost: toInt(pick(r, ["부자재비", "포장비"])),
-        etcCost: toInt(pick(r, ["기타", "기타비"])),
-      },
+      create: { productId: product.id, optionName, ...costData, effectiveAt: new Date(0) },
+      update: costData,
     });
     count += 1;
   }

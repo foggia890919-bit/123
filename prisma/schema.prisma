@@ -184,20 +184,23 @@ model NaverProduct {
 }
 
 model ProductCost {
-  id            String       @id @default(cuid())
-  productId     String
-  product       NaverProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
-  optionName    String       @default("")
-  unitCost      Int          @default(0)
-  shippingCost  Int          @default(0)
-  fulfillCost   Int          @default(0)
-  packagingCost Int          @default(0)
-  etcCost       Int          @default(0)
-  effectiveAt   DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  id             String       @id @default(cuid())
+  productId      String
+  product        NaverProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  optionName     String       @default("")
+  keyword        String       @default("")
+  bottlesPerUnit Int          @default(1)
+  unitCost       Int          @default(0)
+  shippingCost   Int          @default(0)
+  fulfillCost    Int          @default(0)
+  packagingCost  Int          @default(0)
+  etcCost        Int          @default(0)
+  effectiveAt    DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
 
   @@unique([productId, optionName, effectiveAt])
   @@index([productId])
+  @@index([keyword])
 }
 
 model NaverOrder {
