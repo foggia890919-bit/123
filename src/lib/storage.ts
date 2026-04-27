@@ -13,6 +13,8 @@ export const BUCKETS = {
   prescriptionImage: "prescription-images",
   bannerImage: "banners",
   postImage: "post-images",
+  settlementTemplate: "settlement-templates",
+  settlementDocument: "settlement-documents",
 } as const;
 
 export function publicUrl(bucket: BucketName, key: string): string {
@@ -57,6 +59,8 @@ export function extensionFromMime(mime: string): string {
     "image/bmp": "bmp",
     "image/tiff": "tiff",
     "application/pdf": "pdf",
+    "application/vnd.ms-excel": "xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
   };
   return map[m] ?? "bin";
 }

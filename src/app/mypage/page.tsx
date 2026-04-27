@@ -3,9 +3,10 @@
 import { useState } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { User, KeyRound, CheckCircle, ArrowUpCircle } from "lucide-react";
+import { User, KeyRound, CheckCircle, ArrowUpCircle, ChevronRight, Building2, FileSpreadsheet } from "lucide-react";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
 const KAKAO_URL = "https://open.kakao.com/me/ykmedi";
@@ -40,6 +41,8 @@ export default function MyPage() {
     else { setSuccess(true); setCurrentPw(""); setNewPw(""); setConfirmPw(""); }
     setLoading(false);
   }
+
+  const isBiz = session.user.role === "BIZ" || session.user.role === "ADMIN";
 
   return (
     <div className="max-w-lg mx-auto space-y-6 mt-4">
@@ -81,6 +84,37 @@ export default function MyPage() {
           </div>
         </div>
       </div>
+
+      {/* BIZ 전용 메뉴 */}
+      {isBiz && (
+        <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+          <p className="px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">비즈 메뉴</p>
+          <Link href="/mypage/dealer" className="flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-50 rounded-lg">
+                <Building2 className="w-4 h-4 text-blue-600" />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-800">딜러 관리</p>
+                <p className="text-xs text-gray-400">거래처별 계층 분류</p>
+              </div>
+            </div>
+            <ChevronRight className="w-4 h-4 text-gray-400" />
+          </Link>
+          <Link href="/mypage/settlement" className="flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-green-50 rounded-lg">
+                <FileSpreadsheet className="w-4 h-4 text-green-600" />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-800">정산서 관리</p>
+                <p className="text-xs text-gray-400">법인 양식 템플릿 & 취합</p>
+              </div>
+            </div>
+            <ChevronRight className="w-4 h-4 text-gray-400" />
+          </Link>
+        </div>
+      )}
 
       {/* 비밀번호 변경 */}
       <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">

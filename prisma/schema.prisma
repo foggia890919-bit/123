@@ -27,7 +27,10 @@ model User {
   posts                 Post[]
   boardEditorOf         BoardEditor[]
   searchHistories       SearchHistory[]
+  settlementTemplates   SettlementTemplate[]
+  settlementDocuments   SettlementDocument[]
 }
+
 
 model LoginLog {
   id        String   @id @default(cuid())
@@ -53,6 +56,7 @@ model UserClient {
   bizDocument String?   // legacy base64 — preferred storage is Supabase Storage via bizFileKey
   bizFileKey  String?   // Supabase Storage path (bucket: client-documents)
   bizFileName String?
+  dealerType  DealerType?
   approved    Boolean    @default(false)
   createdAt   DateTime   @default(now())
   proposals             Proposal[]
@@ -383,4 +387,49 @@ model SearchHistory {
   searchedAt DateTime @default(now())
 
   @@index([userId, searchedAt])
+}
+
+enum DealerType {
+  CORPORATION   // 법인
+  INDIVIDUAL    // 개인사업자(딜러)
+  UPPER_CORP    // 상위법인
+  LOWER_CORP    // 하위법인
+  SELF          // 자사 (와이케이)
+}
+
+model SettlementTemplate {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  corpName    String
+  fileKey     String
+  fileName    String
+  columnMap   Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  documents   SettlementDocument[]
+
+  @@unique([userId, corpName])
+  @@index([userId])
+}
+
+model SettlementDocument {
+  id         String              @id @default(cuid())
+  userId     String
+  user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  templateId String?
+  template   SettlementTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  corpName   String
+  fileKey    String
+  fileName   String
+  period     String
+  status     String              @default("PENDING")
+  parsedData Json?
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+
+  @@index([userId])
+  @@index([templateId])
+  @@index([userId, period])
 }
