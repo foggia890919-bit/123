@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { parseFileBuffer, pick, toInt } from "@/lib/parse-excel";
-import { appendRows } from "@/lib/sheets";
+import { appendRows, SHEET_TABS, ensureTabExists } from "@/lib/sheets";
+import { HEADER, RAW_HEADERS } from "@/lib/naver/headers";
 
 export const runtime = "nodejs";
 
-function parseDate(s: string): Date {
-  if (!s) return new Date();
-  const cleaned = s.replace(/\./g, "-").trim();
+function parseDate(s: string): Date | null {
+  if (!s) return null;
+  const cleaned = s.replace(/\./g, "-").replace("오전", "AM").replace("오후", "PM").trim();
   const d = new Date(cleaned);
-  return isNaN(d.getTime()) ? new Date() : d;
+  return isNaN(d.getTime()) ? null : d;
 }
 
 export async function POST(req: NextRequest) {
@@ -25,52 +26,55 @@ export async function POST(req: NextRequest) {
   const buf = await file.arrayBuffer();
   const { rows } = parseFileBuffer(buf);
 
-  const orderMap = new Map<string, { paymentDate: Date; buyerName: string; total: number }>();
+  const orderTotals = new Map<string, number>();
+  const rawRows: (string | number)[][] = [];
   let items = 0;
-  const sheetRows: (string | number)[][] = [];
 
   for (const r of rows) {
-    const productOrderId = pick(r, ["상품주문번호", "productOrderId"]);
-    const orderId = pick(r, ["주문번호", "orderId"]) || productOrderId;
-    if (!orderId || !productOrderId) continue;
+    const productOrderId = pick(r, HEADER.productOrderId);
+    const orderId = pick(r, HEADER.orderId) || productOrderId;
+    if (!productOrderId) continue;
 
-    const channelProductNo = pick(r, ["채널상품번호", "상품번호"]);
-    const productName = pick(r, ["상품명", "제품명"]);
-    const optionName = pick(r, ["옵션", "옵션명", "옵션정보"]);
-    const quantity = toInt(pick(r, ["수량", "주문수량"]));
-    const unitPrice = toInt(pick(r, ["상품가격", "판매가", "단가"]));
-    const salesAmount = toInt(pick(r, ["결제금액", "상품별총주문금액", "총주문금액"]));
-    const payCommission = toInt(pick(r, ["네이버페이주문관리수수료", "결제수수료"]));
-    const channelCommission = toInt(pick(r, ["매출연동수수료", "채널수수료"]));
-    const status = pick(r, ["주문상태", "상품주문상태"]);
-    const paymentDate = parseDate(pick(r, ["결제일", "결제일시", "결제일자"]));
-    const buyerName = pick(r, ["구매자명", "주문자명"]);
+    const channelProductNo = pick(r, HEADER.channelProductNo);
+    const productName = pick(r, HEADER.productName);
+    const optionName = pick(r, HEADER.optionName);
+    const sellerProductCode = pick(r, HEADER.sellerProductCode);
+    const quantity = toInt(pick(r, HEADER.quantity));
+    const unitPrice = toInt(pick(r, HEADER.unitPrice));
+    const optionPrice = toInt(pick(r, HEADER.optionPrice));
+    const discountAmount = toInt(pick(r, HEADER.discount));
+    const salesAmount = toInt(pick(r, HEADER.salesAmount));
+    const payCommission = toInt(pick(r, HEADER.payCommission));
+    const channelCommission = toInt(pick(r, HEADER.channelCommission));
+    const settlementAmount = toInt(pick(r, HEADER.settlementAmount));
+    const deliveryFee =
+      toInt(pick(r, HEADER.deliveryFee)) +
+      toInt(pick(r, HEADER.deliveryExtra)) -
+      toInt(pick(r, HEADER.deliveryDiscount));
+    const buyerName = pick(r, HEADER.buyerName) || pick(r, HEADER.recipientName);
+    const paymentMethod = pick(r, HEADER.paymentMethod);
+    const channelName = pick(r, HEADER.channelName);
+    const status = pick(r, HEADER.status);
+    const detailStatus = pick(r, HEADER.detailStatus);
+    const paymentDate = parseDate(pick(r, HEADER.paymentDate)) ?? new Date();
+    const orderedAt = parseDate(pick(r, HEADER.orderedAt));
 
-    const product = channelProductNo || productName
+    const productKey = channelProductNo || sellerProductCode || productName;
+    const product = productKey
       ? await prisma.naverProduct.upsert({
-          where: {
-            storeId_channelProductNo: {
-              storeId: store.id,
-              channelProductNo: channelProductNo || productName,
-            },
-          },
-          create: { storeId: store.id, channelProductNo: channelProductNo || productName, productName },
+          where: { storeId_channelProductNo: { storeId: store.id, channelProductNo: productKey } },
+          create: { storeId: store.id, channelProductNo: productKey, productName: productName || productKey },
           update: { productName: productName || undefined },
         })
       : null;
 
-    const cur = orderMap.get(orderId);
-    const newTotal = (cur?.total ?? 0) + salesAmount;
-    orderMap.set(orderId, {
-      paymentDate: cur?.paymentDate ?? paymentDate,
-      buyerName: cur?.buyerName ?? buyerName,
-      total: newTotal,
-    });
+    const total = (orderTotals.get(orderId) ?? 0) + salesAmount;
+    orderTotals.set(orderId, total);
 
     const order = await prisma.naverOrder.upsert({
       where: { storeId_orderId: { storeId: store.id, orderId } },
       create: { storeId: store.id, orderId, paymentDate, buyerName, totalAmount: salesAmount },
-      update: { paymentDate, buyerName, totalAmount: newTotal },
+      update: { paymentDate, buyerName, totalAmount: total },
     });
 
     await prisma.naverOrderItem.upsert({
@@ -80,42 +84,56 @@ export async function POST(req: NextRequest) {
         productId: product?.id ?? null,
         productOrderId,
         channelProductNo: channelProductNo || null,
+        sellerProductCode: sellerProductCode || null,
         productName,
         optionName,
         quantity,
         unitPrice,
+        optionPrice,
+        discountAmount,
         salesAmount,
         channelCommission,
         payCommission,
+        settlementAmount,
+        deliveryFee,
+        paymentMethod: paymentMethod || null,
+        channelName: channelName || null,
         status: status || null,
+        detailStatus: detailStatus || null,
         paymentDate,
+        orderedAt,
       },
       update: {
         productId: product?.id ?? null,
+        sellerProductCode: sellerProductCode || null,
         productName,
         optionName,
         quantity,
         unitPrice,
+        optionPrice,
+        discountAmount,
         salesAmount,
         channelCommission,
         payCommission,
+        settlementAmount,
+        deliveryFee,
+        paymentMethod: paymentMethod || null,
+        channelName: channelName || null,
         status: status || null,
+        detailStatus: detailStatus || null,
         paymentDate,
+        orderedAt,
       },
     });
     items += 1;
-    sheetRows.push([
-      paymentDate.toISOString().slice(0, 10),
-      store.storeName,
-      productName,
-      optionName,
-      quantity,
-      salesAmount,
-      payCommission + channelCommission,
-    ]);
+    rawRows.push(RAW_HEADERS.map((h) => r[h] ?? ""));
   }
 
-  const sheet = sheetRows.length > 0 ? await appendRows("매출원본!A1", sheetRows) : { ok: true, skipped: true };
+  let sheet: Awaited<ReturnType<typeof appendRows>> = { ok: true, skipped: true };
+  if (rawRows.length > 0) {
+    await ensureTabExists(SHEET_TABS.raw, RAW_HEADERS);
+    sheet = await appendRows(`${SHEET_TABS.raw}!A2`, rawRows);
+  }
 
-  return NextResponse.json({ ok: true, orders: orderMap.size, items, sheet });
+  return NextResponse.json({ ok: true, orders: orderTotals.size, items, sheet });
 }

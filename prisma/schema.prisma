@@ -218,22 +218,31 @@ model NaverOrder {
 }
 
 model NaverOrderItem {
-  id                String        @id @default(cuid())
-  orderId           String
-  order             NaverOrder    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  productId         String?
-  product           NaverProduct? @relation(fields: [productId], references: [id])
-  productOrderId    String        @unique
-  channelProductNo  String?
-  productName       String
-  optionName        String        @default("")
-  quantity          Int           @default(1)
-  unitPrice         Int           @default(0)
-  salesAmount       Int           @default(0)
-  channelCommission Int           @default(0)
-  payCommission     Int           @default(0)
-  status            String?
-  paymentDate       DateTime
+  id                 String        @id @default(cuid())
+  orderId            String
+  order              NaverOrder    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId          String?
+  product            NaverProduct? @relation(fields: [productId], references: [id])
+  productOrderId     String        @unique
+  channelProductNo   String?
+  sellerProductCode  String?
+  productName        String
+  optionName         String        @default("")
+  quantity           Int           @default(1)
+  unitPrice          Int           @default(0)
+  optionPrice        Int           @default(0)
+  discountAmount     Int           @default(0)
+  salesAmount        Int           @default(0)
+  channelCommission  Int           @default(0)
+  payCommission      Int           @default(0)
+  settlementAmount   Int           @default(0)
+  deliveryFee        Int           @default(0)
+  paymentMethod      String?
+  channelName        String?
+  status             String?
+  detailStatus       String?
+  paymentDate        DateTime
+  orderedAt          DateTime?
 
   @@index([orderId])
   @@index([productId])

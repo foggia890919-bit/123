@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { buildDailyReport, formatTelegramMessage, buildSheetRows, previousDayKstRange } from "@/lib/report";
 import { sendTelegram } from "@/lib/telegram";
-import { appendRows } from "@/lib/sheets";
+import { appendRows, SHEET_TABS, ensureTabExists } from "@/lib/sheets";
+
+const DAILY_HEADERS = ["보고일","스토어","상품명","옵션","수량","매출","수수료","원가","물류비","입출고비","부자재비","기타비","총비용","이익"];
 
 export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => ({}))) as { fromIso?: string; toIso?: string };
@@ -15,7 +17,11 @@ export async function POST(req: NextRequest) {
   const tg = await sendTelegram(text);
 
   const sheetRows = buildSheetRows(summary).slice(1);
-  const sheet = sheetRows.length > 0 ? await appendRows("일일보고!A1", sheetRows) : { ok: true, skipped: true };
+  let sheet: Awaited<ReturnType<typeof appendRows>> = { ok: true, skipped: true };
+  if (sheetRows.length > 0) {
+    await ensureTabExists(SHEET_TABS.daily, DAILY_HEADERS);
+    sheet = await appendRows(`${SHEET_TABS.daily}!A2`, sheetRows);
+  }
 
   await prisma.dailyReportLog.upsert({
     where: { reportDate: summary.reportDate },

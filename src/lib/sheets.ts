@@ -109,3 +109,43 @@ export function getSheetUrl(): string | null {
   const id = process.env.GOOGLE_SHEETS_ID;
   return id ? `https://docs.google.com/spreadsheets/d/${id}/edit` : null;
 }
+
+export const SHEET_TABS = {
+  raw: process.env.SHEET_TAB_RAW || "주문원본",
+  daily: process.env.SHEET_TAB_DAILY || "일일집계",
+  cost: process.env.SHEET_TAB_COST || "원가",
+};
+
+export async function ensureTabExists(tabName: string, headers: string[]): Promise<{ ok: boolean; created?: boolean; error?: string }> {
+  const cfg = getConfig();
+  if (!cfg) return { ok: true };
+  try {
+    const token = await getAccessToken(cfg);
+    const meta = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${cfg.sheetId}?fields=sheets.properties.title`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!meta.ok) return { ok: false, error: `${meta.status} ${await meta.text()}` };
+    const json = (await meta.json()) as { sheets?: { properties: { title: string } }[] };
+    const exists = json.sheets?.some((s) => s.properties.title === tabName);
+    if (exists) return { ok: true, created: false };
+
+    const add = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${cfg.sheetId}:batchUpdate`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requests: [{ addSheet: { properties: { title: tabName } } }],
+        }),
+      },
+    );
+    if (!add.ok) return { ok: false, error: `addSheet ${add.status} ${await add.text()}` };
+    if (headers.length > 0) {
+      await overwriteSheet(`${tabName}!A1`, [headers]);
+    }
+    return { ok: true, created: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
