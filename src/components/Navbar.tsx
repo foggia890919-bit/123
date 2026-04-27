@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
-import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Download, Menu, X, Filter, BarChart3, Upload } from "lucide-react";
+import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Download, Menu, X, Filter, BarChart3, Upload, LayoutDashboard } from "lucide-react";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
 interface NavLeaf {
@@ -175,6 +175,12 @@ export default function Navbar() {
               </Link>
             )}
 
+            {(["BIZ", "ADMIN"] as string[]).includes((session?.user as { role?: string } | undefined)?.role ?? "") && (
+              <Link href="/biz"
+                className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-white bg-purple-600 hover:bg-purple-700">
+                <LayoutDashboard className="w-4 h-4" />비즈관리
+              </Link>
+            )}
             {(session?.user as { role?: string } | undefined)?.role === "ADMIN" && (
               <Link href="/admin/dashboard"
                 className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-white bg-gray-800 hover:bg-gray-700">
@@ -229,6 +235,14 @@ export default function Navbar() {
                 </div>
               );
             })}
+            {(["BIZ", "ADMIN"] as string[]).includes((session?.user as { role?: string } | undefined)?.role ?? "") && (
+              <div className="border-t border-gray-100 pt-2">
+                <Link href="/biz" onClick={() => setMobileOpen(false)}
+                  className="flex items-center gap-3 px-3 py-3 rounded-md text-sm font-medium text-white bg-purple-600">
+                  <LayoutDashboard className="w-4 h-4" />비즈관리
+                </Link>
+              </div>
+            )}
             {(session?.user as { role?: string } | undefined)?.role === "ADMIN" && (
               <div className="border-t border-gray-100 pt-2 pb-1">
                 <Link href="/admin/dashboard" onClick={() => setMobileOpen(false)}
