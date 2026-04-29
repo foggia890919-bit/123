@@ -21,36 +21,44 @@ export async function GET(req: NextRequest) {
     const stripped = q.replace(/\D/g, "");
     const isDigits = stripped.length > 0 && q.replace(/-/g, "") === stripped;
 
-    const [globalClients, userClients] = await Promise.all([
-      // 전역 Client 풀
-      prisma.client.findMany({
-        where: q
-          ? isDigits
-            ? { bizNumber: { contains: stripped } }
-            : { clientName: { contains: q, mode: "insensitive" } }
-          : {},
-        select: { clientName: true, bizNumber: true },
-        orderBy: { clientName: "asc" },
-        take: 20,
-      }),
-      // UserClient (기존 등록 데이터 하위호환)
-      prisma.userClient.findMany({
-        where: q
-          ? isDigits
-            ? { bizNumber: { contains: stripped } }
-            : { clientName: { contains: q, mode: "insensitive" } }
-          : {},
+    const nameOrBizWhere = q
+      ? isDigits
+        ? { bizNumber: { contains: stripped } }
+        : { clientName: { contains: q, mode: "insensitive" as const } }
+      : {};
+
+    const globalClients = await prisma.client.findMany({
+      where: nameOrBizWhere,
+      select: { clientName: true, bizNumber: true },
+      orderBy: { clientName: "asc" },
+      take: 20,
+    });
+
+    // dealerType 컬럼이 없을 수 있으므로 try-catch
+    let hospitalClients: { clientName: string; bizNumber: string }[] = [];
+    try {
+      hospitalClients = await prisma.userClient.findMany({
+        where: { dealerType: null, ...nameOrBizWhere },
         select: { clientName: true, bizNumber: true },
         distinct: ["bizNumber"],
         orderBy: { clientName: "asc" },
         take: 20,
-      }),
-    ]);
+      });
+    } catch {
+      // dealerType 컬럼 미존재 시 전체 UserClient fallback
+      hospitalClients = await prisma.userClient.findMany({
+        where: nameOrBizWhere,
+        select: { clientName: true, bizNumber: true },
+        distinct: ["bizNumber"],
+        orderBy: { clientName: "asc" },
+        take: 20,
+      });
+    }
 
     // bizNumber 기준 중복 제거 (전역 풀 우선)
     const seen = new Set<string>();
     const merged: { clientName: string; bizNumber: string }[] = [];
-    for (const c of [...globalClients, ...userClients]) {
+    for (const c of [...globalClients, ...hospitalClients]) {
       const key = c.bizNumber.replace(/\D/g, "");
       if (!seen.has(key)) {
         seen.add(key);
