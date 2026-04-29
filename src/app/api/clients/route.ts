@@ -7,10 +7,6 @@ import { BUCKETS, persistDataUri } from "@/lib/storage";
 export async function GET(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
-  if (user.role !== "BIZ" && user.role !== "ADMIN") {
-    return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
-  }
-
   const bizNumber = req.nextUrl.searchParams.get("bizNumber");
   if (bizNumber) {
     const normalized = bizNumber.replace(/\D/g, "");
@@ -22,18 +18,40 @@ export async function GET(req: NextRequest) {
   }
 
   const q = (req.nextUrl.searchParams.get("q") ?? "").trim();
-  const isDigits = /^\d+$/.test(q);
-  const clients = await prisma.client.findMany({
-    where: q
-      ? isDigits
-        ? { bizNumber: { contains: q } }
-        : { clientName: { contains: q, mode: "insensitive" } }
-      : {},
-    select: { id: true, clientName: true, bizNumber: true, bizFileName: true },
-    orderBy: { clientName: "asc" },
-    take: 30,
-  });
-  return NextResponse.json(clients);
+  const isDigits = /^\d+$/.test(q.replace(/-/g, ""));
+  const nameOrBizWhere = q
+    ? isDigits
+      ? { bizNumber: { contains: q.replace(/\D/g, "") } }
+      : { clientName: { contains: q, mode: "insensitive" as const } }
+    : {};
+
+  const [globalClients, userClients] = await Promise.all([
+    prisma.client.findMany({
+      where: nameOrBizWhere,
+      select: { id: true, clientName: true, bizNumber: true, bizFileName: true },
+      orderBy: { clientName: "asc" },
+      take: 30,
+    }),
+    prisma.userClient.findMany({
+      where: { userId: user.id, dealerType: null, ...nameOrBizWhere },
+      select: { id: true, clientName: true, bizNumber: true, bizFileName: true },
+      orderBy: { clientName: "asc" },
+      take: 30,
+    }).catch(() => prisma.userClient.findMany({
+      where: { userId: user.id, ...nameOrBizWhere },
+      select: { id: true, clientName: true, bizNumber: true, bizFileName: true },
+      orderBy: { clientName: "asc" },
+      take: 30,
+    })),
+  ]);
+
+  const seen = new Set<string>();
+  const merged: { id: string; clientName: string; bizNumber: string; bizFileName: string | null }[] = [];
+  for (const c of [...globalClients, ...userClients]) {
+    const key = c.bizNumber.replace(/\D/g, "");
+    if (!seen.has(key)) { seen.add(key); merged.push(c); }
+  }
+  return NextResponse.json(merged.sort((a, b) => a.clientName.localeCompare(b.clientName)).slice(0, 30));
 }
 
 // POST /api/clients  — 새 전역 거래처 등록
