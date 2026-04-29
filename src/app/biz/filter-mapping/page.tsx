@@ -18,7 +18,7 @@ interface FilterMapping {
 
 interface ClientSuggestion { clientName: string; bizNumber: string }
 interface CompanySuggestion { companyName: string }
-interface DealerSuggestion { clientName: string; bizNumber: string; dealerType: string; managerName?: string | null; managerPhone?: string | null }
+interface DealerSuggestion { clientName: string; bizNumber: string; dealerType: string; managerName?: string | null; managerPhone?: string | null; memo?: string | null }
 
 const DEALER_LABEL: Record<string, string> = {
   CORPORATION: "법인",
@@ -400,6 +400,7 @@ export default function FilterMappingPage() {
                     submissionEntity: item.clientName,
                     managerName: item.managerName ?? f.managerName,
                     managerPhone: item.managerPhone ?? f.managerPhone,
+                    notes: item.memo ?? f.notes,
                   }))}
                   fetchUrl={(q) => `/api/filter-mapping/suggestions?type=dealer&q=${encodeURIComponent(q)}`}
                   getLabel={(item) => item.clientName}

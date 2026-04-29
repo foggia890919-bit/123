@@ -102,20 +102,32 @@ export async function GET(req: NextRequest) {
   if (type === "dealer") {
     const stripped = q.replace(/\D/g, "");
     const isDigits = stripped.length > 0 && q.replace(/-/g, "") === stripped;
-    const dealers = await prisma.userClient.findMany({
-      where: {
-        dealerType: { not: null },
-        ...(q
-          ? isDigits
-            ? bizWhere(stripped)
-            : { clientName: { contains: q, mode: "insensitive" } }
-          : {}),
-      },
-      select: { clientName: true, bizNumber: true, dealerType: true, managerName: true, managerPhone: true },
-      distinct: ["clientName"],
-      orderBy: { clientName: "asc" },
-      take: 20,
-    });
+    const where = {
+      dealerType: { not: null },
+      ...(q
+        ? isDigits
+          ? bizWhere(stripped)
+          : { clientName: { contains: q, mode: "insensitive" as const } }
+        : {}),
+    };
+    let dealers;
+    try {
+      dealers = await prisma.userClient.findMany({
+        where,
+        select: { clientName: true, bizNumber: true, dealerType: true, managerName: true, managerPhone: true, memo: true },
+        distinct: ["clientName"],
+        orderBy: { clientName: "asc" },
+        take: 20,
+      });
+    } catch {
+      dealers = await prisma.userClient.findMany({
+        where,
+        select: { clientName: true, bizNumber: true, dealerType: true },
+        distinct: ["clientName"],
+        orderBy: { clientName: "asc" },
+        take: 20,
+      });
+    }
     return NextResponse.json(dealers);
   }
 
