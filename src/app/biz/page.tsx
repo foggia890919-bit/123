@@ -8,7 +8,7 @@ import {
   Hospital, Building2, FileUp, FileSearch,
   ChevronRight, LayoutDashboard, ClipboardList,
   BarChart3, PercentCircle, Pill, UserCheck,
-  Calculator, Network,
+  Calculator, Network, Users, PackageSearch,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -112,6 +112,25 @@ const BIZ_MENU_GROUPS = [
         desc: "필터링 결과별 추가수수료율 매핑",
         icon: PercentCircle,
         color: "bg-yellow-50 text-yellow-600",
+      },
+    ],
+  },
+  {
+    label: "운영 모니터링",
+    items: [
+      {
+        href: "/biz/team-status",
+        label: "팀 상태 대시보드",
+        desc: "8개 에이전트 작업 현황 + 작업 예상 마감 카운트다운",
+        icon: Users,
+        color: "bg-violet-50 text-violet-600",
+      },
+      {
+        href: "/biz/inventory-status",
+        label: "재고 크롤러 현황",
+        desc: "ScrapeJob 이력·사이트별 성공률·최신 갱신 시각·지금 재시도",
+        icon: PackageSearch,
+        color: "bg-emerald-50 text-emerald-600",
       },
     ],
   },
