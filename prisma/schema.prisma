@@ -89,6 +89,8 @@ model UserClient {
   managerEmail String?
   memo         String?
   approved     Boolean    @default(false)
+  isSettlementTarget  Boolean    @default(false)
+  isRateTarget        Boolean    @default(false)
   createdAt    DateTime   @default(now())
   proposals             Proposal[]
   prescriptionReports   PrescriptionReport[]
