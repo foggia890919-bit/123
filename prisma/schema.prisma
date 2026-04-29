@@ -53,9 +53,13 @@ model UserClient {
   user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   clientName  String
   bizNumber   String
-  bizDocument String?   // legacy base64 — preferred storage is Supabase Storage via bizFileKey
-  bizFileKey  String?   // Supabase Storage path (bucket: client-documents)
-  bizFileName String?
+  bizDocument     String?   // legacy base64 — preferred storage is Supabase Storage via bizFileKey
+  bizFileKey      String?   // Supabase Storage path (bucket: client-documents) — 사업자등록증
+  bizFileName     String?
+  csoFileKey      String?   // CSO신고증
+  csoFileName     String?
+  accountFileKey  String?   // 계좌사본
+  accountFileName String?
   dealerType  DealerType?
   approved    Boolean    @default(false)
   createdAt   DateTime   @default(now())

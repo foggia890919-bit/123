@@ -1,21 +1,54 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireRole, isNextResponse } from "@/lib/auth-guard";
+import { BUCKETS, persistDataUri } from "@/lib/storage";
 
 const VALID_TYPES = ["CORPORATION", "INDIVIDUAL", "UPPER_CORP", "LOWER_CORP", "SELF", null];
 
-// POST /api/dealer  { clientName, bizNumber, dealerType }
+// GET /api/dealer?bizNumber=xxx  → 사업자번호 중복 조회
+export async function GET(req: NextRequest) {
+  const user = await requireRole("BIZ");
+  if (isNextResponse(user)) return user;
+
+  const raw = req.nextUrl.searchParams.get("bizNumber");
+  if (!raw) return NextResponse.json({ error: "bizNumber 필요" }, { status: 400 });
+  const bizNumber = raw.replace(/\D/g, "");
+
+  const client = await prisma.userClient.findUnique({
+    where: { userId_bizNumber: { userId: user.id, bizNumber } },
+    select: { id: true, clientName: true, bizNumber: true, dealerType: true },
+  });
+  return NextResponse.json({ found: !!client, client: client ?? null });
+}
+
+// POST /api/dealer
 export async function POST(req: NextRequest) {
   const user = await requireRole("BIZ");
   if (isNextResponse(user)) return user;
 
-  const { clientName, bizNumber, dealerType } = await req.json();
+  const {
+    clientName, bizNumber, dealerType,
+    bizDocument, bizFileName,
+    csoDocument, csoFileName,
+    accountDocument, accountFileName,
+  } = await req.json();
+
   if (!clientName || !bizNumber) {
     return NextResponse.json({ error: "거래처명과 사업자번호는 필수입니다." }, { status: 400 });
   }
   if (!VALID_TYPES.includes(dealerType)) {
     return NextResponse.json({ error: "유효하지 않은 딜러 유형" }, { status: 400 });
   }
+
+  const [
+    { fileKey: bizFileKey, fileData: bizDocFallback },
+    { fileKey: csoFileKey },
+    { fileKey: accountFileKey },
+  ] = await Promise.all([
+    persistDataUri(BUCKETS.userClientBiz, `${user.id}/biz`, bizDocument ?? null),
+    persistDataUri(BUCKETS.userClientBiz, `${user.id}/cso`, csoDocument ?? null),
+    persistDataUri(BUCKETS.userClientBiz, `${user.id}/account`, accountDocument ?? null),
+  ]);
 
   try {
     const row = await prisma.userClient.create({
@@ -25,6 +58,13 @@ export async function POST(req: NextRequest) {
         bizNumber: String(bizNumber).replace(/\D/g, ""),
         dealerType: dealerType ?? null,
         approved: true,
+        bizDocument: bizDocFallback,
+        bizFileKey: bizFileKey ?? null,
+        bizFileName: bizFileName ?? null,
+        csoFileKey: csoFileKey ?? null,
+        csoFileName: csoFileName ?? null,
+        accountFileKey: accountFileKey ?? null,
+        accountFileName: accountFileName ?? null,
       },
       select: { id: true, clientName: true, bizNumber: true, dealerType: true, approved: true },
     });

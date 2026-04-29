@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { Building2, User, ChevronDown, Tag, Loader2, Search, Plus, Trash2, X } from "lucide-react";
+import { Building2, User, ChevronDown, Tag, Loader2, Search, Plus, Trash2, X, Upload, CheckCircle, AlertCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { BizLayout } from "../page";
 
 type DealerType = "CORPORATION" | "INDIVIDUAL" | "UPPER_CORP" | "LOWER_CORP" | "SELF" | null;
+type ModalStep = "biz" | "checking" | "found" | "form" | "saving";
 
 const DEALER_LABELS: Record<string, string> = {
   CORPORATION: "법인",
@@ -33,6 +34,12 @@ interface Client {
   bizNumber: string;
   dealerType: DealerType;
   approved: boolean;
+}
+
+function formatBiz(n: string) {
+  const d = n.replace(/\D/g, "");
+  if (d.length === 10) return `${d.slice(0, 3)}-${d.slice(3, 5)}-${d.slice(5)}`;
+  return n;
 }
 
 function TypeBadge({ type }: { type: DealerType }) {
@@ -80,9 +87,7 @@ function TypeDropdown({ clientId, current, onUpdated }: {
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div className="absolute right-0 top-full mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[150px]">
-            <button onClick={() => pick(null)} className="w-full text-left px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-50">
-              미분류
-            </button>
+            <button onClick={() => pick(null)} className="w-full text-left px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-50">미분류</button>
             {TYPE_ORDER.map((t) => (
               <button key={t} onClick={() => pick(t as DealerType)}
                 className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 ${current === t ? "font-bold" : ""}`}>
@@ -96,7 +101,51 @@ function TypeDropdown({ clientId, current, onUpdated }: {
   );
 }
 
-const EMPTY_FORM = { clientName: "", bizNumber: "", dealerType: "CORPORATION" as string };
+function FileInput({ label, file, onChange, inputRef }: {
+  label: string;
+  file: File | null;
+  onChange: (f: File | null) => void;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+}) {
+  return (
+    <div
+      onClick={() => inputRef.current?.click()}
+      className="flex items-center gap-2.5 border border-dashed border-gray-300 rounded-lg px-3 py-2.5 cursor-pointer hover:border-blue-400 hover:bg-blue-50/30 transition-colors"
+    >
+      <Upload className="w-4 h-4 text-gray-400 shrink-0" />
+      <div className="min-w-0">
+        <p className="text-xs text-gray-500 leading-tight">{label}</p>
+        <p className={`text-xs truncate mt-0.5 ${file ? "text-blue-600 font-medium" : "text-gray-400"}`}>
+          {file ? file.name : "파일 선택 (PDF, 이미지)"}
+        </p>
+      </div>
+      {file && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onChange(null); if (inputRef.current) inputRef.current.value = ""; }}
+          className="ml-auto text-gray-300 hover:text-red-400 shrink-0"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      )}
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".pdf,image/*"
+        className="hidden"
+        onChange={(e) => onChange(e.target.files?.[0] ?? null)}
+      />
+    </div>
+  );
+}
+
+async function fileToDataUri(file: File): Promise<string> {
+  return new Promise((resolve) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result as string);
+    fr.readAsDataURL(file);
+  });
+}
 
 export default function BizDealersPage() {
   const { data: session, status } = useSession();
@@ -105,10 +154,21 @@ export default function BizDealersPage() {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [filterType, setFilterType] = useState<string>("ALL");
+
+  // modal state
   const [modal, setModal] = useState(false);
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [saving, setSaving] = useState(false);
+  const [step, setStep] = useState<ModalStep>("biz");
+  const [bizNumberInput, setBizNumberInput] = useState("");
+  const [foundClient, setFoundClient] = useState<Client | null>(null);
+  const [clientName, setClientName] = useState("");
+  const [dealerType, setDealerType] = useState<string>("CORPORATION");
+  const [bizFile, setBizFile] = useState<File | null>(null);
+  const [csoFile, setCsoFile] = useState<File | null>(null);
+  const [accountFile, setAccountFile] = useState<File | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const bizRef = useRef<HTMLInputElement>(null);
+  const csoRef = useRef<HTMLInputElement>(null);
+  const accountRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(() => {
     fetch("/api/user-clients")
@@ -125,6 +185,65 @@ export default function BizDealersPage() {
     load();
   }, [session, status, router, load]);
 
+  function openModal() {
+    setStep("biz");
+    setBizNumberInput("");
+    setFoundClient(null);
+    setClientName("");
+    setDealerType("CORPORATION");
+    setBizFile(null);
+    setCsoFile(null);
+    setAccountFile(null);
+    setFormError(null);
+    setModal(true);
+  }
+
+  async function handleBizCheck() {
+    const raw = bizNumberInput.replace(/\D/g, "");
+    if (raw.length < 10) { setFormError("사업자번호 10자리를 입력해주세요."); return; }
+    setFormError(null);
+    setStep("checking");
+    const res = await fetch(`/api/dealer?bizNumber=${raw}`);
+    const d = await res.json();
+    if (d.found) {
+      setFoundClient(d.client);
+      setStep("found");
+    } else {
+      setStep("form");
+    }
+  }
+
+  async function handleAdd() {
+    setFormError(null);
+    if (!clientName.trim()) { setFormError("거래처명을 입력해주세요."); return; }
+    setStep("saving");
+    try {
+      const [bizDocument, csoDocument, accountDocument] = await Promise.all([
+        bizFile ? fileToDataUri(bizFile) : Promise.resolve(null),
+        csoFile ? fileToDataUri(csoFile) : Promise.resolve(null),
+        accountFile ? fileToDataUri(accountFile) : Promise.resolve(null),
+      ]);
+      const res = await fetch("/api/dealer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientName: clientName.trim(),
+          bizNumber: bizNumberInput,
+          dealerType: dealerType || null,
+          bizDocument, bizFileName: bizFile?.name ?? null,
+          csoDocument, csoFileName: csoFile?.name ?? null,
+          accountDocument, accountFileName: accountFile?.name ?? null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setFormError(data.error || "등록 실패"); setStep("form"); return; }
+      setModal(false);
+      load();
+    } catch {
+      setFormError("오류가 발생했습니다."); setStep("form");
+    }
+  }
+
   const handleUpdated = useCallback((id: string, type: DealerType) => {
     setClients((prev) => prev.map((c) => c.id === id ? { ...c, dealerType: type } : c));
   }, []);
@@ -133,29 +252,6 @@ export default function BizDealersPage() {
     if (!confirm(`"${c.clientName}" 을(를) 삭제할까요?`)) return;
     const res = await fetch(`/api/dealer?id=${c.id}`, { method: "DELETE" });
     if (res.ok) setClients((prev) => prev.filter((x) => x.id !== c.id));
-  }
-
-  async function handleAdd() {
-    setFormError(null);
-    if (!form.clientName.trim() || !form.bizNumber.trim()) {
-      setFormError("거래처명과 사업자번호는 필수입니다.");
-      return;
-    }
-    setSaving(true);
-    try {
-      const res = await fetch("/api/dealer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, dealerType: form.dealerType || null }),
-      });
-      const d = await res.json();
-      if (!res.ok) { setFormError(d.error || "등록 실패"); return; }
-      setModal(false);
-      setForm(EMPTY_FORM);
-      load();
-    } finally {
-      setSaving(false);
-    }
   }
 
   const filtered = clients.filter((c) => {
@@ -180,7 +276,7 @@ export default function BizDealersPage() {
             <p className="text-xs text-gray-500 mt-0.5">거래처를 법인 계층별로 분류합니다</p>
           </div>
           <button
-            onClick={() => { setForm(EMPTY_FORM); setFormError(null); setModal(true); }}
+            onClick={openModal}
             className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
           >
             <Plus className="w-4 h-4" />
@@ -188,44 +284,15 @@ export default function BizDealersPage() {
           </button>
         </div>
 
-        {/* 계층 안내 */}
-        <div className="bg-blue-50 border border-blue-100 rounded-xl p-3">
-          <p className="text-xs font-semibold text-blue-700 mb-1.5">계층 구조</p>
-          <div className="flex flex-wrap items-center gap-1.5 text-xs mb-3">
-            {TYPE_ORDER.map((t, i) => (
-              <span key={t} className="flex items-center gap-1">
-                <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${DEALER_COLORS[t]}`}>{DEALER_LABELS[t]}</span>
-                {i < TYPE_ORDER.length - 1 && <span className="text-blue-300">→</span>}
-              </span>
-            ))}
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-            <div className="flex gap-2">
-              <span className={`shrink-0 px-2 py-0.5 rounded-full text-xs font-medium h-fit ${DEALER_COLORS["CORPORATION"]}`}>법인</span>
-              <p className="text-xs text-blue-700/70">없어도 됨</p>
-            </div>
-            <div className="flex gap-2">
-              <span className={`shrink-0 px-2 py-0.5 rounded-full text-xs font-medium h-fit ${DEALER_COLORS["UPPER_CORP"]}`}>상위법인</span>
-              <p className="text-xs text-blue-700/70">통계 및 필터링 요청하는 법인</p>
-            </div>
-            <div className="flex gap-2">
-              <span className={`shrink-0 px-2 py-0.5 rounded-full text-xs font-medium h-fit ${DEALER_COLORS["LOWER_CORP"]}`}>하위법인</span>
-              <p className="text-xs text-blue-700/70">통계 및 필터링을 자사로 요청하는 법인, 자사에서 내역서 및 수수료율을 제공</p>
-            </div>
-          </div>
-        </div>
-
-        {/* 검색 + 필터 */}
-        <div className="flex gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <Input
-              placeholder="거래처명 또는 사업자번호 검색"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              className="pl-9 text-sm"
-            />
-          </div>
+        {/* 검색 */}
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Input
+            placeholder="거래처명 또는 사업자번호 검색"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="pl-9 text-sm"
+          />
         </div>
 
         {/* 타입 필터 탭 */}
@@ -258,17 +325,14 @@ export default function BizDealersPage() {
                 <div key={c.id} className="flex items-center justify-between px-4 py-3">
                   <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center shrink-0">
-                      {c.dealerType === "INDIVIDUAL"
-                        ? <User className="w-4 h-4 text-gray-500" />
-                        : <Building2 className="w-4 h-4 text-gray-500" />
-                      }
+                      {c.dealerType === "INDIVIDUAL" ? <User className="w-4 h-4 text-gray-500" /> : <Building2 className="w-4 h-4 text-gray-500" />}
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
                         <p className="text-sm font-medium text-gray-800">{c.clientName}</p>
                         <TypeBadge type={c.dealerType} />
                       </div>
-                      <p className="text-xs text-gray-400">{c.bizNumber}</p>
+                      <p className="text-xs text-gray-400">{formatBiz(c.bizNumber)}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -291,67 +355,132 @@ export default function BizDealersPage() {
       {/* 등록 모달 */}
       {modal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
             <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100">
               <h2 className="font-semibold text-gray-900">법인·딜러 등록</h2>
               <button onClick={() => setModal(false)} className="text-gray-400 hover:text-gray-600">
                 <X className="w-5 h-5" />
               </button>
             </div>
+
             <div className="px-6 py-5 space-y-4">
-              {formError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{formError}</p>}
-
-              <div className="space-y-1">
-                <label className="block text-xs font-medium text-gray-600">거래처명 *</label>
-                <input
-                  value={form.clientName}
-                  onChange={(e) => setForm({ ...form, clientName: e.target.value })}
-                  placeholder="예: (주)와이케이메디"
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              <div className="space-y-1">
+              {/* Step 1: 사업자번호 입력 */}
+              <div className="space-y-1.5">
                 <label className="block text-xs font-medium text-gray-600">사업자번호 *</label>
-                <input
-                  value={form.bizNumber}
-                  onChange={(e) => setForm({ ...form, bizNumber: e.target.value })}
-                  placeholder="000-00-00000"
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                <div className="flex gap-2">
+                  <input
+                    value={bizNumberInput}
+                    onChange={(e) => {
+                      setBizNumberInput(e.target.value);
+                      if (step === "found" || step === "form") setStep("biz");
+                      setFormError(null);
+                    }}
+                    placeholder="000-00-00000"
+                    disabled={step === "checking" || step === "saving"}
+                    className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50"
+                    onKeyDown={(e) => e.key === "Enter" && step === "biz" && handleBizCheck()}
+                  />
+                  <button
+                    onClick={handleBizCheck}
+                    disabled={step === "checking" || step === "saving" || !bizNumberInput.trim()}
+                    className="px-3 py-2 text-sm font-medium bg-gray-800 hover:bg-gray-700 text-white rounded-lg disabled:opacity-40 whitespace-nowrap flex items-center gap-1.5"
+                  >
+                    {step === "checking" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                    조회
+                  </button>
+                </div>
+                {formError && step !== "form" && (
+                  <p className="text-xs text-red-600">{formError}</p>
+                )}
               </div>
 
-              <div className="space-y-1">
-                <label className="block text-xs font-medium text-gray-600">유형</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {TYPE_ORDER.map((t) => (
-                    <button
-                      key={t}
-                      onClick={() => setForm({ ...form, dealerType: t })}
-                      className={`px-3 py-2 text-xs rounded-lg border font-medium transition-colors text-left ${
-                        form.dealerType === t
-                          ? `${DEALER_COLORS[t]} border-transparent`
-                          : "border-gray-200 text-gray-600 hover:bg-gray-50"
-                      }`}
-                    >
-                      {DEALER_LABELS[t]}
-                    </button>
-                  ))}
+              {/* 이미 등록된 경우 */}
+              {step === "found" && foundClient && (
+                <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-lg px-3 py-3">
+                  <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs font-semibold text-amber-800">이미 등록된 사업자번호입니다</p>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      {foundClient.clientName}
+                      {foundClient.dealerType && (
+                        <span className="ml-1.5 text-amber-600">({DEALER_LABELS[foundClient.dealerType] ?? foundClient.dealerType})</span>
+                      )}
+                    </p>
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {/* Step 2: 거래처 정보 입력 */}
+              {(step === "form" || step === "saving") && (
+                <>
+                  <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+                    <CheckCircle className="w-4 h-4 text-green-500 shrink-0" />
+                    <p className="text-xs text-green-700">등록 가능한 사업자번호입니다</p>
+                  </div>
+
+                  {formError && (
+                    <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{formError}</p>
+                  )}
+
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-medium text-gray-600">거래처명 *</label>
+                    <input
+                      value={clientName}
+                      onChange={(e) => setClientName(e.target.value)}
+                      placeholder="예: (주)이음메디컬"
+                      disabled={step === "saving"}
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-medium text-gray-600">유형</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {TYPE_ORDER.map((t) => (
+                        <button
+                          key={t}
+                          type="button"
+                          disabled={step === "saving"}
+                          onClick={() => setDealerType(t)}
+                          className={`px-3 py-2 text-xs rounded-lg border font-medium transition-colors text-left ${
+                            dealerType === t
+                              ? `${DEALER_COLORS[t]} border-transparent`
+                              : "border-gray-200 text-gray-600 hover:bg-gray-50"
+                          }`}
+                        >
+                          {DEALER_LABELS[t]}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="block text-xs font-medium text-gray-600">서류 첨부 (선택)</label>
+                    <FileInput label="CSO신고증" file={csoFile} onChange={setCsoFile} inputRef={csoRef} />
+                    <FileInput label="사업자등록증" file={bizFile} onChange={setBizFile} inputRef={bizRef} />
+                    <FileInput label="계좌사본" file={accountFile} onChange={setAccountFile} inputRef={accountRef} />
+                  </div>
+                </>
+              )}
             </div>
+
             <div className="px-6 pb-5 flex gap-2 justify-end">
-              <button onClick={() => setModal(false)} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+              <button
+                onClick={() => setModal(false)}
+                className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50"
+              >
                 취소
               </button>
-              <button
-                onClick={handleAdd}
-                disabled={saving}
-                className="px-5 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5"
-              >
-                {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                등록
-              </button>
+              {(step === "form" || step === "saving") && (
+                <button
+                  onClick={handleAdd}
+                  disabled={step === "saving"}
+                  className="px-5 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {step === "saving" && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  등록
+                </button>
+              )}
             </div>
           </div>
         </div>

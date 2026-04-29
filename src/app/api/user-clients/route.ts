@@ -5,9 +5,21 @@ import { BUCKETS, persistDataUri } from "@/lib/storage";
 
 // GET /api/user-clients → 본인 거래처
 // GET /api/user-clients?all=true → 관리자 전용, 모든 담당자의 거래처
+// GET /api/user-clients?bizNumber=xxx → 사업자번호 중복 조회
 export async function GET(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
+
+  const bizNumberCheck = req.nextUrl.searchParams.get("bizNumber");
+  if (bizNumberCheck) {
+    const bizNumber = bizNumberCheck.replace(/\D/g, "");
+    const client = await prisma.userClient.findUnique({
+      where: { userId_bizNumber: { userId: user.id, bizNumber } },
+      select: { id: true, clientName: true, bizNumber: true },
+    });
+    return NextResponse.json({ found: !!client, client: client ?? null });
+  }
+
   const all = req.nextUrl.searchParams.get("all") === "true";
 
   if (all) {
