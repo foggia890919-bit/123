@@ -10,6 +10,10 @@ import {
   Database,
   AlertTriangle,
   Play,
+  Wifi,
+  WifiOff,
+  KeyRound,
+  Activity,
 } from "lucide-react";
 
 interface JobRow {
@@ -32,6 +36,22 @@ interface SiteRow {
   active: boolean;
   latestSnapshotAt: string | null;
   snapshotCount: number;
+}
+
+interface WorkerSiteInfo {
+  key: string;
+  name: string;
+  hasCredentials: boolean;
+  activeSession: boolean;
+}
+
+interface WorkerDiag {
+  workerConfigured: boolean;
+  workerReachable?: boolean;
+  jobRunning?: boolean | null;
+  dbConfigured?: boolean | null;
+  reason?: string;
+  sites: WorkerSiteInfo[];
 }
 
 function formatDuration(ms: number | null): string {
@@ -68,7 +88,9 @@ export default function InventoryStatusPage() {
   const [sites, setSites] = useState<SiteRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(false);
-  const [triggerResult, setTriggerResult] = useState<string | null>(null);
+  const [triggerResult, setTriggerResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [workerDiag, setWorkerDiag] = useState<WorkerDiag | null>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -85,37 +107,63 @@ export default function InventoryStatusPage() {
     }
   }, []);
 
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  async function triggerBatch() {
-    const workerUrl = process.env.NEXT_PUBLIC_WORKER_URL;
-    setTriggering(true);
-    setTriggerResult(null);
+  const loadWorkerDiag = useCallback(async () => {
+    setDiagLoading(true);
     try {
-      // Trigger via the API route that proxies to the worker
-      const res = await fetch("/api/inventory/sites");
-      if (!res.ok) {
-        setTriggerResult("Worker URL not configured — set WORKER_URL + WORKER_TOKEN in env");
+      const res = await fetch("/api/admin/inventory-trigger");
+      if (!res.ok && res.status !== 503) {
+        setWorkerDiag({ workerConfigured: false, reason: `HTTP ${res.status}`, sites: [] });
         return;
       }
       const data = await res.json();
-      // The worker /scrape-batch endpoint must be called directly by the server.
-      // From the browser we can only show a message that tells the operator what to do.
-      void workerUrl; // unused — kept for clarity
-      setTriggerResult(
-        "재시도 트리거는 서버 측 Worker URL을 통해 실행됩니다. " +
-        "관리자가 WORKER_URL/scrape-batch POST 엔드포인트를 직접 호출하거나 " +
-        "Worker 컨테이너에 /scrape-batch 를 POST 하세요. " +
-        `(현재 등록된 사이트: ${Array.isArray(data.sites) ? data.sites.map((s: { key: string }) => s.key).join(", ") : "없음"})`
-      );
+      setWorkerDiag(data);
     } catch (err) {
-      setTriggerResult(`오류: ${(err as Error).message}`);
+      setWorkerDiag({
+        workerConfigured: false,
+        reason: (err as Error).message,
+        sites: [],
+      });
+    } finally {
+      setDiagLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    loadWorkerDiag();
+  }, [load, loadWorkerDiag]);
+
+  async function triggerBatch() {
+    setTriggering(true);
+    setTriggerResult(null);
+    try {
+      const res = await fetch("/api/admin/inventory-trigger", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409) {
+        setTriggerResult({ ok: false, msg: "이미 실행 중인 배치가 있습니다. 완료 후 재시도하세요." });
+      } else if (!res.ok) {
+        setTriggerResult({
+          ok: false,
+          msg: `오류: ${data?.error ?? `HTTP ${res.status}`}`,
+        });
+      } else {
+        setTriggerResult({
+          ok: true,
+          msg: "배치가 시작되었습니다. 완료 후 새로고침하면 결과를 확인할 수 있습니다.",
+        });
+        // Refresh status after a short delay to pick up the new ScrapeJob rows
+        setTimeout(() => { void load(); void loadWorkerDiag(); }, 3_000);
+      }
+    } catch (err) {
+      setTriggerResult({ ok: false, msg: `오류: ${(err as Error).message}` });
     } finally {
       setTriggering(false);
     }
   }
+
+  const workerOk = workerDiag?.workerConfigured && workerDiag?.workerReachable;
+  const missingCreds = workerDiag?.sites.filter(s => !s.hasCredentials) ?? [];
+  const hasCreds = workerDiag?.sites.filter(s => s.hasCredentials) ?? [];
 
   return (
     <BizLayout>
@@ -131,31 +179,142 @@ export default function InventoryStatusPage() {
           <div className="flex gap-2">
             <button
               type="button"
-              onClick={load}
-              disabled={loading}
+              onClick={() => { void load(); void loadWorkerDiag(); }}
+              disabled={loading || diagLoading}
               className="flex items-center gap-1.5 text-sm border border-gray-300 rounded-lg px-3 py-2 hover:bg-gray-50 disabled:opacity-50 transition-colors"
             >
-              <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+              <RefreshCw className={`w-4 h-4 ${(loading || diagLoading) ? "animate-spin" : ""}`} />
               새로고침
             </button>
             <button
               type="button"
-              onClick={triggerBatch}
-              disabled={triggering}
+              onClick={() => void triggerBatch()}
+              disabled={triggering || !workerOk}
+              title={!workerOk ? "Worker가 연결되지 않았습니다. 아래 진단 섹션을 확인하세요." : ""}
               className="flex items-center gap-1.5 text-sm bg-blue-600 text-white rounded-lg px-3 py-2 hover:bg-blue-700 disabled:opacity-50 transition-colors"
             >
               <Play className="w-4 h-4" />
-              {triggering ? "확인 중..." : "지금 재시도"}
+              {triggering ? "시작 중..." : "지금 재시도"}
             </button>
           </div>
         </div>
 
         {triggerResult && (
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800 flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-            <span>{triggerResult}</span>
+          <div
+            className={`border rounded-lg p-3 text-sm flex items-start gap-2 ${
+              triggerResult.ok
+                ? "bg-green-50 border-green-200 text-green-800"
+                : "bg-amber-50 border-amber-200 text-amber-800"
+            }`}
+          >
+            {triggerResult.ok ? (
+              <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            ) : (
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            )}
+            <span>{triggerResult.msg}</span>
           </div>
         )}
+
+        {/* Worker 진단 카드 */}
+        <div>
+          <h2 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
+            <Activity className="w-4 h-4" />
+            Worker 진단
+          </h2>
+          {diagLoading && !workerDiag ? (
+            <p className="text-sm text-gray-400">진단 정보 로딩 중...</p>
+          ) : workerDiag ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* 연결 상태 */}
+              <div className="border rounded-xl p-4 bg-white space-y-2">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Worker 연결</p>
+                {!workerDiag.workerConfigured ? (
+                  <div className="flex items-center gap-2 text-red-600">
+                    <WifiOff className="w-4 h-4" />
+                    <span className="text-sm font-medium">미설정</span>
+                  </div>
+                ) : workerDiag.workerReachable === false ? (
+                  <div className="flex items-center gap-2 text-red-600">
+                    <WifiOff className="w-4 h-4" />
+                    <span className="text-sm font-medium">연결 실패</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-green-600">
+                    <Wifi className="w-4 h-4" />
+                    <span className="text-sm font-medium">연결됨</span>
+                  </div>
+                )}
+                {workerDiag.reason && (
+                  <p className="text-xs text-red-500 break-all">{workerDiag.reason}</p>
+                )}
+                {workerDiag.dbConfigured !== null && workerDiag.dbConfigured !== undefined && (
+                  <p className={`text-xs ${workerDiag.dbConfigured ? "text-green-600" : "text-red-500"}`}>
+                    {workerDiag.dbConfigured ? "DATABASE_URL 설정됨" : "DATABASE_URL 미설정 — 스케줄러 비활성"}
+                  </p>
+                )}
+                {workerDiag.jobRunning === true && (
+                  <p className="text-xs text-blue-600 font-medium">배치 실행 중...</p>
+                )}
+                {!workerDiag.workerConfigured && (
+                  <div className="text-xs text-gray-500 space-y-0.5 pt-1 border-t border-gray-100">
+                    <p className="font-medium text-gray-600">설정 방법:</p>
+                    <p>Vercel 환경변수에 다음 추가:</p>
+                    <code className="block bg-gray-100 rounded px-1.5 py-1 font-mono text-[11px] break-all">
+                      WORKER_URL=http://&lt;lightsail-ip&gt;:8080
+                    </code>
+                    <code className="block bg-gray-100 rounded px-1.5 py-1 font-mono text-[11px]">
+                      WORKER_TOKEN=&lt;32자리 토큰&gt;
+                    </code>
+                  </div>
+                )}
+              </div>
+
+              {/* 자격증명 상태 */}
+              <div className="border rounded-xl p-4 bg-white space-y-2">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1">
+                  <KeyRound className="w-3.5 h-3.5" /> 사이트 자격증명 (Worker 측)
+                </p>
+                {workerDiag.sites.length === 0 && !workerDiag.workerReachable ? (
+                  <p className="text-xs text-gray-400">Worker 연결 후 확인 가능</p>
+                ) : workerDiag.sites.length === 0 ? (
+                  <p className="text-xs text-gray-400">등록된 사이트 없음</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {workerDiag.sites.map(s => (
+                      <div key={s.key} className="flex items-center gap-2">
+                        {s.hasCredentials ? (
+                          <CheckCircle className="w-3.5 h-3.5 text-green-500 shrink-0" />
+                        ) : (
+                          <XCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                        )}
+                        <span className={`text-xs font-mono ${s.hasCredentials ? "text-gray-700" : "text-red-500"}`}>
+                          {s.key}
+                        </span>
+                        <span className="text-xs text-gray-400">({s.name})</span>
+                        {!s.hasCredentials && (
+                          <code className="text-[10px] bg-red-50 text-red-500 px-1 rounded ml-auto">
+                            SCRAPER_{s.key.toUpperCase()}_ID/PW 미설정
+                          </code>
+                        )}
+                      </div>
+                    ))}
+                    {missingCreds.length > 0 && (
+                      <p className="text-[11px] text-red-500 pt-1 border-t border-gray-100">
+                        자격증명 미설정 사이트는 크롤링이 건너뜀. Worker의 .env에 추가하거나 환경변수를 주입하세요.
+                      </p>
+                    )}
+                    {hasCreds.length === 0 && workerDiag.sites.length > 0 && (
+                      <p className="text-xs text-red-600 font-medium pt-1 border-t border-gray-100">
+                        모든 사이트에 자격증명 없음 — 크롤러가 아무것도 실행하지 않습니다.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : null}
+        </div>
 
         {/* 사이트별 최신 갱신 */}
         <div>
@@ -185,7 +344,7 @@ export default function InventoryStatusPage() {
                       </span>
                       {isSuspended ? (
                         <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-300 whitespace-nowrap">
-                          🚧 일시 중단 — 로그인 팝업 이슈
+                          일시 중단 — 로그인 팝업 이슈
                         </span>
                       ) : (
                         <span
@@ -340,10 +499,13 @@ export default function InventoryStatusPage() {
         {/* 운영 가이드 */}
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-xs text-gray-600 space-y-1">
           <p className="font-semibold text-gray-700 mb-1">운영 참고</p>
-          <p>• 크롤러(Worker)가 DATABASE_URL과 스크래퍼 인증정보(SCRAPER_*_ID/PW)를 갖고 있어야 스냅샷이 저장됩니다.</p>
-          <p>• "지금 재시도" 버튼은 Worker URL 설정을 안내합니다. Worker의 <code className="font-mono bg-gray-100 px-1 rounded">/scrape-batch</code> 엔드포인트를 POST하면 즉시 배치가 시작됩니다.</p>
-          <p>• InventorySnapshot은 14일 보존 후 자동 삭제됩니다 (pruneOldSnapshots 로직).</p>
-          <p>• 재고가 통합검색에 표시되려면 Medication.insuranceCode와 InventorySnapshot.insuranceCode가 동일해야 합니다.</p>
+          <p>• Worker(Lightsail)가 실행 중이어야 합니다. <code className="font-mono bg-gray-100 px-1 rounded">worker/scripts/install-lightsail.sh</code> 로 배포.</p>
+          <p>• Vercel 환경변수: <code className="font-mono bg-gray-100 px-1 rounded">WORKER_URL</code> + <code className="font-mono bg-gray-100 px-1 rounded">WORKER_TOKEN</code> 설정 필요.</p>
+          <p>• Worker의 <code className="font-mono bg-gray-100 px-1 rounded">.env</code> 에 자격증명 추가: <code className="font-mono bg-gray-100 px-1 rounded">SCRAPER_IBJP_ID/PW</code>, <code className="font-mono bg-gray-100 px-1 rounded">SCRAPER_FAMILY_ID/PW</code>.</p>
+          <p>• <code className="font-mono bg-gray-100 px-1 rounded">DATABASE_URL</code> 을 Worker의 .env에도 설정해야 스냅샷이 저장됩니다 (Supabase 커넥션 문자열).</p>
+          <p>• 스케줄: KST 06:00 / 12:00 / 18:00 자동 실행. 위 "지금 재시도" 버튼으로 즉시 실행 가능.</p>
+          <p>• InventorySnapshot은 14일 보존 후 자동 삭제됩니다.</p>
+          <p>• 재고가 통합검색에 표시되려면 <code className="font-mono bg-gray-100 px-1 rounded">Medication.insuranceCode</code> 와 <code className="font-mono bg-gray-100 px-1 rounded">InventorySnapshot.insuranceCode</code> 가 동일해야 합니다.</p>
         </div>
       </div>
     </BizLayout>
