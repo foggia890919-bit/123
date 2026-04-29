@@ -65,26 +65,48 @@ PM 메타       ████████████ 1,000 (30%)
 
 ---
 
-## 🚧 사용자 본인이 처리할 일 (누적)
+## 🚧 사용자 본인이 처리할 일 (최종 정리 — 깨어나신 후)
 
-### 🔐 권한 / 외부 셋업 필요
-- 텔레그램 봇 생성 + chat ID 확인 + Vercel 환경변수 4개 등록 — Dev8(텔레그램) 작업 완료 후 안내 예정
-- Supabase Storage 버킷 `biz-rate-files` 수동 생성 (Private, 50MB)
-- Supabase Storage 버킷 `settlement-documents` 권한 확인 (이미 있을 가능성 높음)
+### 🌐 1순위 — PR 머지 (이거 먼저 해야 사이트에 변경 반영)
+- **PR #9**: https://github.com/foggia890919-bit/123/pull/9
+- base = `claude/plan-service-project-Ea4Bn` (default branch)
+- 머지하면 Vercel 자동 빌드 → `https://123-nine-lyart.vercel.app` 5-10분 후 반영
 
-### 💾 Supabase SQL 실행 필요 (누적)
-- ✅ 블록 ① 기존 스키마 (이전 세션에서 요청)
-- ✅ 블록 ② SubmissionRoute.requestType + MonthlySubmissionLog
-- ⏳ 블록 ③ UserClient.isSettlementTarget + isRateTarget (오늘 추가)
-- ⏳ 블록 ④ CorpRateFile + CorpRateFileHistory (요율 implement 완료 후)
-- ⏳ 블록 ⑤ AgentActivity (팀 대시보드 implement 완료 후)
-- ⏳ 블록 ⑥ BizDigestQueue + TelegramReply (텔레그램 implement 완료 후)
-- ⏳ 블록 ⑦ InventorySnapshot 유니크 제약 (크롤러 implement 완료 후)
+### 💾 2순위 — Supabase SQL 7블록 실행
+SQL Editor에서 아래 마이그레이션 파일 내용 복사·붙여넣기 (이미 실행한 ①·② 제외):
+- ✅ 블록 ① 기존 스키마 (코드·SubmissionRoute·CoPromotion·CorpCompanyRate)
+- ✅ 블록 ② `SubmissionRoute.requestType` + `MonthlySubmissionLog`
+- ⏳ 블록 ③ `prisma/migrations/manual/add_dealer_classification.sql` (UserClient 분류 컬럼)
+- ⏳ 블록 ④ `prisma/migrations/manual/add_corp_rate_files.sql` (요율표 + 이력)
+- ⏳ 블록 ⑤ `prisma/migrations/manual/add_agent_activity.sql` (팀 대시보드)
+- ⏳ 블록 ⑥ `prisma/migrations/manual/add_telegram_digest.sql` (디제스트 큐 + 답변)
+- ⏳ 블록 ⑦ `prisma/migrations/manual/add_inventory_integrity.sql` (재고 멱등성)
 
-각 블록 SQL은 implement 완료 시점에 마이그레이션 파일에 모이고, 종합 보고서에서 한 번에 안내드립니다.
+전부 `IF NOT EXISTS` 패턴이라 두 번 실행해도 안전.
 
-### 📋 의견 필요한 것 (현재 없음)
-- 자율 진행 모드라 메인이 합리적 기본값으로 진행 중. 결정 필요 항목 발생 시 텔레그램 디제스트 또는 종합 보고서로 누적 후 일괄 질문.
+### 🌐 3순위 — Supabase Storage
+- 버킷 `biz-rate-files` 생성 (**Private**, 50MB 제한)
+
+### 🌐 4순위 — Vercel 환경변수 4개 등록
+| 변수명 | 값 |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | @BotFather에서 받은 봇 토큰 |
+| `TELEGRAM_CHAT_ID_BIZ` | 본인 chat ID (api.telegram.org/bot<토큰>/getUpdates에서 확인) |
+| `TELEGRAM_WEBHOOK_SECRET` | 무작위 32자 (openssl rand -hex 32) |
+| `CRON_SECRET` | 무작위 문자열 (Vercel cron 인증용) |
+
+자세한 셋업은 `docs/TELEGRAM_SETUP.md` 6단계 따라하세요. 끝나면 다음 09:00 KST부터 자동 일일 보고서 텔레그램 발송.
+
+### 📋 5순위 (선택) — 인천약품 활성화
+- `.env`에 `INCHUN_ID`, `INCHUN_PW` 설정
+- `tsx src/scrapers/inspect.ts inchun 643703630` 실행
+- `/tmp/inchun-*` 또는 `debug/inchun/` 캡처 확인 → 로그인 성공 시
+- `src/scrapers/adapters/index.ts`의 `DISABLED_SITES`에서 `"inchun"` 제거 → 통합검색에 인천 데이터 노출
+
+### ✅ 자동으로 풀리는 것 (사용자 액션 불필요)
+- 머지 후 Vercel 빌드 → 모든 신규 페이지 활성
+- Cron 첫 실행 → 재고 크롤링 정상 적재 (블록 ③·⑦ SQL 실행 후)
+- 다음 09:00 KST → 텔레그램 일일 보고서 (4순위 끝난 후)
 
 ---
 
