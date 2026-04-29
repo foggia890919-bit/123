@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { RefreshCw, Clock, AlertCircle } from "lucide-react";
+import { RefreshCw, Clock, AlertCircle, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BizLayout } from "../page";
 
@@ -223,8 +223,25 @@ export default function TeamStatusPage() {
   const [error, setError] = useState<string | null>(null);
   const [countdown, setCountdown] = useState("--:--:--");
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
+  const [sendingReport, setSendingReport] = useState(false);
+  const [reportStatus, setReportStatus] = useState<"idle" | "ok" | "error">("idle");
 
   const activeEtaRef = useRef<string | null>(null);
+
+  // 보고서 수동 발송
+  const handleSendReport = useCallback(async () => {
+    setSendingReport(true);
+    setReportStatus("idle");
+    try {
+      const res = await fetch("/api/cron/biz-digest?manual=true", { method: "POST" });
+      setReportStatus(res.ok ? "ok" : "error");
+    } catch {
+      setReportStatus("error");
+    } finally {
+      setSendingReport(false);
+      setTimeout(() => setReportStatus("idle"), 4000);
+    }
+  }, []);
 
   // 인증 가드
   useEffect(() => {
@@ -296,14 +313,37 @@ export default function TeamStatusPage() {
               )}
             </p>
           </div>
-          <button
-            onClick={fetchData}
-            disabled={loading}
-            className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 transition-colors"
-          >
-            <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
-            새로고침
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleSendReport}
+              disabled={sendingReport}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border transition-colors disabled:opacity-50",
+                reportStatus === "ok"
+                  ? "border-green-300 bg-green-50 text-green-700"
+                  : reportStatus === "error"
+                  ? "border-red-300 bg-red-50 text-red-700"
+                  : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+              )}
+            >
+              <Send className={cn("w-4 h-4", sendingReport && "animate-pulse")} />
+              {reportStatus === "ok"
+                ? "발송 완료"
+                : reportStatus === "error"
+                ? "발송 실패"
+                : sendingReport
+                ? "발송 중..."
+                : "지금 보고서 발송"}
+            </button>
+            <button
+              onClick={fetchData}
+              disabled={loading}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+              새로고침
+            </button>
+          </div>
         </div>
 
         {/* 카운트다운 배너 */}
