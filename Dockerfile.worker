@@ -1,0 +1,22 @@
+FROM mcr.microsoft.com/playwright:v1.48.0-jammy
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci --ignore-scripts
+
+RUN npx playwright install chromium --with-deps
+
+COPY tsconfig.worker.json ./
+COPY src/scrapers ./src/scrapers
+COPY src/lib/prisma.ts ./src/lib/prisma.ts
+COPY src/worker-server.ts ./src/worker-server.ts
+COPY prisma ./prisma
+
+RUN npx prisma generate
+
+RUN npx tsc -p tsconfig.worker.json
+
+EXPOSE 3001
+
+CMD ["node", "dist-worker/worker-server.js"]
