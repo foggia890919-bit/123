@@ -37,24 +37,28 @@ export default function StoresPage() {
     load();
   }, []);
 
-  async function create() {
+  async function create(skipValidation = false) {
     if (!draft.code || !draft.storeName || !draft.clientId || !draft.clientSecret) {
       setMsg("필수 항목 누락");
       return;
     }
     setBusy(true);
+    setMsg(skipValidation ? "강제 저장 중…" : "Naver API 검증 중…");
     const r = await fetch("/api/sales/stores", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(draft),
+      body: JSON.stringify({ ...draft, skipValidation }),
     });
+    const data = await r.json().catch(() => null);
     setBusy(false);
     if (r.ok) {
       setDraft({ ...empty });
-      setMsg("스토어 추가됨");
+      setMsg(`✅ 스토어 추가됨${data?.validated ? " (Naver API 인증 OK)" : ""}`);
       load();
     } else {
-      setMsg(`실패: ${await r.text()}`);
+      const hint = data?.hint ? `\n💡 ${data.hint}` : "";
+      const detail = data?.detail ? `\n${data.detail}` : "";
+      setMsg(`❌ ${data?.error ?? r.status}${detail}${hint}`);
     }
   }
 
@@ -112,11 +116,14 @@ export default function StoresPage() {
             type="password"
           />
         </div>
-        <div className="mt-3 flex gap-2">
-          <button onClick={create} disabled={busy} className="px-3 py-2 rounded bg-blue-600 text-white text-sm disabled:opacity-50">
-            추가
+        <div className="mt-3 flex gap-2 flex-wrap">
+          <button onClick={() => create(false)} disabled={busy} className="px-3 py-2 rounded bg-blue-600 text-white text-sm disabled:opacity-50">
+            추가 (Naver API 검증)
           </button>
-          {msg && <div className="self-center text-sm text-gray-700">{msg}</div>}
+          <button onClick={() => create(true)} disabled={busy} className="px-3 py-2 rounded border text-sm disabled:opacity-50">
+            검증 없이 강제 저장
+          </button>
+          {msg && <div className="text-sm text-gray-700 whitespace-pre-line w-full">{msg}</div>}
         </div>
       </section>
 

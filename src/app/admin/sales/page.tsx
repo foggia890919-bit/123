@@ -391,6 +391,12 @@ function NavMenu() {
         { href: "/admin/sales/upload", label: "엑셀 업로드" },
       ],
     },
+    {
+      label: "운영",
+      items: [
+        { href: "/admin/sales/health", label: "시스템 상태", emoji: "🩺" },
+      ],
+    },
   ];
   return (
     <details className="rounded-md border bg-gray-50 p-2 group">
