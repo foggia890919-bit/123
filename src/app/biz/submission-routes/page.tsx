@@ -15,6 +15,10 @@ import {
   Download,
   CheckCircle,
   AlertCircle,
+  FileArchive,
+  RefreshCw,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 
@@ -638,10 +642,257 @@ export function SubmissionRoutesContent() {
   );
 }
 
+// ── 제출 현황 탭 ──────────────────────────────────────────────
+
+interface EntityStatus {
+  submissionEntity: string;
+  companies: string[];
+  total: number;
+  matched: number;
+  missingCount: number;
+  missing: { clientName: string; companyName: string }[];
+}
+
+function EntityStatusTab() {
+  const [entities, setEntities] = useState<EntityStatus[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [zipLoading, setZipLoading] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/submission-routes/check");
+      const data = await res.json();
+      setEntities(Array.isArray(data?.entities) ? data.entities : []);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  function toggleExpand(entity: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(entity)) next.delete(entity);
+      else next.add(entity);
+      return next;
+    });
+  }
+
+  async function downloadZip(submissionEntity: string) {
+    setZipLoading(submissionEntity);
+    try {
+      const res = await fetch(
+        `/api/submission-routes/download?submissionEntity=${encodeURIComponent(submissionEntity)}`
+      );
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({ error: "다운로드 실패" }));
+        alert(d.error || "다운로드 실패");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${submissionEntity}_사업자등록증.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setZipLoading(null);
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">제출 현황</h1>
+          <p className="text-sm text-gray-500 mt-0.5">
+            제출처별 사업자등록증 매칭 현황 및 ZIP 일괄 다운로드
+          </p>
+        </div>
+        <button
+          onClick={load}
+          disabled={loading}
+          className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+        >
+          {loading ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <RefreshCw className="w-4 h-4" />
+          )}
+          새로고침
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-16 bg-white border border-gray-200 rounded-xl">
+          <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+        </div>
+      ) : entities.length === 0 ? (
+        <div className="text-center py-16 bg-white border border-gray-200 rounded-xl text-gray-400 text-sm">
+          등록된 제출처가 없어요.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {entities.map((e) => {
+            const allMatched = e.missingCount === 0;
+            const isExpanded = expanded.has(e.submissionEntity);
+            return (
+              <div
+                key={e.submissionEntity}
+                className={`bg-white border rounded-xl overflow-hidden ${
+                  allMatched ? "border-green-200" : "border-yellow-200"
+                }`}
+              >
+                <div
+                  className={`px-5 py-4 border-b ${
+                    allMatched
+                      ? "bg-green-50 border-green-100"
+                      : "bg-yellow-50 border-yellow-100"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="font-semibold text-gray-900 truncate">
+                        {e.submissionEntity}
+                      </h3>
+                      <p className="text-xs text-gray-500 mt-0.5 truncate">
+                        제약사 {e.companies.length}개:{" "}
+                        {e.companies.slice(0, 3).join(", ")}
+                        {e.companies.length > 3
+                          ? ` 외 ${e.companies.length - 3}`
+                          : ""}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-white text-gray-700 border border-gray-200">
+                        {e.matched}/{e.total}
+                      </span>
+                      {e.missingCount > 0 && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                          누락 {e.missingCount}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="px-5 py-4 space-y-3">
+                  {allMatched ? (
+                    <div className="flex items-center gap-2 text-sm text-green-700">
+                      <CheckCircle className="w-4 h-4" />
+                      모든 사업자등록증이 매칭됐어요.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-sm text-yellow-700">
+                        <AlertCircle className="w-4 h-4" />
+                        {e.missingCount}건 누락 — 문서 필요
+                      </div>
+                      <button
+                        onClick={() => toggleExpand(e.submissionEntity)}
+                        className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                      >
+                        {isExpanded ? (
+                          <>
+                            <ChevronUp className="w-3.5 h-3.5" />
+                            누락 목록 접기
+                          </>
+                        ) : (
+                          <>
+                            <ChevronDown className="w-3.5 h-3.5" />
+                            누락 목록 펼치기
+                          </>
+                        )}
+                      </button>
+                      {isExpanded && (
+                        <ul className="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 max-h-48 overflow-y-auto divide-y divide-gray-100">
+                          {e.missing.map((m, i) => (
+                            <li key={i} className="py-1.5 first:pt-0 last:pb-0">
+                              <span className="font-medium text-gray-800">
+                                {m.clientName}
+                              </span>
+                              <span className="text-gray-400"> × </span>
+                              <span>{m.companyName}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+
+                  <button
+                    onClick={() => downloadZip(e.submissionEntity)}
+                    disabled={zipLoading === e.submissionEntity}
+                    className={`w-full flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 ${
+                      allMatched
+                        ? "bg-green-600 hover:bg-green-700 text-white"
+                        : "bg-white border border-gray-200 text-gray-700 hover:bg-gray-50"
+                    }`}
+                  >
+                    {zipLoading === e.submissionEntity ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <FileArchive className="w-4 h-4" />
+                    )}
+                    ZIP 다운로드
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 탭 래퍼 ───────────────────────────────────────────────────
+
+function SubmissionRoutesTabs() {
+  const [activeTab, setActiveTab] = useState<"list" | "status">("list");
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center gap-1 border-b border-gray-200">
+        <button
+          onClick={() => setActiveTab("list")}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            activeTab === "list"
+              ? "border-blue-600 text-blue-600"
+              : "border-transparent text-gray-500 hover:text-gray-800"
+          }`}
+        >
+          제출처 목록
+        </button>
+        <button
+          onClick={() => setActiveTab("status")}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            activeTab === "status"
+              ? "border-blue-600 text-blue-600"
+              : "border-transparent text-gray-500 hover:text-gray-800"
+          }`}
+        >
+          제출 현황
+        </button>
+      </div>
+
+      {activeTab === "list" ? <SubmissionRoutesContent /> : <EntityStatusTab />}
+    </div>
+  );
+}
+
 export default function SubmissionRoutesPage() {
   return (
     <BizLayout>
-      <SubmissionRoutesContent />
+      <SubmissionRoutesTabs />
     </BizLayout>
   );
 }
