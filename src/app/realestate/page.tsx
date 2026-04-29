@@ -81,9 +81,14 @@ export default function RealEstatePage() {
             네이버부동산 수집 + 국토부 실거래 — 개인 사용 전용. 수집한 중개사 연락처는 동의 없는 광고/마케팅 발송에 사용 금지.
           </p>
         </div>
-        <a href="/realestate/watches" className="px-3 py-1.5 rounded bg-blue-600 text-white text-sm hover:bg-blue-700">
-          알림 조건 관리
-        </a>
+        <div className="flex gap-2">
+          <a href="/realestate/valuation" className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50">
+            평가/시세 추정
+          </a>
+          <a href="/realestate/watches" className="px-3 py-1.5 rounded bg-blue-600 text-white text-sm hover:bg-blue-700">
+            알림 조건 관리
+          </a>
+        </div>
       </header>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">

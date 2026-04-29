@@ -622,3 +622,45 @@ model MolitTrade {
   @@index([lawdCd, dealYearMonth])
   @@index([dealKind])
 }
+
+// 한국부동산원 상업용부동산 임대동향조사 — 분기별 권역 평균.
+// 매매가 × 투자수익률 = 추정 연임대료 환산에 사용.
+model RoneStat {
+  id              String   @id @default(cuid())
+  // "오피스" | "중대형상가" | "소규모상가" | "집합상가"
+  buildingType    String
+  region          String   // 시군구명 또는 상권명 (예: "강남구", "강남대로")
+  regionCode      String?  // R-ONE 내부 코드 (있으면)
+  yearQuarter     String   // YYYYQn (예: 2025Q1)
+  rentPerM2       Float?   // 월 임대료 (원/㎡)
+  vacancyRate     Float?   // 공실률 (%)
+  yieldRate       Float?   // 투자수익률 (%, 연간)
+  capRate         Float?   // 소득수익률 (%, 연간) — cap rate 본체
+  raw             Json?
+  fetchedAt       DateTime @default(now())
+
+  @@unique([buildingType, region, yearQuarter])
+  @@index([region])
+  @@index([yearQuarter])
+}
+
+// 소상공인 상권정보 — 후보지의 업종 분포·유동인구·임대시세 추정치.
+model SbizMarketArea {
+  id            String   @id @default(cuid())
+  trarNo        String   @unique // 상권 고유번호
+  trarName      String
+  cortarNo      String?
+  sido          String?
+  sigungu       String?
+  // 통계 스냅샷 (가장 최신값)
+  storeCount    Int?     // 점포 수
+  medicalClinic Int?     // 의료기관 수 (의·치·한 + 약국)
+  populationDay Int?     // 주간 유동인구
+  populationNight Int?
+  estimatedRentPerM2 Float? // 추정 월 임대료 (원/㎡)
+  raw           Json?
+  fetchedAt     DateTime @default(now())
+
+  @@index([cortarNo])
+  @@index([sigungu])
+}

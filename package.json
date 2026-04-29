@@ -14,7 +14,10 @@
     "scrape:inspect": "tsx src/scrapers/inspect.ts",
     "re:scrape": "tsx src/realestate/run.ts scrape",
     "re:detail": "tsx src/realestate/run.ts detail",
-    "re:molit": "tsx src/realestate/run.ts molit"
+    "re:molit": "tsx src/realestate/run.ts molit",
+    "re:rone": "tsx src/realestate/run.ts rone",
+    "re:sbiz": "tsx src/realestate/run.ts sbiz",
+    "re:valuate": "tsx src/realestate/run.ts valuate"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",

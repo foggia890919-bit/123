@@ -1,11 +1,13 @@
 // CLI 진입점.
 //
-//   npm run re:scrape -- --cortar 1168010100 --types 상가,사무실 --trades 매매,월세
-//   npm run re:scrape -- --watches      # 활성 워치의 cortarNo 조합으로 자동 검색
-//   npm run re:molit  -- --endpoint commercialSale --lawd 11680 --months 6
-//   npm run re:detail -- <articleNo>    # 특정 매물 상세(중개사 포함) 단건 조회
-//
-// 옵션을 생략하면 .env의 RE_DEFAULT_CORTARS / RE_DEFAULT_PROPERTY_TYPES 사용.
+//   npm run re:scrape   -- --cortar 1168010100 --types 상가,사무실 --trades 매매,월세
+//   npm run re:scrape   -- --watches             # 활성 워치 기반 자동
+//   npm run re:detail   -- <articleNo>            # 단일 매물 상세
+//   npm run re:molit    -- --endpoint commercialSale --lawd 11680 --months 6
+//   npm run re:rone     -- --types OFFICE,MEDIUM,SMALL --quarters 4
+//   npm run re:sbiz     -- --cortar 1168010100
+//   npm run re:valuate  -- --listing <REListing.id>     # 단건 평가
+//   npm run re:valuate  -- --lawd 11680 --cap 4         # 권역 추정 임대료
 
 import "dotenv/config";
 import { prisma } from "@/lib/prisma";
@@ -15,9 +17,12 @@ import { upsertAgent, upsertListing, markStaleClosed } from "./storage";
 import { evaluateAndNotify } from "./notify";
 import { syncMolit } from "./molit/sync";
 import type { MolitEndpoint } from "./molit/client";
+import { syncRone, recentQuarters } from "./rone/sync";
+import { snapshotDong } from "./sbiz/sync";
+import { valuateListing, regionalEstimatedRent } from "./valuation";
 
 interface Args {
-  cmd: "scrape" | "detail" | "molit";
+  cmd: "scrape" | "detail" | "molit" | "rone" | "sbiz" | "valuate";
   cortarNos: string[];
   propertyTypes: string[];
   tradeTypes: string[];
@@ -26,6 +31,10 @@ interface Args {
   molitEndpoint?: MolitEndpoint;
   lawdCds: string[];
   months: number;
+  roneTypes: ("OFFICE" | "MEDIUM" | "SMALL" | "COMPLEX")[];
+  quarters: number;
+  listingId?: string;
+  capRate?: number;
 }
 
 function parseArgs(): Args {
@@ -49,6 +58,10 @@ function parseArgs(): Args {
     molitEndpoint: (get("--endpoint") as MolitEndpoint | undefined) ?? "commercialSale",
     lawdCds: list("--lawd"),
     months: Number(get("--months") ?? 6),
+    roneTypes: list("--types-rone", ["OFFICE", "MEDIUM", "SMALL"]) as Args["roneTypes"],
+    quarters: Number(get("--quarters") ?? 4),
+    listingId: get("--listing"),
+    capRate: get("--cap") ? Number(get("--cap")) : undefined,
   };
 }
 
@@ -124,6 +137,43 @@ async function runMolit(args: Args) {
   for (const e of summary.errors) console.log(`  [err] ${e.lawdCd}/${e.ymd}: ${e.error}`);
 }
 
+async function runRone(args: Args) {
+  const quarters = recentQuarters(args.quarters);
+  const summary = await syncRone({ buildingTypes: args.roneTypes, yearQuarters: quarters });
+  console.log(`[rone] fetched=${summary.fetched} upserted=${summary.upserted} errors=${summary.errors.length}`);
+  for (const e of summary.errors) console.log(`  [err] ${e.buildingType}/${e.quarter}: ${e.error}`);
+}
+
+async function runSbiz(args: Args) {
+  if (args.cortarNos.length === 0) throw new Error("--cortar 1168010100 (10자리 행정동코드) 필요");
+  for (const cortarNo of args.cortarNos) {
+    const r = await snapshotDong(cortarNo);
+    console.log(`[sbiz] cortar=${cortarNo} stores=${r.total} medical=${r.medical}`);
+  }
+}
+
+async function runValuate(args: Args) {
+  if (args.listingId) {
+    const listing = await prisma.rEListing.findUnique({ where: { id: args.listingId } });
+    if (!listing) throw new Error(`listing not found: ${args.listingId}`);
+    const v = await valuateListing(listing);
+    console.log(JSON.stringify(v, null, 2));
+    return;
+  }
+  if (args.lawdCds.length > 0) {
+    for (const lawdCd of args.lawdCds) {
+      const r = await regionalEstimatedRent({
+        lawdCd,
+        capRatePct: args.capRate ?? 4,
+        months: args.months,
+      });
+      console.log(`[valuate] lawd=${lawdCd} trades=${r.count} 매매단가중간값=${r.pricePerM2}만/㎡ 추정월세=${r.estimatedMonthlyRentPerM2}만/㎡`);
+    }
+    return;
+  }
+  throw new Error("--listing <id> 또는 --lawd 11680 중 하나 필요");
+}
+
 async function main() {
   const args = parseArgs();
   if (args.cmd === "detail") {
@@ -131,6 +181,12 @@ async function main() {
     await runDetail(args.detailId);
   } else if (args.cmd === "molit") {
     await runMolit(args);
+  } else if (args.cmd === "rone") {
+    await runRone(args);
+  } else if (args.cmd === "sbiz") {
+    await runSbiz(args);
+  } else if (args.cmd === "valuate") {
+    await runValuate(args);
   } else {
     await runScrape(args);
   }
