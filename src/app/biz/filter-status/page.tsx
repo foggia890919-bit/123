@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { Loader2, Search, CheckCircle, XCircle, Clock, Filter } from "lucide-react";
+import { Loader2, Search, CheckCircle, XCircle, Clock, Filter, ChevronDown } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { BizLayout } from "../page";
 
@@ -54,6 +54,73 @@ function ResultBadge({ result, status }: { result: string | null; status: string
     <span className="inline-flex items-center gap-1 text-xs font-medium text-yellow-700 bg-yellow-50 px-2 py-0.5 rounded-full">
       <Clock className="w-3 h-3" /> {STATUS_LABEL[status] ?? "대기"}
     </span>
+  );
+}
+
+// ── BIZ용 결과 변경 셀 ──────────────────────────────────────
+function ResultCell({ row, onUpdate }: {
+  row: FilterRow;
+  onUpdate: (id: string, result: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const [saving, setSaving] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+
+  function openMenu() {
+    if (btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, left: rect.left });
+    }
+    setOpen(true);
+  }
+
+  async function select(result: string | null) {
+    setOpen(false);
+    setSaving(true);
+    const res = await fetch("/api/filter-request", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: row.id, respondedResult: result }),
+    });
+    setSaving(false);
+    if (res.ok) onUpdate(row.id, result);
+  }
+
+  const OPTIONS = [
+    { value: "가능", label: "가능", color: "text-green-700 bg-green-50 hover:bg-green-100" },
+    { value: "불가", label: "불가", color: "text-red-700 bg-red-50 hover:bg-red-100" },
+    { value: null,   label: "대기(초기화)", color: "text-yellow-700 bg-yellow-50 hover:bg-yellow-100" },
+  ] as const;
+
+  return (
+    <>
+      <button ref={btnRef} onClick={openMenu} disabled={saving}
+        className="flex items-center gap-0.5 hover:opacity-80 transition-opacity">
+        {saving
+          ? <Loader2 className="w-3 h-3 animate-spin text-gray-400" />
+          : <><ResultBadge result={row.respondedResult} status={row.status} /><ChevronDown className="w-2.5 h-2.5 text-gray-400 ml-0.5" /></>
+        }
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="fixed z-50 bg-white border border-gray-200 rounded-lg shadow-xl overflow-hidden"
+            style={{ top: pos.top, left: pos.left }}>
+            {OPTIONS.map((opt) => (
+              <button
+                key={String(opt.value)}
+                onMouseDown={() => select(opt.value)}
+                className={`w-full text-left px-4 py-2 text-xs font-medium transition-colors ${opt.color}`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </>
   );
 }
 
@@ -163,6 +230,7 @@ export default function FilterStatusPage() {
   const [resultFilter, setResultFilter] = useState<"ALL" | "가능" | "불가" | "대기">("ALL");
 
   const isAdmin = session?.user?.role === "ADMIN";
+  const isBiz = session?.user?.role === "BIZ";
 
   useEffect(() => {
     if (status === "loading") return;
@@ -177,7 +245,7 @@ export default function FilterStatusPage() {
       .finally(() => setLoading(false));
   }, [session, status, router]);
 
-  async function updateCorp(id: string, field: "upperCorpName" | "lowerCorpName", value: string | null) {
+  const updateCorp = useCallback(async (id: string, field: "upperCorpName" | "lowerCorpName", value: string | null) => {
     const res = await fetch("/api/filter-request", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -186,7 +254,18 @@ export default function FilterStatusPage() {
     if (res.ok) {
       setRows((prev) => prev.map((r) => r.id === id ? { ...r, [field]: value } : r));
     }
-  }
+  }, []);
+
+  const updateResult = useCallback((id: string, result: string | null) => {
+    setRows((prev) => prev.map((r) => {
+      if (r.id !== id) return r;
+      return {
+        ...r,
+        respondedResult: result,
+        status: result ? (result === "가능" ? "APPROVED" : "REJECTED") : "PENDING",
+      };
+    }));
+  }, []);
 
   const filtered = rows.filter((r) => {
     const matchQ = !query ||
@@ -331,7 +410,10 @@ export default function FilterStatusPage() {
                         </div>
                         <span className="w-12 text-center text-gray-500">{r.requestType}</span>
                         <span className="w-20 flex justify-center">
-                          <ResultBadge result={r.respondedResult} status={r.status} />
+                          {isBiz
+                            ? <ResultCell row={r} onUpdate={updateResult} />
+                            : <ResultBadge result={r.respondedResult} status={r.status} />
+                          }
                         </span>
                         <span className="w-20 text-right text-gray-400">{formatDate(r.createdAt)}</span>
                         {isAdmin && <span className="w-20 text-right text-gray-400">{formatDate(r.respondedAt)}</span>}

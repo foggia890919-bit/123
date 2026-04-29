@@ -133,21 +133,33 @@ export async function PATCH(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
 
-  const { id, status, replyText, upperCorpName, lowerCorpName } = await req.json();
+  const { id, status, replyText, upperCorpName, lowerCorpName, respondedResult } = await req.json();
   if (!id) return NextResponse.json({ error: "id 필수" }, { status: 400 });
+
+  const record = await prisma.filterRequest.findUnique({
+    where: { id },
+    select: { userId: true, clientName: true, companyName: true, lowerCorpName: true },
+  });
+  if (!record) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
 
   const data: Prisma.FilterRequestUpdateInput = { updatedAt: new Date() };
 
   if (user.role === "ADMIN") {
     if (status !== undefined) data.status = status;
     if (replyText !== undefined) { data.replyText = replyText || null; data.repliedAt = new Date(); }
-  } else {
-    // BIZ: 자기 요청에만 상위/하위법인 설정 가능
+    if (respondedResult !== undefined) applyResult(data, respondedResult);
+  } else if (user.role === "BIZ") {
     if (status !== undefined || replyText !== undefined) {
       return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
     }
-    const record = await prisma.filterRequest.findUnique({ where: { id }, select: { userId: true } });
-    if (!record || record.userId !== user.id) {
+    // BIZ는 모든 요청에 결과 설정 가능
+    if (respondedResult !== undefined) applyResult(data, respondedResult);
+  } else {
+    // 일반 사용자: 본인 요청에만 corp 필드 수정 가능
+    if (status !== undefined || replyText !== undefined || respondedResult !== undefined) {
+      return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+    }
+    if (record.userId !== user.id) {
       return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
     }
   }
@@ -156,5 +168,74 @@ export async function PATCH(req: NextRequest) {
   if (lowerCorpName !== undefined) data.lowerCorpName = lowerCorpName ?? null;
 
   const updated = await prisma.filterRequest.update({ where: { id }, data });
+
+  // BIZ/ADMIN이 결과를 설정할 때 영업사원 + 하위법인에 알림
+  if ((user.role === "BIZ" || user.role === "ADMIN") && respondedResult) {
+    const effectiveLowerCorp = (lowerCorpName !== undefined ? lowerCorpName : record.lowerCorpName) as string | null;
+    notifyResultAsync({
+      clientName: record.clientName,
+      companyName: record.companyName,
+      respondedResult,
+      salesRepUserId: record.userId,
+      lowerCorpName: effectiveLowerCorp,
+    }).catch(() => {});
+  }
+
   return NextResponse.json(updated);
+}
+
+function applyResult(data: Prisma.FilterRequestUpdateInput, result: string | null) {
+  data.respondedResult = result ?? null;
+  if (result) {
+    data.status = result === "가능" ? "APPROVED" : "REJECTED";
+    data.respondedAt = new Date();
+  } else {
+    data.status = "PENDING";
+    data.respondedAt = null;
+  }
+}
+
+async function notifyResultAsync({
+  clientName, companyName, respondedResult, salesRepUserId, lowerCorpName,
+}: {
+  clientName: string; companyName: string; respondedResult: string;
+  salesRepUserId: string; lowerCorpName: string | null;
+}) {
+  const pfId = process.env.KAKAO_PF_ID;
+  const templateId = process.env.KAKAO_TEMPLATE_FILTER_RESULT;
+  if (!pfId || !templateId) return;
+
+  const targets: string[] = [];
+
+  // 영업사원 전화번호
+  const salesRep = await prisma.user.findUnique({
+    where: { id: salesRepUserId },
+    select: { phone: true },
+  });
+  if (salesRep?.phone) targets.push(salesRep.phone);
+
+  // 하위법인 담당자 전화번호
+  if (lowerCorpName) {
+    const dealer = await prisma.userClient.findFirst({
+      where: { clientName: lowerCorpName, dealerType: { not: null } },
+      select: { managerPhone: true },
+    });
+    if (dealer?.managerPhone) targets.push(dealer.managerPhone);
+  }
+
+  const fallbackText = `[KMD] 필터링 결과 안내\n거래처: ${clientName}\n제약사: ${companyName}\n결과: ${respondedResult}`;
+  await Promise.allSettled(
+    targets.map((phone) =>
+      sendAlimtalk(phone, {
+        pfId,
+        templateId,
+        variables: {
+          "#{거래처명}": clientName,
+          "#{제약사명}": companyName,
+          "#{결과}": respondedResult,
+        },
+        buttons: [],
+      }, fallbackText)
+    )
+  );
 }
