@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { useSession } from "next-auth/react";
-import { Upload, ZoomIn, ZoomOut, Maximize2, Minimize2, AlertTriangle, CheckCircle, BarChart3, UserPlus, X, Search, ArrowRight, Plus, Trash2 } from "lucide-react";
+import { Upload, ZoomIn, ZoomOut, Maximize2, Minimize2, AlertTriangle, CheckCircle, BarChart3, UserPlus, X, Search, ArrowRight, Plus, Trash2, FileImage, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import RequireRole from "@/components/RequireRole";
@@ -617,20 +617,23 @@ export default function StatsPage() {
           >
             {imageUrl ? (
               <div onClick={handleImageClick}
-                className={`w-full min-h-full flex items-start justify-center p-2 relative select-none ${isPanning.current ? "cursor-grabbing" : zoomEnabled ? (isZoomed ? "cursor-zoom-out" : "cursor-zoom-in") : "cursor-grab"}`}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img ref={imageElRef} src={imageUrl} alt="처방전"
-                  style={{ width: `${zoomLevel}%`, transition: "width 0.2s ease", maxWidth: "none" }}
-                  className="rounded object-contain" draggable={false} />
-                {focusedIdx != null && editOcr?.drugs[focusedIdx]?.bboxYPercent != null && (
-                  <div
-                    className="absolute left-2 right-2 pointer-events-none border-y-2 border-yellow-400 bg-yellow-300/15 transition-all"
-                    style={{
-                      top: `calc(${editOcr.drugs[focusedIdx]!.bboxYPercent}% - 14px)`,
-                      height: "28px",
-                    }}
-                  />
-                )}
+                className={`w-full min-h-full flex items-start justify-center p-2 select-none ${isPanning.current ? "cursor-grabbing" : zoomEnabled ? (isZoomed ? "cursor-zoom-out" : "cursor-zoom-in") : "cursor-grab"}`}>
+                {/* Image wrapper — relative so highlight % is against image height, not flex parent */}
+                <div className="relative inline-block" style={{ width: `${zoomLevel}%`, transition: "width 0.2s ease" }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img ref={imageElRef} src={imageUrl} alt="처방전"
+                    style={{ maxWidth: "none" }}
+                    className="w-full rounded object-contain" draggable={false} />
+                  {focusedIdx != null && editOcr?.drugs[focusedIdx]?.bboxYPercent != null && (
+                    <div
+                      className="absolute left-0 right-0 pointer-events-none border-y-2 border-yellow-400 bg-yellow-300/15 transition-all"
+                      style={{
+                        top: `calc(${editOcr.drugs[focusedIdx]!.bboxYPercent}% - 14px)`,
+                        height: "28px",
+                      }}
+                    />
+                  )}
+                </div>
               </div>
             ) : (
               <div onDrop={onDrop} onDragOver={(e) => e.preventDefault()}
