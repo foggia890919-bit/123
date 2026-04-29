@@ -4,6 +4,7 @@ import { requireSession, isNextResponse } from "@/lib/auth-guard";
 
 // GET /api/filter-mapping/suggestions?type=client&q=...
 // GET /api/filter-mapping/suggestions?type=company&q=...
+// GET /api/filter-mapping/suggestions?type=dealer&q=...
 
 export async function GET(req: NextRequest) {
   const user = await requireSession();
@@ -64,5 +65,24 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(allNames.map((companyName) => ({ companyName })));
   }
 
-  return NextResponse.json({ error: "type 파라미터가 필요합니다 (client | company)" }, { status: 400 });
+  if (type === "dealer") {
+    // 법인·딜러 등록관리에서 dealerType이 설정된 거래처
+    const dealers = await prisma.userClient.findMany({
+      where: {
+        dealerType: { not: null },
+        ...(q
+          ? /^\d+$/.test(q)
+            ? { bizNumber: { contains: q } }
+            : { clientName: { contains: q, mode: "insensitive" } }
+          : {}),
+      },
+      select: { clientName: true, bizNumber: true, dealerType: true },
+      distinct: ["clientName"],
+      orderBy: { clientName: "asc" },
+      take: 20,
+    });
+    return NextResponse.json(dealers);
+  }
+
+  return NextResponse.json({ error: "type 파라미터가 필요합니다 (client | company | dealer)" }, { status: 400 });
 }

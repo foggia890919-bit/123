@@ -18,6 +18,15 @@ interface FilterMapping {
 
 interface ClientSuggestion { clientName: string; bizNumber: string }
 interface CompanySuggestion { companyName: string }
+interface DealerSuggestion { clientName: string; bizNumber: string; dealerType: string }
+
+const DEALER_LABEL: Record<string, string> = {
+  CORPORATION: "법인",
+  UPPER_CORP: "상위법인",
+  LOWER_CORP: "하위법인",
+  SELF: "자사",
+  INDIVIDUAL: "개인딜러",
+};
 
 const EMPTY_FORM = {
   clientName: "",
@@ -383,11 +392,14 @@ export default function FilterMappingPage() {
               </Field>
 
               <Field label="제출처 *">
-                <input
+                <Autocomplete<DealerSuggestion>
                   value={form.submissionEntity}
-                  onChange={(e) => setForm({ ...form, submissionEntity: e.target.value })}
-                  placeholder="예: 동아제약 서울지점"
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  onChange={(v) => setForm((f) => ({ ...f, submissionEntity: v }))}
+                  onSelect={(item) => setForm((f) => ({ ...f, submissionEntity: item.clientName }))}
+                  fetchUrl={(q) => `/api/filter-mapping/suggestions?type=dealer&q=${encodeURIComponent(q)}`}
+                  getLabel={(item) => item.clientName}
+                  getSub={(item) => DEALER_LABEL[item.dealerType] ?? item.dealerType}
+                  placeholder="법인·딜러명 입력 또는 선택"
                 />
               </Field>
 
