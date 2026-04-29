@@ -116,8 +116,10 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
   useEffect(() => {
     if (!ingredientCode && !ingredientName) { setLoading(false); return; }
     const uid = userId ? `&userId=${userId}` : "";
+    // ingredientCode가 있을 때 ingredientName도 함께 전달 →
+    // 코드 미매핑 약품을 성분명으로 포함하여 누락 방지 (name_match 그룹)
     const url = ingredientCode
-      ? `/api/medications/search?ingredientCode=${encodeURIComponent(ingredientCode)}${uid}&limit=500`
+      ? `/api/medications/search?ingredientCode=${encodeURIComponent(ingredientCode)}&ingredientName=${encodeURIComponent(ingredientName)}${uid}&limit=500`
       : `/api/medications/search?q=${encodeURIComponent(ingredientName)}${uid}&ingredientOnly=true&limit=500`;
     fetch(url)
       .then((r) => r.json())
@@ -175,8 +177,8 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
     }
   }
 
-  // matchLevel 섹션 순서: exact → same_form → same_ingredient → null(코드 없음)
-  const matchOrder: Record<string, number> = { exact: 0, same_form: 1, same_ingredient: 2 };
+  // matchLevel 섹션 순서: exact → same_form → same_ingredient → name_match → null(코드 없음)
+  const matchOrder: Record<string, number> = { exact: 0, same_form: 1, same_ingredient: 2, name_match: 3 };
 
   const sorted = [...medications].sort((a, b) => {
     // ingredientCode 기반 검색이면 matchLevel 우선 정렬
@@ -210,6 +212,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
     exact:           { label: "정확히 일치 (동일 성분·제형·용량)", color: "bg-blue-50 text-blue-800 border-blue-200" },
     same_form:       { label: "동일 성분 + 동일 제형, 용량만 다름", color: "bg-amber-50 text-amber-800 border-amber-200" },
     same_ingredient: { label: "동일 성분 (제형·용량 다름)", color: "bg-gray-50 text-gray-600 border-gray-200" },
+    name_match:      { label: "성분명 일치 (보험코드 미매핑)", color: "bg-slate-50 text-slate-500 border-slate-200" },
   };
 
   function SortIcon({ k }: { k: SortKey }) {

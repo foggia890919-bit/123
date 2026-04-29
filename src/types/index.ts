@@ -5,8 +5,9 @@ export type Role = "ADMIN" | "SALES_REP" | "DOCTOR" | "PHARMACIST";
  *  exact           — 9자리 완전일치 (동일 성분/제형/단위/용량)
  *  same_form       — 8자리 prefix 일치 (동일 성분/제형/단위, 용량만 다름)
  *  same_ingredient — 6자리 prefix 일치 (동일 성분, 제형/용량 다름)
+ *  name_match      — ingredientCode 미매핑, 성분명으로 포함된 약품
  */
-export type IngredientMatchLevel = "exact" | "same_form" | "same_ingredient";
+export type IngredientMatchLevel = "exact" | "same_form" | "same_ingredient" | "name_match";
 
 export interface MedicationItem {
   id: string;
