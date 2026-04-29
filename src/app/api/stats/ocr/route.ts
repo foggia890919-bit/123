@@ -61,6 +61,10 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
     const file = formData.get("image") as File | null;
     if (!file) return NextResponse.json({ error: "이미지가 없습니다" }, { status: 400 });
+    const clientId = (formData.get("clientId") as string | null)?.trim() || null;
+
+    // 거래처 컨텍스트 (이전 확정 데이터에서 자주 처방한 약품 — 소프트 힌트)
+    const clientContext = clientId ? await fetchClientContext(clientId, user.id, user.role) : [];
 
     const bytes = await file.arrayBuffer();
     const base64 = Buffer.from(bytes).toString("base64");
@@ -75,7 +79,7 @@ export async function POST(req: NextRequest) {
     // ── 1단계: Clova + Gemini Vision 병렬 OCR ─────────────────────────────
     const [clovaOut, geminiOut] = await Promise.allSettled([
       callClovaOcr(base64, ext),
-      callGeminiVision(base64, mimeType),
+      callGeminiVision(base64, mimeType, clientContext),
     ]);
 
     const clovaResult = clovaOut.status === "fulfilled" ? clovaOut.value : null;
@@ -113,11 +117,22 @@ export async function POST(req: NextRequest) {
             productName: m.productName,
             companyName: m.companyName,
           })),
+          clientContext,
         });
+
+    // 거래처 컨텍스트와 매칭되면 confidence +5 보너스 (anchoring 방지를 위해 cap)
+    const contextKeys = new Set(
+      clientContext.map((c) => (c.insuranceCode || c.productName).toLowerCase())
+    );
+    const boostedMerged = merged.map((m) => {
+      const key = (m.insuranceCode || m.productName).toLowerCase();
+      const inContext = contextKeys.has(key);
+      return inContext ? { ...m, confidence: Math.min(100, m.confidence + 5) } : m;
+    });
 
     // ── 4단계: 약품마다 마스터 매칭 + 신뢰도 계산 ──────────────────────────
     const drugs: FusionDrug[] = [];
-    for (const item of merged) {
+    for (const item of boostedMerged) {
       const matched = await matchMedication(item, masterByCode);
       // 데이터 완성도 기반 baseline (LLM 자체신뢰도가 누락/0 이어도 합리적 값 보장)
       const fieldsFilled =
@@ -247,6 +262,68 @@ function locateRowInClova(
   return null;
 }
 
+// ── 거래처 컨텍스트 (이전 확정 처방 → 자주 나오는 약품 top N) ─────────────────
+
+interface ClientContextDrug {
+  insuranceCode: string;
+  productName: string;
+  companyName: string;
+}
+
+async function fetchClientContext(
+  clientId: string,
+  userId: string,
+  role: string
+): Promise<ClientContextDrug[]> {
+  const client = await prisma.userClient.findUnique({ where: { id: clientId }, select: { userId: true } });
+  if (!client) return [];
+  if (role !== "ADMIN" && client.userId !== userId) return [];
+
+  const recent = await prisma.prescriptionReport.findMany({
+    where: { clientId },
+    orderBy: { createdAt: "desc" },
+    take: 24,
+    select: { ocrData: true, createdAt: true },
+  });
+
+  type Cell = { drug: ClientContextDrug; weight: number };
+  const counter = new Map<string, Cell>();
+  const now = Date.now();
+  for (const r of recent) {
+    const data = r.ocrData;
+    if (!data || typeof data !== "object") continue;
+    const final = (data as Record<string, unknown>).finalDrugs;
+    if (!Array.isArray(final)) continue;
+    const ageMonths = (now - r.createdAt.getTime()) / (1000 * 60 * 60 * 24 * 30);
+    const w = ageMonths <= 3 ? 2 : 1;
+    for (const d of final) {
+      if (!d || typeof d !== "object") continue;
+      const x = d as Record<string, unknown>;
+      const productName = String(x.productName ?? "").trim();
+      if (!productName) continue;
+      const insuranceCode = String(x.insuranceCode ?? "").trim();
+      const companyName = String(x.companyName ?? "").trim();
+      const key = (insuranceCode && insuranceCode.length === 9 ? `c:${insuranceCode}` : `n:${productName}`).toLowerCase();
+      const cur = counter.get(key);
+      if (cur) cur.weight += w;
+      else counter.set(key, { drug: { insuranceCode, productName, companyName }, weight: w });
+    }
+  }
+  return Array.from(counter.values())
+    .sort((a, b) => b.weight - a.weight)
+    .slice(0, 30)
+    .map((x) => x.drug);
+}
+
+function clientContextHint(ctx: ClientContextDrug[]): string {
+  if (!ctx.length) return "";
+  const lines = ctx
+    .slice(0, 30)
+    .map((d) => `- ${d.productName}${d.companyName ? ` (${d.companyName})` : ""}${d.insuranceCode ? ` [${d.insuranceCode}]` : ""}`)
+    .join("\n");
+  return `\n\n# 이 거래처가 자주 처방하는 약품 (참고용 — 강제 매칭 X, 단지 후보)\n흐릿하거나 애매한 글자가 아래 후보와 유사하면 이쪽일 가능성이 높습니다. 하지만 이미지에 명백히 다른 약품이 보이면 그걸 우선해서 추출하세요.\n${lines}`;
+}
+
 // ── Gemini Vision OCR ─────────────────────────────────────────────────────────
 
 interface GeminiVisionDrug {
@@ -261,7 +338,11 @@ interface GeminiVisionResult {
   drugs: GeminiVisionDrug[];
 }
 
-async function callGeminiVision(base64: string, mimeType: string): Promise<GeminiVisionResult> {
+async function callGeminiVision(
+  base64: string,
+  mimeType: string,
+  clientContext: ClientContextDrug[] = []
+): Promise<GeminiVisionResult> {
   if (!process.env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY 미설정");
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -287,7 +368,7 @@ async function callGeminiVision(base64: string, mimeType: string): Promise<Gemin
 - **보험코드가 없어도 제품명이 명확하면 반드시 추출**하세요 (confidence 70+).
 - 한 약품의 여러 행은 각각 별도로 추출하세요 (예: 같은 약을 여러 환자에게 처방한 경우).
 
-JSON: { "drugs": [ { "insuranceCode": "", "productName": "", "companyName": "", "quantity": "", "confidence": 0 } ] }`;
+JSON: { "drugs": [ { "insuranceCode": "", "productName": "", "companyName": "", "quantity": "", "confidence": 0 } ] }${clientContextHint(clientContext)}`;
 
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash-lite",
@@ -329,6 +410,7 @@ async function callGeminiMerge(args: {
   clovaText: string;
   geminiDraft: GeminiVisionResult | null;
   masterCandidates: Array<{ insuranceCode: string | null; productName: string; companyName: string }>;
+  clientContext: ClientContextDrug[];
 }): Promise<MergedDrug[]> {
   if (!process.env.GEMINI_API_KEY) {
     // Gemini 미설정이면 Vision 결과만 사용
@@ -362,7 +444,7 @@ ${args.masterCandidates.length ? JSON.stringify(args.masterCandidates, null, 2) 
 - quantity 는 숫자만.
 - confidence: 양쪽 OCR 일치 90+, 한쪽만 70~85, 마스터 매칭 시 95+.
 
-JSON: { "drugs": [ { "insuranceCode": "", "productName": "", "companyName": "", "quantity": "", "confidence": 0 } ] }`;
+JSON: { "drugs": [ { "insuranceCode": "", "productName": "", "companyName": "", "quantity": "", "confidence": 0 } ] }${clientContextHint(args.clientContext)}`;
 
   try {
     const response = await ai.models.generateContent({

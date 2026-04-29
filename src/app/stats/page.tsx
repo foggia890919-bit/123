@@ -99,6 +99,17 @@ export default function StatsPage() {
   // 사람이 최종 확정하는 약품 리스트 (오른쪽 패널)
   const [manualDrugs, setManualDrugs] = useState<ManualDrug[]>([emptyManualDrug()]);
   const [lookupBusy, setLookupBusy] = useState<Record<number, boolean>>({});
+  const [manualInitMode, setManualInitMode] = useState<"ocr" | "lastMonth" | "empty">("ocr");
+
+  // 저번달 처방 (가운데 패널 — 거래처+년월 변경 시 자동 로드)
+  const [lastMonth, setLastMonth] = useState<{ drugs: ManualDrug[]; year: number; month: number } | null>(null);
+  const [lastMonthLoading, setLastMonthLoading] = useState(false);
+
+  // 이미지 패널 사이즈 (사용자 조절 가능)
+  const [imageHeight, setImageHeight] = useState(360);
+  const isDraggingResize = useRef(false);
+  const isPanning = useRef<{ startX: number; startY: number; startScrollX: number; startScrollY: number } | null>(null);
+  const dragMoved = useRef(false);
 
   // 제출
   const [submitting, setSubmitting] = useState(false);
@@ -114,6 +125,26 @@ export default function StatsPage() {
       .then((data) => setClients(Array.isArray(data) ? data : []))
       .catch(() => setClients([]));
   }, [session]);
+
+  // 저번달 처방 자료 자동 로드 (거래처/년월 변경 시)
+  useEffect(() => {
+    if (!selectedClient || !year || !month) { setLastMonth(null); return; }
+    setLastMonthLoading(true);
+    fetch(`/api/stats/client-history?clientId=${selectedClient.id}&year=${year}&month=${month}`)
+      .then((r) => r.json())
+      .then((data) => {
+        setLastMonth(data.lastMonth ?? null);
+      })
+      .catch(() => setLastMonth(null))
+      .finally(() => setLastMonthLoading(false));
+  }, [selectedClient, year, month]);
+
+  // 이미지 패널 높이 — localStorage 영속화
+  useEffect(() => {
+    const v = localStorage.getItem("stats:imageHeight");
+    if (v) setImageHeight(Math.max(200, Math.min(800, parseInt(v) || 360)));
+  }, []);
+  useEffect(() => { localStorage.setItem("stats:imageHeight", String(imageHeight)); }, [imageHeight]);
 
   // 드롭다운 외부 클릭 닫기
   useEffect(() => {
@@ -207,11 +238,13 @@ export default function StatsPage() {
 
   async function runOcr() {
     if (!imageFile) return;
+    if (!selectedClient) { setOcrError("거래처를 먼저 선택하세요"); return; }
     setOcrLoading(true); setOcrError("");
     try {
       const compressed = await compressImage(imageFile);
       const fd = new FormData();
       fd.append("image", compressed, "prescription.jpg");
+      fd.append("clientId", selectedClient.id);
       const res = await fetch("/api/stats/ocr", { method: "POST", body: fd });
       const text = await res.text();
       let data: { error?: string } & OcrResult;
@@ -220,16 +253,22 @@ export default function StatsPage() {
       if (data.error) throw new Error(data.error);
       setOcr(data);
       setEditOcr(JSON.parse(JSON.stringify(data)));
-      // OCR 모든 행을 오른쪽 확정창에 1:1 페어링 (사람이 검토 후 수정)
-      const paired: ManualDrug[] = (data.drugs ?? []).map((d) => ({
-        insuranceCode: d.insuranceCode.value,
-        companyName: d.companyName.value,
-        productName: d.productName.value,
-        quantity: d.quantity.value,
-        unitPrice: d.unitPrice,
-        matchedMedicationId: d.matchedMedicationId,
-      }));
-      setManualDrugs(paired.length ? paired : [emptyManualDrug()]);
+      // 사람 확정 패널 초기화 — manualInitMode 에 따라
+      if (manualInitMode === "ocr") {
+        const paired: ManualDrug[] = (data.drugs ?? []).map((d) => ({
+          insuranceCode: d.insuranceCode.value,
+          companyName: d.companyName.value,
+          productName: d.productName.value,
+          quantity: d.quantity.value,
+          unitPrice: d.unitPrice,
+          matchedMedicationId: d.matchedMedicationId,
+        }));
+        setManualDrugs(paired.length ? paired : [emptyManualDrug()]);
+      } else if (manualInitMode === "lastMonth" && lastMonth?.drugs.length) {
+        setManualDrugs([...lastMonth.drugs.map((d) => ({ ...d })), emptyManualDrug()]);
+      } else {
+        setManualDrugs([emptyManualDrug()]);
+      }
       setZoomEnabled(true);
       if (!selectedClient && data.hospitalName?.value) {
         setHospitalQuery(data.hospitalName.value);
@@ -243,9 +282,59 @@ export default function StatsPage() {
   }
 
   function handleImageClick() {
+    if (dragMoved.current) return; // 드래그 끝 click 무시
     if (!zoomEnabled) return;
     if (isZoomed) { setZoomLevel(100); setIsZoomed(false); }
     else { setZoomLevel(200); setIsZoomed(true); }
+  }
+
+  // 이미지 click-drag 팬 — 줌 상태 무관하게 동작
+  function handleImageMouseDown(e: React.MouseEvent) {
+    const scrollEl = imageScrollRef.current;
+    if (!scrollEl) return;
+    isPanning.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startScrollX: scrollEl.scrollLeft,
+      startScrollY: scrollEl.scrollTop,
+    };
+    dragMoved.current = false;
+  }
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      const pan = isPanning.current;
+      const scrollEl = imageScrollRef.current;
+      if (!pan || !scrollEl) return;
+      const dx = e.clientX - pan.startX;
+      const dy = e.clientY - pan.startY;
+      if (Math.abs(dx) + Math.abs(dy) > 4) dragMoved.current = true;
+      scrollEl.scrollLeft = pan.startScrollX - dx;
+      scrollEl.scrollTop = pan.startScrollY - dy;
+    }
+    function onUp() { isPanning.current = null; }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+  }, []);
+
+  // 이미지 패널 세로 크기 조절 — 하단 핸들 드래그
+  function handleResizeMouseDown(e: React.MouseEvent) {
+    e.preventDefault();
+    isDraggingResize.current = true;
+    const startY = e.clientY;
+    const startHeight = imageHeight;
+    function onMove(ev: MouseEvent) {
+      if (!isDraggingResize.current) return;
+      const next = Math.max(200, Math.min(800, startHeight + (ev.clientY - startY)));
+      setImageHeight(next);
+    }
+    function onUp() {
+      isDraggingResize.current = false;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
   }
 
   // 오른쪽 패널 — 사람 입력
@@ -477,87 +566,98 @@ export default function StatsPage() {
           )}
         </div>
 
-        {/* 메인 3-pane view: 이미지 / AI 결과 / 사람 확정 */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* 왼쪽: 이미지 */}
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
+        {/* 이미지 — 상단 sticky strip (높이 조절 + pan/zoom + 커서 따라감) */}
+        <div className="sticky top-0 z-30 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+          <div className="border-b border-gray-100 px-3 py-2 flex items-center gap-2 bg-gray-50 flex-wrap">
+            <Button type="button" variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} className="text-xs">
+              <Upload className="w-3.5 h-3.5 mr-1" />파일 선택
+            </Button>
             {imageUrl && (
-              <div className="border-b border-gray-100 px-3 py-2 flex items-center gap-2 bg-gray-50">
+              <Button type="button" size="sm" onClick={runOcr} disabled={ocrLoading || !selectedClient}
+                className="text-xs bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-300">
+                <BarChart3 className="w-3.5 h-3.5 mr-1" />{ocrLoading ? "인식 중..." : "처방전 인식"}
+              </Button>
+            )}
+            {imageUrl && !selectedClient && (
+              <span className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 px-2 py-0.5 rounded">
+                ⓘ 거래처를 먼저 선택하세요
+              </span>
+            )}
+            <div className="ml-auto flex items-center gap-2 flex-wrap">
+              {imageUrl && <>
                 <button onClick={() => { setZoomLevel(100); setIsZoomed(false); }}
                   className="text-xs px-2 py-1 rounded border border-gray-300 bg-white hover:bg-gray-100 font-mono">1:1</button>
-                <button onClick={() => { setZoomLevel(100); setIsZoomed(false); }}
-                  className="text-xs px-2 py-1 rounded border border-gray-300 bg-white hover:bg-gray-100">Fit</button>
                 <button onClick={() => setZoomLevel((z) => Math.min(z + 25, 400))}
                   className="w-6 h-6 flex items-center justify-center rounded border border-gray-300 bg-white hover:bg-gray-100">
                   <ZoomIn className="w-3.5 h-3.5" /></button>
                 <button onClick={() => setZoomLevel((z) => Math.max(z - 25, 25))}
                   className="w-6 h-6 flex items-center justify-center rounded border border-gray-300 bg-white hover:bg-gray-100">
                   <ZoomOut className="w-3.5 h-3.5" /></button>
-                <span className="text-xs text-gray-500 font-mono">{zoomLevel}%</span>
-                {ocr && (
-                  <div className="ml-auto flex items-center gap-2">
-                    <span className="text-xs text-gray-600">클릭 확대</span>
-                    <button onClick={() => { setZoomEnabled((v) => !v); if (isZoomed) { setIsZoomed(false); setZoomLevel(100); } }}
-                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${zoomEnabled ? "bg-blue-500" : "bg-gray-300"}`}>
-                      <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${zoomEnabled ? "translate-x-4" : "translate-x-1"}`} />
-                    </button>
-                    <span className="text-[10px] text-gray-500">
-                      {zoomEnabled ? (isZoomed ? <Minimize2 className="w-3 h-3 inline text-blue-500" /> : <Maximize2 className="w-3 h-3 inline text-blue-500" />) : null}
-                    </span>
-                  </div>
-                )}
-              </div>
-            )}
-            <div ref={imageScrollRef} className="flex-1 overflow-auto min-h-64 relative">
-              {imageUrl ? (
-                <div onClick={handleImageClick} style={{ minHeight: 300 }}
-                  className={`w-full h-full flex items-start justify-center p-2 relative ${zoomEnabled ? (isZoomed ? "cursor-zoom-out" : "cursor-zoom-in") : ""}`}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img ref={imageElRef} src={imageUrl} alt="처방전"
-                    style={{ width: `${zoomLevel}%`, transition: "width 0.2s ease", maxWidth: "none" }}
-                    className="rounded object-contain" draggable={false} />
-                  {focusedIdx != null && editOcr?.drugs[focusedIdx]?.bboxYPercent != null && (
-                    <div
-                      className="absolute left-2 right-2 pointer-events-none border-y-2 border-yellow-400 bg-yellow-300/15 transition-all"
-                      style={{
-                        top: `calc(${editOcr.drugs[focusedIdx]!.bboxYPercent}% - 14px)`,
-                        height: "28px",
-                      }}
-                    />
-                  )}
-                </div>
-              ) : (
-                <div onDrop={onDrop} onDragOver={(e) => e.preventDefault()}
-                  onClick={() => fileInputRef.current?.click()}
-                  className="h-full min-h-64 flex flex-col items-center justify-center gap-3 cursor-pointer hover:bg-blue-50 transition-colors m-4 border-2 border-dashed border-gray-300 hover:border-blue-400 rounded-lg">
-                  <Upload className="w-10 h-10 text-gray-300" />
-                  <div className="text-center">
-                    <p className="text-sm font-medium text-gray-600">처방전 이미지 업로드</p>
-                    <p className="text-xs text-gray-400 mt-1">클릭하거나 드래그하여 파일 선택</p>
-                  </div>
-                </div>
+                <span className="text-xs text-gray-500 font-mono w-10 text-right">{zoomLevel}%</span>
+              </>}
+              {ocr && (
+                <>
+                  <span className="text-xs text-gray-600">클릭 확대</span>
+                  <button onClick={() => { setZoomEnabled((v) => !v); if (isZoomed) { setIsZoomed(false); setZoomLevel(100); } }}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${zoomEnabled ? "bg-blue-500" : "bg-gray-300"}`}>
+                    <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${zoomEnabled ? "translate-x-4" : "translate-x-1"}`} />
+                  </button>
+                  <span className="text-[10px] text-gray-500">
+                    {zoomEnabled ? (isZoomed ? <Minimize2 className="w-3 h-3 inline text-blue-500" /> : <Maximize2 className="w-3 h-3 inline text-blue-500" />) : null}
+                  </span>
+                </>
               )}
-              <input ref={fileInputRef} type="file" accept="image/*" className="hidden"
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
-            </div>
-            <div className="border-t border-gray-100 p-3 flex gap-2 items-center">
-              <Button type="button" variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} className="text-xs">
-                <Upload className="w-3.5 h-3.5 mr-1" />파일 선택
-              </Button>
-              {imageUrl && (
-                <Button type="button" size="sm" onClick={runOcr} disabled={ocrLoading}
-                  className="text-xs bg-blue-600 hover:bg-blue-700 text-white">
-                  <BarChart3 className="w-3.5 h-3.5 mr-1" />{ocrLoading ? "인식 중..." : "처방전 인식"}
-                </Button>
-              )}
-              {ocrError && <p className="text-xs text-red-500 flex-1">{ocrError}</p>}
+              {ocrError && <p className="text-xs text-red-500">{ocrError}</p>}
             </div>
           </div>
+          <div ref={imageScrollRef}
+            onMouseDown={handleImageMouseDown}
+            style={{ height: `${imageHeight}px` }}
+            className="overflow-auto relative bg-gray-50"
+          >
+            {imageUrl ? (
+              <div onClick={handleImageClick}
+                className={`w-full min-h-full flex items-start justify-center p-2 relative select-none ${isPanning.current ? "cursor-grabbing" : zoomEnabled ? (isZoomed ? "cursor-zoom-out" : "cursor-zoom-in") : "cursor-grab"}`}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img ref={imageElRef} src={imageUrl} alt="처방전"
+                  style={{ width: `${zoomLevel}%`, transition: "width 0.2s ease", maxWidth: "none" }}
+                  className="rounded object-contain" draggable={false} />
+                {focusedIdx != null && editOcr?.drugs[focusedIdx]?.bboxYPercent != null && (
+                  <div
+                    className="absolute left-2 right-2 pointer-events-none border-y-2 border-yellow-400 bg-yellow-300/15 transition-all"
+                    style={{
+                      top: `calc(${editOcr.drugs[focusedIdx]!.bboxYPercent}% - 14px)`,
+                      height: "28px",
+                    }}
+                  />
+                )}
+              </div>
+            ) : (
+              <div onDrop={onDrop} onDragOver={(e) => e.preventDefault()}
+                onClick={() => fileInputRef.current?.click()}
+                className="h-full min-h-64 flex flex-col items-center justify-center gap-3 cursor-pointer hover:bg-blue-50 transition-colors m-4 border-2 border-dashed border-gray-300 hover:border-blue-400 rounded-lg">
+                <Upload className="w-10 h-10 text-gray-300" />
+                <div className="text-center">
+                  <p className="text-sm font-medium text-gray-600">처방전 이미지 업로드</p>
+                  <p className="text-xs text-gray-400 mt-1">클릭하거나 드래그하여 파일 선택</p>
+                </div>
+              </div>
+            )}
+            <input ref={fileInputRef} type="file" accept="image/*" className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
+          </div>
+          {/* 높이 조절 핸들 — 아래로 드래그 */}
+          <div onMouseDown={handleResizeMouseDown}
+            className="h-1.5 cursor-row-resize bg-gray-200 hover:bg-blue-400 transition-colors"
+            title="드래그하여 높이 조절" />
+        </div>
 
-          {/* 중간: OCR 인식 원본 (read-only, 항상 4컬럼 헤더 표시) */}
+        {/* 3-pane data view: 사진매칭 / 저번달처방 / 최종수정 */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* 사진매칭: OCR 인식 원본 (read-only, 항상 4컬럼 헤더 표시) */}
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col">
             <div className="border-b border-gray-100 px-3 h-[44px] flex items-center gap-2 overflow-x-auto">
-              <span className="text-xs font-semibold text-gray-700">OCR 인식 원본</span>
+              <span className="text-xs font-semibold text-gray-700">① 사진매칭</span>
               <span className="text-xs bg-blue-50 text-blue-600 border border-blue-200 px-1.5 py-0.5 rounded">CLOVA + GEMINI</span>
               {editOcr ? (
                 <>
@@ -639,16 +739,83 @@ export default function StatsPage() {
             )}
           </div>
 
-          {/* 오른쪽: 사람 확정 입력 */}
+          {/* 저번달처방: 직전월 확정 자료 (read-only) */}
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col">
             <div className="border-b border-gray-100 px-3 h-[44px] flex items-center gap-2 overflow-x-auto">
-              <span className="text-xs font-semibold text-gray-700">사람 확정</span>
+              <span className="text-xs font-semibold text-gray-700">② 저번달 처방</span>
+              {selectedClient ? (
+                lastMonthLoading ? (
+                  <span className="text-xs text-gray-400">로딩 중...</span>
+                ) : lastMonth ? (
+                  <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">
+                    {lastMonth.year}년 {lastMonth.month}월 · {lastMonth.drugs.length}건
+                  </span>
+                ) : (
+                  <span className="text-xs text-gray-400">없음</span>
+                )
+              ) : (
+                <span className="text-xs text-gray-400">거래처 선택 후 자동 로드</span>
+              )}
+              {lastMonth && lastMonth.drugs.length > 0 && (
+                <button onClick={() => setManualDrugs([...lastMonth.drugs.map((d) => ({ ...d })), emptyManualDrug()])}
+                  className="ml-auto text-[11px] px-2 py-1 rounded border border-blue-300 bg-blue-50 hover:bg-blue-100 text-blue-700 flex items-center gap-1"
+                  title="저번달 데이터를 오른쪽 최종 수정 패널에 복사">
+                  최종으로 복사<ArrowRight className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+            <div className="flex-1 overflow-y-auto p-3">
+              <table className="w-full text-xs table-fixed">
+                <thead>
+                  <tr className="border-b border-gray-200 bg-gray-50">
+                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[26%]">보험코드</th>
+                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[20%]">제약사</th>
+                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500">제품명</th>
+                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[14%]">수량</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {!lastMonth || lastMonth.drugs.length === 0 ? (
+                    <tr><td colSpan={4} className="py-10 text-center text-gray-400 text-xs">
+                      {!selectedClient ? "거래처를 선택하세요" : lastMonthLoading ? "로딩 중..." : "직전월 자료 없음"}
+                    </td></tr>
+                  ) : lastMonth.drugs.map((d, i) => (
+                    <tr key={i} className="border-b border-gray-100 h-9">
+                      <td className="py-1.5 px-1.5 font-mono text-[11px] truncate" title={d.insuranceCode}>{d.insuranceCode || "—"}</td>
+                      <td className="py-1.5 px-1.5 text-[11px] truncate" title={d.companyName}>{d.companyName || "—"}</td>
+                      <td className="py-1.5 px-1.5 text-[11px] truncate" title={d.productName}>{d.productName || "—"}</td>
+                      <td className="py-1.5 px-1.5 text-[11px] truncate">{d.quantity || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {lastMonth && lastMonth.drugs.length > 0 && (
+                <p className="mt-2 text-[10px] text-gray-400">
+                  같은 거래처의 직전월 확정 자료입니다. AI 인식 시 이 패턴을 참고합니다.
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* 최종수정: 사람 확정 입력 */}
+          <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col">
+            <div className="border-b border-gray-100 px-3 h-[44px] flex items-center gap-2 overflow-x-auto">
+              <span className="text-xs font-semibold text-gray-700">③ 최종 수정</span>
               <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{filledManualDrugs.length}건</span>
               {isClientUnnapproved && (
                 <span className="text-xs bg-yellow-100 text-yellow-700 border border-yellow-300 px-1.5 py-0.5 rounded font-semibold">정산서 미반영</span>
               )}
+              <select
+                value={manualInitMode}
+                onChange={(e) => setManualInitMode(e.target.value as "ocr" | "lastMonth" | "empty")}
+                className="ml-auto text-[11px] h-7 border border-gray-300 rounded px-1.5 bg-white text-gray-600"
+                title="OCR 인식 시 이 패널을 어떤 데이터로 채울지 선택">
+                <option value="ocr">OCR 결과 복사</option>
+                <option value="lastMonth">저번달 복사</option>
+                <option value="empty">비어있음</option>
+              </select>
               <button onClick={addManualRow}
-                className="ml-auto text-[11px] px-2 py-1 rounded border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 flex items-center gap-1">
+                className="text-[11px] px-2 py-1 rounded border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 flex items-center gap-1">
                 <Plus className="w-3 h-3" />행 추가
               </button>
             </div>
