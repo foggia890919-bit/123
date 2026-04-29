@@ -176,6 +176,7 @@ model Workspace {
   members       WorkspaceMember[]
   stores        NaverStore[]
   reports       DailyReportLog[]
+  keywordRules  KeywordRule[]
 
   @@index([ownerId])
 }
@@ -345,4 +346,22 @@ model BackfillJob {
   @@index([workspaceId])
   @@index([storeId])
   @@index([status])
+}
+
+model KeywordRule {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  keyword     String
+  // 매칭 패턴 — 콤마 또는 줄바꿈 구분 (e.g. "피쿠알,picual,Picual")
+  patterns    String
+  priority    Int       @default(0)
+  // 병수 자동 추출 정규식 (선택). 비어있으면 글로벌 기본값 사용.
+  bottlesRule String?
+  enabled     Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([workspaceId])
+  @@index([workspaceId, enabled, priority])
 }

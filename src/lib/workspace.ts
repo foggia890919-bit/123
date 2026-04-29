@@ -43,17 +43,17 @@ export async function resolveWorkspace(userId: string): Promise<Workspace | null
   return list[0] ?? null;
 }
 
-/** 워크스페이스가 하나도 없으면 「내 사업자」 자동 생성하고 반환 */
+/** 워크스페이스가 하나도 없으면 「내 사업자」 자동 생성하고 반환 (기본 키워드 룰 시드 포함) */
 export async function ensureWorkspace(userId: string): Promise<Workspace> {
   const existing = await resolveWorkspace(userId);
   if (existing) return existing;
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-  let baseSlug = (user.email.split("@")[0] || "ws").toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+  const baseSlug = (user.email.split("@")[0] || "ws").toLowerCase().replace(/[^a-z0-9-]+/g, "-");
   let slug = baseSlug || `ws-${Date.now()}`;
   for (let i = 0; await prisma.workspace.findUnique({ where: { slug } }); i++) {
     slug = `${baseSlug}-${i + 2}`;
   }
-  return prisma.workspace.create({
+  const ws = await prisma.workspace.create({
     data: {
       name: user.name ? `${user.name}의 사업자` : "내 사업자",
       slug,
@@ -61,6 +61,15 @@ export async function ensureWorkspace(userId: string): Promise<Workspace> {
       members: { create: { userId, role: "OWNER" } },
     },
   });
+  await seedKeywordRules(ws.id);
+  return ws;
+}
+
+async function seedKeywordRules(workspaceId: string) {
+  const { DEFAULT_RULES } = await import("./keyword-match");
+  for (const r of DEFAULT_RULES) {
+    await prisma.keywordRule.create({ data: { workspaceId, ...r } }).catch(() => null);
+  }
 }
 
 export async function requireWorkspace(): Promise<{ user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>; workspace: Workspace }> {

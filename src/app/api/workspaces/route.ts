@@ -29,5 +29,10 @@ export async function POST(req: NextRequest) {
       members: { create: { userId: user.id, role: "OWNER" } },
     },
   });
+  // 기본 키워드 룰 시드 (피쿠알/아르베키나/블렌딩)
+  const { DEFAULT_RULES } = await import("@/lib/keyword-match");
+  for (const r of DEFAULT_RULES) {
+    await prisma.keywordRule.create({ data: { workspaceId: ws.id, ...r } }).catch(() => null);
+  }
   return NextResponse.json({ workspace: ws });
 }
