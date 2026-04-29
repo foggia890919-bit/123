@@ -50,9 +50,9 @@ export async function POST(req: NextRequest) {
   const { fileKey: bizFileKey, fileData: bizDocumentFallback } =
     await persistDataUri(BUCKETS.filterRequestBiz, user.id, bizDocument);
 
-  // Lookup FilterMapping entries for this client × each company
+  // Lookup FilterMapping entries by company name (제약사 → 상위법인)
   const mappings = await prisma.filterMapping.findMany({
-    where: { clientName, active: true },
+    where: { companyName: { in: companies as string[] }, active: true },
   });
   const mappingByCompany = new Map(mappings.map((m) => [m.companyName, m]));
 

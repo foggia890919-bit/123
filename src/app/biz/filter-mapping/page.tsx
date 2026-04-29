@@ -7,7 +7,6 @@ import * as XLSX from "xlsx";
 
 interface FilterMapping {
   id: string;
-  clientName: string;
   companyName: string;
   submissionEntity: string;
   managerName: string | null;
@@ -17,7 +16,6 @@ interface FilterMapping {
   createdAt: string;
 }
 
-interface ClientSuggestion { clientName: string; bizNumber: string }
 interface CompanySuggestion { companyName: string }
 interface DealerSuggestion { clientName: string; bizNumber: string; dealerType: string; managerName?: string | null; managerPhone?: string | null; memo?: string | null }
 
@@ -30,8 +28,6 @@ const DEALER_LABEL: Record<string, string> = {
 };
 
 const EMPTY_FORM = {
-  clientName: "",
-  bizNumber: "",
   companyName: "",
   submissionEntity: "",
   managerName: "",
@@ -149,10 +145,10 @@ function Autocomplete<T>({
 // ── 엑셀 템플릿 다운로드 ─────────────────────────────────────
 function downloadTemplate() {
   const ws = XLSX.utils.aoa_to_sheet([
-    ["거래처", "상위법인", "담당자명", "담당자연락처", "제약사1", "제약사2", "제약사3"],
-    ["용삼의원", "메디필스1", "홍길동", "010-1234-5678", "에이치엘비제약(주)", "(주)메디카코리아", ""],
+    ["상위법인", "담당자명", "담당자연락처", "제약사1", "제약사2", "제약사3"],
+    ["메디필스1", "홍길동", "010-1234-5678", "에이치엘비제약(주)", "(주)메디카코리아", ""],
   ]);
-  ws["!cols"] = [14, 14, 10, 14, 16, 16, 16].map((w) => ({ wch: w }));
+  ws["!cols"] = [14, 10, 14, 16, 16, 16].map((w) => ({ wch: w }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "매핑");
   XLSX.writeFile(wb, "필터매핑_템플릿.xlsx");
@@ -198,14 +194,14 @@ export function FilterMappingContent() {
       const raw: string[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
       const [, ...dataRows] = raw; // skip header row
       const rows = dataRows
-        .filter((r) => r[0]?.trim() && r[1]?.trim())
+        .filter((r) => r[0]?.trim())
         .map((r) => ({
-          clientName: String(r[0]).trim(),
-          submissionEntity: String(r[1]).trim(),
-          managerName: String(r[2] ?? "").trim() || undefined,
-          managerPhone: String(r[3] ?? "").trim() || undefined,
-          companies: r.slice(4).map((c) => String(c).trim()).filter(Boolean),
-        }));
+          submissionEntity: String(r[0]).trim(),
+          managerName: String(r[1] ?? "").trim() || undefined,
+          managerPhone: String(r[2] ?? "").trim() || undefined,
+          companies: r.slice(3).map((c) => String(c).trim()).filter(Boolean),
+        }))
+        .filter((r) => r.companies.length > 0);
       if (rows.length === 0) { alert("유효한 행이 없어요."); return; }
       const res = await fetch("/api/filter-mapping/bulk", {
         method: "POST",
@@ -229,8 +225,6 @@ export function FilterMappingContent() {
 
   function openEdit(m: FilterMapping) {
     setForm({
-      clientName: m.clientName,
-      bizNumber: "",
       companyName: m.companyName,
       submissionEntity: m.submissionEntity,
       managerName: m.managerName ?? "",
@@ -244,15 +238,16 @@ export function FilterMappingContent() {
 
   async function handleSave() {
     setError(null);
-    if (!form.clientName || !form.companyName || !form.submissionEntity) {
-      setError("거래처명, 제약사명, 제출처는 필수입니다.");
+    if (!form.companyName || !form.submissionEntity) {
+      setError("제약사명과 제출처는 필수입니다.");
       return;
     }
     setSaving(true);
     try {
       const method = modal === "edit" ? "PATCH" : "POST";
-      const { bizNumber: _, ...rest } = form;
-      const body = modal === "edit" ? { id: editTarget!.id, ...rest } : rest;
+      const body = modal === "edit"
+        ? { id: editTarget!.id, submissionEntity: form.submissionEntity, managerName: form.managerName, managerPhone: form.managerPhone, notes: form.notes }
+        : { companyName: form.companyName, submissionEntity: form.submissionEntity, managerName: form.managerName, managerPhone: form.managerPhone, notes: form.notes };
       const res = await fetch("/api/filter-mapping", {
         method,
         headers: { "Content-Type": "application/json" },
@@ -277,14 +272,14 @@ export function FilterMappingContent() {
   }
 
   async function handleDelete(m: FilterMapping) {
-    if (!confirm(`"${m.clientName} × ${m.companyName}" 매핑을 삭제할까요?`)) return;
+    if (!confirm(`"${m.companyName}" 매핑을 삭제할까요?`)) return;
     await fetch(`/api/filter-mapping?id=${m.id}`, { method: "DELETE" });
     load();
   }
 
   const filtered = mappings.filter((m) => {
     const q = search.toLowerCase();
-    return !q || m.clientName.toLowerCase().includes(q) || m.companyName.toLowerCase().includes(q) || m.submissionEntity.toLowerCase().includes(q);
+    return !q || m.companyName.toLowerCase().includes(q) || m.submissionEntity.toLowerCase().includes(q);
   });
 
   return (
@@ -292,7 +287,7 @@ export function FilterMappingContent() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-gray-900">필터링 매핑 관리</h1>
-            <p className="text-sm text-gray-500 mt-0.5">거래처 × 제약사별 제출처 및 담당자 설정</p>
+            <p className="text-sm text-gray-500 mt-0.5">제약사별 제출처(상위법인) 및 담당자 설정</p>
           </div>
           <div className="flex items-center gap-2">
             <input ref={bulkRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleBulkUpload} />
@@ -331,7 +326,7 @@ export function FilterMappingContent() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="거래처명, 제약사명, 제출처 검색"
+              placeholder="제약사명, 제출처 검색"
               className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -360,7 +355,6 @@ export function FilterMappingContent() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
-                    <Th>병의원</Th>
                     <Th>제약사명</Th>
                     <Th>제출처(상위법인)</Th>
                     <Th>담당자</Th>
@@ -372,8 +366,7 @@ export function FilterMappingContent() {
                 <tbody className="divide-y divide-gray-50">
                   {filtered.map((m) => (
                     <tr key={m.id} className={`hover:bg-gray-50 transition-colors ${!m.active ? "opacity-50" : ""}`}>
-                      <td className="px-4 py-3 font-medium text-gray-900">{m.clientName}</td>
-                      <td className="px-4 py-3 text-gray-700">{m.companyName}</td>
+                      <td className="px-4 py-3 font-medium text-gray-900">{m.companyName}</td>
                       <td className="px-4 py-3 text-gray-700">{m.submissionEntity}</td>
                       <td className="px-4 py-3 text-gray-600">{m.managerName || "-"}</td>
                       <td className="px-4 py-3 text-gray-600">{m.managerPhone || "-"}</td>
@@ -422,29 +415,6 @@ export function FilterMappingContent() {
             </div>
             <div className="px-6 py-5 space-y-4">
               {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
-
-              {/* 병의원 — 병·의원 등록/관리에서 등록한 거래처 */}
-              <Field label="병의원 *">
-                {modal === "edit" ? (
-                  <input value={form.clientName} disabled
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-500" />
-                ) : (
-                  <>
-                    <Autocomplete<ClientSuggestion>
-                      value={form.clientName}
-                      onChange={(v) => setForm((f) => ({ ...f, clientName: v, bizNumber: "" }))}
-                      onSelect={(item) => setForm((f) => ({ ...f, clientName: item.clientName, bizNumber: item.bizNumber }))}
-                      fetchUrl={(q) => `/api/filter-mapping/suggestions?type=client&q=${encodeURIComponent(q)}`}
-                      getLabel={(item) => item.clientName}
-                      getSub={(item) => item.bizNumber}
-                      placeholder="병의원명 또는 사업자번호 입력"
-                    />
-                    {form.bizNumber && (
-                      <p className="text-xs text-blue-600 mt-1">사업자번호: {form.bizNumber}</p>
-                    )}
-                  </>
-                )}
-              </Field>
 
               {/* 제약사명 */}
               <Field label="제약사명 *">

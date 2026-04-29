@@ -3,7 +3,6 @@ import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 
 interface BulkRow {
-  clientName: string;
   submissionEntity: string;
   managerName?: string;
   managerPhone?: string;
@@ -27,16 +26,14 @@ export async function POST(req: NextRequest) {
   const errors: string[] = [];
 
   for (const row of rows) {
-    if (!row.clientName || !row.submissionEntity) {
-      errors.push(`거래처 또는 상위법인 누락: ${JSON.stringify(row)}`);
+    if (!row.submissionEntity) {
+      errors.push(`제출처 누락: ${JSON.stringify(row)}`);
       continue;
     }
     for (const companyName of row.companies) {
       if (!companyName.trim()) continue;
       try {
-        const existing = await prisma.filterMapping.findUnique({
-          where: { clientName_companyName: { clientName: row.clientName, companyName } },
-        });
+        const existing = await prisma.filterMapping.findUnique({ where: { companyName } });
         if (existing) {
           await prisma.filterMapping.update({
             where: { id: existing.id },
@@ -53,7 +50,6 @@ export async function POST(req: NextRequest) {
           await prisma.filterMapping.create({
             data: {
               id: crypto.randomUUID(),
-              clientName: row.clientName,
               companyName,
               submissionEntity: row.submissionEntity,
               managerName: row.managerName || null,
@@ -64,7 +60,7 @@ export async function POST(req: NextRequest) {
           created++;
         }
       } catch (e) {
-        errors.push(`${row.clientName} × ${companyName}: ${e instanceof Error ? e.message : String(e)}`);
+        errors.push(`${companyName}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
   }

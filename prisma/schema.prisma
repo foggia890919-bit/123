@@ -269,11 +269,11 @@ model FilterRequest {
   @@index([status])
 }
 
-// 거래처 × 제약사 → 제출처 매핑
+// 제약사 → 제출처(상위법인) 매핑
 model FilterMapping {
   id              String    @id @default(cuid())
-  clientName      String
-  companyName     String
+  clientName      String?
+  companyName     String    @unique
   submissionEntity String
   managerName     String?
   managerPhone    String?
@@ -284,7 +284,6 @@ model FilterMapping {
 
   requests        FilterRequest[]
 
-  @@unique([clientName, companyName])
   @@index([clientName])
   @@index([companyName])
 }
