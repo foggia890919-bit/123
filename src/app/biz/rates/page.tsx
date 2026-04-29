@@ -392,12 +392,13 @@ export default function RatesPage() {
   const replaceInputRef = useRef<Record<string, HTMLInputElement | null>>({});
 
   // ── Load corp clients ─────────────────────────────────────────
+  // /api/dealer returns dealer-typed UserClients for the current BIZ user.
+  // isRateTarget=true would be ideal but we load all typed dealers and filter client-side
+  // so the upload modal shows the full corp list regardless of isRateTarget flag.
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(
-          "/api/user-clients?all=true"
-        );
+        const res = await fetch("/api/dealer");
         const data = await res.json();
         if (Array.isArray(data)) {
           const corpTypes = ["CORPORATION", "UPPER_CORP", "LOWER_CORP", "SELF"];
@@ -416,13 +417,20 @@ export default function RatesPage() {
   }, []);
 
   // ── Load company names from Medication ──────────────────────
+  // /api/medications/companies is a public endpoint that returns settlement companies.
+  // The response shape is [{name, ...}] so we map .name to get the company string.
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/api/admin/rates?companiesOnly=true");
+        const res = await fetch("/api/medications/companies?type=settlement");
         const data = await res.json();
         if (Array.isArray(data)) {
-          setCompanies(data.map((d: { companyName: string }) => d.companyName).sort((a: string, b: string) => a.localeCompare(b, "ko")));
+          setCompanies(
+            data
+              .map((d: { name: string }) => d.name)
+              .filter(Boolean)
+              .sort((a: string, b: string) => a.localeCompare(b, "ko"))
+          );
         }
       } catch {
         // ignore

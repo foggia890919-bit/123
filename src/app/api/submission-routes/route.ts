@@ -13,12 +13,15 @@ export async function GET(req: NextRequest) {
   const clientName = searchParams.get("clientName");
   const companyName = searchParams.get("companyName");
   const entity = searchParams.get("entity");
+  const activeParam = searchParams.get("active");
 
   const rows = await prisma.submissionRoute.findMany({
     where: {
       ...(clientName ? { clientName: { contains: clientName, mode: "insensitive" } } : {}),
       ...(companyName ? { companyName: { contains: companyName, mode: "insensitive" } } : {}),
       ...(entity ? { submissionEntity: { contains: entity, mode: "insensitive" } } : {}),
+      // active=true → 활성만, active=false → 비활성만, 파라미터 없음 → 전체
+      ...(activeParam === "true" ? { active: true } : activeParam === "false" ? { active: false } : {}),
     },
     orderBy: [{ submissionEntity: "asc" }, { clientName: "asc" }],
   });
