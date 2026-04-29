@@ -12,9 +12,15 @@ export async function GET(req: NextRequest) {
 
   const bizNumberCheck = req.nextUrl.searchParams.get("bizNumber");
   if (bizNumberCheck) {
-    const bizNumber = bizNumberCheck.replace(/\D/g, "");
-    const client = await prisma.userClient.findUnique({
-      where: { userId_bizNumber: { userId: user.id, bizNumber } },
+    const stripped = bizNumberCheck.replace(/\D/g, "");
+    const fmt = stripped.length === 10
+      ? `${stripped.slice(0, 3)}-${stripped.slice(3, 5)}-${stripped.slice(5)}`
+      : stripped;
+    const client = await prisma.userClient.findFirst({
+      where: {
+        userId: user.id,
+        OR: [{ bizNumber: stripped }, { bizNumber: fmt }],
+      },
       select: { id: true, clientName: true, bizNumber: true },
     });
     return NextResponse.json({ found: !!client, client: client ?? null });

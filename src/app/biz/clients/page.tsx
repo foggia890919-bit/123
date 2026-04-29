@@ -409,14 +409,21 @@ export default function BizClientsPage() {
             </div>
 
             <div className="px-6 pb-5 flex gap-2 justify-end">
-              <button onClick={() => setModal(false)}
-                className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">취소</button>
-              {(step === "new" || step === "notfound" || step === "saving") && (
-                <button onClick={handleAdd} disabled={step === "saving"}
-                  className="px-5 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5">
-                  {step === "saving" && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  등록
-                </button>
+              {step === "found" ? (
+                <button onClick={() => setModal(false)}
+                  className="px-5 py-2 text-sm font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg">닫기</button>
+              ) : (
+                <>
+                  <button onClick={() => setModal(false)}
+                    className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">취소</button>
+                  {(step === "new" || step === "notfound" || step === "saving") && (
+                    <button onClick={handleAdd} disabled={step === "saving"}
+                      className="px-5 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5">
+                      {step === "saving" && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                      등록
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </div>
