@@ -59,22 +59,9 @@ export async function GET(req: NextRequest) {
 
   const userId = user.id;
 
-  // 기존 FilterRequest에서 거래처 정보를 UserClient로 자동 가져오기
-  const pastRequests = await prisma.filterRequest.findMany({
-    where: { userId },
-    select: { clientName: true, bizNumber: true },
-    distinct: ["bizNumber"],
-  });
-  if (pastRequests.length > 0) {
-    await prisma.userClient.createMany({
-      data: pastRequests.map((r) => ({
-        userId,
-        clientName: r.clientName,
-        bizNumber: r.bizNumber,
-      })),
-      skipDuplicates: true,
-    });
-  }
+  // FilterRequest 자동 import 는 사용자가 직접 등록하지 않은 거래처를
+  // 무음으로 추가해 dropdown 을 오염시키므로 더 이상 수행하지 않음 (2026-04-29).
+  // 이전에 자동 추가된 행은 그대로 남아있으니 관리자가 일괄 정리해야 한다.
 
   // 병의원 목록: dealerType IS NULL인 것만 (법인·딜러 제외)
   // dealerType 컬럼이 아직 없으면 fallback
