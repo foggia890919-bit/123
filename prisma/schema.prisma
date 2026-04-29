@@ -52,6 +52,7 @@ model Client {
   id              String   @id @default(cuid())
   clientName      String
   bizNumber       String   @unique
+  bizDocument     String?
   bizFileKey      String?
   bizFileName     String?
   csoFileKey      String?

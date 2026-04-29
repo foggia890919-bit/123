@@ -7,7 +7,7 @@ import { Hospital, Plus, Search, CheckCircle, Clock, Trash2, Loader2, Upload, X,
 import { Input } from "@/components/ui/input";
 import { BizLayout } from "../page";
 
-type ModalStep = "search" | "found" | "new" | "saving";
+type ModalStep = "search" | "found" | "new" | "notfound" | "saving";
 
 interface Client {
   id: string;
@@ -45,7 +45,10 @@ export default function BizClientsPage() {
   const [showSug, setShowSug] = useState(false);
   const [selectedClient, setSelectedClient] = useState<GlobalClient | null>(null);
   const [existingName, setExistingName] = useState<string | null>(null); // already registered
+  const [noResults, setNoResults] = useState(false);
   const [bizFile, setBizFile] = useState<File | null>(null);
+  const [newName, setNewName] = useState("");
+  const [newBizNum, setNewBizNum] = useState("");
   const [formError, setFormError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -64,14 +67,17 @@ export default function BizClientsPage() {
 
   const fetchSuggestions = useCallback((q: string) => {
     clearTimeout(debounceRef.current);
-    if (!q.trim()) { setSuggestions([]); setShowSug(false); return; }
+    if (!q.trim()) { setSuggestions([]); setShowSug(false); setNoResults(false); return; }
     debounceRef.current = setTimeout(async () => {
       setSugLoading(true);
+      setNoResults(false);
       try {
         const res = await fetch(`/api/filter-mapping/suggestions?type=client&q=${encodeURIComponent(q)}`);
         const d = await res.json();
-        setSuggestions(Array.isArray(d) ? d : []);
-        setShowSug(true);
+        const results = Array.isArray(d) ? d : [];
+        setSuggestions(results);
+        setShowSug(results.length > 0);
+        setNoResults(results.length === 0);
       } finally {
         setSugLoading(false);
       }
@@ -97,27 +103,73 @@ export default function BizClientsPage() {
 
   function openModal() {
     setStep("search"); setSearchQ(""); setSuggestions([]); setShowSug(false);
-    setSelectedClient(null); setExistingName(null);
-    setBizFile(null); setFormError(""); setModal(true);
+    setSelectedClient(null); setExistingName(null); setNoResults(false);
+    setBizFile(null); setNewName(""); setNewBizNum(""); setFormError(""); setModal(true);
     if (fileRef.current) fileRef.current.value = "";
   }
 
+  function formatBizNumber(v: string) {
+    const d = v.replace(/\D/g, "");
+    if (d.length <= 3) return d;
+    if (d.length <= 5) return `${d.slice(0, 3)}-${d.slice(3)}`;
+    return `${d.slice(0, 3)}-${d.slice(3, 5)}-${d.slice(5, 10)}`;
+  }
+
+  async function readFileAsDataUri(file: File): Promise<string> {
+    return new Promise((resolve) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result as string);
+      fr.readAsDataURL(file);
+    });
+  }
+
   async function handleAdd() {
+    setFormError("");
+    const isNotFound = step === "notfound";
+
+    // notfound: create global Client first
+    if (isNotFound) {
+      if (!newName.trim() || !newBizNum.trim()) { setFormError("거래처명과 사업자번호를 입력해주세요."); return; }
+      setStep("saving");
+      let bizDocument: string | null = null;
+      let bizFileName: string | null = null;
+      if (bizFile) { bizFileName = bizFile.name; bizDocument = await readFileAsDataUri(bizFile); }
+      // 1. create global Client
+      const cr = await fetch("/api/clients", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientName: newName.trim(), bizNumber: newBizNum.trim(), bizDocument, bizFileName }),
+      });
+      if (!cr.ok) {
+        const d = await cr.json();
+        setFormError(d.error ?? "글로벌 거래처 등록 실패");
+        setStep("notfound");
+        return;
+      }
+      const globalClient: GlobalClient = await cr.json();
+      // 2. link to current user
+      const ur = await fetch("/api/user-clients", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientName: globalClient.clientName, bizNumber: globalClient.bizNumber, bizDocument, bizFileName }),
+      });
+      if (ur.ok) {
+        const row = await ur.json();
+        setClients((p) => [row, ...p]);
+        setModal(false);
+      } else {
+        const d = await ur.json();
+        setFormError(d.error ?? "내 거래처 등록 실패");
+        setStep("notfound");
+      }
+      return;
+    }
+
     if (!selectedClient) { setFormError("거래처를 선택해주세요."); return; }
     setStep("saving");
     let bizDocument: string | null = null;
     let bizFileName: string | null = null;
-    if (bizFile) {
-      bizFileName = bizFile.name;
-      bizDocument = await new Promise((resolve) => {
-        const fr = new FileReader();
-        fr.onload = () => resolve(fr.result as string);
-        fr.readAsDataURL(bizFile!);
-      });
-    }
+    if (bizFile) { bizFileName = bizFile.name; bizDocument = await readFileAsDataUri(bizFile); }
     const res = await fetch("/api/user-clients", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         clientName: selectedClient.clientName,
         bizNumber: selectedClient.bizNumber,
@@ -264,7 +316,7 @@ export default function BizClientsPage() {
                 <p className="text-xs text-gray-400">KMD에 등록된 전체 거래처에서 검색합니다</p>
               </div>
 
-              {/* 이미 등록됨 */}
+              {/* 이미 내 거래처에 등록됨 */}
               {step === "found" && (
                 <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-lg px-3 py-3">
                   <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
@@ -275,8 +327,45 @@ export default function BizClientsPage() {
                 </div>
               )}
 
-              {/* 등록 가능 */}
-              {(step === "new" || step === "saving") && selectedClient && (
+              {/* 글로벌 풀에 없음 → 새로 등록 */}
+              {noResults && step === "search" && searchQ.trim() && !sugLoading && (
+                <div className="text-center py-2">
+                  <p className="text-xs text-gray-400 mb-2">'{searchQ}'에 해당하는 거래처가 없어요</p>
+                  <button type="button"
+                    onClick={() => {
+                      setStep("notfound");
+                      const digitsOnly = searchQ.replace(/\D/g, "");
+                      if (/^\d+$/.test(searchQ.trim())) setNewBizNum(searchQ.trim());
+                      else setNewName(searchQ.trim());
+                    }}
+                    className="inline-flex items-center gap-1 text-xs text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-md transition-colors">
+                    <Plus className="w-3 h-3" />새 거래처로 직접 등록
+                  </button>
+                </div>
+              )}
+
+              {/* 새 거래처 등록 폼 (글로벌 풀에 없을 때) */}
+              {(step === "notfound" || (step === "saving" && !selectedClient)) && (
+                <div className="space-y-3 border border-blue-100 bg-blue-50/40 rounded-lg p-3">
+                  <p className="text-xs font-semibold text-blue-800">새 거래처 등록</p>
+                  <div className="grid grid-cols-1 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-xs text-gray-600 font-medium">거래처명 *</label>
+                      <Input value={newName} onChange={(e) => setNewName(e.target.value)}
+                        placeholder="병의원 상호명" className="h-8 text-xs" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-gray-600 font-medium">사업자번호 *</label>
+                      <Input value={newBizNum} onChange={(e) => setNewBizNum(formatBizNumber(e.target.value))}
+                        placeholder="000-00-00000" maxLength={12} className="h-8 text-xs" />
+                    </div>
+                  </div>
+                  {formError && <p className="text-xs text-red-600 bg-red-50 rounded px-2 py-1.5">{formError}</p>}
+                </div>
+              )}
+
+              {/* 등록 가능 (글로벌 풀에서 선택) */}
+              {(step === "new" || (step === "saving" && selectedClient)) && selectedClient && (
                 <>
                   <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
                     <CheckCircle className="w-4 h-4 text-green-500 shrink-0" />
@@ -285,33 +374,35 @@ export default function BizClientsPage() {
                       <p className="text-xs text-green-700 font-mono">{formatBiz(selectedClient.bizNumber)}</p>
                     </div>
                   </div>
-
                   {formError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{formError}</p>}
-
-                  <div className="space-y-1.5">
-                    <label className="block text-xs font-medium text-gray-600">사업자등록증 (선택)</label>
-                    <div onClick={() => fileRef.current?.click()}
-                      className="flex items-center gap-2.5 border border-dashed border-gray-300 rounded-lg px-3 py-2.5 cursor-pointer hover:border-blue-400 hover:bg-blue-50/30 transition-colors">
-                      <Upload className="w-4 h-4 text-gray-400 shrink-0" />
-                      <p className={`text-xs truncate ${bizFile ? "text-blue-600 font-medium" : "text-gray-400"}`}>
-                        {bizFile ? bizFile.name : "파일 선택 (PDF, 이미지)"}
-                      </p>
-                      {bizFile && (
-                        <button type="button" onClick={(e) => { e.stopPropagation(); setBizFile(null); if (fileRef.current) fileRef.current.value = ""; }}
-                          className="ml-auto text-gray-300 hover:text-red-400 shrink-0"><X className="w-3.5 h-3.5" /></button>
-                      )}
-                      <input ref={fileRef} type="file" accept=".pdf,image/*" className="hidden"
-                        onChange={(e) => setBizFile(e.target.files?.[0] ?? null)} />
-                    </div>
-                  </div>
                 </>
+              )}
+
+              {/* 사업자등록증 첨부 (new / notfound 공통) */}
+              {(step === "new" || step === "notfound") && (
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-gray-600">사업자등록증 (선택)</label>
+                  <div onClick={() => fileRef.current?.click()}
+                    className="flex items-center gap-2.5 border border-dashed border-gray-300 rounded-lg px-3 py-2.5 cursor-pointer hover:border-blue-400 hover:bg-blue-50/30 transition-colors">
+                    <Upload className="w-4 h-4 text-gray-400 shrink-0" />
+                    <p className={`text-xs truncate ${bizFile ? "text-blue-600 font-medium" : "text-gray-400"}`}>
+                      {bizFile ? bizFile.name : "파일 선택 (PDF, 이미지)"}
+                    </p>
+                    {bizFile && (
+                      <button type="button" onClick={(e) => { e.stopPropagation(); setBizFile(null); if (fileRef.current) fileRef.current.value = ""; }}
+                        className="ml-auto text-gray-300 hover:text-red-400 shrink-0"><X className="w-3.5 h-3.5" /></button>
+                    )}
+                    <input ref={fileRef} type="file" accept=".pdf,image/*" className="hidden"
+                      onChange={(e) => setBizFile(e.target.files?.[0] ?? null)} />
+                  </div>
+                </div>
               )}
             </div>
 
             <div className="px-6 pb-5 flex gap-2 justify-end">
               <button onClick={() => setModal(false)}
                 className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">취소</button>
-              {(step === "new" || step === "saving") && (
+              {(step === "new" || step === "notfound" || step === "saving") && (
                 <button onClick={handleAdd} disabled={step === "saving"}
                   className="px-5 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5">
                   {step === "saving" && <Loader2 className="w-3.5 h-3.5 animate-spin" />}

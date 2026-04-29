@@ -60,6 +60,10 @@ export async function GET(req: NextRequest) {
   const rows = await prisma.userClient.findMany({
     where: { userId },
     orderBy: { createdAt: "desc" },
+    select: {
+      id: true, clientName: true, bizNumber: true,
+      bizFileName: true, approved: true, createdAt: true,
+    },
   });
   return NextResponse.json(rows);
 }
@@ -83,8 +87,12 @@ export async function POST(req: NextRequest) {
         bizFileKey,
         bizFileName: bizFileName || null,
       },
+      select: {
+        id: true, clientName: true, bizNumber: true,
+        bizFileName: true, approved: true, createdAt: true,
+      },
     });
-    return NextResponse.json({ ...row, bizDocument: null });
+    return NextResponse.json(row);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes("Unique constraint")) {
