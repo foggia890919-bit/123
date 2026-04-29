@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import type { Locator, Page } from "playwright";
 import type { Credentials, InventoryItem, WholesaleAdapter } from "../core/types";
 
@@ -63,9 +64,54 @@ const SEL = {
 
 const ORDER_URL = "https://inchunpharm.com/Service/Order/Order.asp?l=login";
 
+// Selectors tried when dismissing modals / notice popups after login.
+const MODAL_CLOSERS = [
+  'button[aria-label="Close"]',
+  'button[aria-label="닫기"]',
+  'button:has-text("닫기")',
+  'button:has-text("X")',
+  'button:has-text("✕")',
+  '.modal-close',
+  '.btn-close',
+  '[data-dismiss="modal"]',
+  '#popup_close',
+  '.popup-close',
+  'a:has-text("오늘 하루 보지 않기")',
+  'button:has-text("오늘 하루 보지 않기")',
+];
+
 async function waitAny(page: Page, selector: string, timeout = 20_000): Promise<Locator> {
   await page.waitForSelector(selector, { timeout, state: "visible" });
   return page.locator(selector).first();
+}
+
+/** Dismiss any visible modal/notice popup — tries main frame and all iframes. */
+async function closeModalsIfAny(page: Page) {
+  // Main frame
+  for (const sel of MODAL_CLOSERS) {
+    try {
+      const el = page.locator(sel).first();
+      if (await el.isVisible({ timeout: 500 })) {
+        await el.click({ timeout: 500 });
+        console.warn(`[inchun] closed modal via ${sel}`);
+        await page.waitForTimeout(300);
+      }
+    } catch { /* skip */ }
+  }
+  // Some sites embed notice popups inside iframes
+  for (const frame of page.frames()) {
+    if (frame === page.mainFrame()) continue;
+    for (const sel of MODAL_CLOSERS) {
+      try {
+        const el = frame.locator(sel).first();
+        if (await el.isVisible({ timeout: 500 })) {
+          await el.click({ timeout: 500 });
+          console.warn(`[inchun] closed iframe modal via ${sel} (frame=${frame.url()})`);
+          await page.waitForTimeout(300);
+        }
+      } catch { /* skip */ }
+    }
+  }
 }
 
 export const inchun: WholesaleAdapter = {
@@ -75,6 +121,20 @@ export const inchun: WholesaleAdapter = {
   loginUrl: "https://inchunpharm.com/Homepage/contents/login/login.asp",
 
   async login(page: Page, creds: Credentials) {
+    // Automatically dismiss native browser dialogs (alert / confirm / prompt)
+    // that may appear during or after login (e.g. session-expired warnings).
+    // Register once per page object — the handler is removed when the page closes.
+    page.on("dialog", async (dialog) => {
+      console.warn(`[inchun] dialog ${dialog.type()}: ${dialog.message()}`);
+      await dialog.dismiss();
+    });
+
+    // Close any new window/tab that the login flow opens (e.g. notice popups).
+    page.on("popup", async (popup) => {
+      console.warn(`[inchun] popup opened: ${popup.url()}`);
+      await popup.close();
+    });
+
     await page.goto(this.loginUrl, { waitUntil: "commit", timeout: 60_000 });
     await page.waitForLoadState("domcontentloaded", { timeout: 30_000 }).catch(() => {});
     await page.waitForTimeout(800);
@@ -93,15 +153,35 @@ export const inchun: WholesaleAdapter = {
     await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
     await page.waitForTimeout(800);
 
-    // After login, ASP usually redirects to /Service/... — verify we're not
-    // still on the login page.
-    if (/login\.asp/i.test(page.url())) {
-      throw new Error("inchun login failed — still on login.asp after submit");
+    // Dismiss any modals/notice popups that appear right after login.
+    await closeModalsIfAny(page);
+
+    // Verify login success: must have left login.asp AND the id input must
+    // have disappeared (double guard against soft-fail redirects).
+    const stillOnLoginPage = /login\.asp/i.test(page.url());
+    const idInputStillVisible = await page.locator(SEL.idInput).first().isVisible({ timeout: 1_000 }).catch(() => false);
+
+    if (stillOnLoginPage || idInputStillVisible) {
+      // Capture debug artefacts to /tmp so the operator can inspect offline.
+      const stamp = Date.now();
+      try {
+        await page.screenshot({ path: `/tmp/inchun-login-fail-${stamp}.png`, fullPage: true });
+        const html = await page.content();
+        writeFileSync(`/tmp/inchun-fail-${stamp}.html`, html);
+        console.warn(`[inchun] login-fail artefacts → /tmp/inchun-*-${stamp}.{png,html}`);
+      } catch { /* non-fatal */ }
+      throw new Error(
+        `inchun login failed — ${stillOnLoginPage ? "still on login.asp" : "id input still visible"} after submit`
+      );
     }
   },
 
   async isLoggedIn(page: Page) {
-    return !/login\.asp/i.test(page.url());
+    if (/login\.asp/i.test(page.url())) return false;
+    // Extra check: id input must not be visible (covers cases where ASP
+    // returns a 200 on the login page without redirecting).
+    const idVisible = await page.locator(SEL.idInput).first().isVisible({ timeout: 500 }).catch(() => false);
+    return !idVisible;
   },
 
   async searchByCode(page: Page, insuranceCode: string): Promise<InventoryItem[]> {
@@ -110,6 +190,8 @@ export const inchun: WholesaleAdapter = {
       await page.goto(ORDER_URL, { waitUntil: "commit", timeout: 30_000 });
       await page.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => {});
       await page.waitForTimeout(800);
+      // Dismiss any modals that appear when entering the order page.
+      await closeModalsIfAny(page);
     }
 
     const input = await waitAny(page, SEL.searchInput, 20_000);

@@ -168,37 +168,57 @@ export default function InventoryStatusPage() {
                 등록된 WholesaleSite 행이 없습니다. 크롤러를 최초 실행하거나 SQL 마이그레이션을 적용하세요.
               </p>
             ) : (
-              sites.map(site => (
-                <div
-                  key={site.key}
-                  className="bg-white border border-gray-200 rounded-xl p-4 space-y-2"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-gray-900 text-sm">{site.name}</span>
-                    <span
-                      className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
-                        site.active
-                          ? "bg-green-50 text-green-700 border border-green-200"
-                          : "bg-gray-100 text-gray-400 border border-gray-200"
-                      }`}
-                    >
-                      {site.active ? "활성" : "비활성"}
-                    </span>
+              sites.map(site => {
+                const isSuspended = site.key === "inchun";
+                return (
+                  <div
+                    key={site.key}
+                    className={`border rounded-xl p-4 space-y-2 ${
+                      isSuspended
+                        ? "bg-gray-50 border-gray-200 opacity-70"
+                        : "bg-white border-gray-200"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className={`font-semibold text-sm ${isSuspended ? "text-gray-400" : "text-gray-900"}`}>
+                        {site.name}
+                      </span>
+                      {isSuspended ? (
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-300 whitespace-nowrap">
+                          🚧 일시 중단 — 로그인 팝업 이슈
+                        </span>
+                      ) : (
+                        <span
+                          className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
+                            site.active
+                              ? "bg-green-50 text-green-700 border border-green-200"
+                              : "bg-gray-100 text-gray-400 border border-gray-200"
+                          }`}
+                        >
+                          {site.active ? "활성" : "비활성"}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                      <Database className="w-3.5 h-3.5" />
+                      <span>{site.snapshotCount.toLocaleString()}건</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>
+                        {site.latestSnapshotAt
+                          ? `마지막 성공: ${formatRelative(site.latestSnapshotAt)} (${formatDateTime(site.latestSnapshotAt)})`
+                          : "스냅샷 없음"}
+                      </span>
+                    </div>
+                    {isSuspended && (
+                      <p className="text-[10px] text-gray-400 leading-relaxed">
+                        팝업 자동 닫기 미구현. 향후 P2 작업으로 dialog handler + 모달 dismiss 구현 예정.
+                      </p>
+                    )}
                   </div>
-                  <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                    <Database className="w-3.5 h-3.5" />
-                    <span>{site.snapshotCount.toLocaleString()}건</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                    <Clock className="w-3.5 h-3.5" />
-                    <span>
-                      {site.latestSnapshotAt
-                        ? `${formatRelative(site.latestSnapshotAt)} (${formatDateTime(site.latestSnapshotAt)})`
-                        : "스냅샷 없음"}
-                    </span>
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
