@@ -344,8 +344,9 @@ export default function BizClientsPage() {
                     onClick={() => {
                       setStep("notfound");
                       const digitsOnly = searchQ.replace(/\D/g, "");
-                      if (/^\d+$/.test(searchQ.trim())) setNewBizNum(searchQ.trim());
-                      else setNewName(searchQ.trim());
+                      const isBizSearch = digitsOnly.length > 0 && searchQ.trim().replace(/-/g, "") === digitsOnly;
+                      if (isBizSearch) { setNewBizNum(searchQ.trim()); setNewName(""); }
+                      else { setNewName(searchQ.trim()); setNewBizNum(""); }
                     }}
                     className="inline-flex items-center gap-1 text-xs text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-md transition-colors">
                     <Plus className="w-3 h-3" />새 거래처로 직접 등록
