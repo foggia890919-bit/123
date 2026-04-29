@@ -48,12 +48,22 @@ interface ReportSummary {
   details: DetailRow[];
 }
 
+interface KeywordAlert {
+  keyword: string;
+  severity: "DROP" | "SPIKE" | "NEW" | "GONE";
+  lastQty: number;
+  prevQty: number;
+  pct: number | null;
+  message: string;
+}
+
 interface HomeData {
   today: { sales: number; quantity: number; shipments: number; commission: number; canceledCount: number };
   yesterday: { sales: number; quantity: number; shipments: number };
   last7: { sales: number; quantity: number; shipments: number };
   prev7: { sales: number };
   delta7: { sales: number; salesPct: number | null; shipments: number };
+  keywordAlerts: KeywordAlert[];
   backfillJobs: { id: string; storeName: string; status: string; ordersAdded: number; cursor: string; toDate: string }[];
   newProducts: { id: string; productName: string; storeName: string; createdAt: string }[];
   lastReport: { date: string; ok: boolean; sentAt: string; message: string | null } | null;
@@ -159,6 +169,24 @@ export default function SalesAdminPage() {
             tone={home.delta7.salesPct !== null ? (home.delta7.salesPct >= 0 ? "up" : "down") : "neutral"}
           />
         </div>
+      )}
+
+      {home && home.keywordAlerts.length > 0 && (
+        <section className="rounded-md border bg-white p-4">
+          <h3 className="font-semibold mb-2 text-sm">📣 키워드 추세 알림 (지난 7일 vs 그 직전 7일)</h3>
+          <ul className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+            {home.keywordAlerts.map((a) => {
+              const color = a.severity === "DROP" || a.severity === "GONE" ? "bg-red-50 border-red-200 text-red-900"
+                : a.severity === "SPIKE" || a.severity === "NEW" ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+                : "bg-gray-50 border-gray-200";
+              return (
+                <li key={a.keyword} className={`rounded px-2 py-1.5 border ${color}`}>
+                  <b>{a.keyword}</b> — {a.message}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       )}
 
       {home && (home.backfillJobs.length > 0 || home.newProducts.length > 0 || home.lastReport) && (

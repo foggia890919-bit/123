@@ -66,6 +66,55 @@ export async function GET() {
       }),
     ]);
 
+    // 키워드별 추세 알림 (지난 7일 vs 그 직전 7일)
+    const last7Items = await prisma.naverOrderItem.findMany({
+      where: {
+        paymentDate: { gte: last7Start, lt: todayStart },
+        order: { store: { workspaceId: workspace.id } },
+        OR: [{ productId: null }, { product: { watched: true } }],
+      },
+      select: { quantity: true, salesAmount: true, productName: true, status: true, detailStatus: true, product: { select: { costs: { take: 1, orderBy: { effectiveAt: "desc" }, select: { keyword: true } } } } },
+    });
+    const prev7Items = await prisma.naverOrderItem.findMany({
+      where: {
+        paymentDate: { gte: prev7Start, lt: last7Start },
+        order: { store: { workspaceId: workspace.id } },
+        OR: [{ productId: null }, { product: { watched: true } }],
+      },
+      select: { quantity: true, salesAmount: true, productName: true, status: true, detailStatus: true, product: { select: { costs: { take: 1, orderBy: { effectiveAt: "desc" }, select: { keyword: true } } } } },
+    });
+    const tally = (rows: typeof last7Items) => {
+      const m = new Map<string, { quantity: number; sales: number }>();
+      for (const r of rows) {
+        if (!isRevenueStatus(r.status, r.detailStatus)) continue;
+        const k = r.product?.costs[0]?.keyword || r.productName;
+        const cur = m.get(k) ?? { quantity: 0, sales: 0 };
+        cur.quantity += r.quantity;
+        cur.sales += r.salesAmount;
+        m.set(k, cur);
+      }
+      return m;
+    };
+    const lastT = tally(last7Items);
+    const prevT = tally(prev7Items);
+    const allKeywords = new Set([...lastT.keys(), ...prevT.keys()]);
+    const alerts: { keyword: string; severity: "DROP" | "SPIKE" | "NEW" | "GONE"; lastQty: number; prevQty: number; pct: number | null; message: string }[] = [];
+    for (const k of allKeywords) {
+      const l = lastT.get(k) ?? { quantity: 0, sales: 0 };
+      const p = prevT.get(k) ?? { quantity: 0, sales: 0 };
+      if (p.quantity === 0 && l.quantity >= 3) {
+        alerts.push({ keyword: k, severity: "NEW", lastQty: l.quantity, prevQty: 0, pct: null, message: `신규 매출 발생: 지난 7일 ${l.quantity}개` });
+      } else if (p.quantity >= 5 && l.quantity === 0) {
+        alerts.push({ keyword: k, severity: "GONE", lastQty: 0, prevQty: p.quantity, pct: -100, message: `매출 중단: 직전 7일 ${p.quantity}개 → 0개` });
+      } else if (p.quantity >= 5) {
+        const pct = ((l.quantity - p.quantity) / p.quantity) * 100;
+        if (pct <= -50) alerts.push({ keyword: k, severity: "DROP", lastQty: l.quantity, prevQty: p.quantity, pct, message: `📉 ${pct.toFixed(0)}% 감소 (${p.quantity}→${l.quantity}개)` });
+        else if (pct >= 100) alerts.push({ keyword: k, severity: "SPIKE", lastQty: l.quantity, prevQty: p.quantity, pct, message: `📈 ${pct.toFixed(0)}% 급증 (${p.quantity}→${l.quantity}개)` });
+      }
+    }
+    // 심각도 → 매출 영향 큰 순
+    alerts.sort((a, b) => Math.abs((lastT.get(b.keyword)?.sales ?? 0) - (prevT.get(b.keyword)?.sales ?? 0)) - Math.abs((lastT.get(a.keyword)?.sales ?? 0) - (prevT.get(a.keyword)?.sales ?? 0)));
+
     return NextResponse.json({
       today,
       yesterday,
@@ -76,6 +125,7 @@ export async function GET() {
         salesPct: prev7.sales > 0 ? ((last7.sales - prev7.sales) / prev7.sales) * 100 : null,
         shipments: last7.shipments - prev7.shipments,
       },
+      keywordAlerts: alerts.slice(0, 10),
       backfillJobs: backfillJobs.map((j) => ({
         id: j.id,
         storeName: j.store.storeName,
