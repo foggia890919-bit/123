@@ -358,35 +358,34 @@ export default function MedicationTable({ medications, loading, userId, showCate
                     </td>
                     <td className="px-2 py-1.5">
                       <div className="flex items-start gap-1.5">
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <p className="font-medium text-gray-900 leading-snug">
                             <ProductName name={med.productName} />
                             <SettlementBadge med={med} />
                           </p>
                           <p className="text-[11px] text-gray-500 mt-0.5">{med.companyName}</p>
-                        </div>
-                        <div className="flex flex-col gap-0.5 shrink-0 items-start">
+                          <div className="flex gap-1 mt-1.5 flex-wrap">
                           <button type="button" onClick={(e) => openDropdown(e, [med.id])}
-                            className={`text-[10px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap transition-colors ${userId ? "text-green-700 hover:bg-green-50" : "text-gray-300 cursor-not-allowed"}`}>
-                            제안서추가
+                            className={`text-xs font-medium px-2.5 py-1 rounded-full border whitespace-nowrap transition-colors ${userId ? "border-green-300 text-green-700 bg-green-50 hover:bg-green-100 active:bg-green-200" : "border-gray-200 text-gray-300 cursor-not-allowed"}`}>
+                            + 제안서
                           </button>
                           <button type="button"
                             onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.ingredientCode ?? null })}
-                            className="text-[10px] font-medium text-blue-600 hover:bg-blue-50 px-1.5 py-0.5 rounded whitespace-nowrap transition-colors">
+                            className="text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 active:bg-blue-200 border border-blue-200 px-2.5 py-1 rounded-full whitespace-nowrap transition-colors">
                             동일성분
                           </button>
                           {med.insuranceCode && (
                             <button type="button"
                               onClick={() => setStockModal({ insuranceCode: med.insuranceCode!, productName: med.productName })}
-                              className="text-[10px] font-medium text-emerald-700 hover:bg-emerald-50 px-1.5 py-0.5 rounded whitespace-nowrap transition-colors"
-                              title="도매상에서 실시간 재고 조회">
+                              className="text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-200 px-2.5 py-1 rounded-full whitespace-nowrap transition-colors">
                               재고확인
                             </button>
                           )}
                         </div>
+                        </div>
                         {hasDetailPanel && (
                           <button type="button" onClick={() => toggleRow(med.id)}
-                            className="shrink-0 p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors mt-0.5">
+                            className="shrink-0 p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors mt-0.5">
                             {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                           </button>
                         )}
