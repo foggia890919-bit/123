@@ -17,19 +17,15 @@ export async function GET(req: NextRequest) {
   const q = (req.nextUrl.searchParams.get("q") ?? "").trim();
 
   if (type === "client") {
-    // 숫자만 있으면 사업자번호로 검색, 아니면 거래처명으로 검색
+    // 전역 Client 풀에서 검색 (숫자→사업자번호, 문자→거래처명)
     const isDigits = /^\d+$/.test(q);
-    const clients = await prisma.userClient.findMany({
-      where: {
-        approved: true,
-        ...(q
-          ? isDigits
-            ? { bizNumber: { contains: q } }
-            : { clientName: { contains: q, mode: "insensitive" } }
-          : {}),
-      },
+    const clients = await prisma.client.findMany({
+      where: q
+        ? isDigits
+          ? { bizNumber: { contains: q } }
+          : { clientName: { contains: q, mode: "insensitive" } }
+        : {},
       select: { clientName: true, bizNumber: true },
-      distinct: ["clientName"],
       orderBy: { clientName: "asc" },
       take: 20,
     });

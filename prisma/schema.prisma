@@ -47,6 +47,25 @@ model LoginLog {
   @@index([email])
 }
 
+// 전역 공용 거래처 풀 — 모든 BIZ 회원이 공유
+model Client {
+  id              String   @id @default(cuid())
+  clientName      String
+  bizNumber       String   @unique
+  bizFileKey      String?
+  bizFileName     String?
+  csoFileKey      String?
+  csoFileName     String?
+  accountFileKey  String?
+  accountFileName String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([clientName])
+  @@index([bizNumber])
+}
+
 model UserClient {
   id          String     @id @default(cuid())
   userId      String
