@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { Hospital, Plus, Search, CheckCircle, Clock, Trash2, Loader2, Upload, X, AlertCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { BizLayout } from "../page";
 
-type ModalStep = "biz" | "checking" | "found" | "form" | "saving";
+type ModalStep = "search" | "found" | "new" | "saving";
 
 interface Client {
   id: string;
@@ -16,6 +16,11 @@ interface Client {
   bizFileName?: string;
   approved: boolean;
   createdAt: string;
+}
+
+interface GlobalClient {
+  clientName: string;
+  bizNumber: string;
 }
 
 function formatBiz(n: string) {
@@ -33,13 +38,18 @@ export default function BizClientsPage() {
 
   // modal
   const [modal, setModal] = useState(false);
-  const [step, setStep] = useState<ModalStep>("biz");
-  const [bizNumberInput, setBizNumberInput] = useState("");
-  const [foundClient, setFoundClient] = useState<{ clientName: string } | null>(null);
-  const [clientName, setClientName] = useState("");
+  const [step, setStep] = useState<ModalStep>("search");
+  const [searchQ, setSearchQ] = useState("");
+  const [suggestions, setSuggestions] = useState<GlobalClient[]>([]);
+  const [sugLoading, setSugLoading] = useState(false);
+  const [showSug, setShowSug] = useState(false);
+  const [selectedClient, setSelectedClient] = useState<GlobalClient | null>(null);
+  const [existingName, setExistingName] = useState<string | null>(null); // already registered
   const [bizFile, setBizFile] = useState<File | null>(null);
   const [formError, setFormError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const sugBoxRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (status === "loading") return;
@@ -52,29 +62,48 @@ export default function BizClientsPage() {
       .finally(() => setLoading(false));
   }, [session, status, router]);
 
-  function openModal() {
-    setStep("biz"); setBizNumberInput(""); setFoundClient(null);
-    setClientName(""); setBizFile(null); setFormError(""); setModal(true);
-    if (fileRef.current) fileRef.current.value = "";
-  }
+  const fetchSuggestions = useCallback((q: string) => {
+    clearTimeout(debounceRef.current);
+    if (!q.trim()) { setSuggestions([]); setShowSug(false); return; }
+    debounceRef.current = setTimeout(async () => {
+      setSugLoading(true);
+      try {
+        const res = await fetch(`/api/filter-mapping/suggestions?type=client&q=${encodeURIComponent(q)}`);
+        const d = await res.json();
+        setSuggestions(Array.isArray(d) ? d : []);
+        setShowSug(true);
+      } finally {
+        setSugLoading(false);
+      }
+    }, 200);
+  }, []);
 
-  async function handleBizCheck() {
-    const raw = bizNumberInput.replace(/\D/g, "");
-    if (raw.length < 10) { setFormError("사업자번호 10자리를 입력해주세요."); return; }
-    setFormError(""); setStep("checking");
-    const res = await fetch(`/api/user-clients?bizNumber=${raw}`);
+  async function selectClient(gc: GlobalClient) {
+    setShowSug(false);
+    setSearchQ(`${gc.clientName} (${formatBiz(gc.bizNumber)})`);
+    setSelectedClient(gc);
+    setFormError("");
+    // auto-check duplicate for current user
+    const res = await fetch(`/api/user-clients?bizNumber=${gc.bizNumber.replace(/\D/g, "")}`);
     const d = await res.json();
     if (d.found) {
-      setFoundClient(d.client);
+      setExistingName(d.client.clientName);
       setStep("found");
     } else {
-      setStep("form");
+      setExistingName(null);
+      setStep("new");
     }
   }
 
+  function openModal() {
+    setStep("search"); setSearchQ(""); setSuggestions([]); setShowSug(false);
+    setSelectedClient(null); setExistingName(null);
+    setBizFile(null); setFormError(""); setModal(true);
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
   async function handleAdd() {
-    setFormError("");
-    if (!clientName.trim()) { setFormError("병의원명을 입력해주세요."); return; }
+    if (!selectedClient) { setFormError("거래처를 선택해주세요."); return; }
     setStep("saving");
     let bizDocument: string | null = null;
     let bizFileName: string | null = null;
@@ -89,7 +118,11 @@ export default function BizClientsPage() {
     const res = await fetch("/api/user-clients", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientName: clientName.trim(), bizNumber: bizNumberInput.trim(), bizDocument, bizFileName }),
+      body: JSON.stringify({
+        clientName: selectedClient.clientName,
+        bizNumber: selectedClient.bizNumber,
+        bizDocument, bizFileName,
+      }),
     });
     if (res.ok) {
       const row = await res.json();
@@ -98,7 +131,7 @@ export default function BizClientsPage() {
     } else {
       const d = await res.json();
       setFormError(d.error ?? "등록 실패");
-      setStep("form");
+      setStep("new");
     }
   }
 
@@ -118,7 +151,7 @@ export default function BizClientsPage() {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-bold text-gray-900">병·의원 등록/관리</h2>
-            <p className="text-xs text-gray-500 mt-0.5">거래처 병의원을 등록하고 관리합니다</p>
+            <p className="text-xs text-gray-500 mt-0.5">KMD 전체 거래처 풀에서 선택해 등록합니다</p>
           </div>
           <button
             onClick={openModal}
@@ -140,11 +173,8 @@ export default function BizClientsPage() {
           />
         </div>
 
-        {/* 목록 */}
         {loading ? (
-          <div className="flex justify-center py-12">
-            <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
-          </div>
+          <div className="flex justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>
         ) : filtered.length === 0 ? (
           <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-sm text-gray-400">
             {query ? "검색 결과가 없습니다" : "등록된 병의원이 없습니다"}
@@ -172,19 +202,13 @@ export default function BizClientsPage() {
                   <span className="text-sm text-gray-500 w-32 text-center">{formatBiz(c.bizNumber)}</span>
                   <div className="w-20 flex justify-center">
                     {c.approved ? (
-                      <span className="flex items-center gap-1 text-xs text-green-600 font-medium">
-                        <CheckCircle className="w-3.5 h-3.5" /> 승인
-                      </span>
+                      <span className="flex items-center gap-1 text-xs text-green-600 font-medium"><CheckCircle className="w-3.5 h-3.5" /> 승인</span>
                     ) : (
-                      <span className="flex items-center gap-1 text-xs text-yellow-600 font-medium">
-                        <Clock className="w-3.5 h-3.5" /> 대기
-                      </span>
+                      <span className="flex items-center gap-1 text-xs text-yellow-600 font-medium"><Clock className="w-3.5 h-3.5" /> 대기</span>
                     )}
                   </div>
-                  <button
-                    onClick={() => handleDelete(c.id, c.clientName)}
-                    className="w-8 flex justify-end text-gray-300 hover:text-red-500 transition-colors"
-                  >
+                  <button onClick={() => handleDelete(c.id, c.clientName)}
+                    className="w-8 flex justify-end text-gray-300 hover:text-red-500 transition-colors">
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
@@ -192,10 +216,7 @@ export default function BizClientsPage() {
             </div>
           </div>
         )}
-
-        <p className="text-xs text-gray-400 text-right">
-          총 {filtered.length}개 {query && `(전체 ${clients.length}개 중)`}
-        </p>
+        <p className="text-xs text-gray-400 text-right">총 {filtered.length}개 {query && `(전체 ${clients.length}개 중)`}</p>
       </div>
 
       {/* 등록 모달 */}
@@ -204,84 +225,80 @@ export default function BizClientsPage() {
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm">
             <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100">
               <h2 className="font-semibold text-gray-900">병의원 등록</h2>
-              <button onClick={() => setModal(false)} className="text-gray-400 hover:text-gray-600">
-                <X className="w-5 h-5" />
-              </button>
+              <button onClick={() => setModal(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
             </div>
 
             <div className="px-6 py-5 space-y-4">
+              {/* 자동완성 검색 */}
               <div className="space-y-1.5">
-                <label className="block text-xs font-medium text-gray-600">사업자번호 *</label>
-                <div className="flex gap-2">
+                <label className="block text-xs font-medium text-gray-600">거래처명 또는 사업자번호 검색 *</label>
+                <div className="relative" ref={sugBoxRef}>
                   <input
-                    value={bizNumberInput}
+                    value={searchQ}
                     onChange={(e) => {
-                      setBizNumberInput(e.target.value);
-                      if (step === "found" || step === "form") setStep("biz");
+                      setSearchQ(e.target.value);
+                      setSelectedClient(null);
+                      setStep("search");
                       setFormError("");
+                      fetchSuggestions(e.target.value);
                     }}
-                    placeholder="000-00-00000"
-                    disabled={step === "checking" || step === "saving"}
-                    className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50"
-                    onKeyDown={(e) => e.key === "Enter" && step === "biz" && handleBizCheck()}
+                    onFocus={() => { if (suggestions.length > 0) setShowSug(true); }}
+                    placeholder="병의원명 또는 사업자번호 입력"
+                    disabled={step === "saving"}
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50 pr-8"
                   />
-                  <button
-                    onClick={handleBizCheck}
-                    disabled={step === "checking" || step === "saving" || !bizNumberInput.trim()}
-                    className="px-3 py-2 text-sm font-medium bg-gray-800 hover:bg-gray-700 text-white rounded-lg disabled:opacity-40 whitespace-nowrap flex items-center gap-1.5"
-                  >
-                    {step === "checking" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                    조회
-                  </button>
+                  {sugLoading && <Loader2 className="absolute right-2.5 top-2.5 w-4 h-4 animate-spin text-gray-400" />}
+                  {showSug && suggestions.length > 0 && (
+                    <div className="absolute z-20 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                      {suggestions.map((s, i) => (
+                        <button key={i} type="button"
+                          onMouseDown={(e) => { e.preventDefault(); selectClient(s); }}
+                          className="w-full text-left px-3 py-2.5 text-sm hover:bg-blue-50 border-b border-gray-50 last:border-0">
+                          <p className="font-medium text-gray-800">{s.clientName}</p>
+                          <p className="text-xs text-gray-400 font-mono">{formatBiz(s.bizNumber)}</p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                {formError && step !== "form" && <p className="text-xs text-red-600">{formError}</p>}
+                <p className="text-xs text-gray-400">KMD에 등록된 전체 거래처에서 검색합니다</p>
               </div>
 
-              {step === "found" && foundClient && (
+              {/* 이미 등록됨 */}
+              {step === "found" && (
                 <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-lg px-3 py-3">
                   <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
                   <div>
-                    <p className="text-xs font-semibold text-amber-800">이미 등록된 사업자번호입니다</p>
-                    <p className="text-xs text-amber-700 mt-0.5">{foundClient.clientName}</p>
+                    <p className="text-xs font-semibold text-amber-800">이미 내 거래처에 등록되어 있습니다</p>
+                    <p className="text-xs text-amber-700 mt-0.5">{existingName}</p>
                   </div>
                 </div>
               )}
 
-              {(step === "form" || step === "saving") && (
+              {/* 등록 가능 */}
+              {(step === "new" || step === "saving") && selectedClient && (
                 <>
                   <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
                     <CheckCircle className="w-4 h-4 text-green-500 shrink-0" />
-                    <p className="text-xs text-green-700">등록 가능한 사업자번호입니다</p>
+                    <div>
+                      <p className="text-xs font-medium text-green-800">{selectedClient.clientName}</p>
+                      <p className="text-xs text-green-700 font-mono">{formatBiz(selectedClient.bizNumber)}</p>
+                    </div>
                   </div>
 
                   {formError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{formError}</p>}
 
                   <div className="space-y-1.5">
-                    <label className="block text-xs font-medium text-gray-600">병의원명 *</label>
-                    <input
-                      value={clientName}
-                      onChange={(e) => setClientName(e.target.value)}
-                      placeholder="병의원명 입력"
-                      disabled={step === "saving"}
-                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50"
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
                     <label className="block text-xs font-medium text-gray-600">사업자등록증 (선택)</label>
-                    <div
-                      onClick={() => fileRef.current?.click()}
-                      className="flex items-center gap-2.5 border border-dashed border-gray-300 rounded-lg px-3 py-2.5 cursor-pointer hover:border-blue-400 hover:bg-blue-50/30 transition-colors"
-                    >
+                    <div onClick={() => fileRef.current?.click()}
+                      className="flex items-center gap-2.5 border border-dashed border-gray-300 rounded-lg px-3 py-2.5 cursor-pointer hover:border-blue-400 hover:bg-blue-50/30 transition-colors">
                       <Upload className="w-4 h-4 text-gray-400 shrink-0" />
                       <p className={`text-xs truncate ${bizFile ? "text-blue-600 font-medium" : "text-gray-400"}`}>
                         {bizFile ? bizFile.name : "파일 선택 (PDF, 이미지)"}
                       </p>
                       {bizFile && (
                         <button type="button" onClick={(e) => { e.stopPropagation(); setBizFile(null); if (fileRef.current) fileRef.current.value = ""; }}
-                          className="ml-auto text-gray-300 hover:text-red-400 shrink-0">
-                          <X className="w-3.5 h-3.5" />
-                        </button>
+                          className="ml-auto text-gray-300 hover:text-red-400 shrink-0"><X className="w-3.5 h-3.5" /></button>
                       )}
                       <input ref={fileRef} type="file" accept=".pdf,image/*" className="hidden"
                         onChange={(e) => setBizFile(e.target.files?.[0] ?? null)} />
@@ -293,10 +310,8 @@ export default function BizClientsPage() {
 
             <div className="px-6 pb-5 flex gap-2 justify-end">
               <button onClick={() => setModal(false)}
-                className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
-                취소
-              </button>
-              {(step === "form" || step === "saving") && (
+                className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">취소</button>
+              {(step === "new" || step === "saving") && (
                 <button onClick={handleAdd} disabled={step === "saving"}
                   className="px-5 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5">
                   {step === "saving" && <Loader2 className="w-3.5 h-3.5 animate-spin" />}

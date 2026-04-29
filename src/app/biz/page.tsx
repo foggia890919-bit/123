@@ -6,7 +6,7 @@ import { useEffect } from "react";
 import Link from "next/link";
 import {
   Hospital, Building2, FileUp, FileSearch,
-  ChevronRight, LayoutDashboard, GitBranch,
+  ChevronRight, LayoutDashboard, GitBranch, ClipboardList,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -28,9 +28,16 @@ const BIZ_MENU = [
   {
     href: "/biz/filter-mapping",
     label: "필터링 매핑 관리",
-    desc: "거래처\xd7제약사별 제출처\xb7담당자 설정",
+    desc: "거래처×제약사별 제출처·담당자 설정",
     icon: GitBranch,
     color: "bg-yellow-50 text-yellow-600",
+  },
+  {
+    href: "/biz/filter-status",
+    label: "필터링 현황",
+    desc: "거래처별 제약사 필터링 요청 및 처리 현황",
+    icon: ClipboardList,
+    color: "bg-teal-50 text-teal-600",
   },
   {
     href: "/biz/settlement/upload",
