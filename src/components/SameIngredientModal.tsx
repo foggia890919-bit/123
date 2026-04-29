@@ -3,7 +3,7 @@
 import { useState, useEffect, Fragment } from "react";
 import { X, RefreshCw, ChevronUp, ChevronDown, ChevronsUpDown, Loader2, Plus, FileText } from "lucide-react";
 import { formatPrice } from "@/lib/utils";
-import type { MedicationItem } from "@/types";
+import type { MedicationItem, IngredientMatchLevel } from "@/types";
 
 interface Proposal { id: string; title: string; _count: { items: number } }
 
@@ -175,7 +175,18 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
     }
   }
 
+  // matchLevel 섹션 순서: exact → same_form → same_ingredient → null(코드 없음)
+  const matchOrder: Record<string, number> = { exact: 0, same_form: 1, same_ingredient: 2 };
+
   const sorted = [...medications].sort((a, b) => {
+    // ingredientCode 기반 검색이면 matchLevel 우선 정렬
+    const hasMatch = medications.some((m) => m.matchLevel != null);
+    if (hasMatch && !sortKey) {
+      const la = matchOrder[a.matchLevel ?? ""] ?? 3;
+      const lb = matchOrder[b.matchLevel ?? ""] ?? 3;
+      if (la !== lb) return la - lb;
+      return (a.price ?? 999999999) - (b.price ?? 999999999);
+    }
     if (!sortKey) return 0;
     const getVal = (m: MedicationItem) => {
       const base = m.commissionRate ?? 0;
@@ -192,6 +203,14 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
     if (typeof va === "string" && typeof vb === "string") return sortDir === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
     return sortDir === "asc" ? (va as number) - (vb as number) : (vb as number) - (va as number);
   });
+
+  const hasMatchLevel = sorted.some((m) => m.matchLevel != null);
+
+  const MATCH_SECTION_LABELS: Record<IngredientMatchLevel, { label: string; color: string }> = {
+    exact:           { label: "정확히 일치 (동일 성분·제형·용량)", color: "bg-blue-50 text-blue-800 border-blue-200" },
+    same_form:       { label: "동일 성분 + 동일 제형, 용량만 다름", color: "bg-amber-50 text-amber-800 border-amber-200" },
+    same_ingredient: { label: "동일 성분 (제형·용량 다름)", color: "bg-gray-50 text-gray-600 border-gray-200" },
+  };
 
   function SortIcon({ k }: { k: SortKey }) {
     if (sortKey !== k) return <ChevronsUpDown className="w-3 h-3 inline ml-0.5 text-gray-300" />;
@@ -292,7 +311,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {sorted.map((med) => {
+                  {sorted.map((med, idx) => {
                     const base = med.commissionRate ?? null;
                     const extra = med.additionalRate ?? null;
                     const totalRate = base != null ? base + (extra ?? 0) : null;
@@ -300,8 +319,27 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
                     const isExpanded = expandedRows.has(med.id);
                     const [nameBase, dose, ingredient] = splitProductName(med.productName);
 
+                    // matchLevel 섹션 헤더: 이전 행과 matchLevel이 달라질 때만 표시
+                    const prevLevel = idx > 0 ? sorted[idx - 1].matchLevel : undefined;
+                    const showSectionHeader =
+                      hasMatchLevel &&
+                      med.matchLevel != null &&
+                      med.matchLevel !== prevLevel;
+
                     return (
                       <Fragment key={med.id}>
+                        {showSectionHeader && (
+                          <tr>
+                            <td colSpan={totalCols} className="px-0 pt-1 pb-0">
+                              <div className={`px-3 py-1.5 text-[11px] font-semibold border-y ${MATCH_SECTION_LABELS[med.matchLevel!].color}`}>
+                                {MATCH_SECTION_LABELS[med.matchLevel!].label}
+                                <span className="ml-2 font-normal opacity-70">
+                                  ({sorted.filter((m) => m.matchLevel === med.matchLevel).length}개)
+                                </span>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
                         <tr className="hover:bg-gray-50">
                           <td className="px-2 py-2 min-w-[160px] max-w-[240px]">
                             <p className="font-medium text-gray-900 leading-tight">
