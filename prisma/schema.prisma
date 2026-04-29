@@ -21,6 +21,8 @@ model User {
   companyRates   MemberCompanyRate[]
   documents      UserDocument[]
   filterRequests FilterRequest[]
+  ownedWorkspaces      Workspace[]       @relation("OwnedWorkspaces")
+  workspaceMemberships WorkspaceMember[]
 }
 
 enum Role {
@@ -151,21 +153,71 @@ model FilterRequest {
 }
 
 // ──────────────────────────────────────────────
-// 네이버 매출 자동화
+// 네이버 매출 자동화 — 멀티테넌시
 // ──────────────────────────────────────────────
+
+model Workspace {
+  id            String            @id @default(cuid())
+  name          String
+  slug          String            @unique
+  ownerId       String
+  owner         User              @relation("OwnedWorkspaces", fields: [ownerId], references: [id])
+  // 채널 연동 (워크스페이스 단위 오버라이드, 비워두면 글로벌 .env 사용)
+  telegramBotToken          String?
+  telegramChatId            String?
+  googleSheetsId            String?
+  googleServiceAccountEmail String?
+  googleServiceAccountKey   String?
+  // 보고 시각 (KST HH:mm)
+  reportTime    String            @default("08:00")
+  enabled       Boolean           @default(true)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  members       WorkspaceMember[]
+  stores        NaverStore[]
+  reports       DailyReportLog[]
+
+  @@index([ownerId])
+}
+
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  workspaceId String
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        WorkspaceRole @default(MEMBER)
+  createdAt   DateTime      @default(now())
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
 
 model NaverStore {
   id           String         @id @default(cuid())
-  code         String         @unique
+  workspaceId  String
+  workspace    Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  code         String
   bizName      String
   storeName    String
   clientId     String
   clientSecret String
   enabled      Boolean        @default(true)
+  lastSyncedAt DateTime?
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   products     NaverProduct[]
   orders       NaverOrder[]
+
+  @@unique([workspaceId, code])
+  @@index([workspaceId])
 }
 
 model NaverProduct {
@@ -174,6 +226,12 @@ model NaverProduct {
   store            NaverStore       @relation(fields: [storeId], references: [id], onDelete: Cascade)
   channelProductNo String
   productName      String
+  // 사장님이 보고 대상으로 켠 상품만 보고에 포함
+  watched          Boolean          @default(true)
+  // 마지막으로 네이버 상품 API 에서 정보 가져온 시각
+  lastImportedAt   DateTime?
+  // 첫 발견 시 텔레그램 신상품 알림 보낸 여부
+  notifiedNew      Boolean          @default(false)
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
   costs            ProductCost[]
@@ -181,6 +239,7 @@ model NaverProduct {
 
   @@unique([storeId, channelProductNo])
   @@index([storeId])
+  @@index([watched])
 }
 
 model ProductCost {
@@ -253,10 +312,15 @@ model NaverOrderItem {
 }
 
 model DailyReportLog {
-  id         String   @id @default(cuid())
-  reportDate DateTime @unique
-  sentAt     DateTime @default(now())
-  channel    String
-  ok         Boolean
-  message    String?
+  id          String   @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  reportDate  DateTime
+  sentAt      DateTime @default(now())
+  channel     String
+  ok          Boolean
+  message     String?
+
+  @@unique([workspaceId, reportDate])
+  @@index([workspaceId])
 }

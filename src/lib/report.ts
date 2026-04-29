@@ -68,9 +68,19 @@ export interface ReportSummary {
   };
 }
 
-export async function buildDailyReport(fromIso: string, toIso: string, reportDate: Date): Promise<ReportSummary> {
+export async function buildDailyReport(
+  fromIso: string,
+  toIso: string,
+  reportDate: Date,
+  workspaceId?: string,
+): Promise<ReportSummary> {
   const items = await prisma.naverOrderItem.findMany({
-    where: { paymentDate: { gte: new Date(fromIso), lt: new Date(toIso) } },
+    where: {
+      paymentDate: { gte: new Date(fromIso), lt: new Date(toIso) },
+      ...(workspaceId ? { order: { store: { workspaceId } } } : {}),
+      // watched 가 false 인 상품은 보고에서 제외 (null product 는 포함)
+      OR: [{ productId: null }, { product: { watched: true } }],
+    },
     include: {
       order: { include: { store: true } },
       product: { include: { costs: { orderBy: { effectiveAt: "desc" } } } },

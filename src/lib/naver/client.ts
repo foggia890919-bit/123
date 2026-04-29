@@ -126,3 +126,33 @@ export async function getOrderDetail(
   );
   return data.data ?? { orderId, productOrders: [] };
 }
+
+export interface NaverProductLite {
+  channelProductNo: string;
+  name: string;
+  status?: string;
+  options?: string[];
+}
+
+/** 스토어의 상품 목록 페이지네이션 조회 */
+export async function listProducts(
+  clientId: string,
+  clientSecret: string,
+): Promise<NaverProductLite[]> {
+  const out: NaverProductLite[] = [];
+  let page = 1;
+  for (let i = 0; i < 50; i++) {
+    const params = new URLSearchParams({ page: String(page), size: "100" });
+    const data = await naverFetch<{
+      contents?: { channelProductNo: string; name: string; statusType?: string }[];
+      page?: { totalPages?: number };
+    }>(clientId, clientSecret, `/v1/products/search?${params}`);
+    for (const p of data.contents ?? []) {
+      out.push({ channelProductNo: String(p.channelProductNo), name: p.name, status: p.statusType });
+    }
+    const totalPages = data.page?.totalPages ?? 1;
+    if (page >= totalPages) break;
+    page += 1;
+  }
+  return out;
+}

@@ -6,18 +6,30 @@ export interface SheetRow {
   values: (string | number)[];
 }
 
-interface SheetsConfig {
+export interface SheetsConfig {
   sheetId: string;
   email: string;
   privateKey: string;
 }
 
-function getConfig(): SheetsConfig | null {
-  const sheetId = process.env.GOOGLE_SHEETS_ID;
-  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g, "\n");
+export interface WorkspaceSheetCreds {
+  googleSheetsId?: string | null;
+  googleServiceAccountEmail?: string | null;
+  googleServiceAccountKey?: string | null;
+}
+
+function getConfig(ws?: WorkspaceSheetCreds): SheetsConfig | null {
+  const sheetId = ws?.googleSheetsId || process.env.GOOGLE_SHEETS_ID;
+  const email = ws?.googleServiceAccountEmail || process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+  const rawKey = ws?.googleServiceAccountKey || process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
+  const privateKey = rawKey?.replace(/\\n/g, "\n");
   if (!sheetId || !email || !privateKey) return null;
   return { sheetId, email, privateKey };
+}
+
+export function getWorkspaceSheetUrl(sheetId?: string | null): string | null {
+  const id = sheetId || process.env.GOOGLE_SHEETS_ID;
+  return id ? `https://docs.google.com/spreadsheets/d/${id}/edit` : null;
 }
 
 async function getAccessToken(cfg: SheetsConfig): Promise<string> {
@@ -64,8 +76,9 @@ async function getAccessToken(cfg: SheetsConfig): Promise<string> {
 export async function appendRows(
   rangeA1: string,
   rows: (string | number)[][],
+  ws?: WorkspaceSheetCreds,
 ): Promise<{ ok: boolean; skipped?: boolean; error?: string }> {
-  const cfg = getConfig();
+  const cfg = getConfig(ws);
   if (!cfg) return { ok: true, skipped: true };
   try {
     const token = await getAccessToken(cfg);
@@ -85,8 +98,9 @@ export async function appendRows(
 export async function overwriteSheet(
   rangeA1: string,
   rows: (string | number)[][],
+  ws?: WorkspaceSheetCreds,
 ): Promise<{ ok: boolean; skipped?: boolean; error?: string }> {
-  const cfg = getConfig();
+  const cfg = getConfig(ws);
   if (!cfg) return { ok: true, skipped: true };
   try {
     const token = await getAccessToken(cfg);
@@ -116,8 +130,12 @@ export const SHEET_TABS = {
   cost: process.env.SHEET_TAB_COST || "원가",
 };
 
-export async function ensureTabExists(tabName: string, headers: string[]): Promise<{ ok: boolean; created?: boolean; error?: string }> {
-  const cfg = getConfig();
+export async function ensureTabExists(
+  tabName: string,
+  headers: string[],
+  ws?: WorkspaceSheetCreds,
+): Promise<{ ok: boolean; created?: boolean; error?: string }> {
+  const cfg = getConfig(ws);
   if (!cfg) return { ok: true };
   try {
     const token = await getAccessToken(cfg);
@@ -142,7 +160,7 @@ export async function ensureTabExists(tabName: string, headers: string[]): Promi
     );
     if (!add.ok) return { ok: false, error: `addSheet ${add.status} ${await add.text()}` };
     if (headers.length > 0) {
-      await overwriteSheet(`${tabName}!A1`, [headers]);
+      await overwriteSheet(`${tabName}!A1`, [headers], ws);
     }
     return { ok: true, created: true };
   } catch (err) {

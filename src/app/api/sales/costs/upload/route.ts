@@ -1,10 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { parseFileBuffer, pick, toInt } from "@/lib/parse-excel";
+import { requireWorkspace } from "@/lib/workspace";
 
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
+  let workspace;
+  try {
+    workspace = (await requireWorkspace()).workspace;
+  } catch (err) {
+    if (err instanceof Response) return err;
+    throw err;
+  }
   const form = await req.formData();
   const file = form.get("file");
   if (!(file instanceof File)) return NextResponse.json({ error: "file required" }, { status: 400 });
@@ -20,7 +28,7 @@ export async function POST(req: NextRequest) {
     const optionName = pick(r, ["옵션", "옵션명"]);
     if (!storeCode || (!channelProductNo && !productName)) continue;
 
-    const store = await prisma.naverStore.findUnique({ where: { code: storeCode } });
+    const store = await prisma.naverStore.findFirst({ where: { workspaceId: workspace.id, code: storeCode } });
     if (!store) continue;
 
     const product = await prisma.naverProduct.upsert({

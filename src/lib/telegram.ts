@@ -1,9 +1,13 @@
-/** 텔레그램 봇으로 메시지 전송. 토큰/chat_id 미설정 시 no-op. */
-export async function sendTelegram(text: string): Promise<{ ok: boolean; error?: string }> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
+export interface TelegramCreds {
+  telegramBotToken?: string | null;
+  telegramChatId?: string | null;
+}
+
+export async function sendTelegram(text: string, ws?: TelegramCreds): Promise<{ ok: boolean; error?: string }> {
+  const token = ws?.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = ws?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
   if (!token || !chatId) {
-    return { ok: false, error: "TELEGRAM env not set" };
+    return { ok: false, error: "TELEGRAM not configured" };
   }
   const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",

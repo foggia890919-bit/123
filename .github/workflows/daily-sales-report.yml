@@ -2,8 +2,8 @@ name: Daily Sales Report (KST 08:00)
 
 on:
   schedule:
-    # 23:00 UTC == 08:00 KST
-    - cron: "0 23 * * *"
+    # 매 10분마다 — cron 엔드포인트가 워크스페이스별 reportTime 매칭으로 발송 결정
+    - cron: "*/10 * * * *"
   workflow_dispatch:
 
 jobs:

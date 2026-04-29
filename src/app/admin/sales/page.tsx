@@ -11,6 +11,11 @@ interface Store {
   enabled: boolean;
 }
 
+interface WorkspaceLite {
+  id: string;
+  name: string;
+}
+
 interface KeywordRow {
   storeName: string;
   keyword: string;
@@ -44,6 +49,7 @@ interface ReportSummary {
 }
 
 export default function SalesAdminPage() {
+  const [workspace, setWorkspace] = useState<WorkspaceLite | null>(null);
   const [stores, setStores] = useState<Store[]>([]);
   const [report, setReport] = useState<ReportSummary | null>(null);
   const [sheetUrl, setSheetUrl] = useState<string | null>(null);
@@ -54,9 +60,12 @@ export default function SalesAdminPage() {
     const r = await fetch("/api/sales/overview");
     if (r.ok) {
       const data = await r.json();
+      setWorkspace(data.workspace ?? null);
       setStores(data.stores ?? []);
       setReport(data.report ?? null);
       setSheetUrl(data.sheetUrl ?? null);
+    } else if (r.status === 404) {
+      setMsg("등록된 사업자(워크스페이스)가 없습니다. 먼저 사업자를 등록하세요.");
     }
   }
 
@@ -88,8 +97,11 @@ export default function SalesAdminPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-2xl font-bold">네이버 매출 자동화</h1>
-        <div className="flex gap-2 items-center">
+        <div>
+          <h1 className="text-2xl font-bold">네이버 매출 자동화</h1>
+          {workspace && <div className="text-sm text-gray-500">사업자: {workspace.name}</div>}
+        </div>
+        <div className="flex gap-2 items-center flex-wrap">
           {sheetUrl && (
             <a
               href={sheetUrl}
@@ -100,18 +112,10 @@ export default function SalesAdminPage() {
               📄 구글시트 열기
             </a>
           )}
-          <Link
-            href="/admin/sales/costs"
-            className="px-3 py-2 rounded-md bg-gray-900 text-white text-sm hover:bg-gray-800"
-          >
-            원가 관리
-          </Link>
-          <Link
-            href="/admin/sales/upload"
-            className="px-3 py-2 rounded-md bg-gray-900 text-white text-sm hover:bg-gray-800"
-          >
-            매출장부 업로드
-          </Link>
+          <Link href="/admin/sales/workspaces" className="px-3 py-2 rounded-md border text-sm">사업자</Link>
+          <Link href="/admin/sales/products" className="px-3 py-2 rounded-md border text-sm">상품</Link>
+          <Link href="/admin/sales/costs" className="px-3 py-2 rounded-md bg-gray-900 text-white text-sm">원가/키워드</Link>
+          <Link href="/admin/sales/upload" className="px-3 py-2 rounded-md bg-gray-900 text-white text-sm">매출 업로드</Link>
         </div>
       </div>
 

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { parseFileBuffer, pick, toInt } from "@/lib/parse-excel";
 import { appendRows, SHEET_TABS, ensureTabExists } from "@/lib/sheets";
 import { HEADER, RAW_HEADERS } from "@/lib/naver/headers";
+import { requireWorkspace } from "@/lib/workspace";
 
 export const runtime = "nodejs";
 
@@ -14,13 +15,20 @@ function parseDate(s: string): Date | null {
 }
 
 export async function POST(req: NextRequest) {
+  let workspace;
+  try {
+    workspace = (await requireWorkspace()).workspace;
+  } catch (err) {
+    if (err instanceof Response) return err;
+    throw err;
+  }
   const form = await req.formData();
   const file = form.get("file");
   const storeCode = String(form.get("storeCode") ?? "");
   if (!(file instanceof File)) return NextResponse.json({ error: "file required" }, { status: 400 });
   if (!storeCode) return NextResponse.json({ error: "storeCode required" }, { status: 400 });
 
-  const store = await prisma.naverStore.findUnique({ where: { code: storeCode } });
+  const store = await prisma.naverStore.findFirst({ where: { workspaceId: workspace.id, code: storeCode } });
   if (!store) return NextResponse.json({ error: "store not found" }, { status: 404 });
 
   const buf = await file.arrayBuffer();
@@ -131,8 +139,8 @@ export async function POST(req: NextRequest) {
 
   let sheet: Awaited<ReturnType<typeof appendRows>> = { ok: true, skipped: true };
   if (rawRows.length > 0) {
-    await ensureTabExists(SHEET_TABS.raw, RAW_HEADERS);
-    sheet = await appendRows(`${SHEET_TABS.raw}!A2`, rawRows);
+    await ensureTabExists(SHEET_TABS.raw, RAW_HEADERS, workspace);
+    sheet = await appendRows(`${SHEET_TABS.raw}!A2`, rawRows, workspace);
   }
 
   return NextResponse.json({ ok: true, orders: orderTotals.size, items, sheet });
