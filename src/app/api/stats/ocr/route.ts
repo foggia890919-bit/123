@@ -22,6 +22,7 @@ export interface FusionDrug {
   matchedMedicationId: string | null;
   finalConfidence: number;            // 최종 신뢰도 0-100
   manualCheck: boolean;               // < 95 이면 true
+  bboxYPercent: number | null;        // 이미지 내 행의 Y 중심 (0~100), 없으면 null
 }
 
 export interface FusionResult {
@@ -77,7 +78,10 @@ export async function POST(req: NextRequest) {
       callGeminiVision(base64, mimeType),
     ]);
 
-    const clovaText = clovaOut.status === "fulfilled" ? clovaOut.value.text : "";
+    const clovaResult = clovaOut.status === "fulfilled" ? clovaOut.value : null;
+    const clovaText = clovaResult?.text ?? "";
+    const clovaFields = clovaResult?.fields ?? [];
+    const clovaImageHeight = clovaResult?.imageHeight ?? 0;
     const geminiDraft = geminiOut.status === "fulfilled" ? geminiOut.value : null;
     const geminiText = geminiDraft ? JSON.stringify(geminiDraft, null, 2) : "";
 
@@ -93,16 +97,23 @@ export async function POST(req: NextRequest) {
     const candidateCodes = extractInsuranceCodes(clovaText, geminiDraft);
     const masterByCode = await fetchMasterByCodes(candidateCodes);
 
-    // ── 3단계: LLM 검증/병합 ──────────────────────────────────────────────
-    const merged = await callGeminiMerge({
-      clovaText,
-      geminiDraft,
-      masterCandidates: Array.from(masterByCode.values()).map((m) => ({
-        insuranceCode: m.insuranceCode,
-        productName: m.productName,
-        companyName: m.companyName,
-      })),
+    // ── 3단계: LLM 병합/검증 — Vision 결과의 모든 코드가 마스터와 일치하면 스킵 ─
+    const visionDrugs = geminiDraft?.drugs ?? [];
+    const visionAllMatched = visionDrugs.length > 0 && visionDrugs.every((d) => {
+      const c = d.insuranceCode.replace(/\D/g, "");
+      return c.length === 9 && masterByCode.has(c);
     });
+    const merged: MergedDrug[] = visionAllMatched
+      ? visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 95) }))
+      : await callGeminiMerge({
+          clovaText,
+          geminiDraft,
+          masterCandidates: Array.from(masterByCode.values()).map((m) => ({
+            insuranceCode: m.insuranceCode,
+            productName: m.productName,
+            companyName: m.companyName,
+          })),
+        });
 
     // ── 4단계: 약품마다 마스터 매칭 + 신뢰도 계산 ──────────────────────────
     const drugs: FusionDrug[] = [];
@@ -115,6 +126,7 @@ export async function POST(req: NextRequest) {
         : Math.min(modelConf, 50); // 마스터 미매칭은 최대 50%로 캡
       const manualCheck = finalConfidence < 95;
 
+      const bboxYPercent = locateRowInClova(item, clovaFields, clovaImageHeight);
       drugs.push({
         insuranceCode: { value: matched.insuranceCode, confidence: matched.matchedMedicationId ? 100 : modelConf },
         companyName:   { value: matched.companyName,   confidence: matched.matchedMedicationId ? 100 : modelConf },
@@ -124,6 +136,7 @@ export async function POST(req: NextRequest) {
         matchedMedicationId: matched.matchedMedicationId,
         finalConfidence,
         manualCheck,
+        bboxYPercent,
       });
     }
 
@@ -157,9 +170,13 @@ interface ClovaField {
   inferText: string;
   inferConfidence: number;
   lineBreak?: boolean;
+  boundingPoly?: { vertices: { x: number; y: number }[] };
 }
 
-async function callClovaOcr(base64: string, ext: string): Promise<{ text: string }> {
+async function callClovaOcr(
+  base64: string,
+  ext: string
+): Promise<{ text: string; fields: ClovaField[]; imageHeight: number }> {
   const rawUrl = process.env.CLOVA_OCR_INVOKE_URL?.trim();
   const clovaUrl = rawUrl?.replace(/^http:\/\//, "https://");
   const clovaSecret = process.env.CLOVA_OCR_SECRET_KEY?.trim();
@@ -190,7 +207,35 @@ async function callClovaOcr(base64: string, ext: string): Promise<{ text: string
     if (f.lineBreak !== false) { lines.push(cur.trim()); cur = ""; }
   }
   if (cur) lines.push(cur.trim());
-  return { text: lines.join("\n") };
+  // 이미지 높이는 Clova가 직접 안 주므로 모든 vertex Y 값의 max로 근사
+  let imageHeight = 0;
+  for (const f of fields) {
+    for (const v of f.boundingPoly?.vertices ?? []) {
+      if (v.y > imageHeight) imageHeight = v.y;
+    }
+  }
+  return { text: lines.join("\n"), fields, imageHeight };
+}
+
+// 약품의 보험코드 또는 제품명 일부가 포함된 Clova field를 찾아 그 행의 Y%를 계산
+function locateRowInClova(
+  item: { insuranceCode: string; productName: string },
+  fields: ClovaField[],
+  imageHeight: number
+): number | null {
+  if (!fields.length || !imageHeight) return null;
+  const code = item.insuranceCode.replace(/\D/g, "");
+  const productKey = item.productName.replace(/\s+/g, "").slice(0, 5).toLowerCase();
+  for (const f of fields) {
+    const t = f.inferText.replace(/\s+/g, "").toLowerCase();
+    const matched = (code.length === 9 && t.includes(code)) || (productKey.length >= 3 && t.includes(productKey));
+    if (!matched) continue;
+    const ys = (f.boundingPoly?.vertices ?? []).map((v) => v.y);
+    if (!ys.length) continue;
+    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    return Math.max(0, Math.min(100, Math.round((cy / imageHeight) * 1000) / 10));
+  }
+  return null;
 }
 
 // ── Gemini Vision OCR ─────────────────────────────────────────────────────────
@@ -231,7 +276,7 @@ JSON 형식으로만 응답:
 { "drugs": [ { "insuranceCode": "...", "productName": "...", "companyName": "...", "quantity": "...", "confidence": 0 } ] }`;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: "gemini-2.5-flash-lite",
     contents: [{
       role: "user",
       parts: [
@@ -302,7 +347,7 @@ JSON 응답:
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-2.5-flash-lite",
       contents: prompt,
       config: { responseMimeType: "application/json" },
     });

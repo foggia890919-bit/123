@@ -17,6 +17,7 @@ interface FusionDrug {
   matchedMedicationId: string | null;
   finalConfidence: number;
   manualCheck: boolean;
+  bboxYPercent: number | null;
 }
 interface OcrResult {
   source: string;
@@ -79,6 +80,10 @@ export default function StatsPage() {
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageScrollRef = useRef<HTMLDivElement>(null);
+  const imageElRef = useRef<HTMLImageElement>(null);
+  const manualInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
 
   // 줌
   const [zoomLevel, setZoomLevel] = useState(100);
@@ -261,6 +266,35 @@ export default function StatsPage() {
   }
   function addManualRow() {
     setManualDrugs((prev) => [...prev, emptyManualDrug()]);
+  }
+
+  // 행/필드에 포커스 들어오면 이미지를 해당 약품의 Y 위치로 스크롤
+  function handleManualFocus(idx: number) {
+    setFocusedIdx(idx);
+    const yPercent = editOcr?.drugs[idx]?.bboxYPercent ?? null;
+    const scrollEl = imageScrollRef.current;
+    const imgEl = imageElRef.current;
+    if (!scrollEl || !imgEl) return;
+    if (yPercent != null) {
+      const targetY = (imgEl.clientHeight * yPercent) / 100;
+      scrollEl.scrollTo({ top: Math.max(0, targetY - scrollEl.clientHeight / 2), behavior: "smooth" });
+    } else if (editOcr?.drugs.length) {
+      // bbox 없으면 행 인덱스 비례로 스크롤 (위→아래 가정)
+      const proportional = (idx / editOcr.drugs.length) * imgEl.clientHeight;
+      scrollEl.scrollTo({ top: Math.max(0, proportional - scrollEl.clientHeight / 2), behavior: "smooth" });
+    }
+  }
+
+  // 키보드 위/아래로 행 이동 (Enter / ArrowDown / ArrowUp)
+  function handleManualKey(e: React.KeyboardEvent<HTMLInputElement>, idx: number, field: keyof ManualDrug) {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Enter") return;
+    e.preventDefault();
+    const dir = e.key === "ArrowUp" ? -1 : 1;
+    const nextIdx = idx + dir;
+    if (nextIdx < 0 || nextIdx >= manualDrugs.length) return;
+    const target = manualInputRefs.current[`${nextIdx}:${field}`];
+    target?.focus();
+    target?.select();
   }
   // 보험코드 입력 후 마스터에서 제품명/제약사/단가 자동 채움
   async function lookupByInsuranceCode(idx: number) {
@@ -474,14 +508,23 @@ export default function StatsPage() {
                 )}
               </div>
             )}
-            <div className="flex-1 overflow-auto min-h-64">
+            <div ref={imageScrollRef} className="flex-1 overflow-auto min-h-64 relative">
               {imageUrl ? (
                 <div onClick={handleImageClick} style={{ minHeight: 300 }}
-                  className={`w-full h-full flex items-start justify-center p-2 ${zoomEnabled ? (isZoomed ? "cursor-zoom-out" : "cursor-zoom-in") : ""}`}>
+                  className={`w-full h-full flex items-start justify-center p-2 relative ${zoomEnabled ? (isZoomed ? "cursor-zoom-out" : "cursor-zoom-in") : ""}`}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={imageUrl} alt="처방전"
+                  <img ref={imageElRef} src={imageUrl} alt="처방전"
                     style={{ width: `${zoomLevel}%`, transition: "width 0.2s ease", maxWidth: "none" }}
                     className="rounded object-contain" draggable={false} />
+                  {focusedIdx != null && editOcr?.drugs[focusedIdx]?.bboxYPercent != null && (
+                    <div
+                      className="absolute left-2 right-2 pointer-events-none border-y-2 border-yellow-400 bg-yellow-300/15 transition-all"
+                      style={{
+                        top: `calc(${editOcr.drugs[focusedIdx]!.bboxYPercent}% - 14px)`,
+                        height: "28px",
+                      }}
+                    />
+                  )}
                 </div>
               ) : (
                 <div onDrop={onDrop} onDragOver={(e) => e.preventDefault()}
@@ -513,7 +556,7 @@ export default function StatsPage() {
 
           {/* 중간: OCR 인식 원본 (read-only, 항상 4컬럼 헤더 표시) */}
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col">
-            <div className="border-b border-gray-100 px-3 py-2.5 flex items-center gap-2 flex-wrap">
+            <div className="border-b border-gray-100 px-3 h-[44px] flex items-center gap-2 overflow-x-auto">
               <span className="text-xs font-semibold text-gray-700">OCR 인식 원본</span>
               <span className="text-xs bg-blue-50 text-blue-600 border border-blue-200 px-1.5 py-0.5 rounded">CLOVA + GEMINI</span>
               {editOcr ? (
@@ -598,7 +641,7 @@ export default function StatsPage() {
 
           {/* 오른쪽: 사람 확정 입력 */}
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col">
-            <div className="border-b border-gray-100 px-3 py-2.5 flex items-center gap-2 flex-wrap">
+            <div className="border-b border-gray-100 px-3 h-[44px] flex items-center gap-2 overflow-x-auto">
               <span className="text-xs font-semibold text-gray-700">사람 확정</span>
               <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{filledManualDrugs.length}건</span>
               {isClientUnnapproved && (
@@ -628,33 +671,45 @@ export default function StatsPage() {
                     const aiPair = editOcr?.drugs[i];
                     const lowConf = aiPair?.manualCheck;
                     return (
-                      <tr key={i} className={`border-b border-gray-100 h-9 ${lowConf ? "bg-red-50/50" : ""}`}>
-                        <td className="py-1 px-1 align-middle">
+                      <tr key={i} className={`border-b border-gray-100 h-9 ${focusedIdx === i ? "bg-yellow-50" : lowConf ? "bg-red-50/50" : ""}`}>
+                        <td className="px-1 align-middle">
                           <input value={d.insuranceCode}
+                            ref={(el) => { manualInputRefs.current[`${i}:insuranceCode`] = el; }}
+                            onFocus={() => handleManualFocus(i)}
+                            onKeyDown={(e) => handleManualKey(e, i, "insuranceCode")}
                             onChange={(e) => updateManualField(i, "insuranceCode", e.target.value.replace(/\D/g, "").slice(0, 9))}
                             onBlur={() => lookupByInsuranceCode(i)}
                             placeholder="9자리"
-                            className={`w-full border rounded px-1.5 py-1 text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-blue-400 ${d.matchedMedicationId ? "border-green-300 bg-green-50" : "border-gray-300"}`} />
+                            className={`w-full h-7 border rounded px-1.5 text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-blue-400 ${d.matchedMedicationId ? "border-green-300 bg-green-50" : "border-gray-300"}`} />
                         </td>
-                        <td className="py-1 px-1 align-middle">
+                        <td className="px-1 align-middle">
                           <input value={d.companyName}
+                            ref={(el) => { manualInputRefs.current[`${i}:companyName`] = el; }}
+                            onFocus={() => handleManualFocus(i)}
+                            onKeyDown={(e) => handleManualKey(e, i, "companyName")}
                             onChange={(e) => updateManualField(i, "companyName", e.target.value)}
                             placeholder="제약사"
-                            className="w-full border border-gray-300 rounded px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                            className="w-full h-7 border border-gray-300 rounded px-1.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
                         </td>
-                        <td className="py-1 px-1 align-middle">
+                        <td className="px-1 align-middle">
                           <input value={d.productName}
+                            ref={(el) => { manualInputRefs.current[`${i}:productName`] = el; }}
+                            onFocus={() => handleManualFocus(i)}
+                            onKeyDown={(e) => handleManualKey(e, i, "productName")}
                             onChange={(e) => updateManualField(i, "productName", e.target.value)}
                             placeholder="제품명"
-                            className="w-full border border-gray-300 rounded px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                            className="w-full h-7 border border-gray-300 rounded px-1.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
                         </td>
-                        <td className="py-1 px-1 align-middle">
+                        <td className="px-1 align-middle">
                           <input value={d.quantity}
+                            ref={(el) => { manualInputRefs.current[`${i}:quantity`] = el; }}
+                            onFocus={() => handleManualFocus(i)}
+                            onKeyDown={(e) => handleManualKey(e, i, "quantity")}
                             onChange={(e) => updateManualField(i, "quantity", e.target.value)}
                             placeholder="0"
-                            className="w-full border border-gray-300 rounded px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                            className="w-full h-7 border border-gray-300 rounded px-1.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
                         </td>
-                        <td className="py-1 px-1 align-middle">
+                        <td className="px-1 align-middle text-center">
                           <button onClick={() => removeManualRow(i)}
                             className="text-gray-400 hover:text-red-600" title="행 삭제">
                             <Trash2 className="w-3.5 h-3.5" />
