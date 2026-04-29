@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { Building2, User, ChevronDown, Tag, Loader2, Search, Plus, Trash2, X, Upload, CheckCircle, AlertCircle } from "lucide-react";
+import { Building2, User, ChevronDown, Tag, Loader2, Search, Plus, Trash2, X, Upload, CheckCircle, AlertCircle, Pencil } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { BizLayout } from "../page";
 
@@ -34,6 +34,10 @@ interface Client {
   bizNumber: string;
   dealerType: DealerType;
   approved: boolean;
+  managerName?: string | null;
+  managerPhone?: string | null;
+  managerEmail?: string | null;
+  memo?: string | null;
 }
 
 function formatBiz(n: string) {
@@ -154,6 +158,23 @@ async function fileToDataUri(file: File): Promise<string> {
   });
 }
 
+function FieldInput({ label, value, onChange, placeholder, type = "text" }: {
+  label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string;
+}) {
+  return (
+    <div className="space-y-1">
+      <label className="block text-xs font-medium text-gray-600">{label}</label>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+      />
+    </div>
+  );
+}
+
 export default function BizDealersPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
@@ -162,13 +183,17 @@ export default function BizDealersPage() {
   const [query, setQuery] = useState("");
   const [filterType, setFilterType] = useState<string>("ALL");
 
-  // modal state
+  // 등록 모달 state
   const [modal, setModal] = useState(false);
   const [step, setStep] = useState<ModalStep>("biz");
   const [bizNumberInput, setBizNumberInput] = useState("");
   const [foundClient, setFoundClient] = useState<Client | null>(null);
   const [clientName, setClientName] = useState("");
   const [dealerType, setDealerType] = useState<string>("CORPORATION");
+  const [managerName, setManagerName] = useState("");
+  const [managerPhone, setManagerPhone] = useState("");
+  const [managerEmail, setManagerEmail] = useState("");
+  const [memo, setMemo] = useState("");
   const [bizFile, setBizFile] = useState<File | null>(null);
   const [csoFile, setCsoFile] = useState<File | null>(null);
   const [accountFile, setAccountFile] = useState<File | null>(null);
@@ -176,6 +201,18 @@ export default function BizDealersPage() {
   const bizRef = useRef<HTMLInputElement>(null);
   const csoRef = useRef<HTMLInputElement>(null);
   const accountRef = useRef<HTMLInputElement>(null);
+
+  // 수정 모달 state
+  const [editModal, setEditModal] = useState(false);
+  const [editTarget, setEditTarget] = useState<Client | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editType, setEditType] = useState<string>("CORPORATION");
+  const [editManagerName, setEditManagerName] = useState("");
+  const [editManagerPhone, setEditManagerPhone] = useState("");
+  const [editManagerEmail, setEditManagerEmail] = useState("");
+  const [editMemo, setEditMemo] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     fetch("/api/dealer")
@@ -198,11 +235,22 @@ export default function BizDealersPage() {
     setFoundClient(null);
     setClientName("");
     setDealerType("CORPORATION");
-    setBizFile(null);
-    setCsoFile(null);
-    setAccountFile(null);
+    setManagerName(""); setManagerPhone(""); setManagerEmail(""); setMemo("");
+    setBizFile(null); setCsoFile(null); setAccountFile(null);
     setFormError(null);
     setModal(true);
+  }
+
+  function openEdit(c: Client) {
+    setEditTarget(c);
+    setEditName(c.clientName);
+    setEditType(c.dealerType ?? "CORPORATION");
+    setEditManagerName(c.managerName ?? "");
+    setEditManagerPhone(c.managerPhone ?? "");
+    setEditManagerEmail(c.managerEmail ?? "");
+    setEditMemo(c.memo ?? "");
+    setEditError(null);
+    setEditModal(true);
   }
 
   async function handleBizCheck() {
@@ -240,6 +288,10 @@ export default function BizDealersPage() {
           bizDocument, bizFileName: bizFile?.name ?? null,
           csoDocument, csoFileName: csoFile?.name ?? null,
           accountDocument, accountFileName: accountFile?.name ?? null,
+          managerName: managerName.trim() || null,
+          managerPhone: managerPhone.trim() || null,
+          managerEmail: managerEmail.trim() || null,
+          memo: memo.trim() || null,
         }),
       });
       const data = await res.json();
@@ -248,6 +300,33 @@ export default function BizDealersPage() {
       load();
     } catch {
       setFormError("오류가 발생했습니다."); setStep("form");
+    }
+  }
+
+  async function handleEditSave() {
+    if (!editTarget) return;
+    if (!editName.trim()) { setEditError("거래처명을 입력해주세요."); return; }
+    setEditSaving(true);
+    const res = await fetch(`/api/dealer?id=${editTarget.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        clientName: editName.trim(),
+        dealerType: editType || null,
+        managerName: editManagerName.trim() || null,
+        managerPhone: editManagerPhone.trim() || null,
+        managerEmail: editManagerEmail.trim() || null,
+        memo: editMemo.trim() || null,
+      }),
+    });
+    setEditSaving(false);
+    if (res.ok) {
+      const updated = await res.json();
+      setClients((prev) => prev.map((c) => c.id === editTarget.id ? { ...c, ...updated } : c));
+      setEditModal(false);
+    } else {
+      const d = await res.json();
+      setEditError(d.error ?? "수정 실패");
     }
   }
 
@@ -326,24 +405,35 @@ export default function BizDealersPage() {
             {query ? "검색 결과가 없어요." : "등록된 항목이 없어요."}
           </div>
         ) : (
-          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          /* overflow-visible: 분류 드롭다운이 컨테이너에 잘리지 않도록 */
+          <div className="bg-white border border-gray-200 rounded-xl">
             <div className="divide-y divide-gray-50">
               {filtered.map((c) => (
                 <div key={c.id} className="flex items-center justify-between px-4 py-3">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
                     <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center shrink-0">
                       {c.dealerType === "INDIVIDUAL" ? <User className="w-4 h-4 text-gray-500" /> : <Building2 className="w-4 h-4 text-gray-500" />}
                     </div>
-                    <div>
-                      <div className="flex items-center gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <p className="text-sm font-medium text-gray-800">{c.clientName}</p>
                         <TypeBadge type={c.dealerType} />
                       </div>
                       <p className="text-xs text-gray-400">{formatBiz(c.bizNumber)}</p>
+                      {c.managerName && (
+                        <p className="text-xs text-gray-400 mt-0.5">담당: {c.managerName}{c.managerPhone ? ` · ${c.managerPhone}` : ""}</p>
+                      )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5 shrink-0">
                     <TypeDropdown clientId={c.id} current={c.dealerType} onUpdated={handleUpdated} />
+                    <button
+                      onClick={() => openEdit(c)}
+                      className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
+                      title="수정"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
                     <button
                       onClick={() => handleDelete(c)}
                       className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
@@ -362,15 +452,15 @@ export default function BizDealersPage() {
       {/* 등록 모달 */}
       {modal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
-            <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100 shrink-0">
               <h2 className="font-semibold text-gray-900">법인·딜러 등록</h2>
               <button onClick={() => setModal(false)} className="text-gray-400 hover:text-gray-600">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="px-6 py-5 space-y-4">
+            <div className="px-6 py-5 space-y-4 overflow-y-auto">
               {/* Step 1: 사업자번호 입력 */}
               <div className="space-y-1.5">
                 <label className="block text-xs font-medium text-gray-600">사업자번호 *</label>
@@ -462,6 +552,37 @@ export default function BizDealersPage() {
                     </div>
                   </div>
 
+                  {/* 담당자 정보 */}
+                  <div className="border-t border-gray-100 pt-3 space-y-3">
+                    <p className="text-xs font-semibold text-gray-500">담당자 정보 (선택)</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <label className="block text-xs font-medium text-gray-600">담당자명</label>
+                        <input value={managerName} onChange={(e) => setManagerName(e.target.value)}
+                          placeholder="홍길동" disabled={step === "saving"}
+                          className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50" />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="block text-xs font-medium text-gray-600">담당자연락처</label>
+                        <input value={managerPhone} onChange={(e) => setManagerPhone(e.target.value)}
+                          placeholder="010-0000-0000" disabled={step === "saving"}
+                          className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50" />
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="block text-xs font-medium text-gray-600">담당자이메일</label>
+                      <input value={managerEmail} onChange={(e) => setManagerEmail(e.target.value)}
+                        type="email" placeholder="example@email.com" disabled={step === "saving"}
+                        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="block text-xs font-medium text-gray-600">비고(메모)</label>
+                      <textarea value={memo} onChange={(e) => setMemo(e.target.value)}
+                        placeholder="메모를 입력하세요" rows={2} disabled={step === "saving"}
+                        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50 resize-none" />
+                    </div>
+                  </div>
+
                   <div className="space-y-2">
                     <label className="block text-xs font-medium text-gray-600">서류 첨부 (선택)</label>
                     <FileInput label="CSO신고증" file={csoFile} onChange={setCsoFile} inputRef={csoRef} />
@@ -472,23 +593,109 @@ export default function BizDealersPage() {
               )}
             </div>
 
-            <div className="px-6 pb-5 flex gap-2 justify-end">
-              <button
-                onClick={() => setModal(false)}
-                className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50"
-              >
-                취소
-              </button>
-              {(step === "form" || step === "saving") && (
-                <button
-                  onClick={handleAdd}
-                  disabled={step === "saving"}
-                  className="px-5 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5"
-                >
-                  {step === "saving" && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  등록
-                </button>
+            <div className="px-6 pb-5 flex gap-2 justify-end shrink-0 border-t border-gray-100 pt-4">
+              {step === "found" ? (
+                <button onClick={() => setModal(false)}
+                  className="px-5 py-2 text-sm font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg">닫기</button>
+              ) : (
+                <>
+                  <button onClick={() => setModal(false)}
+                    className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">취소</button>
+                  {(step === "form" || step === "saving") && (
+                    <button onClick={handleAdd} disabled={step === "saving"}
+                      className="px-5 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5">
+                      {step === "saving" && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                      등록
+                    </button>
+                  )}
+                </>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 수정 모달 */}
+      {editModal && editTarget && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100 shrink-0">
+              <h2 className="font-semibold text-gray-900">거래처 정보 수정</h2>
+              <button onClick={() => setEditModal(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="px-6 py-5 space-y-4 overflow-y-auto">
+              <div className="bg-gray-50 rounded-lg px-3 py-2 text-xs text-gray-500">
+                사업자번호: <span className="font-mono font-medium text-gray-700">{formatBiz(editTarget.bizNumber)}</span>
+              </div>
+
+              {editError && (
+                <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{editError}</p>
+              )}
+
+              <FieldInput label="거래처명 *" value={editName} onChange={setEditName} placeholder="거래처명 입력" />
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-medium text-gray-600">유형</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {TYPE_ORDER.map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setEditType(t)}
+                      className={`px-3 py-2 text-xs rounded-lg border font-medium transition-colors text-left ${
+                        editType === t
+                          ? `${DEALER_COLORS[t]} border-transparent`
+                          : "border-gray-200 text-gray-600 hover:bg-gray-50"
+                      }`}
+                    >
+                      {DEALER_LABELS[t]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="border-t border-gray-100 pt-3 space-y-3">
+                <p className="text-xs font-semibold text-gray-500">담당자 정보</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <label className="block text-xs font-medium text-gray-600">담당자명</label>
+                    <input value={editManagerName} onChange={(e) => setEditManagerName(e.target.value)}
+                      placeholder="홍길동"
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-xs font-medium text-gray-600">담당자연락처</label>
+                    <input value={editManagerPhone} onChange={(e) => setEditManagerPhone(e.target.value)}
+                      placeholder="010-0000-0000"
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-xs font-medium text-gray-600">담당자이메일</label>
+                  <input value={editManagerEmail} onChange={(e) => setEditManagerEmail(e.target.value)}
+                    type="email" placeholder="example@email.com"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-xs font-medium text-gray-600">비고(메모)</label>
+                  <textarea value={editMemo} onChange={(e) => setEditMemo(e.target.value)}
+                    placeholder="메모를 입력하세요" rows={2}
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 pb-5 flex gap-2 justify-end shrink-0 border-t border-gray-100 pt-4">
+              <button onClick={() => setEditModal(false)}
+                className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">취소</button>
+              <button onClick={handleEditSave} disabled={editSaving}
+                className="px-5 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5">
+                {editSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                저장
+              </button>
             </div>
           </div>
         </div>

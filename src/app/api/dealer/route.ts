@@ -5,6 +5,15 @@ import { BUCKETS, persistDataUri } from "@/lib/storage";
 
 const VALID_TYPES = ["CORPORATION", "INDIVIDUAL", "UPPER_CORP", "LOWER_CORP", "SELF", null];
 
+const FULL_SELECT = {
+  id: true, clientName: true, bizNumber: true, dealerType: true, approved: true,
+  managerName: true, managerPhone: true, managerEmail: true, memo: true,
+} as const;
+
+const SAFE_SELECT = {
+  id: true, clientName: true, bizNumber: true, dealerType: true, approved: true,
+} as const;
+
 // GET /api/dealer              → 딜러 목록 (dealerType 있는 UserClient만)
 // GET /api/dealer?bizNumber=xxx → 사업자번호 중복 조회
 export async function GET(req: NextRequest) {
@@ -13,27 +22,40 @@ export async function GET(req: NextRequest) {
 
   const raw = req.nextUrl.searchParams.get("bizNumber");
 
-  // bizNumber 중복 조회 모드
   if (raw) {
-    const bizNumber = raw.replace(/\D/g, "");
-    const client = await prisma.userClient.findUnique({
-      where: { userId_bizNumber: { userId: user.id, bizNumber } },
+    const stripped = raw.replace(/\D/g, "");
+    const fmt = stripped.length === 10
+      ? `${stripped.slice(0, 3)}-${stripped.slice(3, 5)}-${stripped.slice(5)}`
+      : stripped;
+    const client = await prisma.userClient.findFirst({
+      where: {
+        userId: user.id,
+        dealerType: { not: null },
+        OR: [{ bizNumber: stripped }, { bizNumber: fmt }],
+      },
       select: { id: true, clientName: true, bizNumber: true, dealerType: true },
     });
     return NextResponse.json({ found: !!client, client: client ?? null });
   }
 
-  // 목록 모드: 딜러로 등록된 UserClient만 반환
   try {
     const rows = await prisma.userClient.findMany({
       where: { userId: user.id, dealerType: { not: null } },
-      select: { id: true, clientName: true, bizNumber: true, dealerType: true, approved: true },
+      select: FULL_SELECT,
       orderBy: { clientName: "asc" },
     });
     return NextResponse.json(rows);
   } catch {
-    // dealerType 컬럼이 아직 DB에 없음 — 마이그레이션 필요
-    return NextResponse.json([]);
+    try {
+      const rows = await prisma.userClient.findMany({
+        where: { userId: user.id, dealerType: { not: null } },
+        select: SAFE_SELECT,
+        orderBy: { clientName: "asc" },
+      });
+      return NextResponse.json(rows);
+    } catch {
+      return NextResponse.json([]);
+    }
   }
 }
 
@@ -47,6 +69,7 @@ export async function POST(req: NextRequest) {
     bizDocument, bizFileName,
     csoDocument, csoFileName,
     accountDocument, accountFileName,
+    managerName, managerPhone, managerEmail, memo,
   } = await req.json();
 
   if (!clientName || !bizNumber) {
@@ -81,8 +104,12 @@ export async function POST(req: NextRequest) {
         csoFileName: csoFileName ?? null,
         accountFileKey: accountFileKey ?? null,
         accountFileName: accountFileName ?? null,
+        managerName: managerName ?? null,
+        managerPhone: managerPhone ?? null,
+        managerEmail: managerEmail ?? null,
+        memo: memo ?? null,
       },
-      select: { id: true, clientName: true, bizNumber: true, dealerType: true, approved: true },
+      select: FULL_SELECT,
     });
     return NextResponse.json(row, { status: 201 });
   } catch (err) {
@@ -90,11 +117,37 @@ export async function POST(req: NextRequest) {
     if (msg.includes("Unique constraint")) {
       return NextResponse.json({ error: "이미 등록된 사업자번호예요." }, { status: 409 });
     }
+    // fallback: try without new columns
+    if (msg.includes("column") || msg.includes("field")) {
+      try {
+        const row = await prisma.userClient.create({
+          data: {
+            userId: user.id,
+            clientName: String(clientName).trim(),
+            bizNumber: String(bizNumber).replace(/\D/g, ""),
+            dealerType: dealerType ?? null,
+            approved: true,
+            bizDocument: bizDocFallback,
+            bizFileKey: bizFileKey ?? null,
+            bizFileName: bizFileName ?? null,
+            csoFileKey: csoFileKey ?? null,
+            csoFileName: csoFileName ?? null,
+            accountFileKey: accountFileKey ?? null,
+            accountFileName: accountFileName ?? null,
+          },
+          select: SAFE_SELECT,
+        });
+        return NextResponse.json(row, { status: 201 });
+      } catch (e2) {
+        const m2 = e2 instanceof Error ? e2.message : String(e2);
+        return NextResponse.json({ error: m2 }, { status: 500 });
+      }
+    }
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
 
-// PATCH /api/dealer?id=xxx  { dealerType }
+// PATCH /api/dealer?id=xxx
 export async function PATCH(req: NextRequest) {
   const user = await requireRole("BIZ");
   if (isNextResponse(user)) return user;
@@ -102,8 +155,10 @@ export async function PATCH(req: NextRequest) {
   const id = req.nextUrl.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id 필요" }, { status: 400 });
 
-  const { dealerType } = await req.json();
-  if (!VALID_TYPES.includes(dealerType)) {
+  const body = await req.json();
+  const { dealerType, clientName, managerName, managerPhone, managerEmail, memo } = body;
+
+  if (dealerType !== undefined && !VALID_TYPES.includes(dealerType)) {
     return NextResponse.json({ error: "유효하지 않은 딜러 유형" }, { status: 400 });
   }
 
@@ -111,12 +166,39 @@ export async function PATCH(req: NextRequest) {
   if (!client) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
   if (client.userId !== user.id) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
-  const updated = await prisma.userClient.update({
-    where: { id },
-    data: { dealerType: dealerType ?? null },
-    select: { id: true, clientName: true, bizNumber: true, dealerType: true },
-  });
-  return NextResponse.json(updated);
+  // Only include fields that were explicitly provided so TypeDropdown (dealerType-only) doesn't null others
+  const data: Record<string, unknown> = {};
+  if (dealerType !== undefined) data.dealerType = dealerType ?? null;
+  if (clientName !== undefined) data.clientName = String(clientName).trim();
+  if (managerName !== undefined) data.managerName = managerName ?? null;
+  if (managerPhone !== undefined) data.managerPhone = managerPhone ?? null;
+  if (managerEmail !== undefined) data.managerEmail = managerEmail ?? null;
+  if (memo !== undefined) data.memo = memo ?? null;
+
+  try {
+    const updated = await prisma.userClient.update({
+      where: { id },
+      data,
+      select: FULL_SELECT,
+    });
+    return NextResponse.json(updated);
+  } catch {
+    // Fallback: update only safe columns if new ones aren't in DB yet
+    const safeData: Record<string, unknown> = {};
+    if (data.dealerType !== undefined) safeData.dealerType = data.dealerType;
+    if (data.clientName !== undefined) safeData.clientName = data.clientName;
+    try {
+      const updated = await prisma.userClient.update({
+        where: { id },
+        data: safeData,
+        select: SAFE_SELECT,
+      });
+      return NextResponse.json(updated);
+    } catch (e2) {
+      const msg = e2 instanceof Error ? e2.message : String(e2);
+      return NextResponse.json({ error: msg }, { status: 500 });
+    }
+  }
 }
 
 // DELETE /api/dealer?id=xxx

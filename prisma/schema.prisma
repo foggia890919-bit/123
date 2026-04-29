@@ -80,9 +80,13 @@ model UserClient {
   csoFileName     String?
   accountFileKey  String?   // 계좌사본
   accountFileName String?
-  dealerType  DealerType?
-  approved    Boolean    @default(false)
-  createdAt   DateTime   @default(now())
+  dealerType   DealerType?
+  managerName  String?
+  managerPhone String?
+  managerEmail String?
+  memo         String?
+  approved     Boolean    @default(false)
+  createdAt    DateTime   @default(now())
   proposals             Proposal[]
   prescriptionReports   PrescriptionReport[]
 
