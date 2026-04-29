@@ -51,6 +51,8 @@ export default function BizClientsPage() {
   const [newBizNum, setNewBizNum] = useState("");
   const [formError, setFormError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const uploadRef = useRef<HTMLInputElement>(null);
+  const [uploadingForId, setUploadingForId] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const sugBoxRef = useRef<HTMLDivElement>(null);
 
@@ -194,6 +196,26 @@ export default function BizClientsPage() {
     }
   }
 
+  async function handleDocUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !uploadingForId) return;
+    const fr = new FileReader();
+    fr.onload = async () => {
+      const bizDocument = fr.result as string;
+      const res = await fetch(`/api/user-clients?id=${uploadingForId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bizDocument, bizFileName: file.name }),
+      });
+      if (res.ok) {
+        setClients((prev) => prev.map((c) => c.id === uploadingForId ? { ...c, bizFileName: file.name } : c));
+      }
+      setUploadingForId(null);
+    };
+    fr.readAsDataURL(file);
+  }
+
   async function handleDelete(id: string, name: string) {
     if (!confirm(`"${name}"을(를) 삭제할까요?`)) return;
     await fetch(`/api/user-clients?id=${id}`, { method: "DELETE" });
@@ -232,6 +254,8 @@ export default function BizClientsPage() {
           />
         </div>
 
+        <input ref={uploadRef} type="file" accept=".pdf,image/*" className="hidden" onChange={handleDocUpload} />
+
         {loading ? (
           <div className="flex justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>
         ) : filtered.length === 0 ? (
@@ -244,7 +268,7 @@ export default function BizClientsPage() {
               <span>병의원명</span>
               <span className="text-center w-32">사업자번호</span>
               <span className="text-center w-20">상태</span>
-              <span className="w-8" />
+              <span className="w-16" />
             </div>
             <div className="divide-y divide-gray-50">
               {filtered.map((c) => (
@@ -266,10 +290,19 @@ export default function BizClientsPage() {
                       <span className="flex items-center gap-1 text-xs text-yellow-600 font-medium"><Clock className="w-3.5 h-3.5" /> 대기</span>
                     )}
                   </div>
-                  <button onClick={() => handleDelete(c.id, c.clientName)}
-                    className="w-8 flex justify-end text-gray-300 hover:text-red-500 transition-colors">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <div className="w-16 flex justify-end items-center gap-1">
+                    <button
+                      onClick={() => { setUploadingForId(c.id); uploadRef.current?.click(); }}
+                      className="text-gray-300 hover:text-blue-500 transition-colors"
+                      title="사업자등록증 업로드"
+                    >
+                      <Upload className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => handleDelete(c.id, c.clientName)}
+                      className="text-gray-300 hover:text-red-500 transition-colors">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

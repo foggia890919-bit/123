@@ -2994,6 +2994,7 @@ interface AdminUserClient {
   approved: boolean;
   createdAt: string;
   userId: string;
+  dealerType?: string | null;
   user: { name: string | null; email: string };
 }
 
@@ -3003,6 +3004,8 @@ function UserClientsTab() {
   const [query, setQuery] = useState("");
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [clientTab, setClientTab] = useState<"approved" | "unapproved">("unapproved");
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const uploadRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { load(); }, []);
 
@@ -3062,10 +3065,31 @@ function UserClientsTab() {
     a.click();
   }
 
+  async function handleDocUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !uploadingId) return;
+    const fr = new FileReader();
+    fr.onload = async () => {
+      const bizDocument = fr.result as string;
+      const res = await fetch(`/api/user-clients?id=${uploadingId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bizDocument, bizFileName: file.name }),
+      });
+      if (res.ok) {
+        setRows((prev) => prev.map((r) => r.id === uploadingId ? { ...r, bizFileName: file.name, hasBizDocument: true } : r));
+      }
+      setUploadingId(null);
+    };
+    fr.readAsDataURL(file);
+  }
+
   if (loading) return <div className="py-16 text-center text-gray-400 text-sm">불러오는 중...</div>;
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <input ref={uploadRef} type="file" accept=".pdf,image/*" className="hidden" onChange={handleDocUpload} />
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-gray-800">담당자별 거래처 등록 현황 ({rows.length}건)</h2>
@@ -3116,6 +3140,7 @@ function UserClientsTab() {
                 <th className="px-4 py-3 text-left">아이디(이메일)</th>
                 <th className="px-4 py-3 text-left">거래처명</th>
                 <th className="px-4 py-3 text-left">사업자번호</th>
+                <th className="px-4 py-3 text-left">구분</th>
                 <th className="px-4 py-3 text-left">사업자등록증</th>
                 <th className="px-4 py-3 text-center">등록일</th>
                 <th className="px-4 py-3 text-center">승인</th>
@@ -3137,11 +3162,27 @@ function UserClientsTab() {
                     <td className="px-4 py-3 text-gray-800">{c.clientName}</td>
                     <td className="px-4 py-3 text-gray-600 text-xs font-mono">{c.bizNumber}</td>
                     <td className="px-4 py-3 text-xs">
-                      {(c.bizDocument || c.hasBizDocument || c.bizFileName) ? (
-                        <button onClick={() => downloadDoc(c)} className="text-blue-600 hover:underline">
-                          {c.bizFileName || "다운로드"}
+                      {c.dealerType ? (
+                        <span className="px-1.5 py-0.5 bg-purple-50 text-purple-700 rounded text-[10px] font-medium">{c.dealerType}</span>
+                      ) : (
+                        <span className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px] font-medium">병의원</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-xs">
+                      <div className="flex items-center gap-2">
+                        {(c.bizDocument || c.hasBizDocument || c.bizFileName) ? (
+                          <button onClick={() => downloadDoc(c)} className="text-blue-600 hover:underline">
+                            {c.bizFileName || "다운로드"}
+                          </button>
+                        ) : <span className="text-gray-300">없음</span>}
+                        <button
+                          onClick={() => { setUploadingId(c.id); uploadRef.current?.click(); }}
+                          className="text-gray-300 hover:text-blue-500 transition-colors"
+                          title="사업자등록증 업로드"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
                         </button>
-                      ) : <span className="text-gray-300">없음</span>}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-center text-gray-400 text-xs whitespace-nowrap">
                       {new Date(c.createdAt).toLocaleDateString("ko-KR")}
@@ -3163,7 +3204,7 @@ function UserClientsTab() {
                 ))
               ))}
               {filtered.length === 0 && query && (
-                <tr><td colSpan={7} className="py-12 text-center text-gray-400 text-sm">검색 결과가 없어요.</td></tr>
+                <tr><td colSpan={8} className="py-12 text-center text-gray-400 text-sm">검색 결과가 없어요.</td></tr>
               )}
             </tbody>
           </table>
