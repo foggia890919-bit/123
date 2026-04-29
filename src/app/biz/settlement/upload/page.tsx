@@ -183,8 +183,8 @@ function CorpUploadRow({
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold text-gray-800">{corp}</span>
           {template
-            ? <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full">매핑완료</span>
-            : <span className="text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded-full">매핑없음</span>}
+            ? <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full">컬럼 매핑 완료</span>
+            : <span className="text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded-full">컬럼 매핑 없음</span>}
         </div>
         <button onClick={onRemove} className="text-gray-300 hover:text-red-500 transition-colors">
           <X className="w-4 h-4" />
