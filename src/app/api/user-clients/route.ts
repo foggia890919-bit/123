@@ -96,7 +96,7 @@ export async function POST(req: NextRequest) {
       data: {
         userId: user.id,
         clientName: String(clientName).trim(),
-        bizNumber: String(bizNumber).trim(),
+        bizNumber: String(bizNumber).replace(/\D/g, ""),
         bizDocument: bizDocumentFallback,
         bizFileKey,
         bizFileName: bizFileName || null,
