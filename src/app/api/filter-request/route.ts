@@ -9,7 +9,6 @@ export async function GET(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
   const all = req.nextUrl.searchParams.get("all") === "true";
-  // Exclude heavy bizDocument from list responses — download via /api/files/filter-request/[id]
   const select = {
     id: true, userId: true, userName: true, clientName: true, bizNumber: true,
     bizFileName: true, bizFileKey: true, companyName: true, status: true,
@@ -19,20 +18,52 @@ export async function GET(req: NextRequest) {
     upperCorpName: true, lowerCorpName: true,
     mapping: { select: { managerName: true, managerPhone: true } },
   } as const;
-  if (all) {
-    if (user.role !== "ADMIN") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
-    const requests = await prisma.filterRequest.findMany({
-      orderBy: { createdAt: "desc" },
-      select: { ...select, user: { select: { name: true, email: true } } },
-    });
-    return NextResponse.json(requests.map((r) => ({ ...r, bizDocument: null, hasBizDocument: !!r.bizFileName })));
+
+  const rawRequests = all
+    ? (user.role !== "ADMIN"
+        ? null
+        : await prisma.filterRequest.findMany({
+            orderBy: { createdAt: "desc" },
+            select: { ...select, user: { select: { name: true, email: true } } },
+          }))
+    : await prisma.filterRequest.findMany({
+        where: { userId: user.id },
+        orderBy: { createdAt: "desc" },
+        select: { ...select, user: { select: { name: true, email: true } } },
+      });
+
+  if (rawRequests === null) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+
+  // 상위법인 연락처를 UserClient에서 실시간 조회 (FilterMapping 복사본보다 우선)
+  const corpNames = [...new Set(rawRequests.map((r) => r.upperCorpName).filter(Boolean))] as string[];
+  let livePhoneMap = new Map<string, { managerName: string | null; managerPhone: string | null }>();
+  if (corpNames.length > 0) {
+    try {
+      const dealers = await prisma.userClient.findMany({
+        where: { clientName: { in: corpNames }, dealerType: { not: null } },
+        select: { clientName: true, managerName: true, managerPhone: true },
+        distinct: ["clientName"],
+      });
+      livePhoneMap = new Map(dealers.map((d) => [d.clientName, { managerName: d.managerName, managerPhone: d.managerPhone }]));
+    } catch {
+      // managerPhone 컬럼 미존재 시 fallback
+    }
   }
-  const requests = await prisma.filterRequest.findMany({
-    where: { userId: user.id },
-    orderBy: { createdAt: "desc" },
-    select: { ...select, user: { select: { name: true, email: true } } },
+
+  const requests = rawRequests.map((r) => {
+    const live = r.upperCorpName ? livePhoneMap.get(r.upperCorpName) : null;
+    return {
+      ...r,
+      bizDocument: null,
+      hasBizDocument: !!r.bizFileName,
+      mapping: {
+        managerName: live?.managerName ?? r.mapping?.managerName ?? null,
+        managerPhone: live?.managerPhone ?? r.mapping?.managerPhone ?? null,
+      },
+    };
   });
-  return NextResponse.json(requests.map((r) => ({ ...r, bizDocument: null, hasBizDocument: !!r.bizFileName })));
+
+  return NextResponse.json(requests);
 }
 
 export async function POST(req: NextRequest) {
