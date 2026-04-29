@@ -24,6 +24,7 @@ export async function GET(req: NextRequest) {
       ingredientName: true,
       companyName: true,
       insuranceCode: true,
+      ingredientCode: true,
       commissionRate: true,
       source: true,
       isSettlement: true,
@@ -33,10 +34,28 @@ export async function GET(req: NextRequest) {
     orderBy: [{ productName: "asc" }, { source: "asc" }],
   });
 
+  // ingredientCode가 있는 첫 번째 row로 동일성분 전체 카운트 조회
+  const sampleCode = rows.find((r) => r.ingredientCode)?.ingredientCode ?? null;
+  const sameIngredientCount = sampleCode
+    ? await prisma.medication.count({ where: { ingredientCode: sampleCode } })
+    : null;
+
+  // 동일 제품명(ingredientName)에서 ingredientCode가 null인 항목 조회
+  const nullCodeRows = rows
+    .filter((r) => r.ingredientCode === null)
+    .map((r) => ({ id: r.id, productName: r.productName, companyName: r.companyName, insuranceCode: r.insuranceCode, source: r.source }));
+
   return NextResponse.json({
     q,
     total: rows.length,
     rows,
+    ingredientCodeBreakdown: {
+      sampleIngredientCode: sampleCode,
+      totalWithSameCode: sameIngredientCount,
+      withCode: rows.filter((r) => r.ingredientCode !== null).length,
+      withoutCode: rows.filter((r) => r.ingredientCode === null).length,
+      nullCodeItems: nullCodeRows,
+    },
     summary: {
       withRate: rows.filter((r) => r.commissionRate !== null).length,
       withoutRate: rows.filter((r) => r.commissionRate === null).length,

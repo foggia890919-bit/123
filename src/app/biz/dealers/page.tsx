@@ -191,13 +191,27 @@ export default function BizDealersPage() {
         {/* 계층 안내 */}
         <div className="bg-blue-50 border border-blue-100 rounded-xl p-3">
           <p className="text-xs font-semibold text-blue-700 mb-1.5">계층 구조</p>
-          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs mb-3">
             {TYPE_ORDER.map((t, i) => (
               <span key={t} className="flex items-center gap-1">
                 <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${DEALER_COLORS[t]}`}>{DEALER_LABELS[t]}</span>
                 {i < TYPE_ORDER.length - 1 && <span className="text-blue-300">→</span>}
               </span>
             ))}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div className="flex gap-2">
+              <span className={`shrink-0 px-2 py-0.5 rounded-full text-xs font-medium h-fit ${DEALER_COLORS["CORPORATION"]}`}>법인</span>
+              <p className="text-xs text-blue-700/70">없어도 됨</p>
+            </div>
+            <div className="flex gap-2">
+              <span className={`shrink-0 px-2 py-0.5 rounded-full text-xs font-medium h-fit ${DEALER_COLORS["UPPER_CORP"]}`}>상위법인</span>
+              <p className="text-xs text-blue-700/70">통계 및 필터링 요청하는 법인</p>
+            </div>
+            <div className="flex gap-2">
+              <span className={`shrink-0 px-2 py-0.5 rounded-full text-xs font-medium h-fit ${DEALER_COLORS["LOWER_CORP"]}`}>하위법인</span>
+              <p className="text-xs text-blue-700/70">통계 및 필터링을 자사로 요청하는 법인, 자사에서 내역서 및 수수료율을 제공</p>
+            </div>
           </div>
         </div>
 
