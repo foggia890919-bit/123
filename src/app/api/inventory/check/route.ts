@@ -160,7 +160,7 @@ export async function POST(req: NextRequest) {
         }
       }
       if (snapshots.length > 0) {
-        await prisma.inventorySnapshot.createMany({ data: snapshots }).catch(err => {
+        await prisma.inventorySnapshot.createMany({ data: snapshots, skipDuplicates: true }).catch(err => {
           console.error("[inventory/check] persist live snapshots failed:", err);
         });
       }
