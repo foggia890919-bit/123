@@ -145,8 +145,8 @@ function Autocomplete<T>({
   );
 }
 
-// ── 메인 페이지 ───────────────────────────────────────────────
-export default function FilterMappingPage() {
+// ── 메인 컨텐츠 (탭 임베드용 named export) ───────────────────
+export function FilterMappingContent() {
   const [mappings, setMappings] = useState<FilterMapping[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -237,8 +237,7 @@ export default function FilterMappingPage() {
   });
 
   return (
-    <BizLayout>
-      <div className="space-y-5">
+    <><div className="space-y-5">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-gray-900">필터링 매핑 관리</h1>
@@ -454,8 +453,12 @@ export default function FilterMappingPage() {
           </div>
         </div>
       )}
-    </BizLayout>
+    </>
   );
+}
+
+export default function FilterMappingPage() {
+  return <BizLayout><FilterMappingContent /></BizLayout>;
 }
 
 function Th({ children }: { children: React.ReactNode }) {

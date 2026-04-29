@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Loader2, Search, CheckCircle, XCircle, Clock, Filter, ChevronDown, AlertCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { BizLayout } from "../page";
+import { FilterMappingContent } from "../filter-mapping/page";
 
 interface FilterRow {
   id: string;
@@ -216,10 +217,13 @@ function countFilter(rows: FilterRow[], f: ResultFilter): number {
   return f === "ALL" ? rows.length : rows.filter((r) => matchesFilter(r, f)).length;
 }
 
+type PageTab = "status" | "mapping";
+
 // ── 메인 페이지 ──────────────────────────────────────────────
 export default function FilterStatusPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
+  const [tab, setTab] = useState<PageTab>("status");
   const [rows, setRows] = useState<FilterRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
@@ -291,7 +295,21 @@ export default function FilterStatusPage() {
 
   return (
     <BizLayout>
-      <div className="space-y-4">
+      {/* 탭 헤더 */}
+      <div className="flex border-b border-gray-200 mb-5 gap-0">
+        {([["status", "필터링 현황"], ["mapping", "매핑 관리"]] as [PageTab, string][]).map(([key, label]) => (
+          <button key={key} onClick={() => setTab(key)}
+            className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+              tab === key ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-800"
+            }`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "mapping" && <FilterMappingContent />}
+
+      {tab === "status" && <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-bold text-gray-900">필터링 현황</h2>
@@ -395,7 +413,7 @@ export default function FilterStatusPage() {
             })}
           </div>
         )}
-      </div>
+      </div>}
     </BizLayout>
   );
 }
