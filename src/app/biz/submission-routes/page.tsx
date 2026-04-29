@@ -19,6 +19,10 @@ import {
   RefreshCw,
   ChevronDown,
   ChevronUp,
+  Calendar,
+  CheckSquare,
+  Square,
+  Mail,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 
@@ -28,6 +32,7 @@ interface SubmissionRoute {
   companyName: string;
   submissionEntity: string;
   submissionEmail: string | null;
+  requestType: string; // "신규" | "이관"
   memo: string | null;
   active: boolean;
   createdAt: string;
@@ -38,6 +43,7 @@ const EMPTY_FORM = {
   companyName: "",
   submissionEntity: "",
   submissionEmail: "",
+  requestType: "신규" as "신규" | "이관",
   memo: "",
 };
 
@@ -71,17 +77,18 @@ function Field({
 // ── 엑셀 다운로드 ──────────────────────────────────────────────
 
 function downloadXlsx(routes: SubmissionRoute[]) {
-  const header = ["거래처", "제약사", "제출처", "이메일", "메모"];
+  const header = ["거래처", "제약사", "제출처", "이메일", "구분(신규/이관)", "메모"];
   const rows = routes.map((r) => [
     r.clientName,
     r.companyName,
     r.submissionEntity,
     r.submissionEmail ?? "",
+    r.requestType ?? "신규",
     r.memo ?? "",
   ]);
 
   const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
-  ws["!cols"] = [18, 18, 18, 24, 30].map((w) => ({ wch: w }));
+  ws["!cols"] = [18, 18, 18, 24, 14, 30].map((w) => ({ wch: w }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "통계제출처");
   XLSX.writeFile(wb, "통계제출처_목록.xlsx");
@@ -173,7 +180,7 @@ export function SubmissionRoutesContent() {
       });
       const [, ...dataRows] = raw; // 헤더행 skip
 
-      // A=거래처, B=제약사, C=제출처, D=이메일, E=메모
+      // A=거래처, B=제약사, C=제출처, D=이메일, E=구분(신규/이관), F=메모
       const rows = dataRows
         .filter(
           (r) =>
@@ -181,13 +188,18 @@ export function SubmissionRoutesContent() {
             String(r[1] ?? "").trim() &&
             String(r[2] ?? "").trim()
         )
-        .map((r) => ({
-          clientName: String(r[0]).trim(),
-          companyName: String(r[1]).trim(),
-          submissionEntity: String(r[2]).trim(),
-          submissionEmail: String(r[3] ?? "").trim() || null,
-          memo: String(r[4] ?? "").trim() || null,
-        }));
+        .map((r) => {
+          const rtRaw = String(r[4] ?? "").trim();
+          const requestType = rtRaw === "이관" ? "이관" : "신규";
+          return {
+            clientName: String(r[0]).trim(),
+            companyName: String(r[1]).trim(),
+            submissionEntity: String(r[2]).trim(),
+            submissionEmail: String(r[3] ?? "").trim() || null,
+            requestType,
+            memo: String(r[5] ?? "").trim() || null,
+          };
+        });
 
       if (rows.length === 0) {
         alert(
@@ -241,6 +253,7 @@ export function SubmissionRoutesContent() {
       companyName: r.companyName,
       submissionEntity: r.submissionEntity,
       submissionEmail: r.submissionEmail ?? "",
+      requestType: r.requestType === "이관" ? "이관" : "신규",
       memo: r.memo ?? "",
     });
     setEditTarget(r);
@@ -266,6 +279,7 @@ export function SubmissionRoutesContent() {
               id: editTarget!.id,
               submissionEntity: form.submissionEntity,
               submissionEmail: form.submissionEmail || null,
+              requestType: form.requestType,
               memo: form.memo || null,
             }
           : {
@@ -273,6 +287,7 @@ export function SubmissionRoutesContent() {
               companyName: form.companyName,
               submissionEntity: form.submissionEntity,
               submissionEmail: form.submissionEmail || null,
+              requestType: form.requestType,
               memo: form.memo || null,
             };
 
@@ -450,6 +465,7 @@ export function SubmissionRoutesContent() {
                     <Th>제약사</Th>
                     <Th>제출처(법인)</Th>
                     <Th>이메일</Th>
+                    <Th>구분</Th>
                     <Th>메모</Th>
                     <Th>상태</Th>
                     <Th>관리</Th>
@@ -474,6 +490,17 @@ export function SubmissionRoutesContent() {
                       </td>
                       <td className="px-4 py-3 text-gray-600 font-mono text-xs">
                         {r.submissionEmail || "-"}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                            r.requestType === "이관"
+                              ? "bg-amber-50 text-amber-700"
+                              : "bg-blue-50 text-blue-700"
+                          }`}
+                        >
+                          {r.requestType === "이관" ? "이관" : "신규"}
+                        </span>
                       </td>
                       <td className="px-4 py-3 text-gray-500 max-w-[200px] truncate">
                         {r.memo || "-"}
@@ -606,6 +633,22 @@ export function SubmissionRoutesContent() {
                 />
               </Field>
 
+              <Field label="구분 (정산 시 추가수수료 적용 여부)">
+                <select
+                  value={form.requestType}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      requestType: e.target.value === "이관" ? "이관" : "신규",
+                    }))
+                  }
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                >
+                  <option value="신규">신규처 — 추가수수료 지급</option>
+                  <option value="이관">이관처 — 추가수수료 미지급</option>
+                </select>
+              </Field>
+
               <Field label="메모">
                 <textarea
                   value={form.memo}
@@ -653,11 +696,18 @@ interface EntityStatus {
   missing: { clientName: string; companyName: string }[];
 }
 
+interface UnmappedItem {
+  clientName: string;
+  companyName: string;
+}
+
 function EntityStatusTab() {
   const [entities, setEntities] = useState<EntityStatus[]>([]);
+  const [unmapped, setUnmapped] = useState<UnmappedItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [zipLoading, setZipLoading] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [unmappedExpanded, setUnmappedExpanded] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -665,6 +715,7 @@ function EntityStatusTab() {
       const res = await fetch("/api/submission-routes/check");
       const data = await res.json();
       setEntities(Array.isArray(data?.entities) ? data.entities : []);
+      setUnmapped(Array.isArray(data?.unmapped) ? data.unmapped : []);
     } finally {
       setLoading(false);
     }
@@ -712,9 +763,9 @@ function EntityStatusTab() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-gray-900">제출 현황</h1>
+          <h1 className="text-xl font-bold text-gray-900">사업자등록증 현황</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            제출처별 사업자등록증 매칭 현황 및 ZIP 일괄 다운로드
+            제출처별 매칭 현황 + ZIP 일괄 다운로드 + 제출처 미매핑 거래처
           </p>
         </div>
         <button
@@ -730,6 +781,41 @@ function EntityStatusTab() {
           새로고침
         </button>
       </div>
+
+      {!loading && unmapped.length > 0 && (
+        <div className="bg-orange-50 border border-orange-200 rounded-xl overflow-hidden">
+          <button
+            onClick={() => setUnmappedExpanded((v) => !v)}
+            className="w-full flex items-center justify-between px-5 py-4 hover:bg-orange-100/50 transition-colors text-left"
+          >
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-orange-600" />
+              <span className="font-semibold text-orange-800">
+                제출처 미매핑 거래처 {unmapped.length}건
+              </span>
+              <span className="text-xs text-orange-600">
+                (사업자등록증은 있지만 통계 제출처가 등록되지 않음)
+              </span>
+            </div>
+            {unmappedExpanded ? (
+              <ChevronUp className="w-4 h-4 text-orange-600" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-orange-600" />
+            )}
+          </button>
+          {unmappedExpanded && (
+            <ul className="px-5 pb-4 text-xs text-orange-900 max-h-80 overflow-y-auto divide-y divide-orange-100 bg-white/60">
+              {unmapped.map((u, i) => (
+                <li key={i} className="py-2">
+                  <span className="font-medium">{u.clientName}</span>
+                  <span className="text-orange-400"> × </span>
+                  <span>{u.companyName}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center justify-center py-16 bg-white border border-gray-200 rounded-xl">
@@ -854,37 +940,407 @@ function EntityStatusTab() {
   );
 }
 
+// ── 월별 제출 체크리스트 탭 ──────────────────────────────────
+
+interface MonthlyItem {
+  id: string;
+  clientName: string;
+  companyName: string;
+  submissionEmail: string | null;
+  requestType: string;
+  submitted: boolean;
+  submittedAt: string | null;
+  memo: string | null;
+}
+
+interface MonthlyGroup {
+  submissionEntity: string;
+  total: number;
+  submitted: number;
+  items: MonthlyItem[];
+}
+
+function currentYearMonth(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function shiftYearMonth(ym: string, delta: number): string {
+  const [y, m] = ym.split("-").map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function MonthlyChecklistTab() {
+  const [yearMonth, setYearMonth] = useState<string>(currentYearMonth());
+  const [groups, setGroups] = useState<MonthlyGroup[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [showOnlyPending, setShowOnlyPending] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(
+        `/api/submission-routes/monthly?yearMonth=${yearMonth}`
+      );
+      const data = await res.json();
+      setGroups(Array.isArray(data?.groups) ? data.groups : []);
+    } finally {
+      setLoading(false);
+    }
+  }, [yearMonth]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function toggleItem(item: MonthlyItem) {
+    setSavingId(item.id);
+    try {
+      const res = await fetch("/api/submission-routes/monthly", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          yearMonth,
+          submissionRouteId: item.id,
+          submitted: !item.submitted,
+        }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({ error: "저장 실패" }));
+        alert(d.error || "저장 실패");
+        return;
+      }
+      load();
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  async function bulkToggle(submissionEntity: string, submitted: boolean) {
+    setBulkBusy(submissionEntity);
+    try {
+      const res = await fetch("/api/submission-routes/monthly", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ yearMonth, submissionEntity, submitted }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({ error: "저장 실패" }));
+        alert(d.error || "저장 실패");
+        return;
+      }
+      load();
+    } finally {
+      setBulkBusy(null);
+    }
+  }
+
+  function toggleCollapse(entity: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(entity)) next.delete(entity);
+      else next.add(entity);
+      return next;
+    });
+  }
+
+  const totalRoutes = groups.reduce((s, g) => s + g.total, 0);
+  const totalSubmitted = groups.reduce((s, g) => s + g.submitted, 0);
+  const totalPending = totalRoutes - totalSubmitted;
+  const allDone = totalRoutes > 0 && totalPending === 0;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">월별 제출 체크</h1>
+          <p className="text-sm text-gray-500 mt-0.5">
+            매달 통계 제출 여부를 제출처별로 체크. 미제출 0건 달성이 목표.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setYearMonth((ym) => shiftYearMonth(ym, -1))}
+            className="px-2 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+            aria-label="이전 달"
+          >
+            ◀
+          </button>
+          <div className="flex items-center gap-1.5 px-3 py-2 text-sm font-semibold text-gray-800 bg-white border border-gray-200 rounded-lg">
+            <Calendar className="w-4 h-4 text-gray-400" />
+            <input
+              type="month"
+              value={yearMonth}
+              onChange={(e) =>
+                setYearMonth(e.target.value || currentYearMonth())
+              }
+              className="bg-transparent focus:outline-none w-32"
+            />
+          </div>
+          <button
+            onClick={() => setYearMonth((ym) => shiftYearMonth(ym, 1))}
+            className="px-2 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+            aria-label="다음 달"
+          >
+            ▶
+          </button>
+          <button
+            onClick={load}
+            disabled={loading}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+          >
+            {loading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <RefreshCw className="w-4 h-4" />
+            )}
+            새로고침
+          </button>
+        </div>
+      </div>
+
+      {/* 진행률 요약 */}
+      {!loading && totalRoutes > 0 && (
+        <div
+          className={`rounded-xl border px-5 py-4 ${
+            allDone
+              ? "bg-green-50 border-green-200"
+              : totalPending > 0
+              ? "bg-yellow-50 border-yellow-200"
+              : "bg-gray-50 border-gray-200"
+          }`}
+        >
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-2">
+              {allDone ? (
+                <CheckCircle className="w-5 h-5 text-green-600" />
+              ) : (
+                <AlertCircle className="w-5 h-5 text-yellow-600" />
+              )}
+              <span className="font-semibold text-gray-900">
+                {yearMonth} —{" "}
+                {allDone
+                  ? "모든 제출처 제출 완료"
+                  : `${totalPending}건 미제출 / 전체 ${totalRoutes}건`}
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setShowOnlyPending((v) => !v)}
+                className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                  showOnlyPending
+                    ? "bg-yellow-100 border-yellow-300 text-yellow-800"
+                    : "bg-white border-gray-200 text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                {showOnlyPending ? "미제출만 보기 ON" : "미제출만 보기"}
+              </button>
+              <div className="text-sm font-mono text-gray-700">
+                {totalSubmitted} / {totalRoutes}
+              </div>
+            </div>
+          </div>
+          <div className="mt-3 h-2 bg-white rounded-full overflow-hidden border border-gray-100">
+            <div
+              className={`h-full transition-all ${
+                allDone ? "bg-green-500" : "bg-yellow-400"
+              }`}
+              style={{
+                width: `${
+                  totalRoutes === 0 ? 0 : (totalSubmitted / totalRoutes) * 100
+                }%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* 제출처 그룹 */}
+      {loading ? (
+        <div className="flex items-center justify-center py-16 bg-white border border-gray-200 rounded-xl">
+          <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+        </div>
+      ) : groups.length === 0 ? (
+        <div className="text-center py-16 bg-white border border-gray-200 rounded-xl text-gray-400 text-sm">
+          등록된 제출처가 없어요. 먼저 &quot;제출처 목록&quot; 탭에서 추가해주세요.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {groups.map((g) => {
+            const allSubmitted = g.submitted === g.total;
+            const isCollapsed = collapsed.has(g.submissionEntity);
+            const visibleItems = showOnlyPending
+              ? g.items.filter((i) => !i.submitted)
+              : g.items;
+            if (showOnlyPending && visibleItems.length === 0) return null;
+            return (
+              <div
+                key={g.submissionEntity}
+                className={`bg-white border rounded-xl overflow-hidden ${
+                  allSubmitted ? "border-green-200" : "border-gray-200"
+                }`}
+              >
+                <div
+                  className={`flex items-center justify-between gap-3 px-5 py-3 ${
+                    allSubmitted ? "bg-green-50" : "bg-gray-50"
+                  } border-b ${
+                    allSubmitted ? "border-green-100" : "border-gray-100"
+                  }`}
+                >
+                  <button
+                    onClick={() => toggleCollapse(g.submissionEntity)}
+                    className="flex items-center gap-2 min-w-0 text-left"
+                  >
+                    {isCollapsed ? (
+                      <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" />
+                    ) : (
+                      <ChevronUp className="w-4 h-4 text-gray-400 shrink-0" />
+                    )}
+                    <span className="font-semibold text-gray-900 truncate">
+                      {g.submissionEntity}
+                    </span>
+                    <span
+                      className={`shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                        allSubmitted
+                          ? "bg-green-100 text-green-700"
+                          : g.submitted > 0
+                          ? "bg-yellow-100 text-yellow-700"
+                          : "bg-gray-100 text-gray-600"
+                      }`}
+                    >
+                      {g.submitted}/{g.total}
+                    </span>
+                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => bulkToggle(g.submissionEntity, true)}
+                      disabled={bulkBusy === g.submissionEntity || allSubmitted}
+                      className="px-3 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      전체 제출완료
+                    </button>
+                    <button
+                      onClick={() => bulkToggle(g.submissionEntity, false)}
+                      disabled={
+                        bulkBusy === g.submissionEntity || g.submitted === 0
+                      }
+                      className="px-3 py-1.5 text-xs font-medium text-gray-600 border border-gray-200 hover:bg-gray-50 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      전체 해제
+                    </button>
+                  </div>
+                </div>
+
+                {!isCollapsed && (
+                  <ul className="divide-y divide-gray-50">
+                    {visibleItems.map((item) => (
+                      <li
+                        key={item.id}
+                        className={`flex items-center gap-3 px-5 py-3 hover:bg-gray-50 transition-colors ${
+                          item.submitted ? "bg-green-50/30" : ""
+                        }`}
+                      >
+                        <button
+                          onClick={() => toggleItem(item)}
+                          disabled={savingId === item.id}
+                          className="shrink-0"
+                          aria-label={item.submitted ? "제출 해제" : "제출 완료"}
+                        >
+                          {savingId === item.id ? (
+                            <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
+                          ) : item.submitted ? (
+                            <CheckSquare className="w-5 h-5 text-green-600" />
+                          ) : (
+                            <Square className="w-5 h-5 text-gray-300 hover:text-gray-500" />
+                          )}
+                        </button>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium text-gray-900 truncate">
+                              {item.clientName}
+                            </span>
+                            <span className="text-xs text-gray-400">×</span>
+                            <span className="text-sm text-gray-700 truncate">
+                              {item.companyName}
+                            </span>
+                            <span
+                              className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                item.requestType === "이관"
+                                  ? "bg-amber-50 text-amber-700"
+                                  : "bg-blue-50 text-blue-700"
+                              }`}
+                            >
+                              {item.requestType}
+                            </span>
+                          </div>
+                          {item.submissionEmail && (
+                            <div className="flex items-center gap-1 text-xs text-gray-500 mt-0.5">
+                              <Mail className="w-3 h-3" />
+                              <span className="font-mono">
+                                {item.submissionEmail}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                        <div className="text-xs text-gray-400 shrink-0">
+                          {item.submitted && item.submittedAt
+                            ? new Date(item.submittedAt).toLocaleDateString(
+                                "ko-KR"
+                              )
+                            : "—"}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── 탭 래퍼 ───────────────────────────────────────────────────
 
+type TabKey = "list" | "status" | "monthly";
+
 function SubmissionRoutesTabs() {
-  const [activeTab, setActiveTab] = useState<"list" | "status">("list");
+  const [activeTab, setActiveTab] = useState<TabKey>("list");
+
+  const tabs: { key: TabKey; label: string }[] = [
+    { key: "list", label: "제출처 목록" },
+    { key: "status", label: "사업자등록증 현황" },
+    { key: "monthly", label: "월별 제출 체크" },
+  ];
 
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-1 border-b border-gray-200">
-        <button
-          onClick={() => setActiveTab("list")}
-          className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-            activeTab === "list"
-              ? "border-blue-600 text-blue-600"
-              : "border-transparent text-gray-500 hover:text-gray-800"
-          }`}
-        >
-          제출처 목록
-        </button>
-        <button
-          onClick={() => setActiveTab("status")}
-          className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-            activeTab === "status"
-              ? "border-blue-600 text-blue-600"
-              : "border-transparent text-gray-500 hover:text-gray-800"
-          }`}
-        >
-          제출 현황
-        </button>
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setActiveTab(t.key)}
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              activeTab === t.key
+                ? "border-blue-600 text-blue-600"
+                : "border-transparent text-gray-500 hover:text-gray-800"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
 
-      {activeTab === "list" ? <SubmissionRoutesContent /> : <EntityStatusTab />}
+      {activeTab === "list" && <SubmissionRoutesContent />}
+      {activeTab === "status" && <EntityStatusTab />}
+      {activeTab === "monthly" && <MonthlyChecklistTab />}
     </div>
   );
 }

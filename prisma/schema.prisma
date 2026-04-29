@@ -504,15 +504,35 @@ model SubmissionRoute {
   companyName      String
   submissionEntity String
   submissionEmail  String?
+  requestType      String   @default("신규")  // "신규" | "이관" — 추가수수료 적용 여부
   memo             String?
   active           Boolean  @default(true)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
+  monthlyLogs      MonthlySubmissionLog[]
+
   @@unique([clientName, companyName])
   @@index([clientName])
   @@index([companyName])
   @@index([submissionEntity])
+}
+
+// 월별 제출 체크리스트: 매달 제출처별로 통계 제출 여부 추적
+model MonthlySubmissionLog {
+  id                String          @id @default(cuid())
+  yearMonth         String          // "YYYY-MM"
+  submissionRouteId String
+  submissionRoute   SubmissionRoute @relation(fields: [submissionRouteId], references: [id], onDelete: Cascade)
+  submitted         Boolean         @default(false)
+  submittedAt       DateTime?
+  memo              String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@unique([yearMonth, submissionRouteId])
+  @@index([yearMonth])
+  @@index([submissionRouteId])
 }
 
 // 코프로모션/예외: 병원통계 제약사 → 실제 정산 제약사

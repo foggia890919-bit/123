@@ -113,5 +113,25 @@ export async function GET() {
     missing: g.missing,
   }));
 
-  return NextResponse.json({ entities });
+  // 제출처 미매핑: 사업자등록증이 있지만 SubmissionRoute에 등록 안 된 거래처×제약사
+  const allDocsFr = await prisma.filterRequest.findMany({
+    where: { OR: [{ bizFileKey: { not: null } }, { bizDocument: { not: null } }] },
+    select: { clientName: true, companyName: true },
+    distinct: ["clientName", "companyName"],
+  });
+  const routeKeySet = new Set(routes.map((r) => `${r.clientName}::${r.companyName}`));
+  const unmappedMap = new Map<string, { clientName: string; companyName: string }>();
+  for (const fr of allDocsFr) {
+    const key = `${fr.clientName}::${fr.companyName}`;
+    if (!routeKeySet.has(key) && !unmappedMap.has(key)) {
+      unmappedMap.set(key, { clientName: fr.clientName, companyName: fr.companyName });
+    }
+  }
+  const unmapped = Array.from(unmappedMap.values()).sort((a, b) =>
+    a.clientName === b.clientName
+      ? a.companyName.localeCompare(b.companyName)
+      : a.clientName.localeCompare(b.clientName)
+  );
+
+  return NextResponse.json({ entities, unmapped });
 }
