@@ -16,6 +16,7 @@ export async function GET(req: NextRequest) {
     replyText: true, repliedAt: true, createdAt: true, updatedAt: true,
     requestType: true, mappingId: true, respondedAt: true, respondedResult: true,
     alimtalkSentAt: true, salesNotifiedAt: true,
+    upperCorpName: true, lowerCorpName: true,
   } as const;
   if (all) {
     if (user.role !== "ADMIN") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
@@ -74,6 +75,7 @@ export async function POST(req: NextRequest) {
       requestType: requestType || "신규",
       mappingId: mapping?.id ?? null,
       responseToken,
+      upperCorpName: mapping?.submissionEntity ?? null,
       updatedAt: now,
     };
   });
@@ -128,16 +130,31 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
-  const guard = await requireAdmin();
-  if (isNextResponse(guard)) return guard;
-  const { id, status, replyText } = await req.json();
+  const user = await requireSession();
+  if (isNextResponse(user)) return user;
+
+  const { id, status, replyText, upperCorpName, lowerCorpName } = await req.json();
   if (!id) return NextResponse.json({ error: "id 필수" }, { status: 400 });
+
   const data: Prisma.FilterRequestUpdateInput = { updatedAt: new Date() };
-  if (status !== undefined) data.status = status;
-  if (replyText !== undefined) {
-    data.replyText = replyText || null;
-    data.repliedAt = new Date();
+
+  if (user.role === "ADMIN") {
+    if (status !== undefined) data.status = status;
+    if (replyText !== undefined) { data.replyText = replyText || null; data.repliedAt = new Date(); }
+  } else {
+    // BIZ: 자기 요청에만 상위/하위법인 설정 가능
+    if (status !== undefined || replyText !== undefined) {
+      return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+    }
+    const record = await prisma.filterRequest.findUnique({ where: { id }, select: { userId: true } });
+    if (!record || record.userId !== user.id) {
+      return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+    }
   }
+
+  if (upperCorpName !== undefined) data.upperCorpName = upperCorpName ?? null;
+  if (lowerCorpName !== undefined) data.lowerCorpName = lowerCorpName ?? null;
+
   const updated = await prisma.filterRequest.update({ where: { id }, data });
   return NextResponse.json(updated);
 }

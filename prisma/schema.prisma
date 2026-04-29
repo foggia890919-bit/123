@@ -259,6 +259,8 @@ model FilterRequest {
   respondedResult String?      // "가능" | "불가"
   alimtalkSentAt  DateTime?
   salesNotifiedAt DateTime?
+  upperCorpName   String?      // 상위법인
+  lowerCorpName   String?      // 하위법인/딜러
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 

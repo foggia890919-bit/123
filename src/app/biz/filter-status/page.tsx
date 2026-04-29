@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { Loader2, Search, CheckCircle, XCircle, Clock, Filter } from "lucide-react";
@@ -17,14 +17,26 @@ interface FilterRow {
   respondedResult: string | null;
   respondedAt: string | null;
   createdAt: string;
+  upperCorpName: string | null;
+  lowerCorpName: string | null;
   user?: { name: string | null; email: string };
 }
+
+interface DealerSuggestion { clientName: string; bizNumber: string; dealerType: string }
 
 const STATUS_LABEL: Record<string, string> = {
   PENDING:   "대기",
   REVIEWING: "검토중",
   APPROVED:  "승인",
   REJECTED:  "반려",
+};
+
+const DEALER_LABEL: Record<string, string> = {
+  CORPORATION: "법인",
+  UPPER_CORP: "상위법인",
+  LOWER_CORP: "하위법인",
+  SELF: "자사",
+  INDIVIDUAL: "딜러",
 };
 
 function ResultBadge({ result, status }: { result: string | null; status: string }) {
@@ -45,6 +57,103 @@ function ResultBadge({ result, status }: { result: string | null; status: string
   );
 }
 
+// ── 상위/하위법인 인라인 선택 셀 ─────────────────────────────
+function CorpCell({ value, onSave }: { value: string | null; onSave: (v: string | null) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const [q, setQ] = useState("");
+  const [items, setItems] = useState<DealerSuggestion[]>([]);
+  const [saving, setSaving] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  function openDropdown() {
+    if (btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, left: rect.left });
+    }
+    setQ("");
+    fetchItems("");
+    setOpen(true);
+  }
+
+  function fetchItems(query: string) {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(async () => {
+      const res = await fetch(`/api/filter-mapping/suggestions?type=dealer&q=${encodeURIComponent(query)}`);
+      const data = await res.json();
+      setItems(Array.isArray(data) ? data : []);
+    }, 150);
+  }
+
+  async function select(name: string | null) {
+    setOpen(false);
+    setSaving(true);
+    await onSave(name);
+    setSaving(false);
+  }
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        onClick={openDropdown}
+        disabled={saving}
+        className="text-xs text-left hover:text-blue-600 transition-colors truncate max-w-[110px] block"
+      >
+        {saving
+          ? <Loader2 className="w-3 h-3 animate-spin text-gray-400" />
+          : value
+            ? <span className="text-gray-700">{value}</span>
+            : <span className="text-gray-300 hover:text-blue-400">미설정</span>
+        }
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div
+            className="fixed z-50 bg-white border border-gray-200 rounded-lg shadow-xl w-52"
+            style={{ top: pos.top, left: pos.left }}
+          >
+            <div className="px-2 pt-2 pb-1 border-b border-gray-100">
+              <input
+                autoFocus
+                value={q}
+                onChange={(e) => { setQ(e.target.value); fetchItems(e.target.value); }}
+                placeholder="법인·딜러명 검색"
+                className="w-full text-xs px-2 py-1.5 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-400"
+              />
+            </div>
+            <div className="max-h-44 overflow-y-auto py-1">
+              <button
+                onMouseDown={() => select(null)}
+                className="w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-50"
+              >
+                미설정 (지우기)
+              </button>
+              {items.map((item, i) => (
+                <button
+                  key={i}
+                  onMouseDown={() => select(item.clientName)}
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-blue-50 flex items-center justify-between gap-2"
+                >
+                  <span className="text-gray-800 truncate">{item.clientName}</span>
+                  <span className="text-gray-400 text-[10px] shrink-0">{DEALER_LABEL[item.dealerType] ?? item.dealerType}</span>
+                </button>
+              ))}
+              {items.length === 0 && q && (
+                <p className="px-3 py-2 text-xs text-gray-400">결과 없음</p>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+// ── 메인 페이지 ──────────────────────────────────────────────
 export default function FilterStatusPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
@@ -68,6 +177,17 @@ export default function FilterStatusPage() {
       .finally(() => setLoading(false));
   }, [session, status, router]);
 
+  async function updateCorp(id: string, field: "upperCorpName" | "lowerCorpName", value: string | null) {
+    const res = await fetch("/api/filter-request", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, [field]: value }),
+    });
+    if (res.ok) {
+      setRows((prev) => prev.map((r) => r.id === id ? { ...r, [field]: value } : r));
+    }
+  }
+
   const filtered = rows.filter((r) => {
     const matchQ = !query ||
       r.clientName.includes(query) ||
@@ -79,7 +199,6 @@ export default function FilterStatusPage() {
     return matchQ && matchResult;
   });
 
-  // 거래처별로 그룹핑
   const grouped = filtered.reduce<Record<string, FilterRow[]>>((acc, r) => {
     const key = `${r.clientName}__${r.bizNumber}`;
     if (!acc[key]) acc[key] = [];
@@ -104,6 +223,11 @@ export default function FilterStatusPage() {
     return n;
   }
 
+  // 컬럼 레이아웃: 제약사 | 상위법인 | 하위법인 | 유형 | 결과 | 요청일 | (처리일)
+  const gridCols = isAdmin
+    ? "grid-cols-[2fr_minmax(80px,1fr)_minmax(80px,1fr)_auto_auto_auto_auto]"
+    : "grid-cols-[2fr_minmax(80px,1fr)_minmax(80px,1fr)_auto_auto_auto]";
+
   return (
     <BizLayout>
       <div className="space-y-4">
@@ -120,7 +244,6 @@ export default function FilterStatusPage() {
           </div>
         </div>
 
-        {/* 검색 + 결과 필터 */}
         <div className="flex flex-col sm:flex-row gap-2">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -179,10 +302,12 @@ export default function FilterStatusPage() {
                   </div>
 
                   {/* 제약사별 행 */}
-                  <div className="divide-y divide-gray-50">
+                  <div className="divide-y divide-gray-50 overflow-x-auto">
                     {/* 테이블 헤더 */}
-                    <div className={`grid text-xs font-medium text-gray-400 px-4 py-2 bg-white ${isAdmin ? "grid-cols-[1fr_auto_auto_auto_auto]" : "grid-cols-[1fr_auto_auto_auto]"}`}>
+                    <div className={`grid text-xs font-medium text-gray-400 px-4 py-2 bg-white ${gridCols}`}>
                       <span>제약사</span>
+                      <span className="text-gray-500">상위법인</span>
+                      <span className="text-gray-500">하위법인</span>
                       <span className="w-12 text-center">유형</span>
                       <span className="w-20 text-center">결과</span>
                       <span className="w-20 text-right">요청일</span>
@@ -190,8 +315,20 @@ export default function FilterStatusPage() {
                     </div>
                     {items.map((r) => (
                       <div key={r.id}
-                        className={`grid items-center px-4 py-2.5 text-xs hover:bg-gray-50 ${isAdmin ? "grid-cols-[1fr_auto_auto_auto_auto]" : "grid-cols-[1fr_auto_auto_auto]"}`}>
+                        className={`grid items-center px-4 py-2.5 text-xs hover:bg-gray-50 ${gridCols}`}>
                         <span className="font-medium text-gray-800 truncate pr-2">{r.companyName}</span>
+                        <div className="pr-2">
+                          <CorpCell
+                            value={r.upperCorpName}
+                            onSave={(v) => updateCorp(r.id, "upperCorpName", v)}
+                          />
+                        </div>
+                        <div className="pr-2">
+                          <CorpCell
+                            value={r.lowerCorpName}
+                            onSave={(v) => updateCorp(r.id, "lowerCorpName", v)}
+                          />
+                        </div>
                         <span className="w-12 text-center text-gray-500">{r.requestType}</span>
                         <span className="w-20 flex justify-center">
                           <ResultBadge result={r.respondedResult} status={r.status} />
