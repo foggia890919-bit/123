@@ -103,6 +103,7 @@ export async function POST(req: NextRequest) {
                 "#{거래처명}": clientName,
                 "#{제약사명}": r.companyName,
                 "#{영업사원}": user.name ?? user.email ?? "",
+                "#{요청유형}": r.requestType || "신규",
               },
               buttons: [
                 {
