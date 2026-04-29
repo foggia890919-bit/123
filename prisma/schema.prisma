@@ -209,23 +209,54 @@ model PrescriptionReport {
 }
 
 model FilterRequest {
-  id          String       @id @default(cuid())
-  userId      String
-  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userName    String
-  clientName  String
-  bizNumber   String
-  bizDocument String?   // legacy base64
-  bizFileKey  String?   // Supabase Storage path (bucket: filter-request-docs)
-  bizFileName String?
-  companyName String
-  status      FilterStatus @default(PENDING)
-  replyText   String?
-  repliedAt   DateTime?
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id              String       @id @default(cuid())
+  userId          String
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userName        String
+  clientName      String
+  bizNumber       String
+  bizDocument     String?
+  bizFileKey      String?
+  bizFileName     String?
+  companyName     String
+  requestType     String       @default("신규")   // "신규" | "이관"
+  status          FilterStatus @default(PENDING)
+  replyText       String?
+  repliedAt       DateTime?
+  // 알림톡 자동화
+  mappingId       String?
+  mapping         FilterMapping? @relation(fields: [mappingId], references: [id], onDelete: SetNull)
+  responseToken   String?      @unique
+  respondedAt     DateTime?
+  respondedResult String?      // "가능" | "불가"
+  alimtalkSentAt  DateTime?
+  salesNotifiedAt DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
 
   @@index([userId])
+  @@index([responseToken])
+  @@index([status])
+}
+
+// 거래처 × 제약사 → 제출처 매핑
+model FilterMapping {
+  id              String    @id @default(cuid())
+  clientName      String
+  companyName     String
+  submissionEntity String
+  managerName     String?
+  managerPhone    String?
+  notes           String?
+  active          Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  requests        FilterRequest[]
+
+  @@unique([clientName, companyName])
+  @@index([clientName])
+  @@index([companyName])
 }
 
 model WholesaleSite {

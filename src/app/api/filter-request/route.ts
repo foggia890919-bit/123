@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import { requireSession, requireAdmin, isNextResponse } from "@/lib/auth-guard";
 import { BUCKETS, persistDataUri } from "@/lib/storage";
+import { sendAlimtalk } from "@/lib/coolsms";
 
 export async function GET(req: NextRequest) {
   const user = await requireSession();
@@ -13,6 +14,8 @@ export async function GET(req: NextRequest) {
     id: true, userId: true, userName: true, clientName: true, bizNumber: true,
     bizFileName: true, bizFileKey: true, companyName: true, status: true,
     replyText: true, repliedAt: true, createdAt: true, updatedAt: true,
+    requestType: true, mappingId: true, respondedAt: true, respondedResult: true,
+    alimtalkSentAt: true, salesNotifiedAt: true,
   } as const;
   if (all) {
     if (user.role !== "ADMIN") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
@@ -33,7 +36,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
-  const { clientName, bizNumber, bizDocument, bizFileName, companies } = await req.json();
+  const { clientName, bizNumber, bizDocument, bizFileName, companies, requestType } = await req.json();
 
   if (!clientName || !bizNumber || !companies?.length) {
     return NextResponse.json({ error: "필수 항목 누락" }, { status: 400 });
@@ -46,8 +49,19 @@ export async function POST(req: NextRequest) {
   const { fileKey: bizFileKey, fileData: bizDocumentFallback } =
     await persistDataUri(BUCKETS.filterRequestBiz, user.id, bizDocument);
 
-  await prisma.filterRequest.createMany({
-    data: (companies as string[]).map((companyName: string) => ({
+  // Lookup FilterMapping entries for this client × each company
+  const mappings = await prisma.filterMapping.findMany({
+    where: { clientName, active: true },
+  });
+  const mappingByCompany = new Map(mappings.map((m) => [m.companyName, m]));
+
+  const now = new Date();
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://medivance.co.kr";
+
+  const rows = (companies as string[]).map((companyName: string) => {
+    const mapping = mappingByCompany.get(companyName);
+    const responseToken = mapping ? crypto.randomUUID() : null;
+    return {
       id: crypto.randomUUID(),
       userId: user.id,
       userName: user.name ?? user.email,
@@ -57,9 +71,59 @@ export async function POST(req: NextRequest) {
       bizFileKey,
       bizFileName: bizFileName || null,
       companyName,
-      updatedAt: new Date(),
-    })),
+      requestType: requestType || "신규",
+      mappingId: mapping?.id ?? null,
+      responseToken,
+      updatedAt: now,
+    };
   });
+
+  await prisma.filterRequest.createMany({ data: rows });
+
+  // Send AlimTalk for rows that have a mapping with phone
+  const pfId = process.env.KAKAO_PF_ID;
+  const templateId = process.env.KAKAO_TEMPLATE_FILTER_REQUEST;
+  if (pfId && templateId) {
+    const sendTasks = rows
+      .filter((r) => r.mappingId && r.responseToken)
+      .map(async (r) => {
+        const mapping = mappingByCompany.get(r.companyName);
+        if (!mapping?.managerPhone) return;
+
+        const respondUrl = `${baseUrl}/filter-respond/${r.responseToken}`;
+        try {
+          await sendAlimtalk(
+            mapping.managerPhone,
+            {
+              pfId,
+              templateId,
+              variables: {
+                "#{거래처명}": clientName,
+                "#{제약사명}": r.companyName,
+                "#{영업사원}": user.name ?? user.email ?? "",
+                "#{요청유형}": r.requestType,
+              },
+              buttons: [
+                {
+                  buttonType: "WL",
+                  buttonName: "응답하기",
+                  linkMo: respondUrl,
+                  linkPc: respondUrl,
+                },
+              ],
+            },
+            `[메디밴스] ${clientName} × ${r.companyName} 필터링 ${r.requestType} 요청입니다. 응답: ${respondUrl}`
+          );
+          await prisma.filterRequest.update({
+            where: { id: r.id },
+            data: { alimtalkSentAt: new Date(), updatedAt: new Date() },
+          });
+        } catch (e) {
+          console.error("AlimTalk 발송 실패", r.companyName, e);
+        }
+      });
+    await Promise.allSettled(sendTasks);
+  }
 
   return NextResponse.json({ success: true });
 }
