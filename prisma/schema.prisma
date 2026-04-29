@@ -494,3 +494,131 @@ model SettlementDocument {
   @@index([templateId])
   @@index([userId, period])
 }
+
+// ─── Real estate (병의원 개원 매물 탐색) ──────────────────────────────────
+// 개인 사용 목적 도구. 네이버부동산은 약관상 자동수집을 금지하므로 보수적 간격
+// (RE_SCRAPE_INTERVAL_MS, 기본 3000ms)으로만 동작하며, 수집한 중개사 연락처는
+// 동의 없는 광고/마케팅 발송에 사용해서는 안 된다 (개인정보보호법·정보통신망법).
+
+model REAgent {
+  id             String   @id @default(cuid())
+  externalId     String   @unique // 네이버 realtorId or cpId
+  name           String
+  phone          String?
+  address        String?
+  representative String?
+  registrationNo String?
+  source         String   @default("naver")
+  firstSeenAt    DateTime @default(now())
+  lastSeenAt     DateTime @default(now())
+  listings       REListing[]
+
+  @@index([name])
+  @@index([phone])
+}
+
+model REListing {
+  id            String    @id @default(cuid())
+  externalId    String    @unique // 네이버 articleNo
+  source        String    @default("naver")
+  url           String?
+  tradeType     String    // 매매 | 전세 | 월세
+  propertyType  String    // 상가 | 사무실 | 빌딩 | 토지 | 아파트 | 기타
+  title         String?
+  cortarNo      String?   // 행정동 코드
+  address       String?
+  region        String?
+  latitude      Float?
+  longitude     Float?
+  priceSale     Int?      // 매매가 (만원)
+  priceDeposit  Int?      // 보증금
+  priceMonthly  Int?      // 월세
+  areaSupply    Float?    // 공급 ㎡
+  areaExclusive Float?    // 전용 ㎡
+  floor         String?
+  description   String?
+  features      String[]  @default([])
+  raw           Json?
+  agentId       String?
+  agent         REAgent?  @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  postedAt      DateTime?
+  firstSeenAt   DateTime  @default(now())
+  lastSeenAt    DateTime  @default(now())
+  closedAt      DateTime?
+  alerts        REAlert[]
+
+  @@index([cortarNo])
+  @@index([propertyType])
+  @@index([tradeType])
+  @@index([firstSeenAt])
+  @@index([priceSale])
+  @@index([priceDeposit])
+}
+
+model REWatch {
+  id              String   @id @default(cuid())
+  ownerEmail      String
+  name            String
+  enabled         Boolean  @default(true)
+  cortarNos       String[] @default([])
+  propertyTypes   String[] @default([])
+  tradeTypes      String[] @default([])
+  priceSaleMax    Int?
+  priceDepositMax Int?
+  priceMonthlyMax Int?
+  areaMinM2       Float?
+  areaMaxM2       Float?
+  floorMin        Int?
+  floorMax        Int?
+  keywords        String[] @default([])
+  excludeKeywords String[] @default([])
+  notifySms       Boolean  @default(false)
+  notifyTelegram  Boolean  @default(false)
+  smsTo           String?
+  telegramChatId  String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  alerts          REAlert[]
+
+  @@index([ownerEmail])
+  @@index([enabled])
+}
+
+model REAlert {
+  id        String    @id @default(cuid())
+  watchId   String
+  watch     REWatch   @relation(fields: [watchId], references: [id], onDelete: Cascade)
+  listingId String
+  listing   REListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  channel   String    // sms | telegram | log
+  status    String    @default("PENDING")
+  error     String?
+  sentAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@unique([watchId, listingId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model MolitTrade {
+  id            String   @id @default(cuid())
+  dealKind      String   // 상업업무용 | 오피스텔 | 아파트 등
+  tradeType     String   // 매매 | 전월세
+  region        String
+  lawdCd        String
+  dealYearMonth String   // YYYYMM
+  dealDay       Int?
+  buildingName  String?
+  areaM2        Float?
+  floor         String?
+  buildYear     Int?
+  amount        Int?     // 만원
+  deposit       Int?
+  monthlyRent   Int?
+  raw           Json?
+  fetchedAt     DateTime @default(now())
+
+  @@index([lawdCd, dealYearMonth])
+  @@index([dealKind])
+}
