@@ -7,7 +7,7 @@ import Link from "next/link";
 import {
   Hospital, Building2, FileUp, FileSearch,
   ChevronRight, LayoutDashboard, ClipboardList,
-  Users, BarChart3, PercentCircle,
+  Users, BarChart3, PercentCircle, GitMerge, Pill, UserCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -29,6 +29,13 @@ const BIZ_MENU_GROUPS = [
         icon: Building2,
         color: "bg-purple-50 text-purple-600",
       },
+      {
+        href: "/biz/sales-reps",
+        label: "영업사원 관리",
+        desc: "영업사원 승인 및 코드 관리",
+        icon: UserCheck,
+        color: "bg-indigo-50 text-indigo-600",
+      },
     ],
   },
   {
@@ -47,6 +54,32 @@ const BIZ_MENU_GROUPS = [
         desc: "업로드된 정산내역 확인 및 취합",
         icon: FileSearch,
         color: "bg-orange-50 text-orange-600",
+      },
+      {
+        href: "/biz/corp-rates",
+        label: "추가수수료 매핑",
+        desc: "법인별·제약사별 추가수수료율 관리",
+        icon: PercentCircle,
+        color: "bg-yellow-50 text-yellow-600",
+      },
+    ],
+  },
+  {
+    label: "제약사/제품 관리",
+    items: [
+      {
+        href: "/biz/submission-routes",
+        label: "통계제출처 관리",
+        desc: "병의원×제약사 통계제출 경로 관리",
+        icon: BarChart3,
+        color: "bg-cyan-50 text-cyan-600",
+      },
+      {
+        href: "/biz/co-promotion",
+        label: "코프로모션 예외 관리",
+        desc: "통계제약사와 정산제약사가 다른 품목 관리",
+        icon: Pill,
+        color: "bg-rose-50 text-rose-600",
       },
     ],
   },

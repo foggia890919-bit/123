@@ -72,7 +72,7 @@ export async function GET(req: NextRequest) {
       orderBy: { createdAt: "desc" },
       select: {
         id: true, clientName: true, bizNumber: true,
-        bizFileName: true, approved: true, createdAt: true,
+        bizFileName: true, approved: true, createdAt: true, code: true,
       },
     });
   } catch {

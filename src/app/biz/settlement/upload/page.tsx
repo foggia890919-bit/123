@@ -5,7 +5,7 @@ import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import {
   FileUp, Upload, FileSpreadsheet, Loader2, CheckCircle,
-  Trash2, Plus, Download, ChevronDown, Settings2,
+  Trash2, Download, ChevronDown, Settings2, Plus, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -56,7 +56,6 @@ function MappingEditor({ corp, template, onSaved }: {
   template: Template | null;
   onSaved: (t: Template) => void;
 }) {
-  // canonToSource: canonical → source col name (what user types)
   const [map, setMap] = useState<Record<string, string>>(() => {
     if (!template) return {};
     const inv: Record<string, string> = {};
@@ -74,7 +73,6 @@ function MappingEditor({ corp, template, onSaved }: {
   }, [template]);
 
   async function handleSave() {
-    // build columnMap: source → canonical
     const columnMap: Record<string, string> = {};
     for (const [canon, src] of Object.entries(map)) {
       if (src.trim()) columnMap[src.trim()] = canon;
@@ -99,29 +97,22 @@ function MappingEditor({ corp, template, onSaved }: {
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
-    a.download = `매핑템플릿_${corp}.xlsx`;
-    a.click();
+    a.href = url; a.download = `매핑템플릿_${corp}.xlsx`; a.click();
     URL.revokeObjectURL(url);
   }
 
-  // Parse uploaded mapping Excel
   async function handleMappingUpload(file: File) {
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(buf, { type: "array" });
     const ws = wb.Sheets[wb.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1 }) as string[][];
-    // Row 1 (idx 0) = 메디펄스 headers: [매핑, 메디펄스, col1, col2, ...]
-    // Row 2 (idx 1) = mapped: [매핑, corp, srcCol1, srcCol2, ...]
     const mappingRow = rows[1];
     if (!mappingRow) return;
     const newMap: Record<string, string> = {};
     for (let i = 2; i < mappingRow.length; i++) {
       const canon = CANONICAL_COLS[i - 2];
       const src = mappingRow[i];
-      if (canon && src && String(src).trim()) {
-        newMap[canon] = String(src).trim();
-      }
+      if (canon && src && String(src).trim()) newMap[canon] = String(src).trim();
     }
     setMap(newMap);
   }
@@ -134,37 +125,29 @@ function MappingEditor({ corp, template, onSaved }: {
         <p className="text-xs font-semibold text-gray-600">{corp} 컬럼 매핑</p>
         <div className="flex gap-1.5">
           <Button variant="outline" size="sm" onClick={handleDownload} className="gap-1.5 text-xs h-7 px-2.5">
-            <Download className="w-3 h-3" /> 템플릿 다운로드
+            <Download className="w-3 h-3" /> 템플릿
           </Button>
           <Button variant="outline" size="sm" onClick={() => mappingFileRef.current?.click()} className="gap-1.5 text-xs h-7 px-2.5">
-            <Upload className="w-3 h-3" /> 엑셀로 불러오기
+            <Upload className="w-3 h-3" /> 불러오기
           </Button>
           <input ref={mappingFileRef} type="file" accept=".xlsx,.xls" className="hidden"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) handleMappingUpload(f); }} />
         </div>
       </div>
-
-      {/* 매핑 테이블 */}
       <div className="border border-gray-200 rounded-lg overflow-hidden text-xs">
         <div className="grid grid-cols-2 bg-gray-50 border-b border-gray-200 px-3 py-1.5 font-semibold text-gray-500">
-          <span>메디펄스 기준 컬럼</span>
-          <span>{corp} 원본 컬럼명</span>
+          <span>기준 컬럼</span><span>{corp} 원본 컬럼명</span>
         </div>
         <div className="divide-y divide-gray-100">
           {CANONICAL_COLS.map((col) => (
             <div key={col} className="grid grid-cols-2 items-center px-3 py-1.5">
               <span className="text-gray-700 font-medium">{col}</span>
-              <Input
-                value={map[col] ?? ""}
-                onChange={(e) => setMap((p) => ({ ...p, [col]: e.target.value }))}
-                placeholder="원본 컬럼명 입력"
-                className="h-6 text-xs py-0"
-              />
+              <Input value={map[col] ?? ""} onChange={(e) => setMap((p) => ({ ...p, [col]: e.target.value }))}
+                placeholder="원본 컬럼명" className="h-6 text-xs py-0" />
             </div>
           ))}
         </div>
       </div>
-
       <Button size="sm" onClick={handleSave} disabled={saving} className="w-full gap-1.5">
         {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : saved ? <CheckCircle className="w-3.5 h-3.5" /> : null}
         {saved ? "저장 완료!" : "매핑 저장"}
@@ -173,21 +156,70 @@ function MappingEditor({ corp, template, onSaved }: {
   );
 }
 
-// ─── Corp Selector ─────────────────────────────────────────────────────────
-function CorpCheckRow({ corp, checked, hasMapping, onToggle }: {
-  corp: string; checked: boolean; hasMapping: boolean; onToggle: () => void;
+// ─── Corp Row (드롭다운 선택 후 개별 행) ──────────────────────────────────
+function CorpUploadRow({
+  corp, template, file, onFileChange, onRemove,
+}: {
+  corp: string;
+  template: Template | null;
+  file: File | null;
+  onFileChange: (f: File | null) => void;
+  onRemove: () => void;
 }) {
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // 매핑된 컬럼명 → 원본 컬럼명 미리보기
+  const mappedCols = template
+    ? CANONICAL_COLS.map((c) => {
+        const inv: Record<string, string> = {};
+        for (const [src, canon] of Object.entries(template.columnMap)) inv[canon] = src;
+        return inv[c] ? `${c}(${inv[c]})` : c;
+      })
+    : null;
+
   return (
-    <label className="flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer hover:bg-gray-50 select-none">
-      <input type="checkbox" checked={checked} onChange={onToggle}
-        className="w-4 h-4 rounded accent-blue-600" />
-      <span className="text-sm font-medium text-gray-700 flex-1">{corp}</span>
-      {hasMapping && (
-        <span className="text-xs text-green-600 font-medium flex items-center gap-0.5">
-          <CheckCircle className="w-3 h-3" /> 매핑완료
-        </span>
+    <div className="border border-gray-200 rounded-xl p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-gray-800">{corp}</span>
+          {template
+            ? <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full">매핑완료</span>
+            : <span className="text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded-full">매핑없음</span>}
+        </div>
+        <button onClick={onRemove} className="text-gray-300 hover:text-red-500 transition-colors">
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* 기준 컬럼 미리보기 */}
+      {mappedCols && (
+        <div className="bg-gray-50 rounded-lg px-3 py-2">
+          <p className="text-[10px] font-semibold text-gray-400 mb-1.5">컬럼 매핑 미리보기</p>
+          <div className="flex flex-wrap gap-1">
+            {mappedCols.map((c, i) => (
+              <span key={i} className="text-[10px] bg-white border border-gray-200 text-gray-600 px-1.5 py-0.5 rounded">
+                {c}
+              </span>
+            ))}
+          </div>
+        </div>
       )}
-    </label>
+
+      {/* 파일 선택 */}
+      <div
+        onClick={() => fileRef.current?.click()}
+        className={`flex items-center justify-center gap-2 border-2 border-dashed rounded-lg py-3 cursor-pointer transition-colors ${
+          file ? "border-green-300 bg-green-50" : "border-gray-200 hover:border-blue-300 hover:bg-blue-50/30"
+        }`}
+      >
+        <FileSpreadsheet className={`w-4 h-4 ${file ? "text-green-600" : "text-gray-400"}`} />
+        <span className={`text-sm truncate max-w-[240px] ${file ? "text-green-700 font-medium" : "text-gray-400"}`}>
+          {file ? file.name : "파일을 클릭하거나 끌어다 놓으세요 (.xlsx)"}
+        </span>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden"
+          onChange={(e) => onFileChange(e.target.files?.[0] ?? null)} />
+      </div>
+    </div>
   );
 }
 
@@ -198,21 +230,29 @@ export default function SettlementUploadPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [docs, setDocs] = useState<Doc[]>([]);
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<"upload" | "mapping">("upload");
 
-  // tab
-  const [tab, setTab] = useState<"mapping" | "upload">("upload");
-
-  // mapping: selected corp
-  const [mappingCorp, setMappingCorp] = useState<string>("");
+  // 매핑탭
   const [expandedCorps, setExpandedCorps] = useState<Set<string>>(new Set());
 
-  // upload state
+  // 업로드 상태
   const [period, setPeriod] = useState("");
-  const [checkedCorps, setCheckedCorps] = useState<Set<string>>(new Set());
+  const [selectedCorps, setSelectedCorps] = useState<string[]>([]);
   const [files, setFiles] = useState<Record<string, File>>({});
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
-  const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
+
+  // 드롭다운
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) setDropdownOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
 
   useEffect(() => {
     if (status === "loading") return;
@@ -230,23 +270,21 @@ export default function SettlementUploadPage() {
 
   const templateMap = Object.fromEntries(templates.map((t) => [t.corpName, t]));
 
-  function toggleCorp(corp: string) {
-    setCheckedCorps((p) => {
-      const n = new Set(p);
-      n.has(corp) ? n.delete(corp) : n.add(corp);
-      return n;
-    });
+  function addCorp(corp: string) {
+    if (!selectedCorps.includes(corp)) setSelectedCorps((p) => [...p, corp]);
+    setDropdownOpen(false);
   }
 
-  function toggleAll() {
-    setCheckedCorps((p) => p.size === CORPS.length ? new Set() : new Set(CORPS));
+  function removeCorp(corp: string) {
+    setSelectedCorps((p) => p.filter((c) => c !== corp));
+    setFiles((p) => { const n = { ...p }; delete n[corp]; return n; });
   }
 
   async function handleUpload(e: React.FormEvent) {
     e.preventDefault();
     setSaveError("");
     if (!period) { setSaveError("정산월을 선택하세요"); return; }
-    const targets = CORPS.filter((c) => checkedCorps.has(c) && files[c]);
+    const targets = selectedCorps.filter((c) => files[c]);
     if (targets.length === 0) { setSaveError("파일을 선택하세요"); return; }
 
     setSaving(true);
@@ -267,7 +305,7 @@ export default function SettlementUploadPage() {
     if (newDocs.length > 0) setDocs((p) => [...newDocs, ...p]);
     const errCount = results.filter((r) => r.status === "rejected" || (r.status === "fulfilled" && r.value?.error)).length;
     if (errCount > 0) setSaveError(`${errCount}개 업로드 실패`);
-    else { setFiles({}); setCheckedCorps(new Set()); }
+    else { setFiles({}); setSelectedCorps([]); }
   }
 
   async function deleteDoc(id: string) {
@@ -289,6 +327,7 @@ export default function SettlementUploadPage() {
     byPeriod[d.period].push(d);
   }
   const periods = Object.keys(byPeriod).sort().reverse();
+  const availableCorps = CORPS.filter((c) => !selectedCorps.includes(c));
 
   if (loading) return <BizLayout><div className="flex justify-center py-20"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div></BizLayout>;
 
@@ -315,7 +354,8 @@ export default function SettlementUploadPage() {
         {/* ── 업로드 탭 ── */}
         {tab === "upload" && (
           <div className="space-y-5">
-            <form onSubmit={handleUpload} className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
+            <form onSubmit={handleUpload} className="bg-white border border-gray-200 rounded-xl p-5 space-y-5">
+
               {/* 정산월 */}
               <div>
                 <label className="text-xs font-semibold text-gray-600 mb-1.5 block">정산월</label>
@@ -323,61 +363,61 @@ export default function SettlementUploadPage() {
                   className="text-sm w-44" required />
               </div>
 
-              {/* 법인 체크 + 파일 선택 */}
+              {/* 법인 선택 드롭다운 */}
               <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-xs font-semibold text-gray-600">법인 선택 및 파일 첨부</label>
-                  <button type="button" onClick={toggleAll}
-                    className="text-xs text-blue-600 hover:text-blue-700 font-medium">
-                    {checkedCorps.size === CORPS.length ? "전체 해제" : "전체 선택"}
-                  </button>
-                </div>
-                <div className="border border-gray-200 rounded-xl overflow-hidden">
-                  {CORPS.map((corp, idx) => {
-                    const checked = checkedCorps.has(corp);
-                    const hasMap = !!templateMap[corp];
-                    const file = files[corp];
-                    return (
-                      <div key={corp} className={`flex items-center gap-3 px-3 py-2.5 ${idx < CORPS.length - 1 ? "border-b border-gray-100" : ""} ${checked ? "bg-blue-50/50" : ""}`}>
-                        {/* 체크박스 + 법인명 */}
-                        <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
-                          <input type="checkbox" checked={checked} onChange={() => toggleCorp(corp)}
-                            className="w-4 h-4 rounded accent-blue-600 shrink-0" />
-                          <span className="text-sm font-medium text-gray-700 truncate">{corp}</span>
-                          {hasMap && <CheckCircle className="w-3.5 h-3.5 text-green-500 shrink-0" />}
-                        </label>
+                <label className="text-xs font-semibold text-gray-600 mb-1.5 block">법인 선택 및 파일 첨부</label>
 
-                        {/* 파일 선택 버튼 */}
-                        <div
-                          onClick={() => { if (!checked) toggleCorp(corp); fileRefs.current[corp]?.click(); }}
-                          className={`flex items-center gap-1.5 text-xs border rounded-md px-2.5 py-1.5 cursor-pointer shrink-0 transition-colors ${
-                            file ? "border-green-300 bg-green-50 text-green-700" : "border-gray-200 hover:bg-gray-50 text-gray-500"
-                          }`}
-                        >
-                          <FileSpreadsheet className="w-3.5 h-3.5" />
-                          <span className="max-w-[140px] truncate">{file ? file.name : "파일 선택"}</span>
-                          <input
-                            ref={(el) => { fileRefs.current[corp] = el; }}
-                            type="file" accept=".xlsx,.xls" className="hidden"
-                            onChange={(e) => {
-                              const f = e.target.files?.[0];
-                              if (f) {
-                                setFiles((p) => ({ ...p, [corp]: f }));
-                                setCheckedCorps((p) => new Set([...p, corp]));
-                              }
-                            }}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
+                <div ref={dropdownRef} className="relative w-60">
+                  <button type="button" onClick={() => setDropdownOpen(!dropdownOpen)}
+                    className="flex items-center justify-between w-full px-3 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+                    <span className="flex items-center gap-1.5 text-gray-600">
+                      <Plus className="w-4 h-4" /> 법인 추가
+                    </span>
+                    <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${dropdownOpen ? "rotate-180" : ""}`} />
+                  </button>
+                  {dropdownOpen && (
+                    <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-52 overflow-y-auto">
+                      {availableCorps.length === 0
+                        ? <p className="px-3 py-2 text-xs text-gray-400">모든 법인이 추가됨</p>
+                        : availableCorps.map((corp) => (
+                          <button key={corp} type="button" onMouseDown={() => addCorp(corp)}
+                            className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 flex items-center justify-between">
+                            <span className="text-gray-800">{corp}</span>
+                            {templateMap[corp] && <CheckCircle className="w-3.5 h-3.5 text-green-500" />}
+                          </button>
+                        ))}
+                    </div>
+                  )}
                 </div>
               </div>
 
+              {/* 선택된 법인별 파일 업로드 행 */}
+              {selectedCorps.length > 0 && (
+                <div className="space-y-3">
+                  {selectedCorps.map((corp) => (
+                    <CorpUploadRow
+                      key={corp}
+                      corp={corp}
+                      template={templateMap[corp] ?? null}
+                      file={files[corp] ?? null}
+                      onFileChange={(f) => setFiles((p) => f ? { ...p, [corp]: f } : (() => { const n = { ...p }; delete n[corp]; return n; })())}
+                      onRemove={() => removeCorp(corp)}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {selectedCorps.length === 0 && (
+                <div className="flex items-center justify-center py-6 border-2 border-dashed border-gray-200 rounded-xl text-sm text-gray-400">
+                  위 드롭다운에서 법인을 선택해주세요
+                </div>
+              )}
+
               {saveError && <p className="text-xs text-red-600">{saveError}</p>}
-              <Button type="submit" disabled={saving} className="w-full gap-1.5">
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                {saving ? "업로드 중..." : `선택된 ${checkedCorps.size}개 법인 업로드`}
+
+              <Button type="submit" disabled={saving || selectedCorps.length === 0} className="w-full gap-1.5">
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileUp className="w-4 h-4" />}
+                {saving ? "업로드 중..." : `${selectedCorps.filter((c) => files[c]).length}개 법인 업로드`}
               </Button>
             </form>
 
@@ -425,41 +465,30 @@ export default function SettlementUploadPage() {
         {tab === "mapping" && (
           <div className="space-y-3">
             <p className="text-xs text-gray-500">
-              각 법인의 원본 컬럼명을 메디펄스 기준 컬럼에 매핑하세요.
-              템플릿 엑셀을 다운로드 → 2행에 매핑 입력 → 다시 불러오기로 한번에 설정할 수 있습니다.
+              각 법인의 원본 컬럼명을 기준 컬럼에 매핑하세요.
+              템플릿 엑셀을 다운로드 → 2행에 매핑 입력 → 불러오기로 한번에 설정할 수 있습니다.
             </p>
-
             {CORPS.map((corp) => {
               const hasTmpl = !!templateMap[corp];
               const isOpen = expandedCorps.has(corp);
               return (
                 <div key={corp} className="bg-white border border-gray-200 rounded-xl overflow-hidden">
                   <button
-                    onClick={() => setExpandedCorps((p) => {
-                      const n = new Set(p);
-                      n.has(corp) ? n.delete(corp) : n.add(corp);
-                      return n;
-                    })}
+                    onClick={() => setExpandedCorps((p) => { const n = new Set(p); n.has(corp) ? n.delete(corp) : n.add(corp); return n; })}
                     className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50"
                   >
                     <div className="flex items-center gap-2.5">
                       <Settings2 className="w-4 h-4 text-gray-400" />
                       <span className="text-sm font-semibold text-gray-800">{corp}</span>
-                      {hasTmpl ? (
-                        <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-medium">매핑완료</span>
-                      ) : (
-                        <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">미설정</span>
-                      )}
+                      {hasTmpl
+                        ? <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-medium">매핑완료</span>
+                        : <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">미설정</span>}
                     </div>
                     <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${isOpen ? "rotate-180" : ""}`} />
                   </button>
                   {isOpen && (
                     <div className="px-4 pb-4 border-t border-gray-100 pt-3">
-                      <MappingEditor
-                        corp={corp}
-                        template={templateMap[corp] ?? null}
-                        onSaved={handleTmplSaved}
-                      />
+                      <MappingEditor corp={corp} template={templateMap[corp] ?? null} onSaved={handleTmplSaved} />
                     </div>
                   )}
                 </div>

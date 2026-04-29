@@ -15,6 +15,7 @@ model User {
   approved     Boolean              @default(false)
   phone        String?
   carrier      String?
+  salesCode    String?              @unique
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
   proposals             Proposal[]
@@ -52,6 +53,7 @@ model Client {
   id              String   @id @default(cuid())
   clientName      String
   bizNumber       String   @unique
+  code            String?  @unique
   bizDocument     String?
   bizFileKey      String?
   bizFileName     String?
@@ -73,6 +75,7 @@ model UserClient {
   user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   clientName  String
   bizNumber   String
+  code        String?
   bizDocument     String?   // legacy base64 — preferred storage is Supabase Storage via bizFileKey
   bizFileKey      String?   // Supabase Storage path (bucket: client-documents) — 사업자등록증
   bizFileName     String?
@@ -492,4 +495,53 @@ model SettlementDocument {
   @@index([userId])
   @@index([templateId])
   @@index([userId, period])
+}
+
+// 통계 제출처 관리: 거래처 × 제약사 → 제출 법인 + 이메일
+model SubmissionRoute {
+  id               String   @id @default(cuid())
+  clientName       String
+  companyName      String
+  submissionEntity String
+  submissionEmail  String?
+  memo             String?
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([clientName, companyName])
+  @@index([clientName])
+  @@index([companyName])
+  @@index([submissionEntity])
+}
+
+// 코프로모션/예외: 병원통계 제약사 → 실제 정산 제약사
+model CoPromotion {
+  id               String   @id @default(cuid())
+  productName      String
+  statCompany      String   // 병원통계에 표기되는 제약사 (예: 다산제약)
+  billingCompany   String   // 실제 정산 제약사 (예: 제일약품)
+  memo             String?
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([productName, statCompany])
+  @@index([statCompany])
+  @@index([billingCompany])
+}
+
+// 법인별 제약사별 추가수수료
+model CorpCompanyRate {
+  id             String   @id @default(cuid())
+  corpName       String
+  companyName    String
+  additionalRate Float    @default(0)
+  memo           String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([corpName, companyName])
+  @@index([corpName])
+  @@index([companyName])
 }
