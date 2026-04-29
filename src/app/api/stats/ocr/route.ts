@@ -1,44 +1,62 @@
 import { NextRequest, NextResponse } from "next/server";
+import { GoogleGenAI } from "@google/genai";
+import { prisma } from "@/lib/prisma";
 import { requireSession, requireAdmin, isNextResponse } from "@/lib/auth-guard";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 90;
 
-interface ClovaField {
-  inferText: string;
-  inferConfidence: number;
-  lineBreak?: boolean;
-  boundingPoly?: { vertices: { x: number; y: number }[] };
+// ── 응답 타입 ─────────────────────────────────────────────────────────────────
+
+interface Field {
+  value: string;
+  confidence: number; // 0-100
 }
 
+export interface FusionDrug {
+  insuranceCode: Field;
+  companyName: Field;
+  productName: Field;
+  quantity: Field;
+  unitPrice: number | null;          // 마스터 DB 단가 (합계 계산용, UI 비표시)
+  matchedMedicationId: string | null;
+  finalConfidence: number;            // 최종 신뢰도 0-100
+  manualCheck: boolean;               // < 95 이면 true
+}
+
+export interface FusionResult {
+  source: "fusion";
+  drugs: FusionDrug[];
+  avgConfidence: number;
+  manualCheckCount: number;
+  rawClovaText: string;
+  rawGeminiText: string;
+  hospitalName: Field;
+  // legacy placeholders (UI/DB 호환)
+  institutionCode: Field;
+  prescriptionDate: Field;
+  patientName: Field;
+}
+
+// ── 진단용 GET ────────────────────────────────────────────────────────────────
+
 export async function GET() {
-  // 진단용 — 관리자만 접근. 환경변수 값/접두어는 노출하지 않음
   const guard = await requireAdmin();
   if (isNextResponse(guard)) return guard;
   return NextResponse.json({
-    hasUrl: !!process.env.CLOVA_OCR_INVOKE_URL,
-    hasSecret: !!process.env.CLOVA_OCR_SECRET_KEY,
+    hasClovaUrl: !!process.env.CLOVA_OCR_INVOKE_URL,
+    hasClovaSecret: !!process.env.CLOVA_OCR_SECRET_KEY,
+    hasGemini: !!process.env.GEMINI_API_KEY,
   });
 }
+
+// ── 메인 POST ─────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
-  try {
-    const rawUrl = process.env.CLOVA_OCR_INVOKE_URL?.trim();
-    // Vercel은 http:// 아웃바운드를 차단하므로 https:// 로 강제 변환
-    const clovaUrl = rawUrl?.replace(/^http:\/\//, "https://");
-    const clovaSecret = process.env.CLOVA_OCR_SECRET_KEY?.trim();
-    if (!clovaUrl && !clovaSecret) {
-      return NextResponse.json({ error: "CLOVA_OCR_INVOKE_URL 과 CLOVA_OCR_SECRET_KEY 둘 다 설정되지 않았습니다. Vercel → Settings → Environment Variables 에 추가 후 Redeploy 하세요." }, { status: 500 });
-    }
-    if (!clovaUrl) {
-      return NextResponse.json({ error: "CLOVA_OCR_INVOKE_URL 이 설정되지 않았습니다." }, { status: 500 });
-    }
-    if (!clovaSecret) {
-      return NextResponse.json({ error: "CLOVA_OCR_SECRET_KEY 가 설정되지 않았습니다." }, { status: 500 });
-    }
 
+  try {
     const formData = await req.formData();
     const file = formData.get("image") as File | null;
     if (!file) return NextResponse.json({ error: "이미지가 없습니다" }, { status: 400 });
@@ -46,210 +64,362 @@ export async function POST(req: NextRequest) {
     const bytes = await file.arrayBuffer();
     const base64 = Buffer.from(bytes).toString("base64");
     const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
-    const format = ["png", "gif", "bmp", "tiff"].includes(ext) ? ext : "jpg";
+    const mimeType =
+      ext === "png" ? "image/png" :
+      ext === "gif" ? "image/gif" :
+      ext === "bmp" ? "image/bmp" :
+      ext === "tiff" ? "image/tiff" :
+      "image/jpeg";
 
-    let clovaRes: Response;
-    try {
-      clovaRes = await fetch(clovaUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-OCR-SECRET": clovaSecret },
-        body: JSON.stringify({
-          version: "V2",
-          requestId: crypto.randomUUID(),
-          timestamp: Date.now(),
-          lang: "ko",
-          images: [{ format, name: "prescription", data: base64 }],
-        }),
+    // ── 1단계: Clova + Gemini Vision 병렬 OCR ─────────────────────────────
+    const [clovaOut, geminiOut] = await Promise.allSettled([
+      callClovaOcr(base64, ext),
+      callGeminiVision(base64, mimeType),
+    ]);
+
+    const clovaText = clovaOut.status === "fulfilled" ? clovaOut.value.text : "";
+    const geminiDraft = geminiOut.status === "fulfilled" ? geminiOut.value : null;
+    const geminiText = geminiDraft ? JSON.stringify(geminiDraft, null, 2) : "";
+
+    if (!clovaText && !geminiDraft) {
+      const errs = [
+        clovaOut.status === "rejected" ? `Clova: ${clovaOut.reason}` : "",
+        geminiOut.status === "rejected" ? `Gemini: ${geminiOut.reason}` : "",
+      ].filter(Boolean).join(" | ");
+      return NextResponse.json({ error: `OCR 양쪽 모두 실패: ${errs}` }, { status: 500 });
+    }
+
+    // ── 2단계: 9자리 보험코드 후보로 마스터 DB 사전 조회 ───────────────────
+    const candidateCodes = extractInsuranceCodes(clovaText, geminiDraft);
+    const masterByCode = await fetchMasterByCodes(candidateCodes);
+
+    // ── 3단계: LLM 검증/병합 ──────────────────────────────────────────────
+    const merged = await callGeminiMerge({
+      clovaText,
+      geminiDraft,
+      masterCandidates: Array.from(masterByCode.values()).map((m) => ({
+        insuranceCode: m.insuranceCode,
+        productName: m.productName,
+        companyName: m.companyName,
+      })),
+    });
+
+    // ── 4단계: 약품마다 마스터 매칭 + 신뢰도 계산 ──────────────────────────
+    const drugs: FusionDrug[] = [];
+    for (const item of merged) {
+      const matched = await matchMedication(item, masterByCode);
+      const matchConf = matched.matchedMedicationId ? matched.matchConfidence : 0;
+      const modelConf = clamp01_100(item.confidence);
+      const finalConfidence = matched.matchedMedicationId
+        ? Math.min(modelConf, matchConf)
+        : Math.min(modelConf, 50); // 마스터 미매칭은 최대 50%로 캡
+      const manualCheck = finalConfidence < 95;
+
+      drugs.push({
+        insuranceCode: { value: matched.insuranceCode, confidence: matched.matchedMedicationId ? 100 : modelConf },
+        companyName:   { value: matched.companyName,   confidence: matched.matchedMedicationId ? 100 : modelConf },
+        productName:   { value: matched.productName,   confidence: matched.matchedMedicationId ? 100 : modelConf },
+        quantity:      { value: item.quantity,         confidence: modelConf },
+        unitPrice: matched.unitPrice,
+        matchedMedicationId: matched.matchedMedicationId,
+        finalConfidence,
+        manualCheck,
       });
-    } catch (fetchErr) {
-      return NextResponse.json({ error: `CLOVA 연결 실패: ${String(fetchErr)}. URL을 확인하세요.` }, { status: 500 });
     }
 
-    if (!clovaRes.ok) {
-      const errText = await clovaRes.text();
-      return NextResponse.json({ error: `CLOVA 오류 (${clovaRes.status}): ${errText}` }, { status: 500 });
-    }
+    const avgConfidence = drugs.length
+      ? Math.round(drugs.reduce((s, d) => s + d.finalConfidence, 0) / drugs.length)
+      : 0;
+    const manualCheckCount = drugs.filter((d) => d.manualCheck).length;
 
-    const clovaData = await clovaRes.json();
-    const image = clovaData.images?.[0];
-    if (!image || image.inferResult !== "SUCCESS") {
-      return NextResponse.json({ error: "OCR 인식 실패: " + (image?.message ?? "알 수 없는 오류") }, { status: 500 });
-    }
+    const result: FusionResult = {
+      source: "fusion",
+      drugs,
+      avgConfidence,
+      manualCheckCount,
+      rawClovaText: clovaText,
+      rawGeminiText: geminiText,
+      hospitalName: { value: "", confidence: 0 },
+      institutionCode: { value: "", confidence: 0 },
+      prescriptionDate: { value: "", confidence: 0 },
+      patientName: { value: "", confidence: 0 },
+    };
 
-    const fields: ClovaField[] = image.fields || [];
-    const result = parsePrescription(fields);
     return NextResponse.json(result);
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }
 }
 
-// ── 파싱 ──────────────────────────────────────────────────────────────────────
+// ── Clova OCR 호출 ────────────────────────────────────────────────────────────
 
-function buildLines(fields: ClovaField[]): { text: string; conf: number }[] {
-  const lines: { text: string; conf: number }[] = [];
-  let cur = { text: "", conf: 0, count: 0 };
-  for (const f of fields) {
-    cur.text += (cur.text ? " " : "") + f.inferText;
-    cur.conf += f.inferConfidence;
-    cur.count++;
-    if (f.lineBreak !== false) {
-      lines.push({ text: cur.text.trim(), conf: cur.count ? Math.round((cur.conf / cur.count) * 100) : 0 });
-      cur = { text: "", conf: 0, count: 0 };
-    }
-  }
-  if (cur.text) lines.push({ text: cur.text.trim(), conf: cur.count ? Math.round((cur.conf / cur.count) * 100) : 0 });
-  return lines;
+interface ClovaField {
+  inferText: string;
+  inferConfidence: number;
+  lineBreak?: boolean;
 }
 
-function confForToken(token: string, fields: ClovaField[]): number {
-  const t = token.replace(/\s+/g, "").toLowerCase();
+async function callClovaOcr(base64: string, ext: string): Promise<{ text: string }> {
+  const rawUrl = process.env.CLOVA_OCR_INVOKE_URL?.trim();
+  const clovaUrl = rawUrl?.replace(/^http:\/\//, "https://");
+  const clovaSecret = process.env.CLOVA_OCR_SECRET_KEY?.trim();
+  if (!clovaUrl || !clovaSecret) throw new Error("CLOVA env 미설정");
+
+  const format = ["png", "gif", "bmp", "tiff"].includes(ext) ? ext : "jpg";
+  const res = await fetch(clovaUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-OCR-SECRET": clovaSecret },
+    body: JSON.stringify({
+      version: "V2",
+      requestId: crypto.randomUUID(),
+      timestamp: Date.now(),
+      lang: "ko",
+      images: [{ format, name: "prescription", data: base64 }],
+    }),
+  });
+  if (!res.ok) throw new Error(`Clova ${res.status}: ${await res.text().catch(() => "")}`);
+  const data = await res.json();
+  const image = data.images?.[0];
+  if (!image || image.inferResult !== "SUCCESS") throw new Error(image?.message ?? "Clova 인식 실패");
+
+  const fields: ClovaField[] = image.fields || [];
+  const lines: string[] = [];
+  let cur = "";
   for (const f of fields) {
-    if (f.inferText.replace(/\s+/g, "").toLowerCase().includes(t)) {
-      return Math.round(f.inferConfidence * 100);
-    }
+    cur += (cur ? " " : "") + f.inferText;
+    if (f.lineBreak !== false) { lines.push(cur.trim()); cur = ""; }
   }
-  return 0;
+  if (cur) lines.push(cur.trim());
+  return { text: lines.join("\n") };
 }
 
-function parsePrescription(fields: ClovaField[]) {
-  const lines = buildLines(fields);
-  const fullText = lines.map((l) => l.text).join("\n");
-  const avgConf = fields.length
-    ? Math.round(fields.reduce((s, f) => s + f.inferConfidence * 100, 0) / fields.length)
-    : 0;
+// ── Gemini Vision OCR ─────────────────────────────────────────────────────────
 
-  // 폼에서 이미 처방년월/병원/제약사를 받으므로 OCR은 약품만 추출
-  const drugs = extractDrugs(lines, fields, avgConf);
+interface GeminiVisionDrug {
+  insuranceCode: string;
+  productName: string;
+  companyName: string;
+  quantity: string;
+  confidence: number; // 0-100, 자체평가
+}
 
+interface GeminiVisionResult {
+  drugs: GeminiVisionDrug[];
+}
+
+async function callGeminiVision(base64: string, mimeType: string): Promise<GeminiVisionResult> {
+  if (!process.env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY 미설정");
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+  const prompt = `당신은 한국 병원 처방전/처방통계 이미지 분석 전문가입니다.
+이미지에서 처방된 의약품을 모두 추출하세요.
+
+각 약품마다 다음을 추출:
+- insuranceCode: 9자리 숫자 보험코드 (없으면 빈 문자열)
+- productName: 약품 제품명 (예: "아모디핀정 5mg")
+- companyName: 제약회사명 (예: "한미약품")
+- quantity: 처방 수량/투여량 (숫자만)
+- confidence: 이 행의 인식 확신도 (0~100 정수)
+
+엄격한 규칙:
+- 제품명에 "(주)"가 들어있으면 회사명 일부이므로 제거
+- 행 헤더(약품명, 코드, 수량 등)는 약품이 아니므로 제외
+- 합계/소계 행은 제외
+- 알 수 없는 필드는 빈 문자열, confidence 는 본인 평가
+
+JSON 형식으로만 응답:
+{ "drugs": [ { "insuranceCode": "...", "productName": "...", "companyName": "...", "quantity": "...", "confidence": 0 } ] }`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: [{
+      role: "user",
+      parts: [
+        { inlineData: { mimeType, data: base64 } },
+        { text: prompt },
+      ],
+    }],
+    config: { responseMimeType: "application/json" },
+  });
+
+  const text = response.text ?? "";
+  const parsed = parseJsonLoose(text) as Partial<GeminiVisionResult> | null;
+  const drugs = Array.isArray(parsed?.drugs) ? parsed!.drugs : [];
   return {
-    source: "clova",
-    hospitalName: { value: "", confidence: 0 },
-    institutionCode: { value: "", confidence: 0 },
-    prescriptionDate: { value: "", confidence: 0 },
-    patientName: { value: "", confidence: 0 },
-    drugs,
-    avgConfidence: avgConf,
-    rawText: fullText,
+    drugs: drugs.map((d) => ({
+      insuranceCode: String(d.insuranceCode ?? "").trim(),
+      productName: String(d.productName ?? "").trim(),
+      companyName: String(d.companyName ?? "").trim(),
+      quantity: String(d.quantity ?? "").trim(),
+      confidence: clamp01_100(Number(d.confidence) || 0),
+    })),
   };
 }
 
-// UI 헤더/라벨/합계 등 약품이 아닌 라인
-const HEADER_WORDS = [
-  "처방", "의약품", "약품명", "약품코드", "보험코드", "청구코드", "사용자코드",
-  "수가코드", "코드명", "명령", "명칭", "단위", "수량", "단가", "금액", "총금액",
-  "총수량", "총사용량", "총투여량", "내원구분", "급여구분", "급비구분", "원내", "원외",
-  "제약회사", "제약사", "진료과", "진료실", "합계", "소계", "총계", "작업일자",
-  "검색기간", "검색조건", "처방일자", "환자명", "환자번호", "성명", "성별", "나이",
-  "통계", "항목", "필드", "드래그", "그룹", "기준", "약제", "약국자료", "원무자료",
-];
+// ── Gemini 병합/검증 LLM ──────────────────────────────────────────────────────
 
-// 약품명: 의미있는 한글 약품명 + 제형 힌트(정/캡슐/시럽 등) 또는 영숫자 조합
-// 순수 영문 코드(pregaba75) 약품도 허용
-// 보험코드: 9자리 숫자 또는 영문 대문자 + 숫자
-const CODE_NUM_RE = /\b(\d{9})\b/;
-const CODE_ALNUM_RE = /\b([A-Z][A-Z0-9]{5,})\b/;
-
-// 약품명: 한글+제형 패턴. 단, (주) 앞의 주는 제형이 아님
-// "(주)" = 주식회사 약어이므로 "X(주" 또는 "X주)" 패턴이면 제외
-const DRUG_FORM = "(?:정제|캅셀|캡슐|시럽|주사액|주사|연고|크림|겔|패취|포|산제|환제|정|액|주)";
-const DRUG_NAME_RE = new RegExp(
-  `([가-힣A-Za-z][가-힣A-Za-z0-9./()\\s-]{2,}?${DRUG_FORM})(?!\\))`
-);
-const DRUG_NAME_EN_RE = /\b([A-Z][A-Za-z0-9]{4,})\b/;
-
-// 제약회사명 패턴 (약품명으로 오인 방지)
-const COMPANY_RE = /[가-힣]+(?:제약|바이오|파마|팜|헬스케어|케미칼|사이언스|신약|약품|생명|의약)/;
-
-function isHeaderLine(text: string): boolean {
-  const stripped = text.trim();
-  if (stripped.length < 3) return true;
-  for (const w of HEADER_WORDS) {
-    if (stripped === w || stripped.startsWith(w + " ") || stripped.endsWith(" " + w)) return true;
-  }
-  if (!/\d/.test(stripped)) return true;
-  return false;
+interface MergedDrug {
+  insuranceCode: string;
+  productName: string;
+  companyName: string;
+  quantity: string;
+  confidence: number;
 }
 
-function extractDrugs(
-  lines: { text: string; conf: number }[],
-  fields: ClovaField[],
-  avgConf: number
-) {
-  const drugs: {
-    name: { value: string; confidence: number };
-    code: { value: string; confidence: number };
-    quantity: { value: string; confidence: number };
-    price: { value: string; confidence: number };
-  }[] = [];
+async function callGeminiMerge(args: {
+  clovaText: string;
+  geminiDraft: GeminiVisionResult | null;
+  masterCandidates: Array<{ insuranceCode: string | null; productName: string; companyName: string }>;
+}): Promise<MergedDrug[]> {
+  if (!process.env.GEMINI_API_KEY) {
+    // Gemini 미설정이면 Vision 결과만 사용
+    return args.geminiDraft?.drugs ?? [];
+  }
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-  const numRe = /[\d,]+(?:\.\d+)?/g;
+  const prompt = `당신은 처방전 OCR 결과를 검증/병합하는 전문가입니다.
+두 OCR 엔진의 결과를 비교하고 마스터 DB 후보를 참고해 가장 정확한 약품 리스트를 만드세요.
 
-  for (const line of lines) {
-    const text = line.text.trim();
-    if (isHeaderLine(text)) continue;
+# Clova OCR 텍스트
+${args.clovaText || "(없음)"}
 
-    // ── 코드 추출 ──────────────────────────────────────────
-    const codeNumMatch = text.match(CODE_NUM_RE);
-    const codeAlnumMatch = text.match(CODE_ALNUM_RE);
-    const code = codeNumMatch?.[1] ?? codeAlnumMatch?.[1] ?? "";
+# Gemini Vision 추출 결과
+${args.geminiDraft ? JSON.stringify(args.geminiDraft.drugs, null, 2) : "(없음)"}
 
-    // ── 약품명 추출 ────────────────────────────────────────
-    // 9자리 코드가 있으면 코드 뒤 텍스트에서 약품명 탐색 (제약사명은 코드 앞에 있음)
-    let searchText = text;
-    if (codeNumMatch) {
-      const codeIdx = text.indexOf(codeNumMatch[1]);
-      searchText = text.slice(codeIdx + codeNumMatch[1].length);
-    }
+# 마스터 DB 후보 (보험코드로 사전 조회됨)
+${args.masterCandidates.length ? JSON.stringify(args.masterCandidates, null, 2) : "(없음)"}
 
-    const nameKoMatch = searchText.match(DRUG_NAME_RE);
-    const nameEnMatch = searchText.match(DRUG_NAME_EN_RE);
-    let name = "";
-    if (nameKoMatch) {
-      name = nameKoMatch[1].trim();
-      // 제약회사명이 약품명으로 잡힌 경우 제거
-      if (COMPANY_RE.test(name)) name = "";
-    }
-    if (!name && nameEnMatch && !codeAlnumMatch) name = nameEnMatch[1].trim();
+규칙:
+- 두 OCR 결과가 일치하면 confidence 95+
+- 한 쪽만 인식했거나 불일치면 confidence 60~85
+- 마스터 DB 후보와 보험코드/제품명이 정확히 일치하면 confidence 100
+- 마스터에 없는 약품도 일단 포함 (사람이 확인하도록)
+- 헤더, 합계, 비약품 행은 제외
+- quantity 는 숫자만 (단위 제외)
 
-    // 약품명 또는 코드 중 하나는 필수
-    if (!name && !code) continue;
+JSON 응답:
+{ "drugs": [ { "insuranceCode": "...", "productName": "...", "companyName": "...", "quantity": "...", "confidence": 0 } ] }`;
 
-    // ── 숫자 필드 추출 (9자리 보험코드 제외) ──────────────
-    const allNums = (text.match(numRe) || []).filter((n) => {
-      const digits = n.replace(/[,.]/g, "");
-      return digits.length !== 9; // 보험코드(9자리)는 금액/수량에서 제외
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+      config: { responseMimeType: "application/json" },
     });
+    const parsed = parseJsonLoose(response.text ?? "") as { drugs?: MergedDrug[] } | null;
+    const drugs = Array.isArray(parsed?.drugs) ? parsed!.drugs : (args.geminiDraft?.drugs ?? []);
+    return drugs.map((d) => ({
+      insuranceCode: String(d.insuranceCode ?? "").trim(),
+      productName: String(d.productName ?? "").trim(),
+      companyName: String(d.companyName ?? "").trim(),
+      quantity: String(d.quantity ?? "").trim(),
+      confidence: clamp01_100(Number(d.confidence) || 0),
+    }));
+  } catch {
+    return args.geminiDraft?.drugs ?? [];
+  }
+}
 
-    if (allNums.length < 1) continue;
+// ── 마스터 DB 매칭 ────────────────────────────────────────────────────────────
 
-    const numericValues = allNums
-      .map((n) => ({ raw: n, num: parseFloat(n.replace(/,/g, "")) }))
-      .filter((x) => !isNaN(x.num) && x.num > 0);
+type MasterRow = {
+  id: string;
+  insuranceCode: string | null;
+  productName: string;
+  companyName: string;
+  price: number | null;
+};
 
-    numericValues.sort((a, b) => b.num - a.num);
-    // 가장 큰 값=총금액, 가장 작은 값=수량(투여량)
-    const price = numericValues[0]?.raw?.replace(/,/g, "") ?? "";
-    const quantity = numericValues[numericValues.length - 1]?.raw ?? "";
+function extractInsuranceCodes(clovaText: string, gemini: GeminiVisionResult | null): string[] {
+  const set = new Set<string>();
+  for (const m of clovaText.matchAll(/\b(\d{9})\b/g)) set.add(m[1]);
+  for (const d of gemini?.drugs ?? []) {
+    const code = d.insuranceCode.replace(/\D/g, "");
+    if (code.length === 9) set.add(code);
+  }
+  return Array.from(set);
+}
 
-    if (name && name.length < 2) continue;
+async function fetchMasterByCodes(codes: string[]): Promise<Map<string, MasterRow>> {
+  const map = new Map<string, MasterRow>();
+  if (codes.length === 0) return map;
+  const rows = await prisma.medication.findMany({
+    where: { insuranceCode: { in: codes } },
+    select: { id: true, insuranceCode: true, productName: true, companyName: true, price: true },
+  });
+  for (const r of rows) {
+    if (r.insuranceCode) map.set(r.insuranceCode, r);
+  }
+  return map;
+}
 
-    drugs.push({
-      name: { value: name, confidence: name ? (confForToken(name, fields) || line.conf || avgConf) : 0 },
-      code: { value: code, confidence: code ? (confForToken(code, fields) || line.conf || avgConf) : 0 },
-      quantity: { value: quantity, confidence: quantity ? (confForToken(quantity, fields) || line.conf) : 0 },
-      price: { value: price, confidence: price ? (confForToken(price, fields) || line.conf) : 0 },
-    });
+async function matchMedication(
+  item: MergedDrug,
+  masterByCode: Map<string, MasterRow>
+): Promise<{
+  insuranceCode: string;
+  productName: string;
+  companyName: string;
+  unitPrice: number | null;
+  matchedMedicationId: string | null;
+  matchConfidence: number;
+}> {
+  const code = item.insuranceCode.replace(/\D/g, "");
+  if (code.length === 9 && masterByCode.has(code)) {
+    const m = masterByCode.get(code)!;
+    return {
+      insuranceCode: code,
+      productName: m.productName,
+      companyName: m.companyName,
+      unitPrice: m.price,
+      matchedMedicationId: m.id,
+      matchConfidence: 100,
+    };
   }
 
-  if (drugs.length === 0) {
-    drugs.push({
-      name: { value: "", confidence: 0 },
-      code: { value: "", confidence: 0 },
-      quantity: { value: "", confidence: 0 },
-      price: { value: "", confidence: 0 },
+  // productName 부분 일치 fallback
+  if (item.productName.length >= 3) {
+    const candidates = await prisma.medication.findMany({
+      where: { productName: { contains: item.productName.slice(0, 8), mode: "insensitive" } },
+      select: { id: true, insuranceCode: true, productName: true, companyName: true, price: true },
+      take: 5,
     });
+    const exact = candidates.find((c: MasterRow) => c.productName === item.productName);
+    const partial = exact ?? candidates[0];
+    if (partial) {
+      return {
+        insuranceCode: partial.insuranceCode ?? item.insuranceCode,
+        productName: partial.productName,
+        companyName: partial.companyName,
+        unitPrice: partial.price,
+        matchedMedicationId: partial.id,
+        matchConfidence: exact ? 95 : 80,
+      };
+    }
   }
 
-  return drugs;
+  return {
+    insuranceCode: item.insuranceCode,
+    productName: item.productName,
+    companyName: item.companyName,
+    unitPrice: null,
+    matchedMedicationId: null,
+    matchConfidence: 0,
+  };
+}
+
+// ── 유틸 ──────────────────────────────────────────────────────────────────────
+
+function clamp01_100(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  if (n <= 1 && n > 0) return Math.round(n * 100); // 0~1 들어오면 % 변환
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+function parseJsonLoose(text: string): unknown {
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { /* fallthrough */ }
+  const m = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+  if (!m) return null;
+  try { return JSON.parse(m[0]); } catch { return null; }
 }
