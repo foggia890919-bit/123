@@ -236,25 +236,28 @@ export function formatTelegramMessage(s: ReportSummary): string {
   const won = (n: number) => n.toLocaleString("ko-KR") + "원";
   const date = s.reportDate.toISOString().slice(0, 10);
   const lines: string[] = [];
-  lines.push(`<b>📊 일일 매출 보고 — ${date}</b>`);
+  lines.push(`<b>📊 ${date} 매출 보고</b>`);
+  lines.push(`<i>전일 00:00 ~ 24:00 결제 기준</i>`);
   lines.push("");
-  lines.push(`총 매출: <b>${won(s.totals.salesAmount)}</b>`);
-  lines.push(`총 비용: ${won(s.totals.totalCost)} (수수료 ${won(s.totals.totalCommission)} 포함)`);
-  lines.push(`총 이익: <b>${won(s.totals.profit)}</b>`);
-  lines.push(`배송 건수: ${s.totals.shipments}건 / 출고 ${s.totals.bottles}병`);
+  lines.push(`💰 매출 <b>${won(s.totals.salesAmount)}</b>`);
+  lines.push(`📦 배송 ${s.totals.shipments}건 · 출고 ${s.totals.bottles}병`);
+  lines.push(`💚 이익 <b>${won(s.totals.profit)}</b> (수수료 ${won(s.totals.totalCommission)})`);
   lines.push("");
-  lines.push("<b>스토어 요약</b>");
-  for (const st of s.byStore) {
-    lines.push(`• ${st.storeName} — 매출 ${won(st.salesAmount)} / 이익 ${won(st.profit)} / ${st.bottles}병 / ${st.shipments}건`);
-  }
-  lines.push("");
-  lines.push("<b>품종(키워드)별</b>");
+  lines.push("<b>━━ 키워드별 (옵션 합산) ━━</b>");
   for (const r of s.byKeyword) {
     lines.push(
-      `• [${r.storeName}] ${r.keyword} — ${r.bottles}병 / 매출 ${won(r.salesAmount)} / 이익 ${won(r.profit)} / ${r.shipments}건 배송`,
+      `• <b>${r.keyword}</b>${s.byStore.length > 1 ? ` <i>[${r.storeName}]</i>` : ""}\n` +
+      `   ${r.bottles}병 · ${won(r.salesAmount)} · 이익 ${won(r.profit)} · ${r.shipments}건`,
     );
   }
-  if (s.byKeyword.length === 0) lines.push("• (매출 없음)");
+  if (s.byKeyword.length === 0) lines.push("(매출 없음)");
+  if (s.byStore.length > 1) {
+    lines.push("");
+    lines.push("<b>━━ 스토어별 ━━</b>");
+    for (const st of s.byStore) {
+      lines.push(`• ${st.storeName} — ${won(st.salesAmount)} · ${st.bottles}병 · ${st.shipments}건`);
+    }
+  }
   return lines.join("\n");
 }
 

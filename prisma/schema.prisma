@@ -169,7 +169,7 @@ model Workspace {
   googleServiceAccountEmail String?
   googleServiceAccountKey   String?
   // 보고 시각 (KST HH:mm)
-  reportTime    String            @default("08:00")
+  reportTime    String            @default("09:00")
   enabled       Boolean           @default(true)
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
@@ -215,6 +215,7 @@ model NaverStore {
   updatedAt    DateTime       @updatedAt
   products     NaverProduct[]
   orders       NaverOrder[]
+  backfillJobs BackfillJob[]
 
   @@unique([workspaceId, code])
   @@index([workspaceId])
@@ -323,4 +324,25 @@ model DailyReportLog {
 
   @@unique([workspaceId, reportDate])
   @@index([workspaceId])
+}
+
+model BackfillJob {
+  id          String       @id @default(cuid())
+  workspaceId String
+  storeId     String
+  store       NaverStore   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  fromDate    DateTime
+  toDate      DateTime
+  // 다음에 처리할 날짜 (KST 자정). 처음엔 fromDate, 진행되면서 앞으로 이동.
+  cursor      DateTime
+  status      String       @default("PENDING") // PENDING | RUNNING | DONE | FAILED
+  ordersAdded Int          @default(0)
+  itemsAdded  Int          @default(0)
+  errors      Json?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([workspaceId])
+  @@index([storeId])
+  @@index([status])
 }

@@ -49,6 +49,8 @@ export default function DashboardPage() {
             <option value={30}>최근 30일</option>
             <option value={60}>최근 60일</option>
             <option value={90}>최근 90일</option>
+            <option value={180}>최근 180일</option>
+            <option value={365}>최근 1년</option>
           </select>
           <select value={storeId} onChange={(e) => setStoreId(e.target.value)} className="border rounded px-2 py-1">
             <option value="">모든 스토어</option>

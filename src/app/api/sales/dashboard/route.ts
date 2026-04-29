@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
   try {
     const { workspace } = await requireWorkspace();
     const url = new URL(req.url);
-    const days = Math.max(1, Math.min(180, parseInt(url.searchParams.get("days") ?? "14", 10)));
+    const days = Math.max(1, Math.min(400, parseInt(url.searchParams.get("days") ?? "14", 10)));
     const storeId = url.searchParams.get("storeId") ?? "";
     const keyword = url.searchParams.get("keyword") ?? "";
 

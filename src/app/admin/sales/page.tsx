@@ -117,6 +117,7 @@ export default function SalesAdminPage() {
           <Link href="/admin/sales/stores" className="px-3 py-2 rounded-md border text-sm">스토어</Link>
           <Link href="/admin/sales/products" className="px-3 py-2 rounded-md border text-sm">상품</Link>
           <Link href="/admin/sales/costs" className="px-3 py-2 rounded-md bg-gray-900 text-white text-sm">원가/키워드</Link>
+          <Link href="/admin/sales/backfill" className="px-3 py-2 rounded-md bg-purple-600 text-white text-sm">📥 1년 백필</Link>
           <Link href="/admin/sales/upload" className="px-3 py-2 rounded-md bg-gray-900 text-white text-sm">매출 업로드</Link>
         </div>
       </div>

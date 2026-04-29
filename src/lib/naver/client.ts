@@ -71,13 +71,28 @@ async function naverFetch<T>(
   return (await res.json()) as T;
 }
 
-/** 결제일자 기간으로 결제 완료된 주문 ID 목록 조회 */
+/** 결제일자 기간으로 결제 완료된 주문 ID 목록 조회 (orderId 단위 dedupe) */
 export async function listPaidOrderIds(
   clientId: string,
   clientSecret: string,
   fromIso: string,
   toIso: string,
 ): Promise<string[]> {
+  const ids = await listChangedProductOrderIds(clientId, clientSecret, fromIso, toIso);
+  const seen = new Set<string>();
+  for (const row of ids) seen.add(row.orderId);
+  return Array.from(seen);
+}
+
+/** 결제일자 기간 내의 (orderId, productOrderId) 페어 목록 — bulk 쿼리에 사용 */
+export async function listChangedProductOrderIds(
+  clientId: string,
+  clientSecret: string,
+  fromIso: string,
+  toIso: string,
+): Promise<{ orderId: string; productOrderId: string }[]> {
+  const out: { orderId: string; productOrderId: string }[] = [];
+  // last-changed-statuses 는 페이지 없이 최대치를 한 번에 줌. 24시간 이내 권장.
   const params = new URLSearchParams({
     lastChangedFrom: fromIso,
     lastChangedTo: toIso,
@@ -86,9 +101,69 @@ export async function listPaidOrderIds(
   const data = await naverFetch<{
     data?: { lastChangeStatuses?: { productOrderId: string; orderId: string }[] };
   }>(clientId, clientSecret, `/v1/pay-order/seller/product-orders/last-changed-statuses?${params}`);
-  const seen = new Set<string>();
-  for (const row of data.data?.lastChangeStatuses ?? []) seen.add(row.orderId);
-  return Array.from(seen);
+  for (const row of data.data?.lastChangeStatuses ?? []) {
+    out.push({ orderId: row.orderId, productOrderId: row.productOrderId });
+  }
+  return out;
+}
+
+export interface NaverBulkProductOrder {
+  productOrder: {
+    productOrderId: string;
+    orderId?: string;
+    productId?: string;
+    channelProductNo?: string;
+    productName: string;
+    productOption?: string;
+    quantity: number;
+    unitPrice: number;
+    optionPrice?: number;
+    totalPaymentAmount: number;
+    totalProductAmount?: number;
+    productDiscountAmount?: number;
+    sellerProductCode?: string;
+    productClass?: string;
+    productOrderStatus?: string;
+    paymentDate?: string;
+    placeOrderDate?: string;
+    knowledgeShoppingSellingInterlockCommission?: number;
+    payCommissionAmount?: number;
+    sellerCommissionAmount?: number;
+    settleAmount?: number;
+    settlementAmount?: number;
+    deliveryFeeAmount?: number;
+    paymentMeans?: string;
+  };
+  order?: {
+    orderId: string;
+    paymentDate?: string;
+    paymentMeans?: string;
+    ordererName?: string;
+  };
+  delivery?: { deliveryFeeAmount?: number };
+}
+
+/** productOrderIds 를 받아 상세를 한 번에 조회 (bulk). 한 호출당 최대 300개. */
+export async function queryProductOrders(
+  clientId: string,
+  clientSecret: string,
+  productOrderIds: string[],
+): Promise<NaverBulkProductOrder[]> {
+  const out: NaverBulkProductOrder[] = [];
+  for (let i = 0; i < productOrderIds.length; i += 300) {
+    const slice = productOrderIds.slice(i, i + 300);
+    const data = await naverFetch<{ data?: NaverBulkProductOrder[] }>(
+      clientId,
+      clientSecret,
+      `/v1/pay-order/seller/product-orders/query`,
+      {
+        method: "POST",
+        body: JSON.stringify({ productOrderIds: slice, quantityClaimCompatibility: true }),
+      },
+    );
+    for (const row of data.data ?? []) out.push(row);
+  }
+  return out;
 }
 
 export interface NaverOrderDetail {
