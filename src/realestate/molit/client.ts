@@ -9,14 +9,22 @@
 // 캐시(MolitTrade 테이블)를 거쳐 사용한다.
 
 const ENDPOINTS = {
-  // 상업업무용 부동산 매매
+  // 상업업무용 부동산 매매 (※ 상업용 전월세는 공공데이터에 없음)
   commercialSale: "https://apis.data.go.kr/1613000/RTMSDataSvcNrgTrade/getRTMSDataSvcNrgTrade",
-  // 오피스텔 매매
+  // 토지 매매
+  landSale: "https://apis.data.go.kr/1613000/RTMSDataSvcLandTrade/getRTMSDataSvcLandTrade",
+  // 오피스텔
   officetelSale: "https://apis.data.go.kr/1613000/RTMSDataSvcOffiTrade/getRTMSDataSvcOffiTrade",
-  // 오피스텔 전월세
   officetelRent: "https://apis.data.go.kr/1613000/RTMSDataSvcOffiRent/getRTMSDataSvcOffiRent",
-  // 아파트 매매
+  // 아파트
   apartmentSale: "https://apis.data.go.kr/1613000/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev",
+  apartmentRent: "https://apis.data.go.kr/1613000/RTMSDataSvcAptRent/getRTMSDataSvcAptRent",
+  // 연립·다세대
+  rowhouseSale: "https://apis.data.go.kr/1613000/RTMSDataSvcRHTrade/getRTMSDataSvcRHTrade",
+  rowhouseRent: "https://apis.data.go.kr/1613000/RTMSDataSvcRHRent/getRTMSDataSvcRHRent",
+  // 단독·다가구
+  detachedSale: "https://apis.data.go.kr/1613000/RTMSDataSvcSHTrade/getRTMSDataSvcSHTrade",
+  detachedRent: "https://apis.data.go.kr/1613000/RTMSDataSvcSHRent/getRTMSDataSvcSHRent",
 } as const;
 
 export type MolitEndpoint = keyof typeof ENDPOINTS;
@@ -50,9 +58,15 @@ export interface MolitTradeItem {
 
 const ENDPOINT_META: Record<MolitEndpoint, { dealKind: string; tradeType: "매매" | "전월세" }> = {
   commercialSale: { dealKind: "상업업무용", tradeType: "매매" },
+  landSale: { dealKind: "토지", tradeType: "매매" },
   officetelSale: { dealKind: "오피스텔", tradeType: "매매" },
   officetelRent: { dealKind: "오피스텔", tradeType: "전월세" },
   apartmentSale: { dealKind: "아파트", tradeType: "매매" },
+  apartmentRent: { dealKind: "아파트", tradeType: "전월세" },
+  rowhouseSale: { dealKind: "연립다세대", tradeType: "매매" },
+  rowhouseRent: { dealKind: "연립다세대", tradeType: "전월세" },
+  detachedSale: { dealKind: "단독다가구", tradeType: "매매" },
+  detachedRent: { dealKind: "단독다가구", tradeType: "전월세" },
 };
 
 export async function fetchMolitTrades(q: MolitQuery): Promise<MolitTradeItem[]> {
