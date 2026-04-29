@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { Building2, User, ChevronDown, Tag, Loader2, Search } from "lucide-react";
+import { Building2, User, ChevronDown, Tag, Loader2, Search, Plus, Trash2, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { BizLayout } from "../page";
 
@@ -96,6 +96,8 @@ function TypeDropdown({ clientId, current, onUpdated }: {
   );
 }
 
+const EMPTY_FORM = { clientName: "", bizNumber: "", dealerType: "CORPORATION" as string };
+
 export default function BizDealersPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
@@ -103,21 +105,58 @@ export default function BizDealersPage() {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [filterType, setFilterType] = useState<string>("ALL");
+  const [modal, setModal] = useState(false);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    fetch("/api/user-clients")
+      .then((r) => r.json())
+      .then((d) => setClients(Array.isArray(d) ? d : []))
+      .finally(() => setLoading(false));
+  }, []);
 
   useEffect(() => {
     if (status === "loading") return;
     if (!session) { router.push("/login"); return; }
     const role = session.user.role;
     if (role !== "BIZ" && role !== "ADMIN") { router.push("/"); return; }
-    fetch("/api/user-clients")
-      .then((r) => r.json())
-      .then((d) => setClients(Array.isArray(d) ? d : []))
-      .finally(() => setLoading(false));
-  }, [session, status, router]);
+    load();
+  }, [session, status, router, load]);
 
   const handleUpdated = useCallback((id: string, type: DealerType) => {
     setClients((prev) => prev.map((c) => c.id === id ? { ...c, dealerType: type } : c));
   }, []);
+
+  async function handleDelete(c: Client) {
+    if (!confirm(`"${c.clientName}" 을(를) 삭제할까요?`)) return;
+    const res = await fetch(`/api/dealer?id=${c.id}`, { method: "DELETE" });
+    if (res.ok) setClients((prev) => prev.filter((x) => x.id !== c.id));
+  }
+
+  async function handleAdd() {
+    setFormError(null);
+    if (!form.clientName.trim() || !form.bizNumber.trim()) {
+      setFormError("거래처명과 사업자번호는 필수입니다.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch("/api/dealer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...form, dealerType: form.dealerType || null }),
+      });
+      const d = await res.json();
+      if (!res.ok) { setFormError(d.error || "등록 실패"); return; }
+      setModal(false);
+      setForm(EMPTY_FORM);
+      load();
+    } finally {
+      setSaving(false);
+    }
+  }
 
   const filtered = clients.filter((c) => {
     const matchQ = !query || c.clientName.includes(query) || c.bizNumber.includes(query);
@@ -125,7 +164,6 @@ export default function BizDealersPage() {
     return matchQ && matchT;
   });
 
-  // counts per type
   const counts: Record<string, number> = { ALL: clients.length, NONE: 0 };
   for (const t of TYPE_ORDER) counts[t] = 0;
   for (const c of clients) {
@@ -136,9 +174,18 @@ export default function BizDealersPage() {
   return (
     <BizLayout>
       <div className="space-y-4">
-        <div>
-          <h2 className="text-lg font-bold text-gray-900">법인·딜러 등록/관리</h2>
-          <p className="text-xs text-gray-500 mt-0.5">거래처를 법인 계층별로 분류합니다</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-bold text-gray-900">법인·딜러 등록/관리</h2>
+            <p className="text-xs text-gray-500 mt-0.5">거래처를 법인 계층별로 분류합니다</p>
+          </div>
+          <button
+            onClick={() => { setForm(EMPTY_FORM); setFormError(null); setModal(true); }}
+            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            법인·딜러 등록
+          </button>
         </div>
 
         {/* 계층 안내 */}
@@ -159,7 +206,7 @@ export default function BizDealersPage() {
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <Input
-              placeholder="거래처명 검색"
+              placeholder="거래처명 또는 사업자번호 검색"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               className="pl-9 text-sm"
@@ -174,9 +221,7 @@ export default function BizDealersPage() {
               key={key}
               onClick={() => setFilterType(key)}
               className={`text-xs px-2.5 py-1 rounded-full font-medium transition-colors ${
-                filterType === key
-                  ? "bg-gray-900 text-white"
-                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                filterType === key ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
               }`}
             >
               {label} {counts[key] !== undefined ? `(${counts[key]})` : ""}
@@ -190,7 +235,7 @@ export default function BizDealersPage() {
           </div>
         ) : filtered.length === 0 ? (
           <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-sm text-gray-400">
-            거래처가 없습니다
+            {query ? "검색 결과가 없어요." : "등록된 항목이 없어요."}
           </div>
         ) : (
           <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
@@ -212,13 +257,91 @@ export default function BizDealersPage() {
                       <p className="text-xs text-gray-400">{c.bizNumber}</p>
                     </div>
                   </div>
-                  <TypeDropdown clientId={c.id} current={c.dealerType} onUpdated={handleUpdated} />
+                  <div className="flex items-center gap-2">
+                    <TypeDropdown clientId={c.id} current={c.dealerType} onUpdated={handleUpdated} />
+                    <button
+                      onClick={() => handleDelete(c)}
+                      className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      title="삭제"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
           </div>
         )}
       </div>
+
+      {/* 등록 모달 */}
+      {modal && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm">
+            <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100">
+              <h2 className="font-semibold text-gray-900">법인·딜러 등록</h2>
+              <button onClick={() => setModal(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              {formError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{formError}</p>}
+
+              <div className="space-y-1">
+                <label className="block text-xs font-medium text-gray-600">거래처명 *</label>
+                <input
+                  value={form.clientName}
+                  onChange={(e) => setForm({ ...form, clientName: e.target.value })}
+                  placeholder="예: (주)와이케이메디"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-xs font-medium text-gray-600">사업자번호 *</label>
+                <input
+                  value={form.bizNumber}
+                  onChange={(e) => setForm({ ...form, bizNumber: e.target.value })}
+                  placeholder="000-00-00000"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-xs font-medium text-gray-600">유형</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {TYPE_ORDER.map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => setForm({ ...form, dealerType: t })}
+                      className={`px-3 py-2 text-xs rounded-lg border font-medium transition-colors text-left ${
+                        form.dealerType === t
+                          ? `${DEALER_COLORS[t]} border-transparent`
+                          : "border-gray-200 text-gray-600 hover:bg-gray-50"
+                      }`}
+                    >
+                      {DEALER_LABELS[t]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="px-6 pb-5 flex gap-2 justify-end">
+              <button onClick={() => setModal(false)} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+                취소
+              </button>
+              <button
+                onClick={handleAdd}
+                disabled={saving}
+                className="px-5 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                등록
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </BizLayout>
   );
 }
