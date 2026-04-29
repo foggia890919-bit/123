@@ -101,7 +101,6 @@ export async function POST(req: NextRequest) {
                 "#{거래처명}": clientName,
                 "#{제약사명}": r.companyName,
                 "#{영업사원}": user.name ?? user.email ?? "",
-                "#{요청유형}": r.requestType,
               },
               buttons: [
                 {
@@ -112,7 +111,7 @@ export async function POST(req: NextRequest) {
                 },
               ],
             },
-            `[메디밴스] ${clientName} × ${r.companyName} 필터링 ${r.requestType} 요청입니다. 응답: ${respondUrl}`
+            `[와이케이메디] 필터링 요청\n\n거래처: ${clientName}\n제약사: ${r.companyName}\n담당 영업사원: ${user.name ?? user.email ?? ""}\n\n위 건 필터링 가능 여부를 확인해 주세요.\n응답: ${respondUrl}`
           );
           await prisma.filterRequest.update({
             where: { id: r.id },
