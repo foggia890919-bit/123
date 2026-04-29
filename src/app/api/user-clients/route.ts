@@ -57,14 +57,28 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const rows = await prisma.userClient.findMany({
-    where: { userId },
-    orderBy: { createdAt: "desc" },
-    select: {
-      id: true, clientName: true, bizNumber: true,
-      bizFileName: true, approved: true, createdAt: true,
-    },
-  });
+  // 병의원 목록: dealerType IS NULL인 것만 (법인·딜러 제외)
+  // dealerType 컬럼이 아직 없으면 fallback
+  let rows;
+  try {
+    rows = await prisma.userClient.findMany({
+      where: { userId, dealerType: null },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true, clientName: true, bizNumber: true,
+        bizFileName: true, approved: true, createdAt: true,
+      },
+    });
+  } catch {
+    rows = await prisma.userClient.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true, clientName: true, bizNumber: true,
+        bizFileName: true, approved: true, createdAt: true,
+      },
+    });
+  }
   return NextResponse.json(rows);
 }
 
