@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { BizLayout } from "@/app/biz/page";
-import { Plus, Pencil, Trash2, Search, ToggleLeft, ToggleRight, Loader2, X, ChevronDown } from "lucide-react";
+import { Plus, Pencil, Trash2, Search, ToggleLeft, ToggleRight, Loader2, X, ChevronDown, Upload, Download, CheckCircle, AlertCircle } from "lucide-react";
+import * as XLSX from "xlsx";
 
 interface FilterMapping {
   id: string;
@@ -145,6 +146,18 @@ function Autocomplete<T>({
   );
 }
 
+// ── 엑셀 템플릿 다운로드 ─────────────────────────────────────
+function downloadTemplate() {
+  const ws = XLSX.utils.aoa_to_sheet([
+    ["거래처", "상위법인", "담당자명", "담당자연락처", "제약사1", "제약사2", "제약사3"],
+    ["용삼의원", "메디필스1", "홍길동", "010-1234-5678", "에이치엘비제약(주)", "(주)메디카코리아", ""],
+  ]);
+  ws["!cols"] = [14, 14, 10, 14, 16, 16, 16].map((w) => ({ wch: w }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "매핑");
+  XLSX.writeFile(wb, "필터매핑_템플릿.xlsx");
+}
+
 // ── 메인 컨텐츠 (탭 임베드용 named export) ───────────────────
 export function FilterMappingContent() {
   const [mappings, setMappings] = useState<FilterMapping[]>([]);
@@ -156,6 +169,9 @@ export function FilterMappingContent() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [bulkUploading, setBulkUploading] = useState(false);
+  const [bulkResult, setBulkResult] = useState<{ created: number; updated: number; errors: string[] } | null>(null);
+  const bulkRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -168,6 +184,41 @@ export function FilterMappingContent() {
   }, [showInactive]);
 
   useEffect(() => { load(); }, [load]);
+
+  async function handleBulkUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setBulkUploading(true);
+    setBulkResult(null);
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf);
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const raw: string[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+      const [, ...dataRows] = raw; // skip header row
+      const rows = dataRows
+        .filter((r) => r[0]?.trim() && r[1]?.trim())
+        .map((r) => ({
+          clientName: String(r[0]).trim(),
+          submissionEntity: String(r[1]).trim(),
+          managerName: String(r[2] ?? "").trim() || undefined,
+          managerPhone: String(r[3] ?? "").trim() || undefined,
+          companies: r.slice(4).map((c) => String(c).trim()).filter(Boolean),
+        }));
+      if (rows.length === 0) { alert("유효한 행이 없어요."); return; }
+      const res = await fetch("/api/filter-mapping/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(rows),
+      });
+      const result = await res.json();
+      setBulkResult(result);
+      load();
+    } finally {
+      setBulkUploading(false);
+    }
+  }
 
   function openAdd() {
     setForm(EMPTY_FORM);
@@ -243,14 +294,36 @@ export function FilterMappingContent() {
             <h1 className="text-xl font-bold text-gray-900">필터링 매핑 관리</h1>
             <p className="text-sm text-gray-500 mt-0.5">거래처 × 제약사별 제출처 및 담당자 설정</p>
           </div>
-          <button
-            onClick={openAdd}
-            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            매핑 추가
-          </button>
+          <div className="flex items-center gap-2">
+            <input ref={bulkRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleBulkUpload} />
+            <button onClick={downloadTemplate}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+              <Download className="w-4 h-4" />템플릿
+            </button>
+            <button onClick={() => bulkRef.current?.click()} disabled={bulkUploading}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50">
+              {bulkUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              엑셀 업로드
+            </button>
+            <button onClick={openAdd}
+              className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors">
+              <Plus className="w-4 h-4" />매핑 추가
+            </button>
+          </div>
         </div>
+
+        {bulkResult && (
+          <div className={`flex items-start gap-2 text-sm rounded-lg px-4 py-3 ${bulkResult.errors.length > 0 ? "bg-yellow-50 border border-yellow-200" : "bg-green-50 border border-green-200"}`}>
+            {bulkResult.errors.length === 0
+              ? <CheckCircle className="w-4 h-4 text-green-600 shrink-0 mt-0.5" />
+              : <AlertCircle className="w-4 h-4 text-yellow-600 shrink-0 mt-0.5" />}
+            <div>
+              <p className="font-medium text-gray-800">신규 {bulkResult.created}건 등록 · 수정 {bulkResult.updated}건</p>
+              {bulkResult.errors.map((e, i) => <p key={i} className="text-xs text-red-600 mt-0.5">{e}</p>)}
+            </div>
+            <button onClick={() => setBulkResult(null)} className="ml-auto text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
+          </div>
+        )}
 
         <div className="flex items-center gap-3">
           <div className="relative flex-1 max-w-sm">
