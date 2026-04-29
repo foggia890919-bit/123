@@ -215,18 +215,16 @@ export default function StatsPage() {
       if (data.error) throw new Error(data.error);
       setOcr(data);
       setEditOcr(JSON.parse(JSON.stringify(data)));
-      // 95%+ 약품만 자동으로 오른쪽 사람 확정창에 미리 채움
-      const autoFilled: ManualDrug[] = (data.drugs ?? [])
-        .filter((d) => !d.manualCheck)
-        .map((d) => ({
-          insuranceCode: d.insuranceCode.value,
-          companyName: d.companyName.value,
-          productName: d.productName.value,
-          quantity: d.quantity.value,
-          unitPrice: d.unitPrice,
-          matchedMedicationId: d.matchedMedicationId,
-        }));
-      setManualDrugs(autoFilled.length ? [...autoFilled, emptyManualDrug()] : [emptyManualDrug()]);
+      // OCR 모든 행을 오른쪽 확정창에 1:1 페어링 (사람이 검토 후 수정)
+      const paired: ManualDrug[] = (data.drugs ?? []).map((d) => ({
+        insuranceCode: d.insuranceCode.value,
+        companyName: d.companyName.value,
+        productName: d.productName.value,
+        quantity: d.quantity.value,
+        unitPrice: d.unitPrice,
+        matchedMedicationId: d.matchedMedicationId,
+      }));
+      setManualDrugs(paired.length ? paired : [emptyManualDrug()]);
       setZoomEnabled(true);
       if (!selectedClient && data.hospitalName?.value) {
         setHospitalQuery(data.hospitalName.value);
@@ -243,37 +241,6 @@ export default function StatsPage() {
     if (!zoomEnabled) return;
     if (isZoomed) { setZoomLevel(100); setIsZoomed(false); }
     else { setZoomLevel(200); setIsZoomed(true); }
-  }
-
-  // 중간 패널: AI 결과를 행 단위로 오른쪽으로 복사
-  function copyAiRowToManual(idx: number) {
-    if (!editOcr) return;
-    const d = editOcr.drugs[idx];
-    if (!d) return;
-    const row: ManualDrug = {
-      insuranceCode: d.insuranceCode.value,
-      companyName: d.companyName.value,
-      productName: d.productName.value,
-      quantity: d.quantity.value,
-      unitPrice: d.unitPrice,
-      matchedMedicationId: d.matchedMedicationId,
-    };
-    setManualDrugs((prev) => {
-      const filtered = prev.filter((p) => p.insuranceCode || p.productName || p.quantity);
-      return [...filtered, row, emptyManualDrug()];
-    });
-  }
-  function copyAllAiToManual() {
-    if (!editOcr) return;
-    const rows: ManualDrug[] = editOcr.drugs.map((d) => ({
-      insuranceCode: d.insuranceCode.value,
-      companyName: d.companyName.value,
-      productName: d.productName.value,
-      quantity: d.quantity.value,
-      unitPrice: d.unitPrice,
-      matchedMedicationId: d.matchedMedicationId,
-    }));
-    setManualDrugs([...rows, emptyManualDrug()]);
   }
 
   // 오른쪽 패널 — 사람 입력
@@ -477,7 +444,7 @@ export default function StatsPage() {
         </div>
 
         {/* 메인 3-pane view: 이미지 / AI 결과 / 사람 확정 */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* 왼쪽: 이미지 */}
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
             {imageUrl && (
@@ -544,107 +511,88 @@ export default function StatsPage() {
             </div>
           </div>
 
-          {/* 중간: AI 변환 결과 (Clova + Gemini Vision + LLM 검증) */}
+          {/* 중간: OCR 인식 원본 (read-only, 항상 4컬럼 헤더 표시) */}
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col">
-            {!editOcr ? (
-              <div className="flex-1 flex flex-col items-center justify-center gap-3 p-10 text-center">
-                <BarChart3 className="w-12 h-12 text-gray-200" />
-                <p className="text-sm text-gray-400">처방전을 업로드하고<br />인식 버튼을 누르면 AI 변환 결과가 표시됩니다</p>
-              </div>
-            ) : (
-              <>
-                <div className="border-b border-gray-100 px-3 py-2.5 flex items-center gap-2 flex-wrap">
-                  <span className="text-xs font-semibold text-gray-700">AI 변환</span>
-                  <span className="text-xs bg-blue-50 text-blue-600 border border-blue-200 px-1.5 py-0.5 rounded">CLOVA + GEMINI</span>
-                  <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">평균 <strong>{editOcr.avgConfidence}%</strong></span>
+            <div className="border-b border-gray-100 px-3 py-2.5 flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-semibold text-gray-700">OCR 인식 원본</span>
+              <span className="text-xs bg-blue-50 text-blue-600 border border-blue-200 px-1.5 py-0.5 rounded">CLOVA + GEMINI</span>
+              {editOcr ? (
+                <>
+                  <span className={`text-xs px-1.5 py-0.5 rounded border ${confColor(editOcr.avgConfidence)}`}>
+                    예상 정확도 <strong>{editOcr.avgConfidence}%</strong>
+                  </span>
                   {editOcr.manualCheckCount > 0 && (
                     <span className="text-xs bg-red-100 text-red-700 border border-red-300 px-1.5 py-0.5 rounded font-semibold">
                       검토 {editOcr.manualCheckCount}건
                     </span>
                   )}
-                  <button onClick={copyAllAiToManual}
-                    className="ml-auto text-[11px] px-2 py-1 rounded border border-blue-300 bg-blue-50 hover:bg-blue-100 text-blue-700 flex items-center gap-1">
-                    전체 복사<ArrowRight className="w-3 h-3" />
-                  </button>
-                </div>
+                </>
+              ) : (
+                <span className="text-xs text-gray-400">대기 중</span>
+              )}
+              {editOcr && (
+                <button onClick={() => setMiddleTab(middleTab === "ai" ? "raw" : "ai")}
+                  className="ml-auto text-[11px] px-2 py-1 rounded border border-gray-300 bg-white hover:bg-gray-50 text-gray-600">
+                  {middleTab === "ai" ? "원본 텍스트" : "표 보기"}
+                </button>
+              )}
+            </div>
 
-                <div className="flex border-b border-gray-100 px-3 gap-3">
-                  <button onClick={() => setMiddleTab("ai")}
-                    className={`py-1.5 text-xs font-medium border-b-2 transition-colors ${middleTab === "ai" ? "border-blue-500 text-blue-600" : "border-transparent text-gray-400 hover:text-gray-600"}`}>
-                    AI 결과
-                  </button>
-                  <button onClick={() => setMiddleTab("raw")}
-                    className={`py-1.5 text-xs font-medium border-b-2 transition-colors ${middleTab === "raw" ? "border-blue-500 text-blue-600" : "border-transparent text-gray-400 hover:text-gray-600"}`}>
-                    원본 텍스트
-                  </button>
+            {editOcr && middleTab === "raw" ? (
+              <div className="flex-1 overflow-y-auto p-3 space-y-3">
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-500 mb-1">CLOVA OCR</p>
+                  <pre className="text-[11px] text-gray-700 bg-gray-50 border border-gray-200 rounded p-2 whitespace-pre-wrap font-mono leading-relaxed">
+                    {editOcr.rawClovaText || "(없음)"}
+                  </pre>
                 </div>
-
-                {middleTab === "raw" ? (
-                  <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                    <div>
-                      <p className="text-[10px] font-semibold text-gray-500 mb-1">CLOVA OCR</p>
-                      <pre className="text-[11px] text-gray-700 bg-gray-50 border border-gray-200 rounded p-2 whitespace-pre-wrap font-mono leading-relaxed">
-                        {editOcr.rawClovaText || "(없음)"}
-                      </pre>
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-semibold text-gray-500 mb-1">GEMINI VISION</p>
-                      <pre className="text-[11px] text-gray-700 bg-gray-50 border border-gray-200 rounded p-2 whitespace-pre-wrap font-mono leading-relaxed">
-                        {editOcr.rawGeminiText || "(없음)"}
-                      </pre>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex-1 overflow-y-auto p-3">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="border-b border-gray-200 bg-gray-50">
-                          <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-24">보험코드</th>
-                          <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-20">제약사</th>
-                          <th className="text-left py-1.5 px-1.5 font-medium text-gray-500">제품명</th>
-                          <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-12">수량</th>
-                          <th className="py-1.5 px-1 w-8"></th>
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-500 mb-1">GEMINI VISION</p>
+                  <pre className="text-[11px] text-gray-700 bg-gray-50 border border-gray-200 rounded p-2 whitespace-pre-wrap font-mono leading-relaxed">
+                    {editOcr.rawGeminiText || "(없음)"}
+                  </pre>
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto p-3">
+                <table className="w-full text-xs table-fixed">
+                  <thead>
+                    <tr className="border-b border-gray-200 bg-gray-50">
+                      <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[26%]">보험코드</th>
+                      <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[20%]">제약사</th>
+                      <th className="text-left py-1.5 px-1.5 font-medium text-gray-500">제품명</th>
+                      <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[14%]">수량</th>
+                      <th className="py-1.5 px-1 w-[34px]"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {!editOcr || editOcr.drugs.length === 0 ? (
+                      <tr><td colSpan={5} className="py-10 text-center text-gray-400 text-xs">
+                        {ocrLoading ? "인식 중..." : "처방전 인식 후 결과가 여기 표시됩니다"}
+                      </td></tr>
+                    ) : editOcr.drugs.map((d, i) => {
+                      const conf = d.finalConfidence;
+                      const rowBg = d.manualCheck ? "bg-red-50" : conf >= 95 ? "bg-green-50/40" : "";
+                      return (
+                        <tr key={i} className={`border-b border-gray-100 h-9 ${rowBg}`}>
+                          <td className="py-1.5 px-1.5 font-mono text-[11px] truncate" title={d.insuranceCode.value}>{d.insuranceCode.value || "—"}</td>
+                          <td className="py-1.5 px-1.5 text-[11px] truncate" title={d.companyName.value}>{d.companyName.value || "—"}</td>
+                          <td className="py-1.5 px-1.5 text-[11px]">
+                            <div className="flex items-center gap-1">
+                              <span className="truncate" title={d.productName.value}>{d.productName.value || "—"}</span>
+                              <span className={`shrink-0 text-[9px] px-1 py-0.5 rounded border font-medium ${confColor(conf)}`}>{conf}%</span>
+                            </div>
+                          </td>
+                          <td className="py-1.5 px-1.5 text-[11px] truncate">{d.quantity.value || "—"}</td>
+                          <td className="py-1.5 px-1 text-blue-500" title={`${conf}% 확신 — 오른쪽 행으로 매칭됨`}>
+                            <ArrowRight className="w-4 h-4 -mr-1" />
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {editOcr.drugs.length === 0 ? (
-                          <tr><td colSpan={5} className="py-6 text-center text-gray-400 text-xs">인식된 약품이 없습니다</td></tr>
-                        ) : editOcr.drugs.map((d, i) => {
-                          const conf = d.finalConfidence;
-                          const rowBg = d.manualCheck ? "bg-red-50" : conf >= 95 ? "bg-green-50/30" : "";
-                          return (
-                            <tr key={i} className={`border-b border-gray-100 ${rowBg}`}>
-                              <td className="py-1.5 px-1.5 font-mono text-[11px]">{d.insuranceCode.value || "—"}</td>
-                              <td className="py-1.5 px-1.5 text-[11px] truncate" title={d.companyName.value}>{d.companyName.value || "—"}</td>
-                              <td className="py-1.5 px-1.5 text-[11px]">
-                                <div className="flex items-center gap-1">
-                                  <span className="truncate" title={d.productName.value}>{d.productName.value || "—"}</span>
-                                  <span className={`shrink-0 text-[9px] px-1 py-0.5 rounded border font-medium ${confColor(conf)}`}>{conf}%</span>
-                                </div>
-                              </td>
-                              <td className="py-1.5 px-1.5 text-[11px]">{d.quantity.value || "—"}</td>
-                              <td className="py-1.5 px-1">
-                                <button onClick={() => copyAiRowToManual(i)}
-                                  className="text-blue-600 hover:text-blue-800" title="오른쪽으로 복사">
-                                  <ArrowRight className="w-3.5 h-3.5" />
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                    {editOcr.manualCheckCount > 0 && (
-                      <div className="mt-3 bg-red-50 border border-red-200 rounded-lg p-2.5 flex gap-2">
-                        <AlertTriangle className="w-3.5 h-3.5 text-red-500 shrink-0 mt-0.5" />
-                        <p className="text-[11px] text-red-700">
-                          <span className="font-semibold">빨간 행은 신뢰도 95% 미만</span>이라 마스터 DB에서 정확히 매칭되지 않았어요. 오른쪽 창에 직접 입력해 확정하세요.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
 
@@ -663,57 +611,62 @@ export default function StatsPage() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-3">
-              <table className="w-full text-xs">
+              <table className="w-full text-xs table-fixed">
                 <thead>
                   <tr className="border-b border-gray-200 bg-gray-50">
-                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-24">보험코드</th>
-                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-20">제약사</th>
+                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[26%]">보험코드</th>
+                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[20%]">제약사</th>
                     <th className="text-left py-1.5 px-1.5 font-medium text-gray-500">제품명</th>
-                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-12">수량</th>
-                    <th className="py-1.5 px-1 w-8"></th>
+                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[14%]">수량</th>
+                    <th className="py-1.5 px-1 w-[34px]"></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {manualDrugs.map((d, i) => (
-                    <tr key={i} className="border-b border-gray-100">
-                      <td className="py-1 px-1">
-                        <input value={d.insuranceCode}
-                          onChange={(e) => updateManualField(i, "insuranceCode", e.target.value.replace(/\D/g, "").slice(0, 9))}
-                          onBlur={() => lookupByInsuranceCode(i)}
-                          placeholder="9자리"
-                          className={`w-full border border-gray-300 rounded px-1.5 py-1 text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-blue-400 ${d.matchedMedicationId ? "bg-green-50" : ""}`} />
-                        {lookupBusy[i] && <span className="text-[9px] text-gray-400">조회 중...</span>}
-                      </td>
-                      <td className="py-1 px-1">
-                        <input value={d.companyName}
-                          onChange={(e) => updateManualField(i, "companyName", e.target.value)}
-                          placeholder="제약사"
-                          className="w-full border border-gray-300 rounded px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                      </td>
-                      <td className="py-1 px-1">
-                        <input value={d.productName}
-                          onChange={(e) => updateManualField(i, "productName", e.target.value)}
-                          placeholder="제품명"
-                          className="w-full border border-gray-300 rounded px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                      </td>
-                      <td className="py-1 px-1">
-                        <input value={d.quantity}
-                          onChange={(e) => updateManualField(i, "quantity", e.target.value)}
-                          placeholder="0"
-                          className="w-full border border-gray-300 rounded px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                      </td>
-                      <td className="py-1 px-1">
-                        <button onClick={() => removeManualRow(i)}
-                          className="text-gray-400 hover:text-red-600" title="행 삭제">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {manualDrugs.length === 0 ? (
+                    <tr><td colSpan={5} className="py-10 text-center text-gray-400 text-xs">행 추가를 눌러 직접 입력하거나 처방전을 인식하세요</td></tr>
+                  ) : manualDrugs.map((d, i) => {
+                    const aiPair = editOcr?.drugs[i];
+                    const lowConf = aiPair?.manualCheck;
+                    return (
+                      <tr key={i} className={`border-b border-gray-100 h-9 ${lowConf ? "bg-red-50/50" : ""}`}>
+                        <td className="py-1 px-1 align-middle">
+                          <input value={d.insuranceCode}
+                            onChange={(e) => updateManualField(i, "insuranceCode", e.target.value.replace(/\D/g, "").slice(0, 9))}
+                            onBlur={() => lookupByInsuranceCode(i)}
+                            placeholder="9자리"
+                            className={`w-full border rounded px-1.5 py-1 text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-blue-400 ${d.matchedMedicationId ? "border-green-300 bg-green-50" : "border-gray-300"}`} />
+                        </td>
+                        <td className="py-1 px-1 align-middle">
+                          <input value={d.companyName}
+                            onChange={(e) => updateManualField(i, "companyName", e.target.value)}
+                            placeholder="제약사"
+                            className="w-full border border-gray-300 rounded px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                        </td>
+                        <td className="py-1 px-1 align-middle">
+                          <input value={d.productName}
+                            onChange={(e) => updateManualField(i, "productName", e.target.value)}
+                            placeholder="제품명"
+                            className="w-full border border-gray-300 rounded px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                        </td>
+                        <td className="py-1 px-1 align-middle">
+                          <input value={d.quantity}
+                            onChange={(e) => updateManualField(i, "quantity", e.target.value)}
+                            placeholder="0"
+                            className="w-full border border-gray-300 rounded px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                        </td>
+                        <td className="py-1 px-1 align-middle">
+                          <button onClick={() => removeManualRow(i)}
+                            className="text-gray-400 hover:text-red-600" title="행 삭제">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
               <p className="mt-2 text-[10px] text-gray-400">
-                보험코드 9자리 입력 후 포커스 이동 시 마스터 DB에서 제품명·제약사·단가 자동 채움 (초록 배경)
+                ← 왼쪽 OCR 결과와 행 단위로 매칭됩니다. 보험코드 9자리 입력 후 포커스 이동 시 마스터 DB에서 제품명·제약사·단가 자동 채움.
               </p>
             </div>
 
