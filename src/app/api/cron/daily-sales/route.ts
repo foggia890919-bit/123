@@ -15,16 +15,19 @@ import { appendRows, SHEET_TABS, ensureTabExists } from "@/lib/sheets";
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
-function shouldRunNow(reportTimeKst: string): boolean {
-  // KST 현재 시각의 HH:mm 이 reportTime 과 같은지 (cron 트리거 시각이 정확히 일치하지 않을 수 있어 ±10분 허용)
-  const now = new Date();
-  const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+/**
+ * 오늘 KST 자정 기준 reportTime 이 이미 지났는지.
+ * cron 트리거가 GitHub Actions/Vercel 모두 정확하지 않을 수 있어 「지났다」 만 체크.
+ * 중복 발송은 DailyReportLog 의 unique(workspaceId, reportDate) 로 방지.
+ */
+function isReportTimePassed(reportTimeKst: string): boolean {
+  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
   const hh = kst.getUTCHours();
   const mm = kst.getUTCMinutes();
   const [rh, rm] = reportTimeKst.split(":").map((s) => parseInt(s, 10));
   const cur = hh * 60 + mm;
-  const target = (rh || 8) * 60 + (rm || 0);
-  return Math.abs(cur - target) <= 10;
+  const target = (rh || 9) * 60 + (rm || 0);
+  return cur >= target;
 }
 
 export async function GET(req: NextRequest) {
@@ -41,7 +44,13 @@ export async function GET(req: NextRequest) {
   const results: unknown[] = [];
 
   for (const ws of workspaces) {
-    if (!force && !shouldRunNow(ws.reportTime)) continue;
+    if (!force) {
+      if (!isReportTimePassed(ws.reportTime)) continue;
+      const existing = await prisma.dailyReportLog.findUnique({
+        where: { workspaceId_reportDate: { workspaceId: ws.id, reportDate: range.reportDate } },
+      });
+      if (existing?.ok) continue;
+    }
 
     const stores = await prisma.naverStore.findMany({ where: { workspaceId: ws.id, enabled: true } });
     const syncResults = [];

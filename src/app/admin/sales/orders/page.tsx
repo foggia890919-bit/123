@@ -36,6 +36,7 @@ export default function OrdersPage() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [busy, setBusy] = useState(false);
+  const [detailId, setDetailId] = useState<string | null>(null);
 
   async function load() {
     setBusy(true);
@@ -151,7 +152,7 @@ export default function OrdersPage() {
             {items.map((it) => {
               const canceled = isCanceled(it);
               return (
-                <tr key={it.id} className={`border-t hover:bg-gray-50 ${canceled ? "bg-red-50/40" : ""}`}>
+                <tr key={it.id} onClick={() => setDetailId(it.id)} className={`border-t hover:bg-blue-50 cursor-pointer ${canceled ? "bg-red-50/40" : ""}`}>
                   <td className="py-1 px-2">{new Date(it.paymentDate).toLocaleString("ko-KR", { hour12: false })}</td>
                   <td>{it.store}</td>
                   <td className={canceled ? "line-through text-gray-500" : ""}>{it.productName}</td>
@@ -187,6 +188,101 @@ export default function OrdersPage() {
           <button onClick={() => setPage(Math.min(totalPages, page + 1))} disabled={page >= totalPages || busy} className="px-3 py-1 border rounded disabled:opacity-50">다음</button>
         </div>
       </div>
+
+      {detailId && <DetailModal id={detailId} onClose={() => setDetailId(null)} />}
+    </div>
+  );
+}
+
+interface DetailItem {
+  productOrderId: string;
+  productName: string;
+  optionName: string;
+  channelProductNo: string | null;
+  sellerProductCode: string | null;
+  quantity: number;
+  unitPrice: number;
+  optionPrice: number;
+  discountAmount: number;
+  salesAmount: number;
+  payCommission: number;
+  channelCommission: number;
+  settlementAmount: number;
+  deliveryFee: number;
+  paymentMethod: string | null;
+  status: string | null;
+  detailStatus: string | null;
+  order: { orderId: string; buyerName: string | null; paymentDate: string; totalAmount: number; store: { storeName: string; bizName: string; code: string } };
+}
+interface DetailData {
+  item: DetailItem;
+  raw: unknown;
+  cost: { keyword: string; bottlesPerUnit: number; unitCost: number; shippingCost: number; fulfillCost: number; packagingCost: number; etcCost: number } | null;
+  computed: { totalCommission: number; perUnitCost: number; totalCost: number; profit: number };
+}
+
+function DetailModal({ id, onClose }: { id: string; onClose: () => void }) {
+  const [data, setData] = useState<DetailData | null>(null);
+  useEffect(() => {
+    fetch(`/api/sales/orders/${id}`).then(async (r) => { if (r.ok) setData(await r.json()); });
+  }, [id]);
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-md shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="sticky top-0 bg-white border-b px-4 py-3 flex justify-between items-center">
+          <h2 className="font-semibold">주문 상세</h2>
+          <button onClick={onClose} className="text-gray-500 text-xl leading-none px-2">×</button>
+        </div>
+        {!data ? (
+          <div className="p-4 text-gray-500 text-sm">로딩…</div>
+        ) : (
+          <div className="p-4 space-y-4 text-sm">
+            <Field2 label="주문번호 / 상품주문번호" value={`${data.item.order.orderId} / ${data.item.productOrderId}`} />
+            <Field2 label="결제일" value={new Date(data.item.order.paymentDate).toLocaleString("ko-KR")} />
+            <Field2 label="구매자" value={data.item.order.buyerName ?? "-"} />
+            <Field2 label="스토어" value={`${data.item.order.store.storeName} (${data.item.order.store.bizName})`} />
+
+            <hr />
+            <Field2 label="상품 / 옵션" value={`${data.item.productName} / ${data.item.optionName}`} />
+            <Field2 label="채널 상품번호" value={data.item.channelProductNo ?? "-"} />
+            <Field2 label="판매자 상품코드" value={data.item.sellerProductCode ?? "-"} />
+            <Field2 label="수량 × 단가" value={`${data.item.quantity} × ${data.item.unitPrice.toLocaleString("ko-KR")}원 (옵션가 ${data.item.optionPrice.toLocaleString("ko-KR")}원)`} />
+            <Field2 label="할인" value={`${data.item.discountAmount.toLocaleString("ko-KR")}원`} />
+            <Field2 label="매출 (총주문금액)" value={`${data.item.salesAmount.toLocaleString("ko-KR")}원`} />
+            <Field2 label="결제수단" value={data.item.paymentMethod ?? "-"} />
+            <Field2 label="상태" value={`${data.item.status ?? "-"} / ${data.item.detailStatus ?? "-"}`} />
+
+            <hr />
+            <h3 className="font-semibold">수수료/정산 (네이버 제공)</h3>
+            <Field2 label="결제수수료 (네이버페이)" value={`${data.item.payCommission.toLocaleString("ko-KR")}원`} />
+            <Field2 label="채널수수료 (매출연동)" value={`${data.item.channelCommission.toLocaleString("ko-KR")}원`} />
+            <Field2 label="정산예정금액" value={`${data.item.settlementAmount.toLocaleString("ko-KR")}원`} />
+            <Field2 label="배송비" value={`${data.item.deliveryFee.toLocaleString("ko-KR")}원`} />
+
+            <hr />
+            <h3 className="font-semibold">원가 매핑 + 이익 계산</h3>
+            {data.cost ? (
+              <>
+                <Field2 label="키워드 / 병수단위" value={`${data.cost.keyword || "(미매핑)"} / ${data.cost.bottlesPerUnit}`} />
+                <Field2 label="단가 합산 (1회 판매당)" value={`${data.computed.perUnitCost.toLocaleString("ko-KR")}원 = 원가 ${data.cost.unitCost} + 물류 ${data.cost.shippingCost} + 입출고 ${data.cost.fulfillCost} + 부자재 ${data.cost.packagingCost} + 기타 ${data.cost.etcCost}`} />
+              </>
+            ) : (
+              <div className="text-gray-500">원가 매핑 안됨 (이익 = 매출 − 수수료 만 반영)</div>
+            )}
+            <Field2 label="총 비용" value={`${data.computed.totalCost.toLocaleString("ko-KR")}원 (수수료 포함)`} />
+            <Field2 label="이익" value={`${data.computed.profit.toLocaleString("ko-KR")}원`} highlight />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Field2({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      <div className="text-gray-500 text-xs">{label}</div>
+      <div className={`col-span-2 ${highlight ? "font-semibold text-emerald-700" : ""}`}>{value}</div>
     </div>
   );
 }
