@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { BizLayout } from "@/app/biz/page";
-import { Plus, Pencil, Trash2, Search, ToggleLeft, ToggleRight, Loader2, X } from "lucide-react";
+import { Plus, Pencil, Trash2, Search, ToggleLeft, ToggleRight, Loader2, X, ChevronDown } from "lucide-react";
 
 interface FilterMapping {
   id: string;
@@ -16,8 +16,12 @@ interface FilterMapping {
   createdAt: string;
 }
 
+interface ClientSuggestion { clientName: string; bizNumber: string }
+interface CompanySuggestion { companyName: string }
+
 const EMPTY_FORM = {
   clientName: "",
+  bizNumber: "",
   companyName: "",
   submissionEntity: "",
   managerName: "",
@@ -25,6 +29,114 @@ const EMPTY_FORM = {
   notes: "",
 };
 
+// ── 자동완성 컴포넌트 ──────────────────────────────────────────
+function Autocomplete<T>({
+  value,
+  onChange,
+  onSelect,
+  fetchUrl,
+  getLabel,
+  getSub,
+  placeholder,
+  disabled,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onSelect: (item: T) => void;
+  fetchUrl: (q: string) => string;
+  getLabel: (item: T) => string;
+  getSub?: (item: T) => string | undefined;
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  const [items, setItems] = useState<T[]>([]);
+  const [open, setOpen] = useState(false);
+  const [fetching, setFetching] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  function handleChange(v: string) {
+    onChange(v);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(async () => {
+      setFetching(true);
+      try {
+        const res = await fetch(fetchUrl(v));
+        const data = await res.json();
+        setItems(Array.isArray(data) ? data : []);
+        setOpen(true);
+      } finally {
+        setFetching(false);
+      }
+    }, 200);
+  }
+
+  async function handleFocus() {
+    if (items.length === 0) {
+      setFetching(true);
+      try {
+        const res = await fetch(fetchUrl(value));
+        const data = await res.json();
+        setItems(Array.isArray(data) ? data : []);
+      } finally {
+        setFetching(false);
+      }
+    }
+    setOpen(true);
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <div className="relative">
+        <input
+          value={value}
+          onChange={(e) => handleChange(e.target.value)}
+          onFocus={handleFocus}
+          disabled={disabled}
+          placeholder={placeholder}
+          className="w-full px-3 py-2 pr-8 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50 disabled:text-gray-500"
+          autoComplete="off"
+        />
+        {fetching
+          ? <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 animate-spin text-gray-400" />
+          : <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+        }
+      </div>
+      {open && items.length > 0 && (
+        <ul className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-52 overflow-y-auto">
+          {items.map((item, i) => {
+            const sub = getSub?.(item);
+            return (
+              <li
+                key={i}
+                onMouseDown={(e) => { e.preventDefault(); onSelect(item); setOpen(false); }}
+                className="flex items-center justify-between px-3 py-2 hover:bg-blue-50 cursor-pointer text-sm"
+              >
+                <span className="font-medium text-gray-900">{getLabel(item)}</span>
+                {sub && <span className="text-xs text-gray-400 ml-2 font-mono">{sub}</span>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {open && !fetching && items.length === 0 && value.length > 0 && (
+        <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 text-sm text-gray-400">
+          검색 결과 없음
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 메인 페이지 ───────────────────────────────────────────────
 export default function FilterMappingPage() {
   const [mappings, setMappings] = useState<FilterMapping[]>([]);
   const [loading, setLoading] = useState(true);
@@ -58,6 +170,7 @@ export default function FilterMappingPage() {
   function openEdit(m: FilterMapping) {
     setForm({
       clientName: m.clientName,
+      bizNumber: "",
       companyName: m.companyName,
       submissionEntity: m.submissionEntity,
       managerName: m.managerName ?? "",
@@ -78,9 +191,8 @@ export default function FilterMappingPage() {
     setSaving(true);
     try {
       const method = modal === "edit" ? "PATCH" : "POST";
-      const body = modal === "edit"
-        ? { id: editTarget!.id, ...form }
-        : form;
+      const { bizNumber: _, ...rest } = form;
+      const body = modal === "edit" ? { id: editTarget!.id, ...rest } : rest;
       const res = await fetch("/api/filter-mapping", {
         method,
         headers: { "Content-Type": "application/json" },
@@ -118,7 +230,6 @@ export default function FilterMappingPage() {
   return (
     <BizLayout>
       <div className="space-y-5">
-        {/* 헤더 */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-gray-900">필터링 매핑 관리</h1>
@@ -133,7 +244,6 @@ export default function FilterMappingPage() {
           </button>
         </div>
 
-        {/* 검색 + 필터 */}
         <div className="flex items-center gap-3">
           <div className="relative flex-1 max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -155,7 +265,6 @@ export default function FilterMappingPage() {
           </button>
         </div>
 
-        {/* 테이블 */}
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
           {loading ? (
             <div className="flex items-center justify-center py-16">
@@ -194,25 +303,13 @@ export default function FilterMappingPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
-                          <button
-                            onClick={() => openEdit(m)}
-                            className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                            title="수정"
-                          >
+                          <button onClick={() => openEdit(m)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="수정">
                             <Pencil className="w-3.5 h-3.5" />
                           </button>
-                          <button
-                            onClick={() => handleToggleActive(m)}
-                            className="p-1.5 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-colors"
-                            title={m.active ? "비활성화" : "활성화"}
-                          >
+                          <button onClick={() => handleToggleActive(m)} className="p-1.5 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-colors" title={m.active ? "비활성화" : "활성화"}>
                             {m.active ? <ToggleRight className="w-3.5 h-3.5" /> : <ToggleLeft className="w-3.5 h-3.5" />}
                           </button>
-                          <button
-                            onClick={() => handleDelete(m)}
-                            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                            title="삭제"
-                          >
+                          <button onClick={() => handleDelete(m)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="삭제">
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
@@ -225,11 +322,8 @@ export default function FilterMappingPage() {
           )}
         </div>
 
-        {/* 요약 */}
         {!loading && (
-          <p className="text-xs text-gray-400 text-right">
-            총 {filtered.length}개 매핑
-          </p>
+          <p className="text-xs text-gray-400 text-right">총 {filtered.length}개 매핑</p>
         )}
       </div>
 
@@ -248,26 +342,45 @@ export default function FilterMappingPage() {
             <div className="px-6 py-5 space-y-4">
               {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
 
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="거래처명 *">
-                  <input
-                    value={form.clientName}
-                    onChange={(e) => setForm({ ...form, clientName: e.target.value })}
-                    disabled={modal === "edit"}
-                    placeholder="예: 연세내과"
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50 disabled:text-gray-500"
-                  />
-                </Field>
-                <Field label="제약사명 *">
-                  <input
+              {/* 거래처 — 사업자번호 또는 이름으로 검색 */}
+              <Field label="거래처명 *">
+                {modal === "edit" ? (
+                  <input value={form.clientName} disabled
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-500" />
+                ) : (
+                  <>
+                    <Autocomplete<ClientSuggestion>
+                      value={form.clientName}
+                      onChange={(v) => setForm((f) => ({ ...f, clientName: v, bizNumber: "" }))}
+                      onSelect={(item) => setForm((f) => ({ ...f, clientName: item.clientName, bizNumber: item.bizNumber }))}
+                      fetchUrl={(q) => `/api/filter-mapping/suggestions?type=client&q=${encodeURIComponent(q)}`}
+                      getLabel={(item) => item.clientName}
+                      getSub={(item) => item.bizNumber}
+                      placeholder="거래처명 또는 사업자번호 입력"
+                    />
+                    {form.bizNumber && (
+                      <p className="text-xs text-blue-600 mt-1">사업자번호: {form.bizNumber}</p>
+                    )}
+                  </>
+                )}
+              </Field>
+
+              {/* 제약사명 */}
+              <Field label="제약사명 *">
+                {modal === "edit" ? (
+                  <input value={form.companyName} disabled
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-500" />
+                ) : (
+                  <Autocomplete<CompanySuggestion>
                     value={form.companyName}
-                    onChange={(e) => setForm({ ...form, companyName: e.target.value })}
-                    disabled={modal === "edit"}
-                    placeholder="예: 동아제약"
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50 disabled:text-gray-500"
+                    onChange={(v) => setForm((f) => ({ ...f, companyName: v }))}
+                    onSelect={(item) => setForm((f) => ({ ...f, companyName: item.companyName }))}
+                    fetchUrl={(q) => `/api/filter-mapping/suggestions?type=company&q=${encodeURIComponent(q)}`}
+                    getLabel={(item) => item.companyName}
+                    placeholder="제약사명 입력"
                   />
-                </Field>
-              </div>
+                )}
+              </Field>
 
               <Field label="제출처 *">
                 <input
@@ -308,10 +421,7 @@ export default function FilterMappingPage() {
               </Field>
             </div>
             <div className="px-6 pb-5 flex gap-2 justify-end">
-              <button
-                onClick={() => setModal(null)}
-                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 border border-gray-200 rounded-lg transition-colors"
-              >
+              <button onClick={() => setModal(null)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 border border-gray-200 rounded-lg transition-colors">
                 취소
               </button>
               <button
@@ -331,11 +441,7 @@ export default function FilterMappingPage() {
 }
 
 function Th({ children }: { children: React.ReactNode }) {
-  return (
-    <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-      {children}
-    </th>
-  );
+  return <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">{children}</th>;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
