@@ -16,12 +16,26 @@ export async function GET(req: NextRequest) {
 
   if (!q && !ingredientCodeParam && companyList.length === 0) return NextResponse.json({ medications: [], total: 0 });
 
+  // ingredientCode 검색 시 동일 성분명(ingredientName)을 가진 코드 미매핑 약품도 포함
+  let ingredientNameFallbackOR: object[] = [];
+  if (ingredientCodeParam) {
+    const namesWithCode = await prisma.medication.findMany({
+      where: { ingredientCode: ingredientCodeParam },
+      select: { ingredientName: true },
+      distinct: ["ingredientName"],
+    });
+    const names = namesWithCode.map((r) => r.ingredientName).filter(Boolean);
+    if (names.length > 0) {
+      ingredientNameFallbackOR = [{ AND: [{ ingredientCode: null }, { ingredientName: { in: names } }] }];
+    }
+  }
+
   const where = {
     AND: [
       settlementOnly ? { isSettlement: true } : {},
       companyList.length > 0 ? { companyName: { in: companyList } } : {},
       ingredientCodeParam
-        ? { ingredientCode: ingredientCodeParam }
+        ? { OR: [{ ingredientCode: ingredientCodeParam }, ...ingredientNameFallbackOR] }
         : q
           ? ingredientOnly
             ? { ingredientName: { contains: q, mode: "insensitive" as const } }
