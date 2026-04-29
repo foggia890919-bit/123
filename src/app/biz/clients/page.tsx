@@ -108,20 +108,18 @@ export default function BizClientsPage() {
     if (fileRef.current) fileRef.current.value = "";
   }
 
-  function formatBizNumber(v: string) {
-    const d = v.replace(/\D/g, "");
+  function formatBizNumber(v: string): string {
+    const d = v.replace(/\D/g, "").slice(0, 10);
     if (d.length <= 3) return d;
     if (d.length <= 5) return `${d.slice(0, 3)}-${d.slice(3)}`;
-    return `${d.slice(0, 3)}-${d.slice(3, 5)}-${d.slice(5, 10)}`;
+    return `${d.slice(0, 3)}-${d.slice(3, 5)}-${d.slice(5)}`;
   }
 
-  // 사업자번호 입력 자동 하이픈 (숫자만 입력 시에만 포매팅)
+  // 숫자/하이픈만 → 사업자번호 포맷, 한글/영문 포함 → 이름 검색 그대로
   function formatSearchInput(v: string): string {
-    const stripped = v.replace(/\D/g, "");
-    if (stripped.length > 0 && v.replace(/-/g, "") === stripped) {
-      return formatBizNumber(stripped);
-    }
-    return v;
+    const lettersOnly = v.replace(/[\d\-\s]/g, "");
+    if (lettersOnly.length > 0) return v; // 이름 검색
+    return formatBizNumber(v);
   }
 
   async function readFileAsDataUri(file: File): Promise<string> {

@@ -139,6 +139,13 @@ function FileInput({ label, file, onChange, inputRef }: {
   );
 }
 
+function formatBizNum(v: string): string {
+  const d = v.replace(/\D/g, "").slice(0, 10);
+  if (d.length <= 3) return d;
+  if (d.length <= 5) return `${d.slice(0, 3)}-${d.slice(3)}`;
+  return `${d.slice(0, 3)}-${d.slice(3, 5)}-${d.slice(5)}`;
+}
+
 async function fileToDataUri(file: File): Promise<string> {
   return new Promise((resolve) => {
     const fr = new FileReader();
@@ -371,11 +378,12 @@ export default function BizDealersPage() {
                   <input
                     value={bizNumberInput}
                     onChange={(e) => {
-                      setBizNumberInput(e.target.value);
+                      setBizNumberInput(formatBizNum(e.target.value));
                       if (step === "found" || step === "form") setStep("biz");
                       setFormError(null);
                     }}
-                    placeholder="000-00-00000"
+                    placeholder="000-00-00000  (자동 하이픈)"
+                    maxLength={12}
                     disabled={step === "checking" || step === "saving"}
                     className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50"
                     onKeyDown={(e) => e.key === "Enter" && step === "biz" && handleBizCheck()}
