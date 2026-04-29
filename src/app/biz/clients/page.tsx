@@ -115,6 +115,15 @@ export default function BizClientsPage() {
     return `${d.slice(0, 3)}-${d.slice(3, 5)}-${d.slice(5, 10)}`;
   }
 
+  // 사업자번호 입력 자동 하이픈 (숫자만 입력 시에만 포매팅)
+  function formatSearchInput(v: string): string {
+    const stripped = v.replace(/\D/g, "");
+    if (stripped.length > 0 && v.replace(/-/g, "") === stripped) {
+      return formatBizNumber(stripped);
+    }
+    return v;
+  }
+
   async function readFileAsDataUri(file: File): Promise<string> {
     return new Promise((resolve) => {
       const fr = new FileReader();
@@ -288,11 +297,13 @@ export default function BizClientsPage() {
                   <input
                     value={searchQ}
                     onChange={(e) => {
-                      setSearchQ(e.target.value);
+                      const formatted = formatSearchInput(e.target.value);
+                      setSearchQ(formatted);
                       setSelectedClient(null);
                       setStep("search");
                       setFormError("");
-                      fetchSuggestions(e.target.value);
+                      setNoResults(false);
+                      fetchSuggestions(formatted);
                     }}
                     onFocus={() => { if (suggestions.length > 0) setShowSug(true); }}
                     placeholder="병의원명 또는 사업자번호 입력"

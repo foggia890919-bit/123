@@ -171,7 +171,7 @@ export default function BizDealersPage() {
   const accountRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(() => {
-    fetch("/api/user-clients")
+    fetch("/api/dealer")
       .then((r) => r.json())
       .then((d) => setClients(Array.isArray(d) ? d : []))
       .finally(() => setLoading(false));

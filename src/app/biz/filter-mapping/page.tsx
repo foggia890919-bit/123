@@ -288,9 +288,9 @@ export default function FilterMappingPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
-                    <Th>거래처명</Th>
+                    <Th>병의원</Th>
                     <Th>제약사명</Th>
-                    <Th>제출처</Th>
+                    <Th>제출처(상위법인)</Th>
                     <Th>담당자</Th>
                     <Th>연락처</Th>
                     <Th>상태</Th>
@@ -351,8 +351,8 @@ export default function FilterMappingPage() {
             <div className="px-6 py-5 space-y-4">
               {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
 
-              {/* 거래처 — 사업자번호 또는 이름으로 검색 */}
-              <Field label="거래처명 *">
+              {/* 병의원 — 병·의원 등록/관리에서 등록한 거래처 */}
+              <Field label="병의원 *">
                 {modal === "edit" ? (
                   <input value={form.clientName} disabled
                     className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-500" />
@@ -365,7 +365,7 @@ export default function FilterMappingPage() {
                       fetchUrl={(q) => `/api/filter-mapping/suggestions?type=client&q=${encodeURIComponent(q)}`}
                       getLabel={(item) => item.clientName}
                       getSub={(item) => item.bizNumber}
-                      placeholder="거래처명 또는 사업자번호 입력"
+                      placeholder="병의원명 또는 사업자번호 입력"
                     />
                     {form.bizNumber && (
                       <p className="text-xs text-blue-600 mt-1">사업자번호: {form.bizNumber}</p>
@@ -391,7 +391,7 @@ export default function FilterMappingPage() {
                 )}
               </Field>
 
-              <Field label="제출처 *">
+              <Field label="제출처(상위법인) *">
                 <Autocomplete<DealerSuggestion>
                   value={form.submissionEntity}
                   onChange={(v) => setForm((f) => ({ ...f, submissionEntity: v }))}

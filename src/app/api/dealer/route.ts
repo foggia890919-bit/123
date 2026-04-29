@@ -5,20 +5,36 @@ import { BUCKETS, persistDataUri } from "@/lib/storage";
 
 const VALID_TYPES = ["CORPORATION", "INDIVIDUAL", "UPPER_CORP", "LOWER_CORP", "SELF", null];
 
-// GET /api/dealer?bizNumber=xxx  → 사업자번호 중복 조회
+// GET /api/dealer              → 딜러 목록 (dealerType 있는 UserClient만)
+// GET /api/dealer?bizNumber=xxx → 사업자번호 중복 조회
 export async function GET(req: NextRequest) {
   const user = await requireRole("BIZ");
   if (isNextResponse(user)) return user;
 
   const raw = req.nextUrl.searchParams.get("bizNumber");
-  if (!raw) return NextResponse.json({ error: "bizNumber 필요" }, { status: 400 });
-  const bizNumber = raw.replace(/\D/g, "");
 
-  const client = await prisma.userClient.findUnique({
-    where: { userId_bizNumber: { userId: user.id, bizNumber } },
-    select: { id: true, clientName: true, bizNumber: true, dealerType: true },
-  });
-  return NextResponse.json({ found: !!client, client: client ?? null });
+  // bizNumber 중복 조회 모드
+  if (raw) {
+    const bizNumber = raw.replace(/\D/g, "");
+    const client = await prisma.userClient.findUnique({
+      where: { userId_bizNumber: { userId: user.id, bizNumber } },
+      select: { id: true, clientName: true, bizNumber: true, dealerType: true },
+    });
+    return NextResponse.json({ found: !!client, client: client ?? null });
+  }
+
+  // 목록 모드: 딜러로 등록된 UserClient만 반환
+  try {
+    const rows = await prisma.userClient.findMany({
+      where: { userId: user.id, dealerType: { not: null } },
+      select: { id: true, clientName: true, bizNumber: true, dealerType: true, approved: true },
+      orderBy: { clientName: "asc" },
+    });
+    return NextResponse.json(rows);
+  } catch {
+    // dealerType 컬럼이 아직 DB에 없음 — 마이그레이션 필요
+    return NextResponse.json([]);
+  }
 }
 
 // POST /api/dealer

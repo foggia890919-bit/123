@@ -17,19 +17,49 @@ export async function GET(req: NextRequest) {
   const q = (req.nextUrl.searchParams.get("q") ?? "").trim();
 
   if (type === "client") {
-    // 전역 Client 풀에서 검색 (숫자→사업자번호, 문자→거래처명)
-    const isDigits = /^\d+$/.test(q);
-    const clients = await prisma.client.findMany({
-      where: q
-        ? isDigits
-          ? { bizNumber: { contains: q } }
-          : { clientName: { contains: q, mode: "insensitive" } }
-        : {},
-      select: { clientName: true, bizNumber: true },
-      orderBy: { clientName: "asc" },
-      take: 20,
-    });
-    return NextResponse.json(clients);
+    // 숫자/하이픈만 → 사업자번호 검색, 그 외 → 거래처명 검색
+    const stripped = q.replace(/\D/g, "");
+    const isDigits = stripped.length > 0 && q.replace(/-/g, "") === stripped;
+
+    const [globalClients, userClients] = await Promise.all([
+      // 전역 Client 풀
+      prisma.client.findMany({
+        where: q
+          ? isDigits
+            ? { bizNumber: { contains: stripped } }
+            : { clientName: { contains: q, mode: "insensitive" } }
+          : {},
+        select: { clientName: true, bizNumber: true },
+        orderBy: { clientName: "asc" },
+        take: 20,
+      }),
+      // UserClient (기존 등록 데이터 하위호환)
+      prisma.userClient.findMany({
+        where: q
+          ? isDigits
+            ? { bizNumber: { contains: stripped } }
+            : { clientName: { contains: q, mode: "insensitive" } }
+          : {},
+        select: { clientName: true, bizNumber: true },
+        distinct: ["bizNumber"],
+        orderBy: { clientName: "asc" },
+        take: 20,
+      }),
+    ]);
+
+    // bizNumber 기준 중복 제거 (전역 풀 우선)
+    const seen = new Set<string>();
+    const merged: { clientName: string; bizNumber: string }[] = [];
+    for (const c of [...globalClients, ...userClients]) {
+      const key = c.bizNumber.replace(/\D/g, "");
+      if (!seen.has(key)) {
+        seen.add(key);
+        merged.push(c);
+      }
+    }
+    return NextResponse.json(
+      merged.sort((a, b) => a.clientName.localeCompare(b.clientName)).slice(0, 20)
+    );
   }
 
   if (type === "company") {
