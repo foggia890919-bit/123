@@ -3,6 +3,7 @@ import { ALL_ADAPTERS } from "../../src/scrapers/adapters/index.ts";
 import type { Credentials, WholesaleAdapter } from "../../src/scrapers/core/types.ts";
 import {
   hasDb,
+  ensureSite,
   loadExcelMedicationCodes,
   saveSnapshots,
   startJob,
@@ -64,6 +65,13 @@ export async function runScheduledJob(
     `[scheduler] starting batch: ${codes.length} codes × ${sitesWithCreds.length} sites = ${codes.length * sitesWithCreds.length} fetches`
   );
   const startedAt = Date.now();
+
+  // Ensure WholesaleSite rows exist before creating ScrapeJob rows (FK guard).
+  for (const site of sitesWithCreds) {
+    await ensureSite(site).catch(err =>
+      console.error(`[scheduler] ensureSite failed for ${site.key}:`, (err as Error).message)
+    );
+  }
 
   const jobMode = opts.mode ?? "scheduled";
   // One ScrapeJob row per site so we can see per-site progress later

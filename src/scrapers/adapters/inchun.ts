@@ -144,30 +144,51 @@ export const inchun: WholesaleAdapter = {
       .catch(() => {});
     await page.waitForTimeout(600);
 
+    // Resolve column indices from header row to survive site layout changes.
+    // Expected headers: KD코드 | 제조사 | 제품명 | 규격 | 구분 | 단가 | DC | 재고 | 수량 | 선택
+    let colCode = 0, colManufacturer = 1, colProduct = 2, colSpec = 3, colPrice = 5, colStock = 7;
+    const headerRow = page.locator('table:has(th:has-text("KD코드")) tr:has(th)').first();
+    const headerCells = await headerRow.locator("th").allTextContents().catch(() => [] as string[]);
+    if (headerCells.length >= 4) {
+      const norm = (s: string) => s.trim().replace(/\s+/g, "");
+      const idx = (label: string) => headerCells.findIndex(h => norm(h).includes(label));
+      const iCode = idx("KD코드");
+      const iMfr  = idx("제조사");
+      const iProd = idx("제품명");
+      const iSpec = idx("규격");
+      const iPri  = idx("단가");
+      const iStk  = idx("재고");
+      if (iCode >= 0)  colCode         = iCode;
+      if (iMfr  >= 0)  colManufacturer = iMfr;
+      if (iProd >= 0)  colProduct      = iProd;
+      if (iSpec >= 0)  colSpec         = iSpec;
+      if (iPri  >= 0)  colPrice        = iPri;
+      if (iStk  >= 0)  colStock        = iStk;
+    }
+
+    const minCols = Math.max(colCode, colManufacturer, colProduct, colSpec, colPrice, colStock) + 1;
+
     const rows = await page.locator(SEL.resultRows).all();
     const items: InventoryItem[] = [];
 
     for (const row of rows) {
       const cells = (await row.locator("td").allTextContents()).map(c => c.trim());
-      if (cells.length < 8) continue;
+      if (cells.length < minCols) continue;
 
       // Skip empty-state row "제품이 없습니다."
       if (cells[0]?.includes("제품이 없습니다")) continue;
 
-      // Confirmed column order from screenshot:
-      //   [0] KD코드  [1] 제조사  [2] 제품명  [3] 규격  [4] 구분
-      //   [5] 단가    [6] DC      [7] 재고    [8] 수량  [9] 선택
-      const code = cells[0];
-      if (!/^\d{9,12}$/.test(code)) continue;
+      const code = cells[colCode];
+      if (!code || !/^\d{9,12}$/.test(code)) continue;
 
-      const priceStr = (cells[5] ?? "").replace(/[^\d]/g, "");
-      const stockStr = (cells[7] ?? "").replace(/[^\d]/g, "");
+      const priceStr = (cells[colPrice] ?? "").replace(/[^\d]/g, "");
+      const stockStr = (cells[colStock] ?? "").replace(/[^\d]/g, "");
 
       items.push({
         insuranceCode: code,
-        productName: cells[2] ?? "",
-        spec: cells[3] || null,
-        manufacturer: cells[1] || null,
+        productName: cells[colProduct] ?? "",
+        spec: cells[colSpec] || null,
+        manufacturer: cells[colManufacturer] || null,
         unitPrice: priceStr ? Number(priceStr) : null,
         stock: stockStr ? Number(stockStr) : null,
         raw: { cells },
