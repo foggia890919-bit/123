@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { canAccessWorkspace, getCurrentUser } from "@/lib/workspace";
+import { encrypt } from "@/lib/crypto";
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
@@ -42,10 +43,12 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   for (const key of ["name", "reportTime", "telegramChatId", "googleSheetsId", "googleServiceAccountEmail"] as const) {
     if (body[key] !== undefined) data[key] = body[key];
   }
-  // 시크릿 필드: "***" 면 변경 안함
+  // 시크릿 필드: "***" 면 변경 안함, 아니면 암호화 후 저장
   for (const key of ["telegramBotToken", "googleServiceAccountKey"] as const) {
     const v = body[key];
-    if (v !== undefined && v !== "***") data[key] = v;
+    if (v !== undefined && v !== "***") {
+      data[key] = v ? encrypt(v) : null;
+    }
   }
   await prisma.workspace.update({ where: { id }, data });
   return NextResponse.json({ ok: true });

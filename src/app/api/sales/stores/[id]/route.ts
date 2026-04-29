@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
+import { encrypt } from "@/lib/crypto";
 
 interface PatchBody {
   storeName?: string;
@@ -22,7 +23,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       if (b[k] !== undefined) data[k] = b[k];
     }
     if (b.clientSecret !== undefined && b.clientSecret !== "***" && b.clientSecret !== "") {
-      data.clientSecret = b.clientSecret;
+      data.clientSecret = encrypt(b.clientSecret);
     }
     await prisma.naverStore.update({ where: { id }, data });
     return NextResponse.json({ ok: true });

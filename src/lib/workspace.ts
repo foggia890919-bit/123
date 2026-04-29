@@ -43,11 +43,30 @@ export async function resolveWorkspace(userId: string): Promise<Workspace | null
   return list[0] ?? null;
 }
 
+/** 워크스페이스가 하나도 없으면 「내 사업자」 자동 생성하고 반환 */
+export async function ensureWorkspace(userId: string): Promise<Workspace> {
+  const existing = await resolveWorkspace(userId);
+  if (existing) return existing;
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+  let baseSlug = (user.email.split("@")[0] || "ws").toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+  let slug = baseSlug || `ws-${Date.now()}`;
+  for (let i = 0; await prisma.workspace.findUnique({ where: { slug } }); i++) {
+    slug = `${baseSlug}-${i + 2}`;
+  }
+  return prisma.workspace.create({
+    data: {
+      name: user.name ? `${user.name}의 사업자` : "내 사업자",
+      slug,
+      ownerId: userId,
+      members: { create: { userId, role: "OWNER" } },
+    },
+  });
+}
+
 export async function requireWorkspace(): Promise<{ user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>; workspace: Workspace }> {
   const user = await getCurrentUser();
   if (!user) throw new Response("Unauthorized", { status: 401 });
-  const ws = await resolveWorkspace(user.id);
-  if (!ws) throw new Response("No workspace", { status: 404 });
+  const ws = await ensureWorkspace(user.id);
   return { user, workspace: ws };
 }
 

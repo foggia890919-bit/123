@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { listPaidOrderIds, getOrderDetail } from "./client";
+import { decrypt } from "@/lib/crypto";
 
 export interface SyncResult {
   store: string;
@@ -20,9 +21,11 @@ export async function syncStoreOrders(
   const store = await prisma.naverStore.findUniqueOrThrow({ where: { id: storeId } });
   const result: SyncResult = { store: store.code, orders: 0, items: 0, errors: [] };
 
+  const clientSecret = decrypt(store.clientSecret);
+
   let orderIds: string[];
   try {
-    orderIds = await listPaidOrderIds(store.clientId, store.clientSecret, fromIso, toIso);
+    orderIds = await listPaidOrderIds(store.clientId, clientSecret, fromIso, toIso);
   } catch (err) {
     result.errors.push(`list: ${err instanceof Error ? err.message : String(err)}`);
     return result;
@@ -30,7 +33,7 @@ export async function syncStoreOrders(
 
   for (const orderId of orderIds) {
     try {
-      const detail = await getOrderDetail(store.clientId, store.clientSecret, orderId);
+      const detail = await getOrderDetail(store.clientId, clientSecret, orderId);
       await upsertOrder(store.id, detail);
       result.orders += 1;
       result.items += detail.productOrders.length;

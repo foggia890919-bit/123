@@ -112,7 +112,9 @@ export default function SalesAdminPage() {
               📄 구글시트 열기
             </a>
           )}
+          <Link href="/admin/sales/dashboard" className="px-3 py-2 rounded-md bg-emerald-600 text-white text-sm">📊 대시보드</Link>
           <Link href="/admin/sales/workspaces" className="px-3 py-2 rounded-md border text-sm">사업자</Link>
+          <Link href="/admin/sales/stores" className="px-3 py-2 rounded-md border text-sm">스토어</Link>
           <Link href="/admin/sales/products" className="px-3 py-2 rounded-md border text-sm">상품</Link>
           <Link href="/admin/sales/costs" className="px-3 py-2 rounded-md bg-gray-900 text-white text-sm">원가/키워드</Link>
           <Link href="/admin/sales/upload" className="px-3 py-2 rounded-md bg-gray-900 text-white text-sm">매출 업로드</Link>

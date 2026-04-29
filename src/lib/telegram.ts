@@ -1,10 +1,12 @@
+import { decrypt } from "./crypto";
+
 export interface TelegramCreds {
   telegramBotToken?: string | null;
   telegramChatId?: string | null;
 }
 
 export async function sendTelegram(text: string, ws?: TelegramCreds): Promise<{ ok: boolean; error?: string }> {
-  const token = ws?.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
+  const token = (ws?.telegramBotToken && decrypt(ws.telegramBotToken)) || process.env.TELEGRAM_BOT_TOKEN;
   const chatId = ws?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
   if (!token || !chatId) {
     return { ok: false, error: "TELEGRAM not configured" };

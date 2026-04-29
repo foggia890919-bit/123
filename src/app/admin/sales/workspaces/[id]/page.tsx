@@ -56,6 +56,18 @@ export default function WorkspaceSettingsPage() {
       }),
     });
     setMsg(r.ok ? "저장됨" : "저장 실패");
+    load();
+  }
+
+  async function test(kind: "telegram" | "sheet") {
+    setMsg(`${kind} 테스트 발송 중…`);
+    const r = await fetch(`/api/workspaces/${wsId}/test`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind }),
+    });
+    const d = await r.json();
+    setMsg(d.ok ? `✅ ${kind} 테스트 OK` : `❌ ${kind} 실패: ${d.error}`);
   }
 
   if (!ws) return <div className="p-4">로딩…</div>;
@@ -76,7 +88,12 @@ export default function WorkspaceSettingsPage() {
       </section>
 
       <section className="rounded-md border bg-white p-4 space-y-3">
-        <h2 className="font-semibold">텔레그램</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold">텔레그램</h2>
+          <button onClick={() => test("telegram")} className="px-2 py-1 rounded border text-xs">
+            테스트 발송
+          </button>
+        </div>
         <Field
           label="Bot Token"
           value={ws.telegramBotToken ?? ""}
@@ -93,7 +110,12 @@ export default function WorkspaceSettingsPage() {
       </section>
 
       <section className="rounded-md border bg-white p-4 space-y-3">
-        <h2 className="font-semibold">구글시트</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold">구글시트</h2>
+          <button onClick={() => test("sheet")} className="px-2 py-1 rounded border text-xs">
+            테스트 쓰기
+          </button>
+        </div>
         <Field
           label="시트 ID"
           value={ws.googleSheetsId ?? ""}

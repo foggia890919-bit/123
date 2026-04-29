@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { listProducts } from "./client";
 import { sendTelegram } from "@/lib/telegram";
+import { decrypt } from "@/lib/crypto";
 
 export interface ProductSyncResult {
   store: string;
@@ -18,7 +19,7 @@ export async function syncStoreProducts(storeId: string): Promise<ProductSyncRes
   const result: ProductSyncResult = { store: store.code, added: 0, total: 0, errors: [] };
   let products;
   try {
-    products = await listProducts(store.clientId, store.clientSecret);
+    products = await listProducts(store.clientId, decrypt(store.clientSecret));
   } catch (err) {
     result.errors.push(err instanceof Error ? err.message : String(err));
     return result;

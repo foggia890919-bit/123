@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
+import { encrypt } from "@/lib/crypto";
 
 export async function GET() {
   try {
@@ -41,7 +42,7 @@ export async function POST(req: NextRequest) {
         bizName: b.bizName ?? workspace.name,
         storeName: b.storeName,
         clientId: b.clientId,
-        clientSecret: b.clientSecret,
+        clientSecret: encrypt(b.clientSecret) ?? "",
         enabled: b.enabled ?? true,
       },
     });

@@ -1,3 +1,5 @@
+import { decrypt } from "./crypto";
+
 /**
  * 구글시트 동기화. Service Account 자격증명이 환경변수로 설정되어야 동작.
  * 미설정 시 no-op 으로 통과 (사장님이 시트 공유 후 키만 채우면 자동으로 켜짐).
@@ -21,7 +23,9 @@ export interface WorkspaceSheetCreds {
 function getConfig(ws?: WorkspaceSheetCreds): SheetsConfig | null {
   const sheetId = ws?.googleSheetsId || process.env.GOOGLE_SHEETS_ID;
   const email = ws?.googleServiceAccountEmail || process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const rawKey = ws?.googleServiceAccountKey || process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
+  const rawKey = ws?.googleServiceAccountKey
+    ? decrypt(ws.googleServiceAccountKey)
+    : process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY ?? "";
   const privateKey = rawKey?.replace(/\\n/g, "\n");
   if (!sheetId || !email || !privateKey) return null;
   return { sheetId, email, privateKey };
