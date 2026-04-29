@@ -6,6 +6,15 @@ import { requireSession, isNextResponse } from "@/lib/auth-guard";
 // GET /api/filter-mapping/suggestions?type=company&q=...
 // GET /api/filter-mapping/suggestions?type=dealer&q=...
 
+// DB에 하이픈 포함/미포함 혼재하므로 두 형태 모두 OR 검색
+function bizWhere(stripped: string) {
+  const fmt = stripped.length <= 3 ? stripped
+    : stripped.length <= 5 ? `${stripped.slice(0, 3)}-${stripped.slice(3)}`
+    : `${stripped.slice(0, 3)}-${stripped.slice(3, 5)}-${stripped.slice(5)}`;
+  if (fmt === stripped) return { bizNumber: { contains: stripped } };
+  return { OR: [{ bizNumber: { contains: stripped } }, { bizNumber: { contains: fmt } }] };
+}
+
 export async function GET(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
@@ -17,13 +26,12 @@ export async function GET(req: NextRequest) {
   const q = (req.nextUrl.searchParams.get("q") ?? "").trim();
 
   if (type === "client") {
-    // 숫자/하이픈만 → 사업자번호 검색, 그 외 → 거래처명 검색
     const stripped = q.replace(/\D/g, "");
     const isDigits = stripped.length > 0 && q.replace(/-/g, "") === stripped;
 
     const nameOrBizWhere = q
       ? isDigits
-        ? { bizNumber: { contains: stripped } }
+        ? bizWhere(stripped)
         : { clientName: { contains: q, mode: "insensitive" as const } }
       : {};
 
@@ -34,7 +42,6 @@ export async function GET(req: NextRequest) {
       take: 20,
     });
 
-    // dealerType 컬럼이 없을 수 있으므로 try-catch
     let hospitalClients: { clientName: string; bizNumber: string }[] = [];
     try {
       hospitalClients = await prisma.userClient.findMany({
@@ -45,7 +52,6 @@ export async function GET(req: NextRequest) {
         take: 20,
       });
     } catch {
-      // dealerType 컬럼 미존재 시 전체 UserClient fallback
       hospitalClients = await prisma.userClient.findMany({
         where: nameOrBizWhere,
         select: { clientName: true, bizNumber: true },
@@ -55,15 +61,11 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // bizNumber 기준 중복 제거 (전역 풀 우선)
     const seen = new Set<string>();
     const merged: { clientName: string; bizNumber: string }[] = [];
     for (const c of [...globalClients, ...hospitalClients]) {
       const key = c.bizNumber.replace(/\D/g, "");
-      if (!seen.has(key)) {
-        seen.add(key);
-        merged.push(c);
-      }
+      if (!seen.has(key)) { seen.add(key); merged.push(c); }
     }
     return NextResponse.json(
       merged.sort((a, b) => a.clientName.localeCompare(b.clientName)).slice(0, 20)
@@ -71,7 +73,6 @@ export async function GET(req: NextRequest) {
   }
 
   if (type === "company") {
-    // MemberCompanyRate에서 제약사명 조회
     const companies = await prisma.memberCompanyRate.findMany({
       where: q ? { companyName: { contains: q, mode: "insensitive" } } : {},
       select: { companyName: true },
@@ -79,7 +80,6 @@ export async function GET(req: NextRequest) {
       orderBy: { companyName: "asc" },
       take: 20,
     });
-    // FilterRequest에서도 추가로 수집
     const fromRequests = await prisma.filterRequest.findMany({
       where: q ? { companyName: { contains: q, mode: "insensitive" } } : {},
       select: { companyName: true },
@@ -100,13 +100,14 @@ export async function GET(req: NextRequest) {
   }
 
   if (type === "dealer") {
-    // 법인·딜러 등록관리에서 dealerType이 설정된 거래처
+    const stripped = q.replace(/\D/g, "");
+    const isDigits = stripped.length > 0 && q.replace(/-/g, "") === stripped;
     const dealers = await prisma.userClient.findMany({
       where: {
         dealerType: { not: null },
         ...(q
-          ? /^\d+$/.test(q)
-            ? { bizNumber: { contains: q } }
+          ? isDigits
+            ? bizWhere(stripped)
             : { clientName: { contains: q, mode: "insensitive" } }
           : {}),
       },
