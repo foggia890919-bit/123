@@ -17,6 +17,7 @@ export async function GET(req: NextRequest) {
     requestType: true, mappingId: true, respondedAt: true, respondedResult: true,
     alimtalkSentAt: true, salesNotifiedAt: true,
     upperCorpName: true, lowerCorpName: true,
+    mapping: { select: { managerName: true, managerPhone: true } },
   } as const;
   if (all) {
     if (user.role !== "ADMIN") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
