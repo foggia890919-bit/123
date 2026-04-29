@@ -39,9 +39,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ found: !!client, client: client ?? null });
   }
 
+  const isSettlementTarget = req.nextUrl.searchParams.get("isSettlementTarget") === "true";
+
   try {
     const rows = await prisma.userClient.findMany({
-      where: { userId: user.id, dealerType: { not: null } },
+      where: { userId: user.id, dealerType: { not: null }, ...(isSettlementTarget ? { isSettlementTarget: true } : {}) },
       select: FULL_SELECT,
       orderBy: { clientName: "asc" },
     });
