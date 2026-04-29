@@ -111,7 +111,7 @@ export async function GET(req: NextRequest) {
             : { clientName: { contains: q, mode: "insensitive" } }
           : {}),
       },
-      select: { clientName: true, bizNumber: true, dealerType: true },
+      select: { clientName: true, bizNumber: true, dealerType: true, managerName: true, managerPhone: true },
       distinct: ["clientName"],
       orderBy: { clientName: "asc" },
       take: 20,

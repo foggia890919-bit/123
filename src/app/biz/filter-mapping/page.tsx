@@ -18,7 +18,7 @@ interface FilterMapping {
 
 interface ClientSuggestion { clientName: string; bizNumber: string }
 interface CompanySuggestion { companyName: string }
-interface DealerSuggestion { clientName: string; bizNumber: string; dealerType: string }
+interface DealerSuggestion { clientName: string; bizNumber: string; dealerType: string; managerName?: string | null; managerPhone?: string | null }
 
 const DEALER_LABEL: Record<string, string> = {
   CORPORATION: "법인",
@@ -395,7 +395,12 @@ export default function FilterMappingPage() {
                 <Autocomplete<DealerSuggestion>
                   value={form.submissionEntity}
                   onChange={(v) => setForm((f) => ({ ...f, submissionEntity: v }))}
-                  onSelect={(item) => setForm((f) => ({ ...f, submissionEntity: item.clientName }))}
+                  onSelect={(item) => setForm((f) => ({
+                    ...f,
+                    submissionEntity: item.clientName,
+                    managerName: item.managerName ?? f.managerName,
+                    managerPhone: item.managerPhone ?? f.managerPhone,
+                  }))}
                   fetchUrl={(q) => `/api/filter-mapping/suggestions?type=dealer&q=${encodeURIComponent(q)}`}
                   getLabel={(item) => item.clientName}
                   getSub={(item) => DEALER_LABEL[item.dealerType] ?? item.dealerType}
