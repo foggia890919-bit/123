@@ -113,6 +113,8 @@ export default function SalesAdminPage() {
             </a>
           )}
           <Link href="/admin/sales/dashboard" className="px-3 py-2 rounded-md bg-emerald-600 text-white text-sm">📊 대시보드</Link>
+          <Link href="/admin/sales/orders" className="px-3 py-2 rounded-md border text-sm">주문 검색</Link>
+          <Link href="/admin/sales/onboarding" className="px-3 py-2 rounded-md border text-sm">⚙️ 초기설정</Link>
           <Link href="/admin/sales/workspaces" className="px-3 py-2 rounded-md border text-sm">사업자</Link>
           <Link href="/admin/sales/stores" className="px-3 py-2 rounded-md border text-sm">스토어</Link>
           <Link href="/admin/sales/products" className="px-3 py-2 rounded-md border text-sm">상품</Link>
