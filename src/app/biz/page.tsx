@@ -7,46 +7,65 @@ import Link from "next/link";
 import {
   Hospital, Building2, FileUp, FileSearch,
   ChevronRight, LayoutDashboard, ClipboardList,
+  Users, BarChart3, PercentCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const BIZ_MENU = [
+const BIZ_MENU_GROUPS = [
   {
-    href: "/biz/clients",
-    label: "병·의원 등록/관리",
-    desc: "거래처 병의원 등록 및 승인 관리",
-    icon: Hospital,
-    color: "bg-blue-50 text-blue-600",
+    label: "거래처/유저 관리",
+    items: [
+      {
+        href: "/biz/clients",
+        label: "병·의원 등록/관리",
+        desc: "거래처 병의원 등록 및 승인 관리",
+        icon: Hospital,
+        color: "bg-blue-50 text-blue-600",
+      },
+      {
+        href: "/biz/dealers",
+        label: "법인·딜러 등록/관리",
+        desc: "법인 및 딜러 계층 분류 관리",
+        icon: Building2,
+        color: "bg-purple-50 text-purple-600",
+      },
+    ],
   },
   {
-    href: "/biz/dealers",
-    label: "법인·딜러 등록/관리",
-    desc: "법인 및 딜러 계층 분류 관리",
-    icon: Building2,
-    color: "bg-purple-50 text-purple-600",
+    label: "정산 관리",
+    items: [
+      {
+        href: "/biz/settlement/upload",
+        label: "정산내역서 업로드",
+        desc: "법인별 정산 엑셀 파일 업로드",
+        icon: FileUp,
+        color: "bg-green-50 text-green-600",
+      },
+      {
+        href: "/biz/settlement/review",
+        label: "정산내역서 검수",
+        desc: "업로드된 정산내역 확인 및 취합",
+        icon: FileSearch,
+        color: "bg-orange-50 text-orange-600",
+      },
+    ],
   },
   {
-    href: "/biz/filter-status",
     label: "필터링 관리",
-    desc: "매핑 설정 및 거래처별 필터링 요청 현황",
-    icon: ClipboardList,
-    color: "bg-teal-50 text-teal-600",
-  },
-  {
-    href: "/biz/settlement/upload",
-    label: "정산내역서 업로드",
-    desc: "법인별 정산 엑셀 파일 업로드",
-    icon: FileUp,
-    color: "bg-green-50 text-green-600",
-  },
-  {
-    href: "/biz/settlement/review",
-    label: "정산내역서 검수",
-    desc: "업로드된 정산내역 확인 및 취합",
-    icon: FileSearch,
-    color: "bg-orange-50 text-orange-600",
+    items: [
+      {
+        href: "/biz/filter-status",
+        label: "필터링 관리",
+        desc: "현황·플로우·매핑 통합 관리",
+        icon: ClipboardList,
+        color: "bg-teal-50 text-teal-600",
+      },
+    ],
   },
 ];
+
+// 대시보드 카드용 평탄화
+const BIZ_MENU_FLAT = BIZ_MENU_GROUPS.flatMap((g) => g.items);
 
 export function BizLayout({ children }: { children: React.ReactNode }) {
   const { data: session, status } = useSession();
@@ -66,7 +85,6 @@ export function BizLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* 비즈 사이드바 + 콘텐츠 */}
       <div className="max-w-7xl mx-auto px-4 py-6 flex gap-6">
         {/* 사이드 메뉴 */}
         <aside className="hidden md:flex flex-col w-56 shrink-0 gap-1">
@@ -74,33 +92,39 @@ export function BizLayout({ children }: { children: React.ReactNode }) {
             href="/biz"
             className={cn(
               "flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-semibold mb-2",
-              isDashboard
-                ? "bg-gray-900 text-white"
-                : "text-gray-700 hover:bg-gray-200"
+              isDashboard ? "bg-gray-900 text-white" : "text-gray-700 hover:bg-gray-200"
             )}
           >
             <LayoutDashboard className="w-4 h-4" />
             비즈 관리
           </Link>
-          {BIZ_MENU.map((item) => {
-            const Icon = item.icon;
-            const active = pathname === item.href || pathname.startsWith(item.href + "/");
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  "flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
-                  active
-                    ? "bg-white border border-gray-200 text-gray-900 shadow-sm"
-                    : "text-gray-600 hover:bg-white hover:text-gray-900"
-                )}
-              >
-                <Icon className="w-4 h-4 shrink-0" />
-                {item.label}
-              </Link>
-            );
-          })}
+
+          {BIZ_MENU_GROUPS.map((group) => (
+            <div key={group.label} className="mb-1">
+              <p className="px-3 py-1 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
+                {group.label}
+              </p>
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                const active = pathname === item.href || pathname.startsWith(item.href + "/");
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={cn(
+                      "flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
+                      active
+                        ? "bg-white border border-gray-200 text-gray-900 shadow-sm"
+                        : "text-gray-600 hover:bg-white hover:text-gray-900"
+                    )}
+                  >
+                    <Icon className="w-4 h-4 shrink-0" />
+                    {item.label}
+                  </Link>
+                );
+              })}
+            </div>
+          ))}
         </aside>
 
         {/* 메인 콘텐츠 */}
@@ -133,29 +157,36 @@ export default function BizDashboard() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {BIZ_MENU.map((item) => {
-            const Icon = item.icon;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="bg-white border border-gray-200 rounded-xl p-5 hover:shadow-md hover:border-gray-300 transition-all group"
-              >
-                <div className="flex items-start justify-between">
-                  <div className={cn("p-3 rounded-xl", item.color)}>
-                    <Icon className="w-6 h-6" />
-                  </div>
-                  <ChevronRight className="w-5 h-5 text-gray-300 group-hover:text-gray-500 transition-colors mt-1" />
-                </div>
-                <div className="mt-4">
-                  <p className="text-base font-semibold text-gray-900">{item.label}</p>
-                  <p className="text-sm text-gray-500 mt-1">{item.desc}</p>
-                </div>
-              </Link>
-            );
-          })}
-        </div>
+        {BIZ_MENU_GROUPS.map((group) => (
+          <div key={group.label}>
+            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+              {group.label}
+            </h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className="bg-white border border-gray-200 rounded-xl p-5 hover:shadow-md hover:border-gray-300 transition-all group"
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className={cn("p-3 rounded-xl", item.color)}>
+                        <Icon className="w-6 h-6" />
+                      </div>
+                      <ChevronRight className="w-5 h-5 text-gray-300 group-hover:text-gray-500 transition-colors mt-1" />
+                    </div>
+                    <div className="mt-4">
+                      <p className="text-base font-semibold text-gray-900">{item.label}</p>
+                      <p className="text-sm text-gray-500 mt-1">{item.desc}</p>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </div>
     </BizLayout>
   );

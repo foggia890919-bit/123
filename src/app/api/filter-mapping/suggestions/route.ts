@@ -73,19 +73,21 @@ export async function GET(req: NextRequest) {
   }
 
   if (type === "company") {
+    const all = req.nextUrl.searchParams.get("all") === "true";
+    const limit = all ? 5000 : 20;
     const companies = await prisma.memberCompanyRate.findMany({
       where: q ? { companyName: { contains: q, mode: "insensitive" } } : {},
       select: { companyName: true },
       distinct: ["companyName"],
       orderBy: { companyName: "asc" },
-      take: 20,
+      take: limit,
     });
     const fromRequests = await prisma.filterRequest.findMany({
       where: q ? { companyName: { contains: q, mode: "insensitive" } } : {},
       select: { companyName: true },
       distinct: ["companyName"],
       orderBy: { companyName: "asc" },
-      take: 20,
+      take: limit,
     });
     const allNames = [
       ...new Set([
@@ -95,7 +97,7 @@ export async function GET(req: NextRequest) {
     ]
       .filter((n) => !q || n.toLowerCase().includes(q.toLowerCase()))
       .sort()
-      .slice(0, 20);
+      .slice(0, limit);
     return NextResponse.json(allNames.map((companyName) => ({ companyName })));
   }
 

@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { normalizeCompanyName } from "@/lib/company-name";
 
+// 세로 형식: 각 row = { submissionEntity, managerName?, managerPhone?, companyName }
 interface BulkRow {
   submissionEntity: string;
   managerName?: string;
   managerPhone?: string;
-  companies: string[];
+  companyName: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -26,42 +28,41 @@ export async function POST(req: NextRequest) {
   const errors: string[] = [];
 
   for (const row of rows) {
-    if (!row.submissionEntity) {
-      errors.push(`제출처 누락: ${JSON.stringify(row)}`);
+    if (!row.submissionEntity || !row.companyName) {
+      errors.push(`제출처 또는 제약사 누락: ${JSON.stringify(row)}`);
       continue;
     }
-    for (const companyName of row.companies) {
-      if (!companyName.trim()) continue;
-      try {
-        const existing = await prisma.filterMapping.findUnique({ where: { companyName } });
-        if (existing) {
-          await prisma.filterMapping.update({
-            where: { id: existing.id },
-            data: {
-              submissionEntity: row.submissionEntity,
-              managerName: row.managerName || null,
-              managerPhone: row.managerPhone || null,
-              active: true,
-              updatedAt: new Date(),
-            },
-          });
-          updated++;
-        } else {
-          await prisma.filterMapping.create({
-            data: {
-              id: crypto.randomUUID(),
-              companyName,
-              submissionEntity: row.submissionEntity,
-              managerName: row.managerName || null,
-              managerPhone: row.managerPhone || null,
-              updatedAt: new Date(),
-            },
-          });
-          created++;
-        }
-      } catch (e) {
-        errors.push(`${companyName}: ${e instanceof Error ? e.message : String(e)}`);
+    const companyName = normalizeCompanyName(row.companyName.trim());
+    if (!companyName) continue;
+    try {
+      const existing = await prisma.filterMapping.findUnique({ where: { companyName } });
+      if (existing) {
+        await prisma.filterMapping.update({
+          where: { id: existing.id },
+          data: {
+            submissionEntity: row.submissionEntity,
+            managerName: row.managerName || null,
+            managerPhone: row.managerPhone || null,
+            active: true,
+            updatedAt: new Date(),
+          },
+        });
+        updated++;
+      } else {
+        await prisma.filterMapping.create({
+          data: {
+            id: crypto.randomUUID(),
+            companyName,
+            submissionEntity: row.submissionEntity,
+            managerName: row.managerName || null,
+            managerPhone: row.managerPhone || null,
+            updatedAt: new Date(),
+          },
+        });
+        created++;
       }
+    } catch (e) {
+      errors.push(`${companyName}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { BizLayout } from "@/app/biz/page";
 import { Plus, Pencil, Trash2, Search, ToggleLeft, ToggleRight, Loader2, X, ChevronDown, Upload, Download, CheckCircle, AlertCircle } from "lucide-react";
 import * as XLSX from "xlsx";
+import { normalizeCompanyName } from "@/lib/company-name";
 
 interface FilterMapping {
   id: string;
@@ -142,13 +143,31 @@ function Autocomplete<T>({
   );
 }
 
-// ── 엑셀 템플릿 다운로드 ─────────────────────────────────────
-function downloadTemplate() {
-  const ws = XLSX.utils.aoa_to_sheet([
-    ["상위법인", "담당자명", "담당자연락처", "제약사1", "제약사2", "제약사3"],
-    ["메디필스1", "홍길동", "010-1234-5678", "에이치엘비제약(주)", "(주)메디카코리아", ""],
-  ]);
-  ws["!cols"] = [14, 10, 14, 16, 16, 16].map((w) => ({ wch: w }));
+// ── 엑셀 템플릿 다운로드 (세로형식, 요율표 기반 전체 제약사 포함) ─────
+async function downloadTemplate() {
+  // 요율표 기반 전체 제약사 목록 조회
+  let companies: string[] = [];
+  try {
+    const res = await fetch("/api/filter-mapping/suggestions?type=company&all=true");
+    const data = await res.json();
+    companies = Array.isArray(data) ? data.map((d: { companyName: string }) => d.companyName) : [];
+  } catch {
+    companies = [];
+  }
+
+  // 헤더 행 + 데이터 행 (제약사 한 줄씩)
+  const rows: (string | null)[][] = [
+    ["상위법인", "담당자명", "담당자연락처", "제약사"],
+    ...companies.map((c) => [null, null, null, c]),
+  ];
+  if (companies.length === 0) {
+    rows.push([null, null, null, "에이치엘비제약(주)"]);
+    rows.push([null, null, null, "(주)메디카코리아"]);
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws["!cols"] = [16, 10, 14, 20].map((w) => ({ wch: w }));
+  ws["!freeze"] = { xSplit: 0, ySplit: 1 }; // 첫 행 고정
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "매핑");
   XLSX.writeFile(wb, "필터매핑_템플릿.xlsx");
@@ -166,8 +185,14 @@ export function FilterMappingContent() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [bulkUploading, setBulkUploading] = useState(false);
+  const [templateDownloading, setTemplateDownloading] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ created: number; updated: number; errors: string[] } | null>(null);
   const bulkRef = useRef<HTMLInputElement>(null);
+
+  async function handleDownloadTemplate() {
+    setTemplateDownloading(true);
+    try { await downloadTemplate(); } finally { setTemplateDownloading(false); }
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -192,17 +217,20 @@ export function FilterMappingContent() {
       const wb = XLSX.read(buf);
       const ws = wb.Sheets[wb.SheetNames[0]];
       const raw: string[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-      const [, ...dataRows] = raw; // skip header row
+      const [, ...dataRows] = raw; // 헤더 행 제외
+
+      // 세로 형식: A=상위법인, B=담당자명, C=연락처, D=제약사
       const rows = dataRows
-        .filter((r) => r[0]?.trim())
+        .filter((r) => String(r[0] ?? "").trim() && String(r[3] ?? "").trim())
         .map((r) => ({
           submissionEntity: String(r[0]).trim(),
           managerName: String(r[1] ?? "").trim() || undefined,
           managerPhone: String(r[2] ?? "").trim() || undefined,
-          companies: r.slice(3).map((c) => String(c).trim()).filter(Boolean),
+          companyName: normalizeCompanyName(String(r[3]).trim()),
         }))
-        .filter((r) => r.companies.length > 0);
-      if (rows.length === 0) { alert("유효한 행이 없어요."); return; }
+        .filter((r) => r.companyName);
+
+      if (rows.length === 0) { alert("유효한 행이 없어요. A열(상위법인)과 D열(제약사)을 확인해주세요."); return; }
       const res = await fetch("/api/filter-mapping/bulk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -291,9 +319,10 @@ export function FilterMappingContent() {
           </div>
           <div className="flex items-center gap-2">
             <input ref={bulkRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleBulkUpload} />
-            <button onClick={downloadTemplate}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-              <Download className="w-4 h-4" />템플릿
+            <button onClick={handleDownloadTemplate} disabled={templateDownloading}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50">
+              {templateDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              템플릿
             </button>
             <button onClick={() => bulkRef.current?.click()} disabled={bulkUploading}
               className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50">
