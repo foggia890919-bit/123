@@ -119,19 +119,28 @@ export async function POST(req: NextRequest) {
     const drugs: FusionDrug[] = [];
     for (const item of merged) {
       const matched = await matchMedication(item, masterByCode);
-      const matchConf = matched.matchedMedicationId ? matched.matchConfidence : 0;
-      const modelConf = clamp01_100(item.confidence);
+      // 데이터 완성도 기반 baseline (LLM 자체신뢰도가 누락/0 이어도 합리적 값 보장)
+      const fieldsFilled =
+        (item.productName ? 1 : 0) +
+        (item.companyName ? 1 : 0) +
+        (item.quantity ? 1 : 0) +
+        (item.insuranceCode.replace(/\D/g, "").length === 9 ? 1 : 0);
+      const completeness = fieldsFilled >= 4 ? 90 : fieldsFilled === 3 ? 80 : fieldsFilled === 2 ? 65 : 50;
+      const llmConf = clamp01_100(item.confidence);
+      const baselineConf = Math.max(llmConf, completeness);
+      // 마스터 매칭 시 매칭 신뢰도가 곧 finalConfidence (마스터 정보가 권위 있음)
+      // 미매칭이어도 baselineConf 그대로 사용 (50% 캡 제거)
       const finalConfidence = matched.matchedMedicationId
-        ? Math.min(modelConf, matchConf)
-        : Math.min(modelConf, 50); // 마스터 미매칭은 최대 50%로 캡
+        ? matched.matchConfidence
+        : baselineConf;
       const manualCheck = finalConfidence < 95;
 
       const bboxYPercent = locateRowInClova(item, clovaFields, clovaImageHeight);
       drugs.push({
-        insuranceCode: { value: matched.insuranceCode, confidence: matched.matchedMedicationId ? 100 : modelConf },
-        companyName:   { value: matched.companyName,   confidence: matched.matchedMedicationId ? 100 : modelConf },
-        productName:   { value: matched.productName,   confidence: matched.matchedMedicationId ? 100 : modelConf },
-        quantity:      { value: item.quantity,         confidence: modelConf },
+        insuranceCode: { value: matched.insuranceCode, confidence: matched.matchedMedicationId ? 100 : baselineConf },
+        companyName:   { value: matched.companyName,   confidence: matched.matchedMedicationId ? 100 : baselineConf },
+        productName:   { value: matched.productName,   confidence: matched.matchedMedicationId ? 100 : baselineConf },
+        quantity:      { value: item.quantity,         confidence: baselineConf },
         unitPrice: matched.unitPrice,
         matchedMedicationId: matched.matchedMedicationId,
         finalConfidence,
@@ -256,24 +265,29 @@ async function callGeminiVision(base64: string, mimeType: string): Promise<Gemin
   if (!process.env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY 미설정");
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-  const prompt = `당신은 한국 병원 처방전/처방통계 이미지 분석 전문가입니다.
-이미지에서 처방된 의약품을 모두 추출하세요.
+  const prompt = `당신은 한국 병원의 다양한 EMR 처방통계 표를 읽는 전문가입니다.
 
-각 약품마다 다음을 추출:
-- insuranceCode: 9자리 숫자 보험코드 (없으면 빈 문자열)
-- productName: 약품 제품명 (예: "아모디핀정 5mg")
-- companyName: 제약회사명 (예: "한미약품")
-- quantity: 처방 수량/투여량 (숫자만)
-- confidence: 이 행의 인식 확신도 (0~100 정수)
+# 작업 순서
+1. 먼저 표의 **헤더(컬럼명)** 를 식별하세요. EMR마다 컬럼 구성이 다릅니다.
+   - 가능한 헤더: 약품코드, 약품명, 제품명, 약품영형/제형, 단위, 수량, 일수,
+     총투여량, 총사용량, 단가, 금액, 송금액, 제약회사, 제약사, 보험코드, 청구코드
+2. 각 약품 행에서 헤더에 맞춰 값을 뽑으세요.
+3. 합계/소계, 검색기간, 내원구분/급비구분 같은 메타데이터 행은 제외하세요.
 
-엄격한 규칙:
-- 제품명에 "(주)"가 들어있으면 회사명 일부이므로 제거
-- 행 헤더(약품명, 코드, 수량 등)는 약품이 아니므로 제외
-- 합계/소계 행은 제외
-- 알 수 없는 필드는 빈 문자열, confidence 는 본인 평가
+# 출력 필드
+- insuranceCode: **9자리 숫자**인 경우만 채움. EMR 내부 약품코드(예: mosapit, ultra5)
+  는 9자리가 아니면 빈 문자열로 두세요.
+- productName: 정확한 제품명 (예: "모사피트정5밀리그람"). 약품명/제품명 컬럼 사용
+- companyName: 제약회사명 ("(주)" 표기는 유지해도 됨, 단 이름 끝의 (주)는 제거)
+- quantity: 처방 수량/투여량/총사용량 컬럼 값. 숫자만
+- confidence: 이 행 인식 확신도 0~100 (제품명·수량·제약사 모두 명확하면 90+,
+  제품명만 명확하면 70~85, 일부 결손 50~70)
 
-JSON 형식으로만 응답:
-{ "drugs": [ { "insuranceCode": "...", "productName": "...", "companyName": "...", "quantity": "...", "confidence": 0 } ] }`;
+# 중요
+- **보험코드가 없어도 제품명이 명확하면 반드시 추출**하세요 (confidence 70+).
+- 한 약품의 여러 행은 각각 별도로 추출하세요 (예: 같은 약을 여러 환자에게 처방한 경우).
+
+JSON: { "drugs": [ { "insuranceCode": "", "productName": "", "companyName": "", "quantity": "", "confidence": 0 } ] }`;
 
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash-lite",
@@ -322,28 +336,33 @@ async function callGeminiMerge(args: {
   }
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-  const prompt = `당신은 처방전 OCR 결과를 검증/병합하는 전문가입니다.
-두 OCR 엔진의 결과를 비교하고 마스터 DB 후보를 참고해 가장 정확한 약품 리스트를 만드세요.
+  const prompt = `당신은 한국 EMR의 처방통계 표를 OCR 결과로부터 재구성하는 전문가입니다.
 
-# Clova OCR 텍스트
+# 입력 1: Clova OCR 라인 단위 텍스트 (가장 신뢰할 수 있는 raw 데이터)
 ${args.clovaText || "(없음)"}
 
-# Gemini Vision 추출 결과
-${args.geminiDraft ? JSON.stringify(args.geminiDraft.drugs, null, 2) : "(없음)"}
+# 입력 2: Gemini Vision 의 1차 구조화 결과
+${args.geminiDraft && args.geminiDraft.drugs.length ? JSON.stringify(args.geminiDraft.drugs, null, 2) : "(비어있음 — Clova 텍스트를 기반으로 직접 추출하세요)"}
 
-# 마스터 DB 후보 (보험코드로 사전 조회됨)
+# 입력 3: 마스터 DB 후보 (Clova 가 뽑은 9자리 보험코드로 사전 조회)
 ${args.masterCandidates.length ? JSON.stringify(args.masterCandidates, null, 2) : "(없음)"}
 
-규칙:
-- 두 OCR 결과가 일치하면 confidence 95+
-- 한 쪽만 인식했거나 불일치면 confidence 60~85
-- 마스터 DB 후보와 보험코드/제품명이 정확히 일치하면 confidence 100
-- 마스터에 없는 약품도 일단 포함 (사람이 확인하도록)
-- 헤더, 합계, 비약품 행은 제외
-- quantity 는 숫자만 (단위 제외)
+# 작업
+1. Clova 텍스트에서 약품 행들을 식별. 헤더 라인(약품코드/약품명/총투여량/단가/송금액 등)을
+   먼저 찾아 컬럼 구조를 추론.
+2. Vision 결과가 비어있으면 Clova 텍스트만으로 약품 리스트 추출.
+3. 양쪽 모두 있으면 일치 항목은 신뢰도↑, 불일치는 Clova를 우선.
+4. 마스터 DB 후보에 매칭되는 행이 있으면 정확한 productName/companyName 으로 보정.
 
-JSON 응답:
-{ "drugs": [ { "insuranceCode": "...", "productName": "...", "companyName": "...", "quantity": "...", "confidence": 0 } ] }`;
+# 규칙
+- 9자리 숫자가 아닌 EMR 내부 코드(mosapit, ultra5 등)는 insuranceCode 에 넣지 말고
+  빈 문자열로 두기.
+- 보험코드 없어도 제품명 명확하면 추출 (confidence 70+).
+- 헤더, 합계, 검색기간, 내원구분 같은 메타 라인은 제외.
+- quantity 는 숫자만.
+- confidence: 양쪽 OCR 일치 90+, 한쪽만 70~85, 마스터 매칭 시 95+.
+
+JSON: { "drugs": [ { "insuranceCode": "", "productName": "", "companyName": "", "quantity": "", "confidence": 0 } ] }`;
 
   try {
     const response = await ai.models.generateContent({
@@ -422,6 +441,31 @@ async function matchMedication(
     };
   }
 
+  // productName + companyName 동시 매치가 가장 강함
+  if (item.productName.length >= 3 && item.companyName.length >= 2) {
+    const companyKey = item.companyName.replace(/\(주\)|\(유\)|주식회사|㈜/g, "").trim();
+    const candidates = await prisma.medication.findMany({
+      where: {
+        productName: { contains: item.productName.slice(0, 8), mode: "insensitive" },
+        companyName: { contains: companyKey.slice(0, 6), mode: "insensitive" },
+      },
+      select: { id: true, insuranceCode: true, productName: true, companyName: true, price: true },
+      take: 5,
+    });
+    const exact = candidates.find((c: MasterRow) => c.productName === item.productName);
+    const partial = exact ?? candidates[0];
+    if (partial) {
+      return {
+        insuranceCode: partial.insuranceCode ?? item.insuranceCode,
+        productName: partial.productName,
+        companyName: partial.companyName,
+        unitPrice: partial.price,
+        matchedMedicationId: partial.id,
+        matchConfidence: exact ? 98 : 90,
+      };
+    }
+  }
+
   // productName 부분 일치 fallback
   if (item.productName.length >= 3) {
     const candidates = await prisma.medication.findMany({
@@ -438,7 +482,7 @@ async function matchMedication(
         companyName: partial.companyName,
         unitPrice: partial.price,
         matchedMedicationId: partial.id,
-        matchConfidence: exact ? 95 : 80,
+        matchConfidence: exact ? 92 : 78,
       };
     }
   }
