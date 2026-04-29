@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { isRevenueStatus } from "@/lib/order-status";
 
 const KST_OFFSET_MIN = 9 * 60;
 
@@ -74,7 +75,7 @@ export async function buildDailyReport(
   reportDate: Date,
   workspaceId?: string,
 ): Promise<ReportSummary> {
-  const items = await prisma.naverOrderItem.findMany({
+  const itemsRaw = await prisma.naverOrderItem.findMany({
     where: {
       paymentDate: { gte: new Date(fromIso), lt: new Date(toIso) },
       ...(workspaceId ? { order: { store: { workspaceId } } } : {}),
@@ -86,6 +87,8 @@ export async function buildDailyReport(
       product: { include: { costs: { orderBy: { effectiveAt: "desc" } } } },
     },
   });
+  // 취소·반품·환불 제외
+  const items = itemsRaw.filter((it) => isRevenueStatus(it.status, it.detailStatus));
 
   const details: DetailRow[] = [];
   // 키워드별 집계 + distinct orderId 추적

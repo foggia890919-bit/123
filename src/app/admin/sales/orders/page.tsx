@@ -63,6 +63,39 @@ export default function OrdersPage() {
   const sumSales = useMemo(() => items.reduce((a, b) => a + b.salesAmount, 0), [items]);
   const sumQty = useMemo(() => items.reduce((a, b) => a + b.quantity, 0), [items]);
 
+  function isCanceled(it: Item): boolean {
+    return /취소|반품|환불|cancel|refund|return/i.test(`${it.status ?? ""} ${it.detailStatus ?? ""}`);
+  }
+
+  async function exportCsv() {
+    setBusy(true);
+    // 모든 페이지 다 가져오기 (최대 5000건)
+    const params = new URLSearchParams({ q, storeId, from, to, page: "1", size: "5000" });
+    const r = await fetch(`/api/sales/orders?${params}`);
+    setBusy(false);
+    if (!r.ok) return;
+    const d = await r.json();
+    const rows: Item[] = d.items ?? [];
+    const headers = ["결제일","스토어","상품","옵션","키워드","수량","병수단위","매출","수수료","상태","구매자","주문번호","상품주문번호"];
+    const lines = [headers.join(",")];
+    for (const it of rows) {
+      const cells = [
+        new Date(it.paymentDate).toLocaleString("ko-KR", { hour12: false }),
+        it.store, it.productName, it.optionName, it.keyword,
+        String(it.quantity), String(it.bottlesPerUnit), String(it.salesAmount), String(it.commission),
+        `${it.detailStatus || it.status || ""}`, it.buyerName ?? "", it.orderId, it.productOrderId,
+      ];
+      lines.push(cells.map((v) => v.includes(",") || v.includes('"') ? `"${v.replace(/"/g, '""')}"` : v).join(","));
+    }
+    const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `주문_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="space-y-4 max-w-7xl">
       <div className="flex items-center gap-3">
@@ -89,10 +122,13 @@ export default function OrdersPage() {
         </button>
       </section>
 
-      <div className="text-sm text-gray-600 flex gap-4 flex-wrap">
+      <div className="text-sm text-gray-600 flex gap-4 flex-wrap items-center">
         <span>총 <b>{total.toLocaleString()}</b>건</span>
         <span>현재 페이지 매출: {won(sumSales)}원</span>
         <span>수량: {sumQty}개</span>
+        <button onClick={exportCsv} disabled={busy} className="ml-auto px-2 py-1 rounded border text-xs disabled:opacity-50">
+          ⬇ CSV 내보내기 (검색결과 최대 5000건)
+        </button>
       </div>
 
       <section className="rounded-md border bg-white overflow-x-auto">
@@ -112,22 +148,31 @@ export default function OrdersPage() {
             </tr>
           </thead>
           <tbody>
-            {items.map((it) => (
-              <tr key={it.id} className="border-t hover:bg-gray-50">
-                <td className="py-1 px-2">{new Date(it.paymentDate).toLocaleString("ko-KR", { hour12: false })}</td>
-                <td>{it.store}</td>
-                <td>{it.productName}</td>
-                <td>{it.optionName}</td>
-                <td>
-                  {it.keyword ? <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded text-xs">{it.keyword}</span> : <span className="text-gray-400 text-xs">미매핑</span>}
-                </td>
-                <td className="text-right">{it.quantity}{it.bottlesPerUnit > 1 ? <span className="text-gray-500 text-xs"> ×{it.bottlesPerUnit}</span> : ""}</td>
-                <td className="text-right">{won(it.salesAmount)}</td>
-                <td className="text-right text-gray-600">{won(it.commission)}</td>
-                <td className="text-xs text-gray-600">{it.detailStatus || it.status}</td>
-                <td className="text-xs text-gray-600">{it.buyerName ?? "-"}</td>
-              </tr>
-            ))}
+            {items.map((it) => {
+              const canceled = isCanceled(it);
+              return (
+                <tr key={it.id} className={`border-t hover:bg-gray-50 ${canceled ? "bg-red-50/40" : ""}`}>
+                  <td className="py-1 px-2">{new Date(it.paymentDate).toLocaleString("ko-KR", { hour12: false })}</td>
+                  <td>{it.store}</td>
+                  <td className={canceled ? "line-through text-gray-500" : ""}>{it.productName}</td>
+                  <td className={canceled ? "line-through text-gray-500" : ""}>{it.optionName}</td>
+                  <td>
+                    {it.keyword ? <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded text-xs">{it.keyword}</span> : <span className="text-gray-400 text-xs">미매핑</span>}
+                  </td>
+                  <td className="text-right">{it.quantity}{it.bottlesPerUnit > 1 ? <span className="text-gray-500 text-xs"> ×{it.bottlesPerUnit}</span> : ""}</td>
+                  <td className={`text-right ${canceled ? "line-through text-red-700" : ""}`}>{won(it.salesAmount)}</td>
+                  <td className="text-right text-gray-600">{won(it.commission)}</td>
+                  <td className="text-xs">
+                    {canceled ? (
+                      <span className="px-1.5 py-0.5 bg-red-100 text-red-800 rounded">{it.detailStatus || it.status}</span>
+                    ) : (
+                      <span className="text-gray-600">{it.detailStatus || it.status}</span>
+                    )}
+                  </td>
+                  <td className="text-xs text-gray-600">{it.buyerName ?? "-"}</td>
+                </tr>
+              );
+            })}
             {items.length === 0 && !busy && (
               <tr><td colSpan={10} className="py-4 text-center text-gray-500">결과 없음</td></tr>
             )}

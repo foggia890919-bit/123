@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
+import { isRevenueStatus } from "@/lib/order-status";
 
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
@@ -58,6 +59,7 @@ async function fetchItems(workspaceId: string, storeId: string, keyword: string,
   });
   const out: ItemLite[] = [];
   for (const it of items) {
+    if (!isRevenueStatus(it.status, it.detailStatus)) continue;
     const c = it.product?.costs[0];
     const cost: CostMatch = c ? {
       keyword: c.keyword,
