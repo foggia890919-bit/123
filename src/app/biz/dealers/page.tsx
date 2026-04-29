@@ -385,7 +385,7 @@ export default function BizDealersPage() {
   const filtered = clients.filter((c) => {
     // 분류 뷰 탭 필터
     if (classificationTab === "settlement" && !(c.isSettlementTarget ?? false)) return false;
-    if (classificationTab === "rate"       && !(c.isRateTarget        ?? false)) return false;
+    if (classificationTab === "rate"       && !(c.isRateTarget ?? false)) return false;
     const matchQ = !query || c.clientName.includes(query) || c.bizNumber.includes(query);
     const matchT = filterType === "ALL" || (filterType === "NONE" ? !c.dealerType : c.dealerType === filterType);
     return matchQ && matchT;
