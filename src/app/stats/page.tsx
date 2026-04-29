@@ -172,6 +172,38 @@ export default function StatsPage() {
     setHospitalQuery("");
   }
 
+  async function deleteClient(c: UserClient) {
+    // 1) 연결된 항목 카운트 가져와서 확인 메시지에 포함
+    let reportCount = 0, proposalCount = 0;
+    try {
+      const r = await fetch(`/api/user-clients/${c.id}`);
+      if (r.ok) {
+        const data = await r.json();
+        reportCount = data.reportCount ?? 0;
+        proposalCount = data.proposalCount ?? 0;
+      }
+    } catch { /* 카운트 못 가져와도 진행 */ }
+
+    const refs = [
+      reportCount > 0 ? `처방통계 ${reportCount}건` : "",
+      proposalCount > 0 ? `제안서 ${proposalCount}건` : "",
+    ].filter(Boolean).join(" / ");
+    const msg = refs
+      ? `"${c.clientName}" 거래처를 삭제할까요?\n연결된 ${refs}는 그대로 유지되고 거래처 정보만 분리됩니다.`
+      : `"${c.clientName}" 거래처를 삭제할까요?`;
+    if (!window.confirm(msg)) return;
+
+    try {
+      const res = await fetch(`/api/user-clients/${c.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `삭제 실패 (${res.status})`);
+      setClients((prev) => prev.filter((x) => x.id !== c.id));
+      if (selectedClient?.id === c.id) clearClient();
+    } catch (e) {
+      window.alert(`거래처 삭제 실패: ${String(e)}`);
+    }
+  }
+
   async function registerClient() {
     if (!regName.trim() || !regBizNum.trim()) { setRegError("이름과 사업자번호를 입력하세요"); return; }
     if (!session?.user?.id) return;
@@ -509,17 +541,27 @@ export default function StatsPage() {
                         <p className="text-xs text-gray-400 text-center py-4">검색 결과 없음</p>
                       ) : (
                         filteredClients.map((c) => (
-                          <button key={c.id} type="button" onClick={() => selectClient(c)}
-                            className="w-full text-left px-3 py-2 hover:bg-blue-50 flex items-center justify-between gap-2">
-                            <div>
-                              <p className="text-sm font-medium text-gray-800">{c.clientName}</p>
+                          <div key={c.id} role="button" tabIndex={0}
+                            onClick={() => selectClient(c)}
+                            onKeyDown={(e) => { if (e.key === "Enter") selectClient(c); }}
+                            className="w-full text-left px-3 py-2 hover:bg-blue-50 flex items-center justify-between gap-2 cursor-pointer">
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-gray-800 truncate">{c.clientName}</p>
                               <p className="text-xs text-gray-400">{c.bizNumber}</p>
                             </div>
-                            {c.approved
-                              ? <span className="text-[10px] bg-green-100 text-green-700 border border-green-300 rounded px-1.5 py-0.5 shrink-0">승인완료</span>
-                              : <span className="text-[10px] bg-yellow-100 text-yellow-700 border border-yellow-300 rounded px-1.5 py-0.5 shrink-0">승인전</span>
-                            }
-                          </button>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {c.approved
+                                ? <span className="text-[10px] bg-green-100 text-green-700 border border-green-300 rounded px-1.5 py-0.5">승인완료</span>
+                                : <span className="text-[10px] bg-yellow-100 text-yellow-700 border border-yellow-300 rounded px-1.5 py-0.5">승인전</span>
+                              }
+                              <button type="button"
+                                onClick={(e) => { e.stopPropagation(); deleteClient(c); }}
+                                className="text-gray-300 hover:text-red-600 p-0.5 rounded hover:bg-red-50"
+                                title="이 거래처 삭제">
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
                         ))
                       )}
                     </div>
