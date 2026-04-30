@@ -16,6 +16,7 @@ export const BUCKETS = {
   settlementTemplate: "settlement-templates",
   settlementDocument: "settlement-documents",
   bizRateFile: "biz-rate-files",
+  incomingEmail: "incoming-emails",
 } as const;
 
 export function publicUrl(bucket: BucketName, key: string): string {

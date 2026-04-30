@@ -116,3 +116,57 @@ ON CONFLICT ("key") DO UPDATE
       "baseUrl"   = EXCLUDED."baseUrl",
       "loginUrl"  = EXCLUDED."loginUrl",
       "updatedAt" = NOW();
+
+-- 자동 메일 수신
+CREATE TABLE IF NOT EXISTS "IncomingEmail" (
+  "id"                TEXT PRIMARY KEY,
+  "messageId"         TEXT NOT NULL UNIQUE,
+  "fromAddress"       TEXT NOT NULL,
+  "fromName"          TEXT,
+  "subject"           TEXT NOT NULL,
+  "bodyPreview"       TEXT,
+  "receivedAt"        TIMESTAMPTZ NOT NULL,
+  "status"            TEXT NOT NULL DEFAULT 'PENDING',
+  "classifiedAs"      TEXT,
+  "mappedCorpId"      TEXT,
+  "mappedCompanyName" TEXT,
+  "applyMonth"        TEXT,
+  "processedAt"       TIMESTAMPTZ,
+  "processedById"     TEXT,
+  "rateFileId"        TEXT,
+  "settlementDocId"   TEXT,
+  "errorMessage"      TEXT,
+  "createdAt"         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  "updatedAt"         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT "IncomingEmail_processedById_fkey"
+    FOREIGN KEY ("processedById") REFERENCES "User"("id") ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS "IncomingEmail_status_idx"      ON "IncomingEmail"("status");
+CREATE INDEX IF NOT EXISTS "IncomingEmail_receivedAt_idx"  ON "IncomingEmail"("receivedAt" DESC);
+CREATE INDEX IF NOT EXISTS "IncomingEmail_fromAddress_idx" ON "IncomingEmail"("fromAddress");
+
+CREATE TABLE IF NOT EXISTS "EmailAttachment" (
+  "id"        TEXT PRIMARY KEY,
+  "emailId"   TEXT NOT NULL,
+  "fileName"  TEXT NOT NULL,
+  "mimeType"  TEXT NOT NULL,
+  "size"      INTEGER NOT NULL,
+  "fileKey"   TEXT NOT NULL,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT "EmailAttachment_emailId_fkey"
+    FOREIGN KEY ("emailId") REFERENCES "IncomingEmail"("id") ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS "EmailAttachment_emailId_idx" ON "EmailAttachment"("emailId");
+
+CREATE TABLE IF NOT EXISTS "EmailSenderMapping" (
+  "id"                    TEXT PRIMARY KEY,
+  "fromAddress"           TEXT NOT NULL UNIQUE,
+  "matchType"             TEXT NOT NULL DEFAULT 'EXACT',
+  "corpClientId"          TEXT NOT NULL,
+  "defaultClassification" TEXT,
+  "active"                BOOLEAN NOT NULL DEFAULT true,
+  "createdAt"             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  "updatedAt"             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS "EmailSenderMapping_fromAddress_idx" ON "EmailSenderMapping"("fromAddress");
+CREATE INDEX IF NOT EXISTS "EmailSenderMapping_active_idx"      ON "EmailSenderMapping"("active");

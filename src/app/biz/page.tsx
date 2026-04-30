@@ -8,7 +8,7 @@ import {
   Hospital, Building2, FileUp, FileSearch,
   ChevronRight, LayoutDashboard, ClipboardList,
   BarChart3, PercentCircle, Pill, UserCheck,
-  Calculator, Network, Users, PackageSearch,
+  Calculator, Network, Users, PackageSearch, Mail,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -131,6 +131,13 @@ const BIZ_MENU_GROUPS = [
         desc: "ScrapeJob 이력·사이트별 성공률·최신 갱신 시각·지금 재시도",
         icon: PackageSearch,
         color: "bg-emerald-50 text-emerald-600",
+      },
+      {
+        href: "/biz/email-inbox",
+        label: "메일 자동 수신함",
+        desc: "지메일 자동 수신 + 발신자 매핑 + 첨부 자동 분류·등록",
+        icon: Mail,
+        color: "bg-pink-50 text-pink-600",
       },
     ],
   },

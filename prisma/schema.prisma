@@ -32,6 +32,7 @@ model User {
   settlementDocuments   SettlementDocument[]
   corpRateFilesUploaded      CorpRateFile[]        @relation("CorpRateFileUploader")
   corpRateHistoriesPerformed CorpRateFileHistory[] @relation("CorpRateFileHistoryPerformer")
+  processedEmails            IncomingEmail[]       @relation("EmailProcessor")
 }
 
 
@@ -647,6 +648,65 @@ model BizDigestQueue {
 
   @@index([sentAt])
   @@index([type])
+}
+
+// 자동 수신된 이메일
+model IncomingEmail {
+  id                String   @id @default(cuid())
+  messageId         String   @unique
+  fromAddress       String
+  fromName          String?
+  subject           String
+  bodyPreview       String?
+  receivedAt        DateTime
+  status            String   @default("PENDING")
+  classifiedAs      String?
+  mappedCorpId      String?
+  mappedCompanyName String?
+  applyMonth        String?
+  processedAt       DateTime?
+  processedById     String?
+  processedBy       User?    @relation("EmailProcessor", fields: [processedById], references: [id])
+  rateFileId        String?
+  settlementDocId   String?
+  errorMessage      String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  attachments EmailAttachment[]
+
+  @@index([status])
+  @@index([receivedAt(sort: Desc)])
+  @@index([fromAddress])
+}
+
+// 이메일 첨부파일
+model EmailAttachment {
+  id        String        @id @default(cuid())
+  emailId   String
+  email     IncomingEmail @relation(fields: [emailId], references: [id], onDelete: Cascade)
+  fileName  String
+  mimeType  String
+  size      Int
+  fileKey   String
+  createdAt DateTime      @default(now())
+
+  @@index([emailId])
+}
+
+// 발신자 → 법인 매핑
+model EmailSenderMapping {
+  id                    String   @id @default(cuid())
+  fromAddress           String   @unique
+  matchType             String   @default("EXACT")
+  corpClientId          String
+  defaultClassification String?
+  active                Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([fromAddress])
+  @@index([active])
 }
 
 // 텔레그램 수신 답변 저장
