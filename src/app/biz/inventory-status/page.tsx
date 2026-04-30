@@ -14,7 +14,6 @@ import {
   WifiOff,
   KeyRound,
   Activity,
-  Info,
 } from "lucide-react";
 
 interface JobRow {
@@ -491,14 +490,27 @@ export default function InventoryStatusPage() {
                     </div>
                     <div className="flex items-center gap-1.5 text-xs text-gray-500">
                       <Database className="w-3.5 h-3.5" />
-                      <span>{site.snapshotCount.toLocaleString()}건</span>
+                      <span>
+                        전체 {site.snapshotCount.toLocaleString()}건
+                        {site.snapshotCount24h > 0 && (
+                          <span className="ml-1.5 text-green-600 font-medium">
+                            (24h +{site.snapshotCount24h.toLocaleString()})
+                          </span>
+                        )}
+                        {site.snapshotCount24h === 0 && site.snapshotCount > 0 && (
+                          <span className="ml-1.5 text-amber-500">(24h 0건)</span>
+                        )}
+                        {site.snapshotCount === 0 && (
+                          <span className="ml-1.5 text-red-500 font-medium">— 없음</span>
+                        )}
+                      </span>
                     </div>
                     <div className="flex items-center gap-1.5 text-xs text-gray-500">
                       <Clock className="w-3.5 h-3.5" />
                       <span>
                         {site.latestSnapshotAt
-                          ? `마지막 성공: ${formatRelative(site.latestSnapshotAt)} (${formatDateTime(site.latestSnapshotAt)})`
-                          : "스냅샷 없음"}
+                          ? `마지막: ${formatRelative(site.latestSnapshotAt)} (${formatDateTime(site.latestSnapshotAt)})`
+                          : <span className="text-red-500 font-medium">스냅샷 없음</span>}
                       </span>
                     </div>
                     {isSuspended && (
