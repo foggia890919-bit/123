@@ -36,9 +36,10 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   const buf = await res.arrayBuffer();
+  const body = new Uint8Array(buf);
   const contentType = res.headers.get("content-type") ?? attachment.mimeType ?? "application/octet-stream";
 
-  return new NextResponse(buf, {
+  return new NextResponse(body, {
     headers: {
       "Content-Type": contentType,
       "Content-Disposition": `attachment; filename="${encodeURIComponent(attachment.fileName)}"`,
