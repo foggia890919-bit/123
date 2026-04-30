@@ -14,6 +14,7 @@ import {
   WifiOff,
   KeyRound,
   Activity,
+  Info,
 } from "lucide-react";
 
 interface JobRow {
@@ -36,6 +37,17 @@ interface SiteRow {
   active: boolean;
   latestSnapshotAt: string | null;
   snapshotCount: number;
+  snapshotCount24h: number;
+}
+
+interface DiagBlock {
+  tableExists: boolean;
+  scrapeJobCount24h: number;
+  scrapeJobSuccessCount24h: number;
+  scrapeJobFailedCount24h: number;
+  snapshotCount24h: number;
+  workerEnvConfigured: boolean;
+  diagMessage: string;
 }
 
 interface WorkerSiteInfo {
@@ -83,9 +95,44 @@ function formatDateTime(iso: string | null): string {
   });
 }
 
+// ── DiagCard ─────────────────────────────────────────────────────────────────
+function DiagCard({
+  ok,
+  label,
+  okText,
+  failText,
+  hint,
+}: {
+  ok: boolean;
+  label: string;
+  okText: string;
+  failText: string;
+  hint?: string;
+}) {
+  return (
+    <div className={`border rounded-xl p-4 space-y-1.5 ${ok ? "bg-white border-gray-200" : "bg-red-50 border-red-200"}`}>
+      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{label}</p>
+      <div className="flex items-start gap-2">
+        {ok ? (
+          <CheckCircle className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
+        ) : (
+          <XCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+        )}
+        <span className={`text-xs font-medium ${ok ? "text-gray-700" : "text-red-700"}`}>
+          {ok ? okText : failText}
+        </span>
+      </div>
+      {hint && !ok && (
+        <p className="text-xs text-red-600 leading-relaxed pl-6">{hint}</p>
+      )}
+    </div>
+  );
+}
+
 export default function InventoryStatusPage() {
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [sites, setSites] = useState<SiteRow[]>([]);
+  const [diag, setDiag] = useState<DiagBlock | null>(null);
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(false);
   const [triggerResult, setTriggerResult] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -100,6 +147,7 @@ export default function InventoryStatusPage() {
       const data = await res.json();
       setJobs(Array.isArray(data.jobs) ? data.jobs : []);
       setSites(Array.isArray(data.sites) ? data.sites : []);
+      if (data.diag) setDiag(data.diag as DiagBlock);
     } catch (err) {
       console.error("[inventory-status] load failed:", err);
     } finally {
@@ -213,6 +261,89 @@ export default function InventoryStatusPage() {
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
             )}
             <span>{triggerResult.msg}</span>
+          </div>
+        )}
+
+        {/* 자가진단 카드 */}
+        {(diag || loading) && (
+          <div>
+            <h2 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
+              <AlertTriangle className="w-4 h-4" />
+              자가진단 요약
+            </h2>
+            {loading && !diag ? (
+              <p className="text-sm text-gray-400">진단 정보 로딩 중...</p>
+            ) : diag ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {/* DB 테이블 존재 여부 */}
+                <DiagCard
+                  ok={diag.tableExists}
+                  label="DB 테이블"
+                  okText="InventorySnapshot 테이블 정상"
+                  failText="InventorySnapshot 테이블 없음"
+                  hint={!diag.tableExists ? "Supabase에서 _MASTER_MIGRATION.sql을 실행하세요." : undefined}
+                />
+                {/* Worker 환경변수 */}
+                <DiagCard
+                  ok={diag.workerEnvConfigured}
+                  label="Worker 환경변수"
+                  okText="WORKER_URL / WORKER_TOKEN 설정됨"
+                  failText="WORKER_URL 또는 WORKER_TOKEN 미설정"
+                  hint={!diag.workerEnvConfigured ? "Vercel 환경변수에 WORKER_URL + WORKER_TOKEN을 추가하세요." : undefined}
+                />
+                {/* 최근 24h ScrapeJob */}
+                <DiagCard
+                  ok={diag.scrapeJobCount24h > 0}
+                  label="24h ScrapeJob"
+                  okText={`${diag.scrapeJobCount24h}건 실행 (성공 ${diag.scrapeJobSuccessCount24h} / 실패 ${diag.scrapeJobFailedCount24h})`}
+                  failText="최근 24h 작업 없음 — Worker 프로세스 미실행"
+                  hint={diag.scrapeJobCount24h === 0 ? "worker/scripts/install-lightsail.sh로 Lightsail 워커를 배포하세요." : undefined}
+                />
+                {/* 24h 성공률 */}
+                <DiagCard
+                  ok={diag.scrapeJobCount24h === 0 || diag.scrapeJobSuccessCount24h > 0}
+                  label="24h 크롤 성공률"
+                  okText={
+                    diag.scrapeJobCount24h === 0
+                      ? "해당 없음 (작업 없음)"
+                      : `성공 ${diag.scrapeJobSuccessCount24h} / 전체 ${diag.scrapeJobCount24h}`
+                  }
+                  failText={`전체 ${diag.scrapeJobCount24h}건 모두 실패`}
+                  hint={
+                    diag.scrapeJobCount24h > 0 && diag.scrapeJobSuccessCount24h === 0
+                      ? "자격증명(SCRAPER_*_ID/PW) 또는 사이트 접속 이슈. 아래 에러 컬럼을 확인하세요."
+                      : undefined
+                  }
+                />
+                {/* 24h 스냅샷 적재량 */}
+                <DiagCard
+                  ok={diag.snapshotCount24h > 0 || diag.scrapeJobCount24h === 0}
+                  label="24h 스냅샷 적재"
+                  okText={
+                    diag.scrapeJobCount24h === 0
+                      ? "해당 없음 (작업 없음)"
+                      : `${diag.snapshotCount24h.toLocaleString()}건 저장됨`
+                  }
+                  failText="크롤 성공 후에도 스냅샷 0건"
+                  hint={
+                    diag.scrapeJobSuccessCount24h > 0 && diag.snapshotCount24h === 0
+                      ? "Worker의 DATABASE_URL 미설정 또는 어댑터 파싱 결함. Worker 로그를 확인하세요."
+                      : undefined
+                  }
+                />
+                {/* Vercel cron vs Worker cron */}
+                <div className="border rounded-xl p-4 bg-white space-y-1">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">스케줄 구조</p>
+                  <p className="text-xs text-gray-700 font-medium">Worker 내장 node-cron</p>
+                  <p className="text-xs text-gray-500 leading-relaxed">
+                    Vercel cron에 인벤토리 항목 없음. 크롤 스케줄은 Worker(Lightsail) 프로세스 내부
+                    node-cron이 KST 06:00 / 12:00 / 18:00에 실행합니다.
+                    <br />
+                    <span className="font-medium text-amber-600">Worker가 꺼져 있으면 영영 0건.</span>
+                  </p>
+                </div>
+              </div>
+            ) : null}
           </div>
         )}
 
