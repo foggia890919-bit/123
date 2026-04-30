@@ -77,6 +77,9 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
   const [dropdown, setDropdown] = useState<DropdownState | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [localProposals, setLocalProposals] = useState<Proposal[]>(externalProposals ?? []);
+  // 기본 = exact(용량까지 정확 일치)만 표시. 토글로 하위 단계 노출.
+  const [showOtherDose, setShowOtherDose] = useState(false);
+  const [showOtherForm, setShowOtherForm] = useState(false);
 
   useEffect(() => { setLocalProposals(externalProposals ?? []); }, [externalProposals]);
 
@@ -206,7 +209,19 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
     return sortDir === "asc" ? (va as number) - (vb as number) : (vb as number) - (va as number);
   });
 
-  const hasMatchLevel = sorted.some((m) => m.matchLevel != null);
+  // ingredientCode 기반 검색이면 matchLevel 필터 적용.
+  // showOtherDose=false이면 same_form 제외, showOtherForm=false이면 same_ingredient/name_match 제외.
+  const hasIngredientCodeSearch = medications.some((m) => m.matchLevel != null);
+  const visibleSorted = hasIngredientCodeSearch
+    ? sorted.filter((m) => {
+        if (m.matchLevel === "exact") return true;
+        if (m.matchLevel === "same_form") return showOtherDose;
+        if (m.matchLevel === "same_ingredient" || m.matchLevel === "name_match") return showOtherForm;
+        return true;
+      })
+    : sorted;
+
+  const hasMatchLevel = visibleSorted.some((m) => m.matchLevel != null);
 
   const MATCH_SECTION_LABELS: Record<IngredientMatchLevel, { label: string; color: string }> = {
     exact:           { label: "정확히 일치 (동일 성분·제형·용량)", color: "bg-blue-50 text-blue-800 border-blue-200" },
@@ -228,7 +243,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
     );
   }
 
-  const hasRate = sorted.some((m) => m.commissionRate != null);
+  const hasRate = visibleSorted.some((m) => m.commissionRate != null);
   const totalCols = 1 + (hasDetailPanel ? 1 : 0) + 1 + (hasRate ? 4 : 0) + 1;
 
   return (
@@ -293,7 +308,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
               <div className="flex justify-center py-16 text-gray-400 text-sm">검색 정보가 없습니다.</div>
             ) : loading ? (
               <div className="flex justify-center py-16 text-gray-400 text-sm">검색 중...</div>
-            ) : sorted.length === 0 ? (
+            ) : visibleSorted.length === 0 ? (
               <div className="flex justify-center py-16 text-gray-400 text-sm">결과가 없어요.</div>
             ) : (
               <table className="text-xs" style={{ minWidth: "max-content", width: "100%" }}>
@@ -314,7 +329,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {sorted.map((med, idx) => {
+                  {visibleSorted.map((med, idx) => {
                     const base = med.commissionRate ?? null;
                     const extra = med.additionalRate ?? null;
                     const totalRate = base != null ? base + (extra ?? 0) : null;
@@ -323,7 +338,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
                     const [nameBase, dose, ingredient] = splitProductName(med.productName);
 
                     // matchLevel 섹션 헤더: 이전 행과 matchLevel이 달라질 때만 표시
-                    const prevLevel = idx > 0 ? sorted[idx - 1].matchLevel : undefined;
+                    const prevLevel = idx > 0 ? visibleSorted[idx - 1].matchLevel : undefined;
                     const showSectionHeader =
                       hasMatchLevel &&
                       med.matchLevel != null &&
@@ -337,7 +352,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
                               <div className={`px-3 py-1.5 text-[11px] font-semibold border-y ${MATCH_SECTION_LABELS[med.matchLevel!].color}`}>
                                 {MATCH_SECTION_LABELS[med.matchLevel!].label}
                                 <span className="ml-2 font-normal opacity-70">
-                                  ({sorted.filter((m) => m.matchLevel === med.matchLevel).length}개)
+                                  ({visibleSorted.filter((m) => m.matchLevel === med.matchLevel).length}개)
                                 </span>
                               </div>
                             </td>
