@@ -10,13 +10,17 @@ It is idempotent — every statement uses `IF NOT EXISTS` / `DROP NOT NULL`, so 
 
 After the master migration runs successfully, open `_ADMIN_PROMOTE.sql`, replace the placeholder email, and run it to grant yourself ADMIN.
 
+`_MASTER_MIGRATION.sql` now includes the inventory tables (`WholesaleSite`, `InventorySnapshot`, `ScrapeJob`) and their unique constraint. You do **not** need to run `_INVENTORY_MIGRATION.sql` or `add_inventory_integrity.sql` separately.
+
 ## File map
 
 | File | Purpose |
 | --- | --- |
-| `_MASTER_MIGRATION.sql` | Run first. Creates `LoginLog`, indexes, Storage columns. |
+| `_MASTER_MIGRATION.sql` | **Run first.** Creates `LoginLog`, indexes, Storage columns, and inventory tables (`WholesaleSite` / `InventorySnapshot` / `ScrapeJob`). |
 | `_BOARD_MIGRATION.sql` | **Run second.** Adds Notice popup columns, `HomeBanner`, `Board`, `Post`, `BoardEditor` tables, and 3 sample boards. |
 | `_ADMIN_PROMOTE.sql` | Grants `role=ADMIN` + `approved=true` to one user. |
+| `_INVENTORY_MIGRATION.sql` | Historical — already folded into master. |
+| `add_inventory_integrity.sql` | Historical — already folded into master. |
 | `add_ingredient_code.sql` | Historical — already folded into master. |
 | `add_perf_indexes.sql` | Historical — already folded into master. |
 

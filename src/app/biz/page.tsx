@@ -7,34 +7,66 @@ import Link from "next/link";
 import {
   Hospital, Building2, FileUp, FileSearch,
   ChevronRight, LayoutDashboard, ClipboardList,
-  Users, BarChart3, PercentCircle, GitMerge, Pill, UserCheck,
+  BarChart3, PercentCircle, Pill, UserCheck,
+  Calculator, Network, Users, PackageSearch, Mail,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const BIZ_MENU_GROUPS = [
   {
-    label: "거래처/유저 관리",
+    label: "유저 관리",
     items: [
       {
         href: "/biz/clients",
-        label: "병·의원 등록/관리",
-        desc: "거래처 병의원 등록 및 승인 관리",
+        label: "병·의원 관리",
+        desc: "병의원 등록·승인·H-코드 생성",
         icon: Hospital,
         color: "bg-blue-50 text-blue-600",
       },
       {
         href: "/biz/dealers",
-        label: "법인·딜러 등록/관리",
-        desc: "법인 및 딜러 계층 분류 관리",
+        label: "법인 관리",
+        desc: "법인·딜러 계층 등록·C-코드 생성",
         icon: Building2,
         color: "bg-purple-50 text-purple-600",
       },
       {
         href: "/biz/sales-reps",
         label: "영업사원 관리",
-        desc: "영업사원 승인 및 코드 관리",
+        desc: "영업사원 승인·S-코드 생성",
         icon: UserCheck,
         color: "bg-indigo-50 text-indigo-600",
+      },
+    ],
+  },
+  {
+    label: "통계제출처 관리",
+    items: [
+      {
+        href: "/biz/submission-routes",
+        label: "통계 제출처 관리",
+        desc: "거래처×제약사 제출처 매핑·신규/이관 분류·월별 제출체크·ZIP 다운",
+        icon: BarChart3,
+        color: "bg-cyan-50 text-cyan-600",
+      },
+    ],
+  },
+  {
+    label: "요율 관리",
+    items: [
+      {
+        href: "/biz/rates",
+        label: "요율 업데이트",
+        desc: "법인 단위 제약사별 요율 매핑 (관리자 통합 요율 위에 비즈 오버라이드)",
+        icon: Calculator,
+        color: "bg-emerald-50 text-emerald-600",
+      },
+      {
+        href: "/biz/co-promotion",
+        label: "코프로모션 예외 관리",
+        desc: "통계제약사 ≠ 정산제약사인 품목 매핑 (예: 다산제약 오마코 → 제일약품 정산)",
+        icon: Pill,
+        color: "bg-rose-50 text-rose-600",
       },
     ],
   },
@@ -44,42 +76,16 @@ const BIZ_MENU_GROUPS = [
       {
         href: "/biz/settlement/upload",
         label: "정산내역서 업로드",
-        desc: "법인별 정산 엑셀 파일 업로드",
+        desc: "법인별 정산 엑셀 드롭다운 업로드 + 컬럼매핑 미리보기",
         icon: FileUp,
         color: "bg-green-50 text-green-600",
       },
       {
         href: "/biz/settlement/review",
         label: "정산내역서 검수",
-        desc: "업로드된 정산내역 확인 및 취합",
+        desc: "업로드 이력·기간 필터·상태 추적·삭제",
         icon: FileSearch,
         color: "bg-orange-50 text-orange-600",
-      },
-      {
-        href: "/biz/corp-rates",
-        label: "추가수수료 매핑",
-        desc: "법인별·제약사별 추가수수료율 관리",
-        icon: PercentCircle,
-        color: "bg-yellow-50 text-yellow-600",
-      },
-    ],
-  },
-  {
-    label: "제약사/제품 관리",
-    items: [
-      {
-        href: "/biz/submission-routes",
-        label: "통계제출처 관리",
-        desc: "병의원×제약사 통계제출 경로 관리",
-        icon: BarChart3,
-        color: "bg-cyan-50 text-cyan-600",
-      },
-      {
-        href: "/biz/co-promotion",
-        label: "코프로모션 예외 관리",
-        desc: "통계제약사와 정산제약사가 다른 품목 관리",
-        icon: Pill,
-        color: "bg-rose-50 text-rose-600",
       },
     ],
   },
@@ -88,10 +94,50 @@ const BIZ_MENU_GROUPS = [
     items: [
       {
         href: "/biz/filter-status",
-        label: "필터링 관리",
-        desc: "현황·플로우·매핑 통합 관리",
+        label: "필터링 현황·플로우",
+        desc: "필터링 요청 현황 + 카톡 발송→응답 플로우 추적",
         icon: ClipboardList,
         color: "bg-teal-50 text-teal-600",
+      },
+      {
+        href: "/biz/filter-mapping",
+        label: "제약사→상위법인 매핑",
+        desc: "제약사 필터링 요청 시 상위법인 담당자 매핑 (세로형 엑셀)",
+        icon: Network,
+        color: "bg-sky-50 text-sky-600",
+      },
+      {
+        href: "/biz/corp-rates",
+        label: "법인×제약사 추가수수료",
+        desc: "필터링 결과별 추가수수료율 매핑",
+        icon: PercentCircle,
+        color: "bg-yellow-50 text-yellow-600",
+      },
+    ],
+  },
+  {
+    label: "운영 모니터링",
+    items: [
+      {
+        href: "/biz/team-status",
+        label: "팀 상태 대시보드",
+        desc: "8개 에이전트 작업 현황 + 작업 예상 마감 카운트다운",
+        icon: Users,
+        color: "bg-violet-50 text-violet-600",
+      },
+      {
+        href: "/biz/inventory-status",
+        label: "재고 크롤러 현황",
+        desc: "ScrapeJob 이력·사이트별 성공률·최신 갱신 시각·지금 재시도",
+        icon: PackageSearch,
+        color: "bg-emerald-50 text-emerald-600",
+      },
+      {
+        href: "/biz/email-inbox",
+        label: "메일 자동 수신함",
+        desc: "지메일 자동 수신 + 발신자 매핑 + 첨부 자동 분류·등록",
+        icon: Mail,
+        color: "bg-pink-50 text-pink-600",
       },
     ],
   },

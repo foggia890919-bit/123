@@ -8,7 +8,8 @@ export async function GET(req: NextRequest) {
   const user = await requireRole("BIZ");
   if (isNextResponse(user)) return user;
 
-  const period = req.nextUrl.searchParams.get("period") ?? undefined;
+  const yearMonth = req.nextUrl.searchParams.get("yearMonth") ?? req.nextUrl.searchParams.get("period");
+  const period = yearMonth ?? undefined;
 
   const docs = await prisma.settlementDocument.findMany({
     where: { userId: user.id, ...(period ? { period } : {}) },

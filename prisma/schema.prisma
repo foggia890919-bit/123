@@ -30,6 +30,9 @@ model User {
   searchHistories       SearchHistory[]
   settlementTemplates   SettlementTemplate[]
   settlementDocuments   SettlementDocument[]
+  corpRateFilesUploaded      CorpRateFile[]        @relation("CorpRateFileUploader")
+  corpRateHistoriesPerformed CorpRateFileHistory[] @relation("CorpRateFileHistoryPerformer")
+  processedEmails            IncomingEmail[]       @relation("EmailProcessor")
 }
 
 
@@ -89,9 +92,12 @@ model UserClient {
   managerEmail String?
   memo         String?
   approved     Boolean    @default(false)
+  isSettlementTarget  Boolean    @default(false)
+  isRateTarget        Boolean    @default(false)
   createdAt    DateTime   @default(now())
   proposals             Proposal[]
   prescriptionReports   PrescriptionReport[]
+  corpRateFiles         CorpRateFile[]
 
   @@index([userId])
   @@index([approved])
@@ -316,6 +322,7 @@ model InventorySnapshot {
   raw           Json?
   scrapedAt     DateTime      @default(now())
 
+  @@unique([siteKey, insuranceCode, scrapedAt])
   @@index([insuranceCode])
   @@index([siteKey, insuranceCode])
   @@index([scrapedAt])
@@ -504,15 +511,35 @@ model SubmissionRoute {
   companyName      String
   submissionEntity String
   submissionEmail  String?
+  requestType      String   @default("신규")  // "신규" | "이관" — 추가수수료 적용 여부
   memo             String?
   active           Boolean  @default(true)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
+  monthlyLogs      MonthlySubmissionLog[]
+
   @@unique([clientName, companyName])
   @@index([clientName])
   @@index([companyName])
   @@index([submissionEntity])
+}
+
+// 월별 제출 체크리스트: 매달 제출처별로 통계 제출 여부 추적
+model MonthlySubmissionLog {
+  id                String          @id @default(cuid())
+  yearMonth         String          // "YYYY-MM"
+  submissionRouteId String
+  submissionRoute   SubmissionRoute @relation(fields: [submissionRouteId], references: [id], onDelete: Cascade)
+  submitted         Boolean         @default(false)
+  submittedAt       DateTime?
+  memo              String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@unique([yearMonth, submissionRouteId])
+  @@index([yearMonth])
+  @@index([submissionRouteId])
 }
 
 // 코프로모션/예외: 병원통계 제약사 → 실제 정산 제약사
@@ -544,4 +571,153 @@ model CorpCompanyRate {
   @@unique([corpName, companyName])
   @@index([corpName])
   @@index([companyName])
+}
+
+model CorpRateFile {
+  id            String     @id @default(cuid())
+  corpClientId  String
+  corpClient    UserClient @relation(fields: [corpClientId], references: [id], onDelete: Cascade)
+  companyName   String
+  applyMonth    String     // "YYYY-MM"
+  fileName      String
+  fileKey       String
+  uploadedById  String
+  uploadedBy    User       @relation("CorpRateFileUploader", fields: [uploadedById], references: [id])
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  history       CorpRateFileHistory[]
+
+  @@unique([corpClientId, companyName, applyMonth])
+  @@index([corpClientId])
+  @@index([applyMonth])
+}
+
+model CorpRateFileHistory {
+  id            String       @id @default(cuid())
+  rateFileId    String
+  rateFile      CorpRateFile @relation(fields: [rateFileId], references: [id], onDelete: Cascade)
+  corpClientId  String       // 스냅샷
+  companyName   String       // 스냅샷
+  applyMonth    String       // 스냅샷
+  action        String       // "UPLOAD" | "REPLACE" | "DELETE"
+  prevFileKey   String?
+  prevFileName  String?
+  newFileKey    String?
+  newFileName   String?
+  performedById String
+  performedBy   User         @relation("CorpRateFileHistoryPerformer", fields: [performedById], references: [id])
+  createdAt     DateTime     @default(now())
+
+  @@index([rateFileId])
+  @@index([createdAt(sort: Desc)])
+}
+
+// 에이전트 활동 로그 — 팀 상태 대시보드
+model AgentActivity {
+  id          String    @id @default(cuid())
+  agentName   String    // "biz-user-mgmt" 등
+  status      String    // "idle" | "working" | "blocked" | "done"
+  currentTask String?   // 현재 작업 요약
+  etaAt       DateTime? // 예상 마감 (있으면)
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  notes       String?   // 추가 정보
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([agentName])
+  @@index([createdAt(sort: Desc)])
+}
+
+// 텔레그램 일일 디제스트 큐 — 매일 9시 KST 발송
+model BizDigestQueue {
+  id              String    @id @default(cuid())
+  type            String    // "completed" | "decision_needed" | "blocker" | "info"
+  category        String    // "거래처/유저" | "정산" | "요율" | "필터링" | "통계제출처" | "재고크롤러" | "메타"
+  title           String
+  body            String    // 상세 내용 (마크다운)
+  decisionOptions Json?     // 결정 필요 시 [{id, label}]
+  resolvedAt      DateTime?
+  resolvedBy      String?   // "사용자가 텔레그램으로 답변"
+  resolvedAnswer  String?   // 사용자 답변 텍스트
+  sentAt          DateTime?
+  createdAt       DateTime  @default(now())
+
+  replies         TelegramReply[] @relation("DigestReply")
+
+  @@index([sentAt])
+  @@index([type])
+}
+
+// 자동 수신된 이메일
+model IncomingEmail {
+  id                String   @id @default(cuid())
+  messageId         String   @unique
+  fromAddress       String
+  fromName          String?
+  subject           String
+  bodyPreview       String?
+  receivedAt        DateTime
+  status            String   @default("PENDING")
+  classifiedAs      String?
+  mappedCorpId      String?
+  mappedCompanyName String?
+  applyMonth        String?
+  processedAt       DateTime?
+  processedById     String?
+  processedBy       User?    @relation("EmailProcessor", fields: [processedById], references: [id])
+  rateFileId        String?
+  settlementDocId   String?
+  errorMessage      String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  attachments EmailAttachment[]
+
+  @@index([status])
+  @@index([receivedAt(sort: Desc)])
+  @@index([fromAddress])
+}
+
+// 이메일 첨부파일
+model EmailAttachment {
+  id        String        @id @default(cuid())
+  emailId   String
+  email     IncomingEmail @relation(fields: [emailId], references: [id], onDelete: Cascade)
+  fileName  String
+  mimeType  String
+  size      Int
+  fileKey   String
+  createdAt DateTime      @default(now())
+
+  @@index([emailId])
+}
+
+// 발신자 → 법인 매핑
+model EmailSenderMapping {
+  id                    String   @id @default(cuid())
+  fromAddress           String   @unique
+  matchType             String   @default("EXACT")
+  corpClientId          String
+  defaultClassification String?
+  active                Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([fromAddress])
+  @@index([active])
+}
+
+// 텔레그램 수신 답변 저장
+model TelegramReply {
+  id            String          @id @default(cuid())
+  messageId     String          @unique  // Telegram message_id
+  chatId        String
+  text          String
+  digestQueueId String?
+  digestQueue   BizDigestQueue? @relation("DigestReply", fields: [digestQueueId], references: [id], onDelete: SetNull)
+  receivedAt    DateTime        @default(now())
+
+  @@index([digestQueueId])
 }

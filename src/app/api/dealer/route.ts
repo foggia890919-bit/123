@@ -8,6 +8,7 @@ const VALID_TYPES = ["CORPORATION", "INDIVIDUAL", "UPPER_CORP", "LOWER_CORP", "S
 const FULL_SELECT = {
   id: true, clientName: true, bizNumber: true, dealerType: true, approved: true,
   managerName: true, managerPhone: true, managerEmail: true, memo: true, code: true,
+  isSettlementTarget: true, isRateTarget: true,
 } as const;
 
 const SAFE_SELECT = {
@@ -38,9 +39,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ found: !!client, client: client ?? null });
   }
 
+  const isSettlementTarget = req.nextUrl.searchParams.get("isSettlementTarget") === "true";
+
   try {
     const rows = await prisma.userClient.findMany({
-      where: { userId: user.id, dealerType: { not: null } },
+      where: { userId: user.id, dealerType: { not: null }, ...(isSettlementTarget ? { isSettlementTarget: true } : {}) },
       select: FULL_SELECT,
       orderBy: { clientName: "asc" },
     });
@@ -174,6 +177,8 @@ export async function PATCH(req: NextRequest) {
   if (managerPhone !== undefined) data.managerPhone = managerPhone ?? null;
   if (managerEmail !== undefined) data.managerEmail = managerEmail ?? null;
   if (memo !== undefined) data.memo = memo ?? null;
+  if (body.isSettlementTarget !== undefined) data.isSettlementTarget = Boolean(body.isSettlementTarget);
+  if (body.isRateTarget        !== undefined) data.isRateTarget        = Boolean(body.isRateTarget);
 
   try {
     const updated = await prisma.userClient.update({

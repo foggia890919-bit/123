@@ -39,6 +39,8 @@ interface Client {
   managerEmail?: string | null;
   memo?: string | null;
   code?: string | null;
+  isSettlementTarget?: boolean | null;
+  isRateTarget?: boolean | null;
 }
 
 function formatBiz(n: string) {
@@ -183,6 +185,9 @@ export default function BizDealersPage() {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [filterType, setFilterType] = useState<string>("ALL");
+
+  type ClassificationTab = "all" | "settlement" | "rate";
+  const [classificationTab, setClassificationTab] = useState<ClassificationTab>("all");
 
   // 등록 모달 state
   const [modal, setModal] = useState(false);
@@ -342,6 +347,24 @@ export default function BizDealersPage() {
     if (res.ok) setClients((prev) => prev.filter((x) => x.id !== c.id));
   }
 
+  async function toggleClassification(
+    c: Client,
+    field: "isSettlementTarget" | "isRateTarget"
+  ) {
+    const next = !(c[field] ?? false);
+    setClients((prev) => prev.map((x) => x.id === c.id ? { ...x, [field]: next } : x));
+    try {
+      const res = await fetch(`/api/dealer?id=${c.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [field]: next }),
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      setClients((prev) => prev.map((x) => x.id === c.id ? { ...x, [field]: !next } : x));
+    }
+  }
+
   async function generateCode(id: string) {
     setGeneratingCode(id);
     try {
@@ -360,6 +383,9 @@ export default function BizDealersPage() {
   }
 
   const filtered = clients.filter((c) => {
+    // 분류 뷰 탭 필터
+    if (classificationTab === "settlement" && !(c.isSettlementTarget ?? false)) return false;
+    if (classificationTab === "rate"       && !(c.isRateTarget ?? false)) return false;
     const matchQ = !query || c.clientName.includes(query) || c.bizNumber.includes(query);
     const matchT = filterType === "ALL" || (filterType === "NONE" ? !c.dealerType : c.dealerType === filterType);
     return matchQ && matchT;
@@ -398,6 +424,23 @@ export default function BizDealersPage() {
             onChange={(e) => setQuery(e.target.value)}
             className="pl-9 text-sm"
           />
+        </div>
+
+        {/* 분류 뷰 탭 */}
+        <div className="flex gap-1 mb-2">
+          {(["all", "settlement", "rate"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setClassificationTab(tab)}
+              className={`text-xs px-2.5 py-1 rounded-full font-medium transition-colors ${
+                classificationTab === tab
+                  ? "bg-teal-700 text-white"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              }`}
+            >
+              {tab === "all" ? "전체" : tab === "settlement" ? "정산 대상" : "요율 대상"}
+            </button>
+          ))}
         </div>
 
         {/* 타입 필터 탭 */}
@@ -459,6 +502,28 @@ export default function BizDealersPage() {
                         코드
                       </button>
                     )}
+                    <button
+                      onClick={() => toggleClassification(c, "isSettlementTarget")}
+                      className={`text-[10px] px-2 py-0.5 rounded-full font-medium transition-colors ${
+                        (c.isSettlementTarget ?? false)
+                          ? "bg-green-100 text-green-700"
+                          : "bg-gray-100 text-gray-400 hover:bg-gray-200"
+                      }`}
+                      title="정산내역서 업로드 대상으로 분류"
+                    >
+                      정산
+                    </button>
+                    <button
+                      onClick={() => toggleClassification(c, "isRateTarget")}
+                      className={`text-[10px] px-2 py-0.5 rounded-full font-medium transition-colors ${
+                        (c.isRateTarget ?? false)
+                          ? "bg-blue-100 text-blue-700"
+                          : "bg-gray-100 text-gray-400 hover:bg-gray-200"
+                      }`}
+                      title="요율표 관리 대상으로 분류"
+                    >
+                      요율
+                    </button>
                     <TypeDropdown clientId={c.id} current={c.dealerType} onUpdated={handleUpdated} />
                     <button
                       onClick={() => openEdit(c)}
