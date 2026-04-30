@@ -65,9 +65,11 @@ export async function GET(req: NextRequest) {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "요율표이력");
   const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+  // Next.js 16 NextResponse 타입이 Buffer 직접 안 받음 — Uint8Array로 변환
+  const body = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
 
   const encoded = encodeURIComponent("요율표_변경이력.xlsx");
-  return new NextResponse(buf, {
+  return new NextResponse(body, {
     status: 200,
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

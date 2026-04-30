@@ -196,8 +196,9 @@ export async function GET(req: NextRequest) {
   const safeEntity = submissionEntity.replace(/[/\\:*?"<>|]/g, "_");
   const dateStr = new Date().toISOString().slice(0, 7).replace("-", "");
   const zipBuf = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+  const body = new Uint8Array(zipBuf.buffer, zipBuf.byteOffset, zipBuf.byteLength);
 
-  return new NextResponse(zipBuf, {
+  return new NextResponse(body, {
     headers: {
       "Content-Type": "application/zip",
       "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(`${safeEntity}_사업자등록증_${dateStr}.zip`)}`,
