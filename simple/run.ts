@@ -137,29 +137,43 @@ interface BulkOrder {
 async function fetchOrdersForDay(store: StoreConfig, fromIso: string, toIso: string): Promise<BulkOrder[]> {
   const token = await getAccessToken(store.clientId, store.clientSecret);
 
-  // 1) 기간 내 모든 상태변경 productOrderId 수집 (필터 없이 + 페이지네이션)
-  //    - lastChangedType 필터 없으면 PAYED/DISPATCHED 등 모든 변경 포함 → 결제 후 발송된 주문도 누락 X
-  //    - moreSequence 로 다음 페이지 따라가며 전체 수집
+  // 1) 기간 내 productOrderId 를 여러 필터로 합집합 수집
+  //    - 필터 없이: 모든 상태변경 (이상적이지만 API 가 일부 누락하는 경우 있음)
+  //    - PAYED/DISPATCHED/PAY_WAITING/DELIVERED/PURCHASE_DECIDED: 각 상태변경 별도 조회로 누락 방지
+  //    - productOrderId Set 으로 자동 dedupe
   const allIds = new Set<string>();
-  let cursor: string | undefined;
-  for (let page = 0; page < 100; page++) {
-    const params = new URLSearchParams({
-      lastChangedFrom: fromIso,
-      lastChangedTo: toIso,
-    });
-    if (cursor) params.set("moreSequence", cursor);
-    const data = await naverFetch<{
-      data?: {
-        lastChangeStatuses?: { productOrderId: string; orderId: string; lastChangedType?: string; productOrderStatus?: string }[];
-        more?: { moreSequence?: string };
-      };
-    }>(token, `/v1/pay-order/seller/product-orders/last-changed-statuses?${params}`);
-    for (const row of data.data?.lastChangeStatuses ?? []) {
-      allIds.add(row.productOrderId);
+  const types: (string | undefined)[] = [undefined, "PAYED", "DISPATCHED", "DELIVERED", "PURCHASE_DECIDED", "PAY_WAITING"];
+
+  for (const type of types) {
+    let cursor: string | undefined;
+    for (let page = 0; page < 100; page++) {
+      const params = new URLSearchParams({
+        lastChangedFrom: fromIso,
+        lastChangedTo: toIso,
+      });
+      if (type) params.set("lastChangedType", type);
+      if (cursor) params.set("moreSequence", cursor);
+      try {
+        const data = await naverFetch<{
+          data?: {
+            lastChangeStatuses?: { productOrderId: string; orderId: string; lastChangedType?: string; productOrderStatus?: string }[];
+            more?: { moreSequence?: string };
+          };
+        }>(token, `/v1/pay-order/seller/product-orders/last-changed-statuses?${params}`);
+        for (const row of data.data?.lastChangeStatuses ?? []) {
+          allIds.add(row.productOrderId);
+        }
+        cursor = data.data?.more?.moreSequence;
+        if (!cursor) break;
+      } catch (err) {
+        // 일부 type 은 지원 안할 수 있음 — 그건 무시하고 다음 type 으로
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("400") || msg.includes("invalid")) break;
+        throw err;
+      }
     }
-    cursor = data.data?.more?.moreSequence;
-    if (!cursor) break;
   }
+  console.log(`[${store.name}] 수집된 productOrderId: ${allIds.size}개`);
   if (allIds.size === 0) return [];
 
   // 2) 300개 단위로 bulk 상세 조회
@@ -182,12 +196,20 @@ async function fetchOrdersForDay(store: StoreConfig, fromIso: string, toIso: str
   //    상태변경 윈도우는 「변경시각」 기준이라, 옛날 결제 주문이 오늘 발송돼서 잡힌 경우 제외
   const fromMs = new Date(fromIso).getTime();
   const toMs = new Date(toIso).getTime();
+  let dropped = 0;
+  let nullDate = 0;
   const out = raw.filter((row) => {
     const dateStr = row.productOrder.paymentDate ?? row.order?.paymentDate;
-    if (!dateStr) return false;
+    if (!dateStr) {
+      nullDate += 1;
+      return false;
+    }
     const t = new Date(dateStr).getTime();
-    return t >= fromMs && t < toMs;
+    if (t >= fromMs && t < toMs) return true;
+    dropped += 1;
+    return false;
   });
+  console.log(`[${store.name}] bulk 응답 ${raw.length}개 → 결제일 필터 후 ${out.length}개 (윈도우밖 ${dropped}개 / 결제일없음 ${nullDate}개)`);
   return out;
 }
 
