@@ -134,52 +134,39 @@ interface BulkOrder {
   order?: { orderId: string; ordererName?: string; paymentDate?: string };
 }
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 async function fetchOrdersForDay(store: StoreConfig, fromIso: string, toIso: string): Promise<BulkOrder[]> {
   const token = await getAccessToken(store.clientId, store.clientSecret);
 
-  // 1) 기간 내 productOrderId 를 여러 필터로 합집합 수집
-  //    - 필터 없이: 모든 상태변경 (이상적이지만 API 가 일부 누락하는 경우 있음)
-  //    - PAYED/DISPATCHED/PAY_WAITING/DELIVERED/PURCHASE_DECIDED: 각 상태변경 별도 조회로 누락 방지
-  //    - productOrderId Set 으로 자동 dedupe
+  // 1) 기간 내 모든 상태변경 productOrderId 수집 (필터 없이 단일 호출 + 페이지네이션)
+  //    - lastChangedType 안 줌 → 모든 상태변경 포함
+  //    - moreSequence 로 다음 페이지
+  //    - 페이지 사이 800ms 딜레이로 RATE_LIMIT 회피
   const allIds = new Set<string>();
-  const types: (string | undefined)[] = [undefined, "PAYED", "DISPATCHED", "DELIVERED", "PURCHASE_DECIDED", "PAY_WAITING"];
-
-  for (const type of types) {
-    let cursor: string | undefined;
-    for (let page = 0; page < 100; page++) {
-      const params = new URLSearchParams({
-        lastChangedFrom: fromIso,
-        lastChangedTo: toIso,
-      });
-      if (type) params.set("lastChangedType", type);
-      if (cursor) params.set("moreSequence", cursor);
-      try {
-        const data = await naverFetch<{
-          data?: {
-            lastChangeStatuses?: { productOrderId: string; orderId: string; lastChangedType?: string; productOrderStatus?: string }[];
-            more?: { moreSequence?: string };
-          };
-        }>(token, `/v1/pay-order/seller/product-orders/last-changed-statuses?${params}`);
-        for (const row of data.data?.lastChangeStatuses ?? []) {
-          allIds.add(row.productOrderId);
-        }
-        cursor = data.data?.more?.moreSequence;
-        if (!cursor) break;
-      } catch (err) {
-        // 일부 type 은 지원 안할 수 있음 — 그건 무시하고 다음 type 으로
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("400") || msg.includes("invalid")) break;
-        throw err;
-      }
-    }
+  let cursor: string | undefined;
+  for (let page = 0; page < 100; page++) {
+    if (page > 0) await sleep(800);
+    const params = new URLSearchParams({ lastChangedFrom: fromIso, lastChangedTo: toIso });
+    if (cursor) params.set("moreSequence", cursor);
+    const data = await naverFetch<{
+      data?: {
+        lastChangeStatuses?: { productOrderId: string; orderId: string }[];
+        more?: { moreSequence?: string };
+      };
+    }>(token, `/v1/pay-order/seller/product-orders/last-changed-statuses?${params}`);
+    for (const row of data.data?.lastChangeStatuses ?? []) allIds.add(row.productOrderId);
+    cursor = data.data?.more?.moreSequence;
+    if (!cursor) break;
   }
-  console.log(`[${store.name}] 수집된 productOrderId: ${allIds.size}개`);
+  console.log(`[${store.name}] 수집된 productOrderId: ${allIds.size}개 (페이지네이션)`);
   if (allIds.size === 0) return [];
 
-  // 2) 300개 단위로 bulk 상세 조회
+  // 2) 300개 단위로 bulk 상세 조회 (사이 딜레이)
   const ids = Array.from(allIds);
   const raw: BulkOrder[] = [];
   for (let i = 0; i < ids.length; i += 300) {
+    if (i > 0) await sleep(800);
     const slice = ids.slice(i, i + 300);
     const data = await naverFetch<{ data?: BulkOrder[] }>(
       token,
@@ -369,7 +356,9 @@ async function main() {
   const all: NormalizedItem[] = [];
   const errors: string[] = [];
 
-  for (const store of STORES) {
+  for (let si = 0; si < STORES.length; si++) {
+    if (si > 0) await sleep(1500); // 스토어 사이 1.5초
+    const store = STORES[si];
     try {
       console.log(`[${store.name}] fetching ${range.fromIso} ~ ${range.toIso}…`);
       const orders = await fetchOrdersForDay(store, range.fromIso, range.toIso);
