@@ -137,19 +137,33 @@ interface BulkOrder {
 async function fetchOrdersForDay(store: StoreConfig, fromIso: string, toIso: string): Promise<BulkOrder[]> {
   const token = await getAccessToken(store.clientId, store.clientSecret);
 
-  // 1) 결제 완료된 productOrderId 목록
-  const params = new URLSearchParams({
-    lastChangedFrom: fromIso,
-    lastChangedTo: toIso,
-    lastChangedType: "PAYED",
-  });
-  const list = await naverFetch<{
-    data?: { lastChangeStatuses?: { productOrderId: string; orderId: string }[] };
-  }>(token, `/v1/pay-order/seller/product-orders/last-changed-statuses?${params}`);
-  const ids = (list.data?.lastChangeStatuses ?? []).map((r) => r.productOrderId);
-  if (ids.length === 0) return [];
+  // 1) 기간 내 모든 상태변경 productOrderId 수집 (필터 없이 + 페이지네이션)
+  //    - lastChangedType 필터 없으면 PAYED/DISPATCHED 등 모든 변경 포함 → 결제 후 발송된 주문도 누락 X
+  //    - moreSequence 로 다음 페이지 따라가며 전체 수집
+  const allIds = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < 100; page++) {
+    const params = new URLSearchParams({
+      lastChangedFrom: fromIso,
+      lastChangedTo: toIso,
+    });
+    if (cursor) params.set("moreSequence", cursor);
+    const data = await naverFetch<{
+      data?: {
+        lastChangeStatuses?: { productOrderId: string; orderId: string; lastChangedType?: string; productOrderStatus?: string }[];
+        more?: { moreSequence?: string };
+      };
+    }>(token, `/v1/pay-order/seller/product-orders/last-changed-statuses?${params}`);
+    for (const row of data.data?.lastChangeStatuses ?? []) {
+      allIds.add(row.productOrderId);
+    }
+    cursor = data.data?.more?.moreSequence;
+    if (!cursor) break;
+  }
+  if (allIds.size === 0) return [];
 
   // 2) 300개 단위로 bulk 상세 조회
+  const ids = Array.from(allIds);
   const out: BulkOrder[] = [];
   for (let i = 0; i < ids.length; i += 300) {
     const slice = ids.slice(i, i + 300);
@@ -264,7 +278,7 @@ function buildReport(items: NormalizedItem[], dateStr: string): string {
   lines.push(`<b>📊 ${dateStr} 매출 보고</b>`);
   lines.push("");
   lines.push(`💰 매출 <b>${won(totalSales)}</b>`);
-  lines.push(`📦 ${totalShipments}건 배송 / ${totalQty}개`);
+  lines.push(`📦 ${totalShipments}건 배송 / ${rows.reduce((s, r) => s + r.bottles, 0)}병 / ${totalQty}개 품목`);
   lines.push(`💳 수수료 ${won(totalCommission)}`);
   if (canceledCount > 0) lines.push(`⚠️ 취소·반품·환불 ${canceledCount}건 제외`);
   lines.push("");
@@ -277,7 +291,7 @@ function buildReport(items: NormalizedItem[], dateStr: string): string {
       const storeLabel = storeNames.length > 1 ? ` <i>[${r.storeName}]</i>` : "";
       lines.push(
         `• <b>${r.keyword}</b>${storeLabel}\n` +
-        `   ${r.bottles}병 · ${won(r.sales)} · ${r.orderIds.size}건`,
+        `   ${r.bottles}병 · ${r.quantity}개 · ${r.orderIds.size}건 · ${won(r.sales)}`,
       );
     }
     if (storeNames.length > 1) {
