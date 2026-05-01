@@ -131,7 +131,7 @@ interface BulkOrder {
     paymentDate?: string;
     placeOrderDate?: string;
   };
-  order?: { orderId: string; ordererName?: string };
+  order?: { orderId: string; ordererName?: string; paymentDate?: string };
 }
 
 async function fetchOrdersForDay(store: StoreConfig, fromIso: string, toIso: string): Promise<BulkOrder[]> {
@@ -164,7 +164,7 @@ async function fetchOrdersForDay(store: StoreConfig, fromIso: string, toIso: str
 
   // 2) 300개 단위로 bulk 상세 조회
   const ids = Array.from(allIds);
-  const out: BulkOrder[] = [];
+  const raw: BulkOrder[] = [];
   for (let i = 0; i < ids.length; i += 300) {
     const slice = ids.slice(i, i + 300);
     const data = await naverFetch<{ data?: BulkOrder[] }>(
@@ -175,8 +175,19 @@ async function fetchOrdersForDay(store: StoreConfig, fromIso: string, toIso: str
         body: JSON.stringify({ productOrderIds: slice, quantityClaimCompatibility: true }),
       },
     );
-    for (const row of data.data ?? []) out.push(row);
+    for (const row of data.data ?? []) raw.push(row);
   }
+
+  // 3) 결제일이 우리 윈도우 [from, to) 안인 것만 필터
+  //    상태변경 윈도우는 「변경시각」 기준이라, 옛날 결제 주문이 오늘 발송돼서 잡힌 경우 제외
+  const fromMs = new Date(fromIso).getTime();
+  const toMs = new Date(toIso).getTime();
+  const out = raw.filter((row) => {
+    const dateStr = row.productOrder.paymentDate ?? row.order?.paymentDate;
+    if (!dateStr) return false;
+    const t = new Date(dateStr).getTime();
+    return t >= fromMs && t < toMs;
+  });
   return out;
 }
 
