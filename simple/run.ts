@@ -379,10 +379,10 @@ async function main() {
       } catch (err) {
         console.warn("조건부서식 적용 실패:", err instanceof Error ? err.message : String(err));
       }
-      const rawRows = allRows.map((r) => [
+      const rawRows: (string | number)[][] = allRows.map((r) => [
         r.paymentDate, r.store, r.orderId, r.productOrderId, r.channelProductNo,
         r.productName, r.optionName, r.keyword, r.quantity, r.bottles,
-        r.salesAmount, r.commission, r.settlement, r.status, r.buyer,
+        r.salesAmount, r.commission, r.isCanceled ? "" : r.settlement, r.status, r.buyer,
       ]);
       // 상품주문번호(D열, idx 3) 기준 upsert. 이미 있으면 갱신, 중복 자동 정리.
       const result = await upsertRows(

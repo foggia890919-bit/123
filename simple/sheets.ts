@@ -213,7 +213,7 @@ export async function ensureTab(c: SheetCreds, name: string, headers: string[]):
 
 /**
  * 「상태」 칼럼이 취소/반품/환불 키워드 포함하면 행 전체 빨간 글씨.
- * 동일 조건의 룰이 이미 있으면 추가 안 함 (idempotent).
+ * 같은 패턴의 기존 룰이 있으면 모두 제거 후 새로 추가 (idempotent + repair).
  */
 export async function applyCancelRedRule(
   c: SheetCreds,
@@ -236,47 +236,45 @@ export async function applyCancelRedRule(
   const sheet = json.sheets?.find((s) => s.properties.title === tabName);
   if (!sheet) return;
   const sheetId = sheet.properties.sheetId;
-  const colLetter = String.fromCharCode(65 + statusColIndex);
-  const formula = `=REGEXMATCH(TO_TEXT($${colLetter}2), "취소|환불|반품|cancel|refund|return")`;
-  const exists = (sheet.conditionalFormats ?? []).some((cf) =>
-    cf.booleanRule?.condition?.values?.some((v) => v.userEnteredValue === formula),
-  );
-  if (exists) return;
+  const colL = String.fromCharCode(65 + statusColIndex);
+  const formula = `=REGEXMATCH(TO_TEXT($${colL}2),"취소|환불|반품|cancel|refund|return")`;
+
+  const existing = sheet.conditionalFormats ?? [];
+  const ourIndices: number[] = [];
+  existing.forEach((cf, idx) => {
+    const v = cf.booleanRule?.condition?.values?.[0]?.userEnteredValue ?? "";
+    if (v.includes("취소") || v.includes("환불") || v.includes("반품")) ourIndices.push(idx);
+  });
+
+  const requests: unknown[] = [];
+  // 인덱스 큰 것부터 삭제 (삭제하면 인덱스 밀림)
+  for (const idx of [...ourIndices].sort((a, b) => b - a)) {
+    requests.push({ deleteConditionalFormatRule: { sheetId, index: idx } });
+  }
+  requests.push({
+    addConditionalFormatRule: {
+      rule: {
+        ranges: [
+          { sheetId, startRowIndex: 1, startColumnIndex: 0, endColumnIndex: totalCols },
+        ],
+        booleanRule: {
+          condition: { type: "CUSTOM_FORMULA", values: [{ userEnteredValue: formula }] },
+          format: { textFormat: { foregroundColor: { red: 0.85, green: 0.1, blue: 0.1 } } },
+        },
+      },
+      index: 0,
+    },
+  });
+
   const res = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}:batchUpdate`,
     {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        requests: [
-          {
-            addConditionalFormatRule: {
-              rule: {
-                ranges: [
-                  {
-                    sheetId,
-                    startRowIndex: 1,
-                    startColumnIndex: 0,
-                    endColumnIndex: totalCols,
-                  },
-                ],
-                booleanRule: {
-                  condition: { type: "CUSTOM_FORMULA", values: [{ userEnteredValue: formula }] },
-                  format: {
-                    textFormat: {
-                      foregroundColor: { red: 0.85, green: 0.1, blue: 0.1 },
-                    },
-                  },
-                },
-              },
-              index: 0,
-            },
-          },
-        ],
-      }),
+      body: JSON.stringify({ requests }),
     },
   );
-  if (!res.ok) throw new Error(`addConditionalFormatRule ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw new Error(`condFormat ${res.status}: ${await res.text()}`);
 }
 
 export function loadCredsFromEnv(): SheetCreds | null {
