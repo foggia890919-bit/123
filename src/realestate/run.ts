@@ -26,10 +26,14 @@ import { syncCensus } from "./census/sync";
 import { matchAllNotices, matchNoticeNeighbors } from "./scout/proximity";
 import { computeScore } from "./scout/score";
 import { syncHira } from "./hira/sync";
+import { syncSubway } from "./traffic/sync";
+import { importPharmacies, importSupply, geocodeAllPharmacies } from "./pharmacy/import";
+import { runDailyReport } from "./report/daily";
 
 interface Args {
   cmd: "scrape" | "detail" | "molit" | "rone" | "sbiz" | "valuate" | "land" | "massing"
-     | "notice" | "census" | "match" | "hira" | "score";
+     | "notice" | "census" | "match" | "hira" | "score"
+     | "subway" | "supply" | "report";
   cortarNos: string[];
   propertyTypes: string[];
   tradeTypes: string[];
@@ -51,6 +55,13 @@ interface Args {
   noticeId?: string;
   radiusM?: number;
   enrich?: boolean;
+  subwayDays?: number;
+  yearMonth?: string;
+  csvPharmacies?: string;
+  csvSupply?: string;
+  reportChannel?: "sms" | "telegram" | "log";
+  reportTo?: string;
+  topN?: number;
 }
 
 function parseArgs(): Args {
@@ -87,6 +98,13 @@ function parseArgs(): Args {
     noticeId: get("--notice"),
     radiusM: get("--radius") ? Number(get("--radius")) : undefined,
     enrich: argv.includes("--enrich"),
+    subwayDays: get("--days") ? Number(get("--days")) : undefined,
+    yearMonth: get("--ym"),
+    csvPharmacies: get("--pharmacies"),
+    csvSupply: get("--supply"),
+    reportChannel: get("--channel") as "sms" | "telegram" | "log" | undefined,
+    reportTo: get("--to"),
+    topN: get("--top") ? Number(get("--top")) : undefined,
   };
 }
 
@@ -269,6 +287,44 @@ async function runScore(args: Args) {
   console.log(JSON.stringify(s, null, 2));
 }
 
+async function runSubway(args: Args) {
+  const r = await syncSubway({ days: args.subwayDays ?? 7, yearMonth: args.yearMonth });
+  console.log(`[subway] stations=${r.stationsUpserted}/${r.stationsFetched} ridershipDays=${r.ridershipDays} rows=${r.ridershipRows} errors=${r.errors.length}`);
+}
+
+async function runSupply(args: Args) {
+  if (args.csvPharmacies) {
+    const r = await importPharmacies(args.csvPharmacies, { geocode: argv("--geocode") });
+    console.log(`[pharmacies] ${r.upserted}/${r.fetched} upserted, geocoded=${r.geocoded}, errors=${r.errors.length}`);
+    if (r.errors.length) for (const e of r.errors.slice(0, 5)) console.log(`  row${e.row}: ${e.error}`);
+  }
+  if (args.csvSupply) {
+    const r = await importSupply(args.csvSupply);
+    console.log(`[supply] ${r.upserted}/${r.fetched} upserted, errors=${r.errors.length}`);
+    if (r.errors.length) for (const e of r.errors.slice(0, 5)) console.log(`  row${e.row}: ${e.error}`);
+  }
+  if (!args.csvPharmacies && !args.csvSupply && argv("--geocode")) {
+    const r = await geocodeAllPharmacies();
+    console.log(`[geocode] done=${r.done} failed=${r.failed}`);
+  }
+  if (!args.csvPharmacies && !args.csvSupply && !argv("--geocode")) {
+    throw new Error("--pharmacies <csv> 또는 --supply <csv> 또는 --geocode 필요");
+  }
+}
+
+function argv(flag: string): boolean {
+  return process.argv.includes(flag);
+}
+
+async function runReport(args: Args) {
+  const r = await runDailyReport({
+    channel: args.reportChannel,
+    recipient: args.reportTo,
+    topN: args.topN,
+  });
+  console.log(`[report] ${r.status} via ${r.channel}\n---\n${r.text}`);
+}
+
 async function main() {
   const args = parseArgs();
   if (args.cmd === "detail") {
@@ -296,6 +352,12 @@ async function main() {
     await runHira(args);
   } else if (args.cmd === "score") {
     await runScore(args);
+  } else if (args.cmd === "subway") {
+    await runSubway(args);
+  } else if (args.cmd === "supply") {
+    await runSupply(args);
+  } else if (args.cmd === "report") {
+    await runReport(args);
   } else {
     await runScrape(args);
   }

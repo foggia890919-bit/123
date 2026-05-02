@@ -24,7 +24,10 @@
     "re:census": "tsx src/realestate/run.ts census",
     "re:match": "tsx src/realestate/run.ts match",
     "re:hira": "tsx src/realestate/run.ts hira",
-    "re:score": "tsx src/realestate/run.ts score"
+    "re:score": "tsx src/realestate/run.ts score",
+    "re:subway": "tsx src/realestate/run.ts subway",
+    "re:supply": "tsx src/realestate/run.ts supply",
+    "re:report": "tsx src/realestate/run.ts report"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",

@@ -13,6 +13,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { haversine } from "./proximity";
+import { nearestStation } from "@/realestate/traffic/walk";
 
 // 인당 연 평균 처방횟수 (건강보험심사평가원 진료통계 평균값 — 2023년 기준 연 21회)
 const PRESCRIPTION_PER_CAPITA = 21;
@@ -45,6 +46,11 @@ export interface ScoreOutput {
   prescriptionScore: number;
   buildableRoi: number | null;
   vacancyPct: number | null;
+  trafficFlow: number;
+  supplyAdvantage: number;
+  nearestStationName: string | null;
+  nearestStationWalkM: number | null;
+  supplyMonthlyTotal: number;
   compositeScore: number;
   recommendedSpecialties: string[];
   notes: string[];
@@ -159,10 +165,75 @@ export async function computeScore(input: ScoreInput): Promise<ScoreOutput> {
   if (competitors === 0) notes.push("경쟁의원 0 — 데이터 부족 또는 의료 공백 지역 (HIRA 동기화 확인)");
   if (backing === 0) notes.push("배후 세대 0 — 분양 공고 동기화 필요");
 
-  // 8) 종합 점수
-  const trafficFlow = 0;
+  // 7-A) TrafficFlow — 가장 가까운 지하철역의 월 승하차 합 / 도보거리 패널티
+  let trafficFlow = 0;
+  let nearestStationName: string | null = null;
+  let nearestStationWalkM: number | null = null;
+  try {
+    const ns = await nearestStation(center, prisma);
+    if (ns) {
+      nearestStationName = `${ns.station.lineNumber} ${ns.station.name}`;
+      nearestStationWalkM = ns.walk.walkingDistanceM;
+      const latestRidership = await prisma.subwayRidership.findFirst({
+        where: { stationId: ns.station.id },
+        orderBy: { yearMonth: "desc" },
+      });
+      if (latestRidership) {
+        // 월간 승차+하차 합 (보통 수십만~수백만 단위) → 도보 분 패널티(분당 5%) 반영 → 정규화
+        const flowRaw = (latestRidership.rideCount + latestRidership.alightCount) /
+          Math.max(1, 1 + ns.walk.walkingMinutes * 0.05);
+        trafficFlow = normalize(flowRaw, 5_000_000);
+      } else if (ns.walk.walkingDistanceM <= 800) {
+        // 승하차 데이터 없으면 거리만 — 800m 이내면 50, 1500m면 0
+        trafficFlow = Math.max(0, 50 * (1 - ns.walk.walkingMinutes / 20));
+      }
+    } else {
+      notes.push("반경 1.5km 내 지하철역 없음 (또는 SubwayStation 미동기화)");
+    }
+  } catch (e) {
+    notes.push(`TrafficFlow 계산 실패: ${(e as Error).message}`);
+  }
+
+  // 7-B) SupplyAdvantage — 자체 약국 공급 매출 (월) 합 / 거리 가중
+  let supplyAdvantage = 0;
+  let supplyMonthlyTotal = 0;
+  try {
+    const supplyRadius = 2000; // 2km
+    const dLatS = supplyRadius / 111000;
+    const dLngS = supplyRadius / (111000 * Math.cos((center.lat * Math.PI) / 180));
+    const pharmacies = await prisma.ownedPharmacy.findMany({
+      where: {
+        active: true,
+        latitude: { gte: center.lat - dLatS, lte: center.lat + dLatS },
+        longitude: { gte: center.lng - dLngS, lte: center.lng + dLngS },
+      },
+      include: {
+        supplies: { orderBy: { yearMonth: "desc" }, take: 3 },
+      },
+    });
+    let weightedSum = 0;
+    for (const p of pharmacies) {
+      if (p.latitude == null || p.longitude == null) continue;
+      const d = haversine(center, { lat: p.latitude, lng: p.longitude });
+      if (d > supplyRadius) continue;
+      const recent3 = p.supplies;
+      if (recent3.length === 0) continue;
+      const avgMonthly = recent3.reduce((a, s) => a + s.totalAmount, 0) / recent3.length;
+      supplyMonthlyTotal += avgMonthly;
+      // 거리 패널티: 500m 이내 1.0, 1km에서 0.5, 2km에서 0
+      const w = Math.max(0, 1 - d / supplyRadius);
+      weightedSum += avgMonthly * w;
+    }
+    // 만원 단위 → 정규화 (월 1억 = 10000 → 만점)
+    supplyAdvantage = normalize(weightedSum, 10_000);
+  } catch (e) {
+    notes.push(`SupplyAdvantage 계산 실패: ${(e as Error).message}`);
+  }
+
+  // 7-C) PIndex (placeholder — 카드사 데이터 계약 후 채움)
   const pIndex = 0;
-  const supplyAdvantage = 0; // TODO: 자체 약국 데이터 회귀
+
+  // 8) 가중합 종합 점수
   const vacancyPenalty = vacancyPct != null ? Math.max(0, 100 - vacancyPct * 5) : 50;
   const buildableRoiNorm = roi != null ? Math.max(0, Math.min(100, roi * 10)) : 0;
 
@@ -174,33 +245,31 @@ export async function computeScore(input: ScoreInput): Promise<ScoreOutput> {
     w.w5 * supplyAdvantage +
     w.w6 * buildableRoiNorm;
 
-  // 저장
+  if (nearestStationName) {
+    notes.push(`가장 가까운 역: ${nearestStationName} (도보 ${Math.round((nearestStationWalkM ?? 0) / 1.3 / 60)}분, ${nearestStationWalkM}m)`);
+  }
+  if (supplyMonthlyTotal > 0) {
+    notes.push(`반경 2km 자체 약국 월 공급 합 ≈ ${supplyMonthlyTotal.toLocaleString()} 만원`);
+  }
+
+  const persistData = {
+    backingHouseholds: backing,
+    competitorClinics: competitors,
+    populationDensity,
+    prescriptionDemand: prescriptionScoreRaw,
+    buildableRoi: roi ?? null,
+    trafficFlow,
+    pIndex,
+    supplyAdvantage,
+    prescriptionScore,
+    compositeScore: +composite.toFixed(2),
+    recommendedSpecialties: recommended,
+    notes,
+  };
   await prisma.locationScore.upsert({
     where: { parcelId: input.parcelId },
-    create: {
-      parcelId: input.parcelId,
-      backingHouseholds: backing,
-      competitorClinics: competitors,
-      populationDensity,
-      prescriptionDemand: prescriptionScoreRaw,
-      buildableRoi: roi ?? null,
-      prescriptionScore,
-      compositeScore: +composite.toFixed(2),
-      recommendedSpecialties: recommended,
-      notes,
-    },
-    update: {
-      computedAt: new Date(),
-      backingHouseholds: backing,
-      competitorClinics: competitors,
-      populationDensity,
-      prescriptionDemand: prescriptionScoreRaw,
-      buildableRoi: roi ?? null,
-      prescriptionScore,
-      compositeScore: +composite.toFixed(2),
-      recommendedSpecialties: recommended,
-      notes,
-    },
+    create: { parcelId: input.parcelId, ...persistData },
+    update: { computedAt: new Date(), ...persistData },
   });
 
   return {
@@ -211,6 +280,11 @@ export async function computeScore(input: ScoreInput): Promise<ScoreOutput> {
     prescriptionScore,
     buildableRoi: roi,
     vacancyPct,
+    trafficFlow,
+    supplyAdvantage,
+    nearestStationName,
+    nearestStationWalkM,
+    supplyMonthlyTotal,
     compositeScore: +composite.toFixed(2),
     recommendedSpecialties: recommended,
     notes,

@@ -907,3 +907,91 @@ model LocationScore {
 
   @@index([compositeScore])
 }
+
+// ─── Phase 6: 교통·동선 ────────────────────────────────────────────────
+model SubwayStation {
+  id          String   @id @default(cuid())
+  externalId  String   @unique // 역코드 또는 노선+역명 조합
+  name        String
+  lineNumber  String   // "2", "신분당", "수인분당" 등
+  latitude    Float
+  longitude   Float
+  cortarNo    String?
+  raw         Json?
+  fetchedAt   DateTime @default(now())
+  ridership   SubwayRidership[]
+
+  @@index([name])
+  @@index([latitude, longitude])
+}
+
+model SubwayRidership {
+  id          String   @id @default(cuid())
+  stationId   String
+  station     SubwayStation @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  yearMonth   String   // YYYYMM
+  rideCount   Int      // 월 합계 승차
+  alightCount Int      // 월 합계 하차
+  raw         Json?
+  fetchedAt   DateTime @default(now())
+
+  @@unique([stationId, yearMonth])
+  @@index([yearMonth])
+}
+
+// ─── 자체 약국 공급 데이터 (의약품 유통업체 자산) ─────────────────────
+// 사업주의 자체 거래 약국 + 월별 공급 매출. 입지 점수의 SupplyAdvantage 산출 핵심.
+
+model OwnedPharmacy {
+  id          String   @id @default(cuid())
+  externalId  String   @unique // 내부 거래처코드 또는 사업자번호
+  name        String
+  bizNumber   String?
+  address     String?
+  cortarNo    String?
+  latitude    Float?
+  longitude   Float?
+  joinedAt    DateTime?
+  active      Boolean  @default(true)
+  notes       String?
+  raw         Json?
+  fetchedAt   DateTime @default(now())
+  supplies    PharmacySupply[]
+
+  @@index([cortarNo])
+  @@index([latitude, longitude])
+}
+
+model PharmacySupply {
+  id          String        @id @default(cuid())
+  pharmacyId  String
+  pharmacy    OwnedPharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  yearMonth   String        // YYYYMM
+  totalAmount Int           // 만원 (이번 달 공급 총액)
+  scriptCount Int?          // 처방조제건수 (있으면)
+  raw         Json?
+
+  @@unique([pharmacyId, yearMonth])
+  @@index([yearMonth])
+}
+
+// ─── 일일 보고서 ───────────────────────────────────────────────────────
+model DailyReport {
+  id          String   @id @default(cuid())
+  reportDate  DateTime // 자정 기준
+  scope       String   @default("global")
+  topPicks    Json     // [{parcelId, jibun, score, ...}]
+  newListings Json     // [{listingId, title, ...}]
+  newNotices  Json     // [{noticeId, name, moveInAt, ...}]
+  summaryText String?  // 발송용 텍스트
+  channel     String   @default("log")
+  status      String   @default("PENDING") // PENDING | SENT | FAILED
+  recipient   String?
+  error       String?
+  sentAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  @@unique([reportDate, scope])
+  @@index([status])
+  @@index([createdAt])
+}
