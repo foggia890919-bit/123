@@ -82,6 +82,9 @@ export default function RealEstatePage() {
           </p>
         </div>
         <div className="flex gap-2">
+          <a href="/realestate/landplan" className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50">
+            토지·가설계
+          </a>
           <a href="/realestate/valuation" className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50">
             평가/시세 추정
           </a>

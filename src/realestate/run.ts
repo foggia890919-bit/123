@@ -20,8 +20,7 @@ import type { MolitEndpoint } from "./molit/client";
 import { syncRone, recentQuarters } from "./rone/sync";
 import { snapshotDong } from "./sbiz/sync";
 import { valuateListing, regionalEstimatedRent } from "./valuation";
-import { geocodeJibun, getParcelByPnu, getLandUse } from "./land/vworld";
-import { compute as computeMassing, DEFAULT_MEDICAL } from "./land/massing";
+import { analyze, regionalRentBenchmark } from "./land/analyze";
 
 interface Args {
   cmd: "scrape" | "detail" | "molit" | "rone" | "sbiz" | "valuate" | "land" | "massing";
@@ -181,30 +180,22 @@ async function runValuate(args: Args) {
 }
 
 async function runLand(args: Args) {
-  if (!args.jibun && !args.pnu) throw new Error("--jibun '서울특별시 강남구 역삼동 825-22' 또는 --pnu 1168010100... 필요");
-  let pnu = args.pnu;
-  if (args.jibun && !pnu) {
-    const g = await geocodeJibun(args.jibun);
-    if (!g) throw new Error("지번 검색 실패");
-    pnu = g.pnu;
-    console.log(`[land] geocoded → pnu=${pnu} lat=${g.lat} lng=${g.lng}`);
+  if (!args.jibun && !args.pnu) {
+    throw new Error("--jibun '서울특별시 강남구 역삼동 825-22' 또는 --pnu 1168010100... 필요");
   }
-  const parcel = await getParcelByPnu(pnu!);
-  const landuse = await getLandUse(pnu!);
-  console.log(JSON.stringify({ parcel, landuse }, null, 2));
+  const result = await analyze({
+    jibun: args.jibun,
+    pnu: args.pnu,
+    assumedSaleAmount: args.capRate ? undefined : undefined, // CLI 단순화: 옵션은 API/UI에서
+    capRatePct: args.capRate,
+  });
+  const benchmark = await regionalRentBenchmark(result.parcel).catch(() => null);
+  console.log(JSON.stringify({ ...result, benchmark }, null, 2));
 }
 
 async function runMassing(args: Args) {
-  if (!args.pnu) throw new Error("--pnu 1168010100... 필요");
-  const parcel = await getParcelByPnu(args.pnu);
-  if (!parcel || parcel.area == null) throw new Error("필지 정보 또는 면적 없음");
-  const landuse = await getLandUse(args.pnu);
-  const zone = landuse.zones.find(z => z.type === "용도지역")?.name ?? "";
-  const result = computeMassing(
-    { pnu: args.pnu, area: parcel.area, zoneName: zone },
-    DEFAULT_MEDICAL,
-  );
-  console.log(JSON.stringify(result, null, 2));
+  // 별도 매싱은 analyze() 가 통합으로 처리. 호환을 위해 land로 위임.
+  await runLand(args);
 }
 
 async function main() {

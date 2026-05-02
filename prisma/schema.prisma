@@ -664,3 +664,83 @@ model SbizMarketArea {
   @@index([cortarNo])
   @@index([sigungu])
 }
+
+// ─── Phase 3: 토지·건축 ──────────────────────────────────────────────
+// 지번 → 필지(Parcel) → 기존 건물(BuildingLedger) → 매싱 결과(MassingResult).
+
+model Parcel {
+  id             String   @id @default(cuid())
+  pnu            String   @unique // 19자리 필지고유번호
+  jibun          String?
+  cortarNo       String?
+  sigungu        String?
+  area           Float?   // ㎡
+  landUse        String?  // 용도지역
+  landUseDistrict String? // 용도지구
+  landUseExtra   String?  // 용도구역 (있는 경우)
+  bcrLimit       Float?   // 법정 건폐율 % (룩업 결과)
+  farLimit       Float?   // 법정 용적률 % (룩업 결과)
+  officialPrice  Int?     // 개별공시지가 원/㎡
+  centerLat      Float?
+  centerLng      Float?
+  geometry       Json?    // GeoJSON Polygon
+  raw            Json?
+  fetchedAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  ledgers        BuildingLedger[]
+  massings       MassingResult[]
+
+  @@index([cortarNo])
+  @@index([sigungu])
+  @@index([landUse])
+}
+
+model BuildingLedger {
+  id                String   @id @default(cuid())
+  pnu               String
+  parcelId          String?
+  parcel            Parcel?  @relation(fields: [parcelId], references: [id], onDelete: SetNull)
+  bldgNm            String?
+  totalFloorArea    Float?   // 연면적 ㎡
+  buildArea         Float?   // 건축면적 ㎡
+  bcr               Float?   // 실제 건폐율 %
+  far               Float?   // 실제 용적률 %
+  groundFloors      Int?
+  undergroundFloors Int?
+  mainPurpose       String?  // 주용도
+  structure         String?
+  approvedAt        DateTime?
+  raw               Json?
+  fetchedAt         DateTime @default(now())
+
+  @@index([pnu])
+  @@index([parcelId])
+}
+
+model MassingResult {
+  id                       String   @id @default(cuid())
+  parcelId                 String
+  parcel                   Parcel   @relation(fields: [parcelId], references: [id], onDelete: Cascade)
+  scenario                 String   // "medical-default" 등
+  buildingType             String
+  floorHeight              Float
+  efficiency               Float
+  parkingRule              String
+  bcrApplied               Float
+  farApplied               Float
+  maxBuildArea             Float
+  maxFloorArea             Float
+  maxFloors                Int
+  parkingRequired          Int
+  basementFloors           Int
+  netRentableArea          Float
+  estimatedConstructionCost Int     // 만원
+  notes                    String[] @default([])
+  // Phase 2 valuation과 결합된 결과를 캐시 (옵션)
+  estimatedAnnualRent      Int?     // 만원
+  estimatedRoi             Float?   // %
+  createdAt                DateTime @default(now())
+
+  @@index([parcelId])
+  @@index([scenario])
+}
