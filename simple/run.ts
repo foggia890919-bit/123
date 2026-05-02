@@ -1,91 +1,80 @@
 /**
- * 사장님 개인용 — 매일 09시 텔레그램 매출 보고.
+ * 사장님 개인용 — 매일 09시 매출 보고.
  *
- * 환경변수:
- *   NAVER_STORES_JSON  '[{"name":"비타앤오리진","clientId":"...","clientSecret":"$2a$04$..."}, ...]'
+ * 흐름:
+ *   1. Naver API 로 어제 결제건 모두 수집 (multi-type + 페이지네이션 + orderId 재조회)
+ *   2. Google Sheet 「주문원본」 탭에 raw 행 append
+ *   3. Sheet 「옵션매핑」 탭 읽어서 키워드 룰 로드 (없으면 코드 기본값)
+ *   4. 매핑 적용 → 키워드별 집계 → Sheet 「일일집계」 탭 append
+ *   5. 텔레그램 발송
+ *
+ * 환경변수 (.env):
+ *   NAVER_STORES_JSON     '[{"name":"...","clientId":"...","clientSecret":"$2a$..."}]'
  *   TELEGRAM_BOT_TOKEN
  *   TELEGRAM_CHAT_ID
- *
- * 실행: `npx tsx run.ts`  (전일 결제 기준)
- *      `npx tsx run.ts 2026-04-25`  (특정 날짜 KST 기준)
- *
- * 단일 파일 ~280줄. DB·로그인·UI 없음. cron 1개로 동작.
+ *   GOOGLE_SHEETS_ID                    (선택 — 시트 안 쓰면 비워둠)
+ *   GOOGLE_SERVICE_ACCOUNT_EMAIL        (선택)
+ *   GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY  (선택, JSON 의 private_key 값. \n 그대로)
  */
 
 import "dotenv/config";
 import bcrypt from "bcryptjs";
+import { appendRows, ensureTab, readRange, loadCredsFromEnv, type SheetCreds } from "./sheets";
 
-// ─────────────────────────────── 설정
+// ─────────────────── 설정
 interface StoreConfig {
   name: string;
   clientId: string;
   clientSecret: string;
 }
 
-interface KeywordRule {
-  keyword: string;
-  patterns: string[];
-}
-
 const STORES: StoreConfig[] = JSON.parse(process.env.NAVER_STORES_JSON ?? "[]");
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TG_CHAT = process.env.TELEGRAM_CHAT_ID;
+const SHEET_CREDS: SheetCreds | null = loadCredsFromEnv();
 
-// 옵션명 → 키워드 매칭 룰 (필요 시 여기 직접 수정)
-const KEYWORD_RULES: KeywordRule[] = [
-  { keyword: "피쿠알", patterns: ["피쿠알", "picual"] },
-  { keyword: "아르베키나", patterns: ["아르베키나", "arbequina"] },
-  { keyword: "블렌딩", patterns: ["블렌딩", "blending", "blend", "혼합"] },
+// 시트 「옵션매핑」 탭 없을 때 사용할 코드 기본값
+const DEFAULT_RULES: { pattern: string; keyword: string }[] = [
+  { pattern: "피쿠알", keyword: "피쿠알" },
+  { pattern: "picual", keyword: "피쿠알" },
+  { pattern: "아르베키나", keyword: "아르베키나" },
+  { pattern: "arbequina", keyword: "아르베키나" },
+  { pattern: "블렌딩", keyword: "블렌딩" },
+  { pattern: "blending", keyword: "블렌딩" },
 ];
 
-const REFUND_KEYWORDS = ["취소", "반품", "환불", "CANCEL", "REFUND", "RETURN"];
+// ─────────────────── 시간 (KST)
+const KST_OFFSET = 9 * 60 * 60 * 1000;
 
-// ─────────────────────────────── 시간 (KST)
-const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
-
-function previousDayKstRange(now: Date = new Date()): {
-  fromIso: string;
-  toIso: string;
-  dateStr: string;
-} {
-  const kstNow = new Date(now.getTime() + KST_OFFSET_MS);
-  const y = kstNow.getUTCFullYear();
-  const m = kstNow.getUTCMonth();
-  const d = kstNow.getUTCDate();
-  const startMs = Date.UTC(y, m, d - 1) - KST_OFFSET_MS;
-  const endMs = Date.UTC(y, m, d) - KST_OFFSET_MS;
+function previousDayKstRange(now: Date = new Date()): { fromIso: string; toIso: string; dateStr: string } {
+  const kst = new Date(now.getTime() + KST_OFFSET);
+  const y = kst.getUTCFullYear(), m = kst.getUTCMonth(), d = kst.getUTCDate();
+  const start = Date.UTC(y, m, d - 1) - KST_OFFSET;
+  const end = Date.UTC(y, m, d) - KST_OFFSET;
   return {
-    fromIso: new Date(startMs).toISOString(),
-    toIso: new Date(endMs).toISOString(),
+    fromIso: new Date(start).toISOString(),
+    toIso: new Date(end).toISOString(),
     dateStr: new Date(Date.UTC(y, m, d - 1)).toISOString().slice(0, 10),
   };
 }
 
-function dateKstRange(dateStr: string): { fromIso: string; toIso: string; dateStr: string } {
-  // dateStr = YYYY-MM-DD (KST)
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const startMs = Date.UTC(y, m - 1, d) - KST_OFFSET_MS;
-  const endMs = Date.UTC(y, m - 1, d + 1) - KST_OFFSET_MS;
-  return {
-    fromIso: new Date(startMs).toISOString(),
-    toIso: new Date(endMs).toISOString(),
-    dateStr,
-  };
+function dateKstRange(s: string): { fromIso: string; toIso: string; dateStr: string } {
+  const [y, m, d] = s.split("-").map(Number);
+  const start = Date.UTC(y, m - 1, d) - KST_OFFSET;
+  const end = Date.UTC(y, m - 1, d + 1) - KST_OFFSET;
+  return { fromIso: new Date(start).toISOString(), toIso: new Date(end).toISOString(), dateStr: s };
 }
 
-// ─────────────────────────────── Naver API
+// ─────────────────── Naver API
 const NAVER_BASE = "https://api.commerce.naver.com/external";
 const tokenCache = new Map<string, { token: string; exp: number }>();
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 async function getAccessToken(clientId: string, clientSecret: string): Promise<string> {
   const cached = tokenCache.get(clientId);
   if (cached && cached.exp > Date.now() + 60_000) return cached.token;
-
   const ts = Date.now();
-  const password = `${clientId}_${ts}`;
-  const hashed = bcrypt.hashSync(password, clientSecret);
-  const sign = Buffer.from(hashed, "utf8").toString("base64");
-
+  const sign = Buffer.from(bcrypt.hashSync(`${clientId}_${ts}`, clientSecret), "utf8").toString("base64");
   const body = new URLSearchParams({
     client_id: clientId,
     timestamp: String(ts),
@@ -124,216 +113,157 @@ interface BulkOrder {
     productName: string;
     productOption?: string;
     quantity: number;
+    unitPrice: number;
     totalPaymentAmount: number;
     productOrderStatus?: string;
     knowledgeShoppingSellingInterlockCommission?: number;
     payCommissionAmount?: number;
+    settlementAmount?: number;
+    settleAmount?: number;
     paymentDate?: string;
-    placeOrderDate?: string;
+    channelProductNo?: string;
+    productId?: string;
   };
   order?: { orderId: string; ordererName?: string; paymentDate?: string };
 }
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
 async function fetchOrdersForDay(store: StoreConfig, fromIso: string, toIso: string): Promise<BulkOrder[]> {
   const token = await getAccessToken(store.clientId, store.clientSecret);
 
-  // 1) 기간 내 모든 상태변경 productOrderId 수집 (필터 없이 단일 호출 + 페이지네이션)
-  //    - lastChangedType 안 줌 → 모든 상태변경 포함
-  //    - moreSequence 로 다음 페이지
-  //    - 페이지 사이 800ms 딜레이로 RATE_LIMIT 회피
+  // Step 1: 다중 status type 호출 (4초 사이딜레이로 RATE_LIMIT 회피)
+  const types: (string | undefined)[] = [undefined, "PAYED", "DISPATCHED", "DELIVERED", "PURCHASE_DECIDED"];
   const allIds = new Set<string>();
-  let cursor: string | undefined;
-  for (let page = 0; page < 100; page++) {
-    if (page > 0) await sleep(800);
-    const params = new URLSearchParams({ lastChangedFrom: fromIso, lastChangedTo: toIso });
-    if (cursor) params.set("moreSequence", cursor);
-    const data = await naverFetch<{
-      data?: {
-        lastChangeStatuses?: { productOrderId: string; orderId: string }[];
-        more?: { moreSequence?: string };
-      };
-    }>(token, `/v1/pay-order/seller/product-orders/last-changed-statuses?${params}`);
-    for (const row of data.data?.lastChangeStatuses ?? []) allIds.add(row.productOrderId);
-    cursor = data.data?.more?.moreSequence;
-    if (!cursor) break;
+  const orderIds = new Set<string>();
+
+  for (let ti = 0; ti < types.length; ti++) {
+    if (ti > 0) await sleep(4000);
+    const type = types[ti];
+    let cursor: string | undefined;
+    for (let page = 0; page < 100; page++) {
+      if (page > 0) await sleep(1500);
+      const params = new URLSearchParams({ lastChangedFrom: fromIso, lastChangedTo: toIso });
+      if (type) params.set("lastChangedType", type);
+      if (cursor) params.set("moreSequence", cursor);
+      try {
+        const data = await naverFetch<{
+          data?: {
+            lastChangeStatuses?: { productOrderId: string; orderId: string }[];
+            more?: { moreSequence?: string };
+          };
+        }>(token, `/v1/pay-order/seller/product-orders/last-changed-statuses?${params}`);
+        for (const row of data.data?.lastChangeStatuses ?? []) {
+          allIds.add(row.productOrderId);
+          orderIds.add(row.orderId);
+        }
+        cursor = data.data?.more?.moreSequence;
+        if (!cursor) break;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes(" 400 ") || msg.includes(" 401 ")) break; // unsupported type
+        if (msg.includes(" 429 ")) {
+          console.warn(`[${store.name}] RATE_LIMIT — 60초 대기`);
+          await sleep(60_000);
+        }
+        break;
+      }
+    }
   }
-  console.log(`[${store.name}] 수집된 productOrderId: ${allIds.size}개 (페이지네이션)`);
+  console.log(`[${store.name}] step1: productOrderIds=${allIds.size}, orderIds=${orderIds.size}`);
+
+  // Step 2: orderId 별 productOrderId 재조회 (형제 productOrder 누락 방지)
+  if (orderIds.size > 0 && orderIds.size <= 200) {
+    let added = 0;
+    for (const oid of orderIds) {
+      await sleep(500);
+      try {
+        const data = await naverFetch<{ data?: { productOrderIds?: string[]; contents?: { productOrderId: string }[] } }>(
+          token,
+          `/v1/pay-order/seller/orders/${oid}/product-order-ids`,
+        );
+        const ids = data.data?.productOrderIds
+          ?? data.data?.contents?.map((c) => c.productOrderId)
+          ?? [];
+        for (const id of ids) {
+          if (!allIds.has(id)) {
+            allIds.add(id);
+            added += 1;
+          }
+        }
+      } catch {
+        // 일부 실패는 무시
+      }
+    }
+    console.log(`[${store.name}] step2 재조회 +${added}건 → 누적 ${allIds.size}`);
+  }
+
   if (allIds.size === 0) return [];
 
-  // 2) 300개 단위로 bulk 상세 조회 (사이 딜레이)
-  const ids = Array.from(allIds);
+  // Step 3: bulk 상세 조회 (300개 단위)
+  const idArr = Array.from(allIds);
   const raw: BulkOrder[] = [];
-  for (let i = 0; i < ids.length; i += 300) {
-    if (i > 0) await sleep(800);
-    const slice = ids.slice(i, i + 300);
-    const data = await naverFetch<{ data?: BulkOrder[] }>(
-      token,
-      `/v1/pay-order/seller/product-orders/query`,
-      {
-        method: "POST",
-        body: JSON.stringify({ productOrderIds: slice, quantityClaimCompatibility: true }),
-      },
-    );
+  for (let i = 0; i < idArr.length; i += 300) {
+    if (i > 0) await sleep(1500);
+    const slice = idArr.slice(i, i + 300);
+    const data = await naverFetch<{ data?: BulkOrder[] }>(token, `/v1/pay-order/seller/product-orders/query`, {
+      method: "POST",
+      body: JSON.stringify({ productOrderIds: slice, quantityClaimCompatibility: true }),
+    });
     for (const row of data.data ?? []) raw.push(row);
   }
 
-  // 3) 결제일이 우리 윈도우 [from, to) 안인 것만 필터
-  //    상태변경 윈도우는 「변경시각」 기준이라, 옛날 결제 주문이 오늘 발송돼서 잡힌 경우 제외
+  // Step 4: paymentDate 가 윈도우 안인 것만
   const fromMs = new Date(fromIso).getTime();
   const toMs = new Date(toIso).getTime();
-  let dropped = 0;
-  let nullDate = 0;
   const out = raw.filter((row) => {
     const dateStr = row.productOrder.paymentDate ?? row.order?.paymentDate;
-    if (!dateStr) {
-      nullDate += 1;
-      return false;
-    }
+    if (!dateStr) return false;
     const t = new Date(dateStr).getTime();
-    if (t >= fromMs && t < toMs) return true;
-    dropped += 1;
-    return false;
+    return t >= fromMs && t < toMs;
   });
-  console.log(`[${store.name}] bulk 응답 ${raw.length}개 → 결제일 필터 후 ${out.length}개 (윈도우밖 ${dropped}개 / 결제일없음 ${nullDate}개)`);
+  console.log(`[${store.name}] bulk ${raw.length} → 결제일 필터 ${out.length}개`);
   return out;
 }
 
-// ─────────────────────────────── 집계
-interface NormalizedItem {
-  storeName: string;
-  productName: string;
-  optionName: string;
-  keyword: string;
-  bottles: number;
-  quantity: number;
-  salesAmount: number;
-  commission: number;
-  orderId: string;
-  status: string;
+// ─────────────────── 키워드 매핑
+async function loadRules(): Promise<{ pattern: string; keyword: string }[]> {
+  // 시트 「옵션매핑」 (A=패턴, B=키워드) 우선, 없으면 코드 기본값
+  if (!SHEET_CREDS) return DEFAULT_RULES;
+  try {
+    const rows = await readRange(SHEET_CREDS, "옵션매핑!A2:B10000");
+    const fromSheet = rows
+      .filter((r) => r[0] && r[1])
+      .map((r) => ({ pattern: String(r[0]), keyword: String(r[1]) }));
+    if (fromSheet.length > 0) {
+      console.log(`시트 옵션매핑 ${fromSheet.length}개 로드`);
+      // 시트 우선 + 코드 기본값 보충
+      return [...fromSheet, ...DEFAULT_RULES];
+    }
+  } catch (err) {
+    console.warn("옵션매핑 시트 읽기 실패:", err instanceof Error ? err.message : String(err));
+  }
+  return DEFAULT_RULES;
 }
 
-function classify(text: string): { keyword: string; bottles: number } {
-  for (const r of KEYWORD_RULES) {
-    for (const p of r.patterns) {
-      if (text.toLowerCase().includes(p.toLowerCase())) {
-        const m = text.match(/(\d+)\s*(?:병|개|입|set|세트|팩)/i);
-        return { keyword: r.keyword, bottles: m ? parseInt(m[1], 10) : 1 };
-      }
-    }
+function classify(text: string, rules: { pattern: string; keyword: string }[]): string {
+  const lower = text.toLowerCase();
+  for (const r of rules) {
+    if (lower.includes(r.pattern.toLowerCase())) return r.keyword;
   }
+  return "";
+}
+
+function extractBottles(text: string): number {
   const m = text.match(/(\d+)\s*(?:병|개|입|set|세트|팩)/i);
-  return { keyword: "", bottles: m ? parseInt(m[1], 10) : 1 };
+  return m ? parseInt(m[1], 10) : 1;
 }
 
 function isCanceled(status: string): boolean {
-  const u = status.toUpperCase();
-  return REFUND_KEYWORDS.some((k) => u.includes(k.toUpperCase()));
+  return /취소|반품|환불|cancel|refund|return/i.test(status);
 }
 
-function normalize(orders: BulkOrder[], storeName: string): NormalizedItem[] {
-  const out: NormalizedItem[] = [];
-  for (const row of orders) {
-    const po = row.productOrder;
-    const optionName = po.productOption ?? "";
-    const text = `${po.productName} ${optionName}`;
-    const { keyword, bottles } = classify(text);
-    out.push({
-      storeName,
-      productName: po.productName,
-      optionName,
-      keyword: keyword || po.productName,
-      bottles: po.quantity * bottles,
-      quantity: po.quantity,
-      salesAmount: po.totalPaymentAmount,
-      commission: (po.knowledgeShoppingSellingInterlockCommission ?? 0) + (po.payCommissionAmount ?? 0),
-      orderId: row.order?.orderId ?? po.orderId ?? "",
-      status: po.productOrderStatus ?? "",
-    });
-  }
-  return out;
-}
-
-// ─────────────────────────────── 메시지 포맷
+// ─────────────────── 텔레그램
 const won = (n: number) => n.toLocaleString("ko-KR") + "원";
 
-function buildReport(items: NormalizedItem[], dateStr: string): string {
-  const live = items.filter((it) => !isCanceled(it.status));
-  const canceledCount = items.length - live.length;
-
-  // (스토어, 키워드) 단위 집계
-  const map = new Map<string, { storeName: string; keyword: string; quantity: number; bottles: number; sales: number; commission: number; orderIds: Set<string> }>();
-  for (const it of live) {
-    const k = `${it.storeName}::${it.keyword}`;
-    const cur = map.get(k);
-    if (cur) {
-      cur.quantity += it.quantity;
-      cur.bottles += it.bottles;
-      cur.sales += it.salesAmount;
-      cur.commission += it.commission;
-      cur.orderIds.add(it.orderId);
-    } else {
-      map.set(k, {
-        storeName: it.storeName,
-        keyword: it.keyword,
-        quantity: it.quantity,
-        bottles: it.bottles,
-        sales: it.salesAmount,
-        commission: it.commission,
-        orderIds: new Set([it.orderId]),
-      });
-    }
-  }
-  const rows = Array.from(map.values()).sort((a, b) => b.sales - a.sales);
-
-  const totalSales = live.reduce((s, it) => s + it.salesAmount, 0);
-  const totalQty = live.reduce((s, it) => s + it.quantity, 0);
-  const totalShipments = new Set(live.map((it) => it.orderId)).size;
-  const totalCommission = live.reduce((s, it) => s + it.commission, 0);
-
-  const storeNames = Array.from(new Set(rows.map((r) => r.storeName)));
-
-  const lines: string[] = [];
-  lines.push(`<b>📊 ${dateStr} 매출 보고</b>`);
-  lines.push("");
-  lines.push(`💰 매출 <b>${won(totalSales)}</b>`);
-  lines.push(`📦 ${totalShipments}건 배송 / ${rows.reduce((s, r) => s + r.bottles, 0)}병 / ${totalQty}개 품목`);
-  lines.push(`💳 수수료 ${won(totalCommission)}`);
-  if (canceledCount > 0) lines.push(`⚠️ 취소·반품·환불 ${canceledCount}건 제외`);
-  lines.push("");
-
-  if (rows.length === 0) {
-    lines.push("매출 없음.");
-  } else {
-    lines.push("<b>━━ 키워드별 ━━</b>");
-    for (const r of rows) {
-      const storeLabel = storeNames.length > 1 ? ` <i>[${r.storeName}]</i>` : "";
-      lines.push(
-        `• <b>${r.keyword}</b>${storeLabel}\n` +
-        `   ${r.bottles}병 · ${r.quantity}개 · ${r.orderIds.size}건 · ${won(r.sales)}`,
-      );
-    }
-    if (storeNames.length > 1) {
-      lines.push("");
-      lines.push("<b>━━ 스토어별 ━━</b>");
-      const byStore = new Map<string, { sales: number; orders: Set<string>; bottles: number }>();
-      for (const it of live) {
-        const cur = byStore.get(it.storeName) ?? { sales: 0, orders: new Set(), bottles: 0 };
-        cur.sales += it.salesAmount;
-        cur.bottles += it.bottles;
-        cur.orders.add(it.orderId);
-        byStore.set(it.storeName, cur);
-      }
-      for (const [name, v] of Array.from(byStore.entries()).sort((a, b) => b[1].sales - a[1].sales)) {
-        lines.push(`• ${name} — ${won(v.sales)} · ${v.bottles}병 · ${v.orders.size}건`);
-      }
-    }
-  }
-  return lines.join("\n");
-}
-
-// ─────────────────────────────── 텔레그램
 async function sendTelegram(text: string): Promise<void> {
   if (!TG_TOKEN || !TG_CHAT) {
     console.error("TELEGRAM 환경변수 누락");
@@ -347,24 +277,76 @@ async function sendTelegram(text: string): Promise<void> {
   if (!res.ok) throw new Error(`telegram ${res.status}: ${await res.text()}`);
 }
 
-// ─────────────────────────────── 메인
+// ─────────────────── 메인
+const RAW_HEADERS = [
+  "결제일", "스토어", "주문번호", "상품주문번호", "상품번호",
+  "상품명", "옵션", "키워드", "수량", "병수",
+  "매출", "수수료", "정산예정", "상태", "구매자",
+];
+const SUMMARY_HEADERS = ["보고일", "키워드", "병수", "수량", "건수", "매출", "수수료"];
+
+interface Row {
+  paymentDate: string;
+  store: string;
+  orderId: string;
+  productOrderId: string;
+  channelProductNo: string;
+  productName: string;
+  optionName: string;
+  keyword: string;
+  quantity: number;
+  bottles: number;
+  salesAmount: number;
+  commission: number;
+  settlement: number;
+  status: string;
+  buyer: string;
+  isCanceled: boolean;
+}
+
 async function main() {
   if (STORES.length === 0) throw new Error("NAVER_STORES_JSON 비어있음");
   const arg = process.argv[2];
   const range = arg ? dateKstRange(arg) : previousDayKstRange();
+  console.log(`보고일: ${range.dateStr} (KST 00:00~24:00)`);
 
-  const all: NormalizedItem[] = [];
+  const rules = await loadRules();
+  console.log(`키워드 룰 ${rules.length}개`);
+
+  const allRows: Row[] = [];
   const errors: string[] = [];
 
   for (let si = 0; si < STORES.length; si++) {
-    if (si > 0) await sleep(1500); // 스토어 사이 1.5초
+    if (si > 0) await sleep(3000);
     const store = STORES[si];
     try {
-      console.log(`[${store.name}] fetching ${range.fromIso} ~ ${range.toIso}…`);
+      console.log(`[${store.name}] 시작…`);
       const orders = await fetchOrdersForDay(store, range.fromIso, range.toIso);
-      const items = normalize(orders, store.name);
-      console.log(`[${store.name}] ${items.length}건`);
-      all.push(...items);
+      for (const o of orders) {
+        const po = o.productOrder;
+        const optionText = `${po.productName} ${po.productOption ?? ""}`;
+        const keyword = classify(optionText, rules);
+        const perUnitBottles = extractBottles(po.productOption ?? po.productName);
+        allRows.push({
+          paymentDate: po.paymentDate ?? o.order?.paymentDate ?? "",
+          store: store.name,
+          orderId: o.order?.orderId ?? po.orderId ?? "",
+          productOrderId: po.productOrderId,
+          channelProductNo: po.channelProductNo ?? po.productId ?? "",
+          productName: po.productName,
+          optionName: po.productOption ?? "",
+          keyword,
+          quantity: po.quantity,
+          bottles: po.quantity * perUnitBottles,
+          salesAmount: po.totalPaymentAmount,
+          commission: (po.knowledgeShoppingSellingInterlockCommission ?? 0) + (po.payCommissionAmount ?? 0),
+          settlement: po.settlementAmount ?? po.settleAmount ?? 0,
+          status: po.productOrderStatus ?? "",
+          buyer: o.order?.ordererName ?? "",
+          isCanceled: isCanceled(po.productOrderStatus ?? ""),
+        });
+      }
+      console.log(`[${store.name}] ${orders.length}건 정규화`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[${store.name}] 실패: ${msg}`);
@@ -372,14 +354,93 @@ async function main() {
     }
   }
 
-  let report = buildReport(all, range.dateStr);
-  if (errors.length > 0) {
-    report += `\n\n⚠️ <b>일부 스토어 오류:</b>\n${errors.map((e) => `• ${e}`).join("\n")}`;
+  // 시트 입력 (있으면)
+  if (SHEET_CREDS && allRows.length > 0) {
+    try {
+      await ensureTab(SHEET_CREDS, "주문원본", RAW_HEADERS);
+      const rawRows = allRows.map((r) => [
+        r.paymentDate, r.store, r.orderId, r.productOrderId, r.channelProductNo,
+        r.productName, r.optionName, r.keyword, r.quantity, r.bottles,
+        r.salesAmount, r.commission, r.settlement, r.status, r.buyer,
+      ]);
+      await appendRows(SHEET_CREDS, "주문원본!A2", rawRows);
+      console.log(`✅ 시트 「주문원본」에 ${rawRows.length}행 추가`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("시트 「주문원본」 쓰기 실패:", msg);
+      errors.push(`sheet: ${msg}`);
+    }
+  } else if (!SHEET_CREDS) {
+    console.log("(시트 미설정 — 시트 입력 스킵)");
   }
 
-  console.log("\n=== 미리보기 ===\n" + report.replace(/<[^>]+>/g, ""));
-  await sendTelegram(report);
-  console.log("\n✅ 텔레그램 발송 완료");
+  // 집계
+  const live = allRows.filter((r) => !r.isCanceled);
+  const canceledCount = allRows.length - live.length;
+
+  const byKeyword = new Map<
+    string,
+    { keyword: string; qty: number; bottles: number; sales: number; commission: number; orderIds: Set<string> }
+  >();
+  for (const r of live) {
+    const k = r.keyword || `(미분류)${r.productName.slice(0, 20)}`;
+    const cur = byKeyword.get(k) ?? { keyword: k, qty: 0, bottles: 0, sales: 0, commission: 0, orderIds: new Set() };
+    cur.qty += r.quantity;
+    cur.bottles += r.bottles;
+    cur.sales += r.salesAmount;
+    cur.commission += r.commission;
+    cur.orderIds.add(r.orderId);
+    byKeyword.set(k, cur);
+  }
+  const summary = Array.from(byKeyword.values()).sort((a, b) => b.sales - a.sales);
+
+  // 집계 시트도 입력
+  if (SHEET_CREDS && summary.length > 0) {
+    try {
+      await ensureTab(SHEET_CREDS, "일일집계", SUMMARY_HEADERS);
+      const sumRows = summary.map((r) => [
+        range.dateStr, r.keyword, r.bottles, r.qty, r.orderIds.size, r.sales, r.commission,
+      ]);
+      await appendRows(SHEET_CREDS, "일일집계!A2", sumRows);
+      console.log(`✅ 시트 「일일집계」에 ${sumRows.length}행 추가`);
+    } catch (err) {
+      console.error("시트 「일일집계」 쓰기 실패:", err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // 텔레그램
+  const totalSales = live.reduce((s, r) => s + r.salesAmount, 0);
+  const totalQty = live.reduce((s, r) => s + r.quantity, 0);
+  const totalBottles = live.reduce((s, r) => s + r.bottles, 0);
+  const totalShipments = new Set(live.map((r) => r.orderId)).size;
+  const totalCommission = live.reduce((s, r) => s + r.commission, 0);
+
+  const lines: string[] = [];
+  lines.push(`<b>📊 ${range.dateStr} 매출 보고</b>`);
+  lines.push("");
+  lines.push(`💰 매출 <b>${won(totalSales)}</b>`);
+  lines.push(`📦 ${totalShipments}건 배송 / ${totalBottles}병 / ${totalQty}개 품목`);
+  lines.push(`💳 수수료 ${won(totalCommission)}`);
+  if (canceledCount > 0) lines.push(`⚠️ 취소·반품·환불 ${canceledCount}건 제외`);
+  lines.push("");
+
+  if (summary.length === 0) {
+    lines.push("매출 없음.");
+  } else {
+    lines.push("<b>━━ 키워드별 ━━</b>");
+    for (const r of summary) {
+      lines.push(`• <b>${r.keyword}</b>\n   ${r.bottles}병 · ${r.qty}개 · ${r.orderIds.size}건 · ${won(r.sales)}`);
+    }
+  }
+  if (errors.length > 0) {
+    lines.push("");
+    lines.push("⚠️ <b>오류:</b>");
+    for (const e of errors) lines.push(`• ${e.slice(0, 250)}`);
+  }
+
+  console.log("\n=== 미리보기 ===\n" + lines.join("\n").replace(/<[^>]+>/g, ""));
+  await sendTelegram(lines.join("\n"));
+  console.log("\n✅ 완료");
 }
 
 main().catch(async (err) => {

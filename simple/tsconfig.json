@@ -10,5 +10,5 @@
     "noEmit": true,
     "lib": ["ES2022"]
   },
-  "include": ["run.ts"]
+  "include": ["run.ts", "sheets.ts"]
 }
