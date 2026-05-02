@@ -196,7 +196,7 @@ export async function GET(req: NextRequest) {
   const safeEntity = submissionEntity.replace(/[/\\:*?"<>|]/g, "_");
   const dateStr = new Date().toISOString().slice(0, 7).replace("-", "");
   const zipBuf = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
-  const body = new Uint8Array(zipBuf.buffer, zipBuf.byteOffset, zipBuf.byteLength);
+  const body = new Uint8Array(zipBuf);
 
   return new NextResponse(body, {
     headers: {

@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
   if (!buf) return NextResponse.json({ error: "파일을 불러올 수 없습니다" }, { status: 404 });
 
   const encodedName = encodeURIComponent(doc.fileName ?? "settlement.xlsx");
-  const body = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  const body = new Uint8Array(buf);
 
   return new NextResponse(body, {
     headers: {

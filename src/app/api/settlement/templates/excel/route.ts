@@ -119,7 +119,8 @@ export async function GET(req: NextRequest) {
   ];
 
   const buf = await wb.xlsx.writeBuffer();
-  const body = new Uint8Array(buf as ArrayBuffer);
+  // exceljs writeBuffer는 환경 따라 Buffer or ArrayBuffer — 1-arg Uint8Array 생성자가 양쪽 모두 처리
+  const body = new Uint8Array(buf as Buffer);
   return new NextResponse(body, {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
