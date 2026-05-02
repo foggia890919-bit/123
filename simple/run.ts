@@ -376,7 +376,7 @@ async function main() {
 
   // 집계
   const live = allRows.filter((r) => !r.isCanceled);
-  const canceledCount = allRows.length - live.length;
+  const canceled = allRows.filter((r) => r.isCanceled);
 
   const byKeyword = new Map<
     string,
@@ -409,7 +409,9 @@ async function main() {
   }
 
   // 텔레그램
-  const totalSales = live.reduce((s, r) => s + r.salesAmount, 0);
+  const liveSales = live.reduce((s, r) => s + r.salesAmount, 0);
+  const canceledSales = canceled.reduce((s, r) => s + r.salesAmount, 0);
+  const grossSales = liveSales + canceledSales;
   const totalQty = live.reduce((s, r) => s + r.quantity, 0);
   const totalBottles = live.reduce((s, r) => s + r.bottles, 0);
   const totalShipments = new Set(live.map((r) => r.orderId)).size;
@@ -418,10 +420,14 @@ async function main() {
   const lines: string[] = [];
   lines.push(`<b>📊 ${range.dateStr} 매출 보고</b>`);
   lines.push("");
-  lines.push(`💰 매출 <b>${won(totalSales)}</b>`);
+  lines.push(`💰 전체매출 ${won(grossSales)} (${allRows.length}건)`);
+  if (canceled.length > 0) {
+    lines.push(`❌ 취소매출 -${won(canceledSales)} (${canceled.length}건)`);
+  }
+  lines.push(`✅ <b>최종매출 ${won(liveSales)}</b> (${live.length}건)`);
+  lines.push("");
   lines.push(`📦 ${totalShipments}건 배송 / ${totalBottles}병 / ${totalQty}개 품목`);
   lines.push(`💳 수수료 ${won(totalCommission)}`);
-  if (canceledCount > 0) lines.push(`⚠️ 취소·반품·환불 ${canceledCount}건 제외`);
   lines.push("");
 
   if (summary.length === 0) {
