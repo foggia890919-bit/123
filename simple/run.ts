@@ -19,7 +19,14 @@
 
 import "dotenv/config";
 import bcrypt from "bcryptjs";
-import { appendRows, ensureTab, readRange, loadCredsFromEnv, type SheetCreds } from "./sheets";
+import {
+  appendRows,
+  applyCancelRedRule,
+  ensureTab,
+  readRange,
+  loadCredsFromEnv,
+  type SheetCreds,
+} from "./sheets";
 
 // ─────────────────── 설정
 interface StoreConfig {
@@ -120,6 +127,7 @@ interface BulkOrder {
     payCommissionAmount?: number;
     settlementAmount?: number;
     settleAmount?: number;
+    expectedSettlementAmount?: number;
     paymentDate?: string;
     channelProductNo?: string;
     productId?: string;
@@ -327,6 +335,13 @@ async function main() {
         const optionText = `${po.productName} ${po.productOption ?? ""}`;
         const keyword = classify(optionText, rules);
         const perUnitBottles = extractBottles(po.productOption ?? po.productName);
+        const commission =
+          (po.knowledgeShoppingSellingInterlockCommission ?? 0) + (po.payCommissionAmount ?? 0);
+        const settlement =
+          po.expectedSettlementAmount
+          ?? po.settlementAmount
+          ?? po.settleAmount
+          ?? (po.totalPaymentAmount - commission);
         allRows.push({
           paymentDate: po.paymentDate ?? o.order?.paymentDate ?? "",
           store: store.name,
@@ -339,8 +354,8 @@ async function main() {
           quantity: po.quantity,
           bottles: po.quantity * perUnitBottles,
           salesAmount: po.totalPaymentAmount,
-          commission: (po.knowledgeShoppingSellingInterlockCommission ?? 0) + (po.payCommissionAmount ?? 0),
-          settlement: po.settlementAmount ?? po.settleAmount ?? 0,
+          commission,
+          settlement,
           status: po.productOrderStatus ?? "",
           buyer: o.order?.ordererName ?? "",
           isCanceled: isCanceled(po.productOrderStatus ?? ""),
@@ -358,6 +373,12 @@ async function main() {
   if (SHEET_CREDS && allRows.length > 0) {
     try {
       await ensureTab(SHEET_CREDS, "주문원본", RAW_HEADERS);
+      // 상태(N열, index 13) 가 취소/반품/환불 이면 행 빨간 글씨
+      try {
+        await applyCancelRedRule(SHEET_CREDS, "주문원본", 13, RAW_HEADERS.length);
+      } catch (err) {
+        console.warn("조건부서식 적용 실패:", err instanceof Error ? err.message : String(err));
+      }
       const rawRows = allRows.map((r) => [
         r.paymentDate, r.store, r.orderId, r.productOrderId, r.channelProductNo,
         r.productName, r.optionName, r.keyword, r.quantity, r.bottles,

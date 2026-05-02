@@ -104,6 +104,74 @@ export async function ensureTab(c: SheetCreds, name: string, headers: string[]):
   }
 }
 
+/**
+ * 「상태」 칼럼이 취소/반품/환불 키워드 포함하면 행 전체 빨간 글씨.
+ * 동일 조건의 룰이 이미 있으면 추가 안 함 (idempotent).
+ */
+export async function applyCancelRedRule(
+  c: SheetCreds,
+  tabName: string,
+  statusColIndex: number, // 0-based
+  totalCols: number,
+): Promise<void> {
+  const token = await getToken(c);
+  const meta = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}?fields=sheets(properties(title,sheetId),conditionalFormats)`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!meta.ok) throw new Error(`meta ${meta.status}: ${await meta.text()}`);
+  const json = (await meta.json()) as {
+    sheets?: {
+      properties: { title: string; sheetId: number };
+      conditionalFormats?: { booleanRule?: { condition?: { values?: { userEnteredValue?: string }[] } } }[];
+    }[];
+  };
+  const sheet = json.sheets?.find((s) => s.properties.title === tabName);
+  if (!sheet) return;
+  const sheetId = sheet.properties.sheetId;
+  const colLetter = String.fromCharCode(65 + statusColIndex);
+  const formula = `=REGEXMATCH(TO_TEXT($${colLetter}2), "취소|환불|반품|cancel|refund|return")`;
+  const exists = (sheet.conditionalFormats ?? []).some((cf) =>
+    cf.booleanRule?.condition?.values?.some((v) => v.userEnteredValue === formula),
+  );
+  if (exists) return;
+  const res = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}:batchUpdate`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        requests: [
+          {
+            addConditionalFormatRule: {
+              rule: {
+                ranges: [
+                  {
+                    sheetId,
+                    startRowIndex: 1,
+                    startColumnIndex: 0,
+                    endColumnIndex: totalCols,
+                  },
+                ],
+                booleanRule: {
+                  condition: { type: "CUSTOM_FORMULA", values: [{ userEnteredValue: formula }] },
+                  format: {
+                    textFormat: {
+                      foregroundColor: { red: 0.85, green: 0.1, blue: 0.1 },
+                    },
+                  },
+                },
+              },
+              index: 0,
+            },
+          },
+        ],
+      }),
+    },
+  );
+  if (!res.ok) throw new Error(`addConditionalFormatRule ${res.status}: ${await res.text()}`);
+}
+
 export function loadCredsFromEnv(): SheetCreds | null {
   const sheetId = process.env.GOOGLE_SHEETS_ID;
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
