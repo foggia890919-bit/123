@@ -128,12 +128,17 @@ function parseParcel(j: VworldDataRaw): VworldParcel | null {
   const props = f.properties ?? {};
   const geom = (f.geometry ?? null) as GeoJSON.Polygon | GeoJSON.MultiPolygon | null;
   const center = geom ? polygonCentroid(geom) : null;
+  const pnu = String(props.pnu ?? "");
+  // PNU 19자리 = [10 법정동코드][1 산여부][4 본번][4 부번] → cortarNo 10자리
+  const cortarFromPnu = /^\d{19}$/.test(pnu) ? pnu.slice(0, 10) : null;
   return {
-    pnu: String(props.pnu ?? ""),
+    pnu,
     jibun: [props.ldCodeNm, props.mnnmSlno].filter(Boolean).join(" ") || String(props.jibun ?? ""),
     area: props.lndpcl_ar != null ? Number(props.lndpcl_ar) : null,
     sigungu: typeof props.ldCodeNm === "string" ? props.ldCodeNm.split(" ").slice(0, 2).join(" ") : null,
-    cortarNo: props.ld_cd ? String(props.ld_cd) : props.ldCode ? String(props.ldCode) : null,
+    cortarNo: cortarFromPnu
+      ?? (props.ld_cd ? String(props.ld_cd) : null)
+      ?? (props.ldCode ? String(props.ldCode) : null),
     geometry: geom,
     centerLat: center?.lat ?? null,
     centerLng: center?.lng ?? null,

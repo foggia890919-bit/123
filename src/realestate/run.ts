@@ -21,9 +21,15 @@ import { syncRone, recentQuarters } from "./rone/sync";
 import { snapshotDong } from "./sbiz/sync";
 import { valuateListing, regionalEstimatedRent } from "./valuation";
 import { analyze, regionalRentBenchmark } from "./land/analyze";
+import { syncApplyhome, syncLh } from "./notice/sync";
+import { syncCensus } from "./census/sync";
+import { matchAllNotices, matchNoticeNeighbors } from "./scout/proximity";
+import { computeScore } from "./scout/score";
+import { syncHira } from "./hira/sync";
 
 interface Args {
-  cmd: "scrape" | "detail" | "molit" | "rone" | "sbiz" | "valuate" | "land" | "massing";
+  cmd: "scrape" | "detail" | "molit" | "rone" | "sbiz" | "valuate" | "land" | "massing"
+     | "notice" | "census" | "match" | "hira" | "score";
   cortarNos: string[];
   propertyTypes: string[];
   tradeTypes: string[];
@@ -38,6 +44,13 @@ interface Args {
   capRate?: number;
   jibun?: string;
   pnu?: string;
+  noticeSource?: "applyhome" | "lh";
+  sido?: string;
+  sgguCd?: string;
+  parcelId?: string;
+  noticeId?: string;
+  radiusM?: number;
+  enrich?: boolean;
 }
 
 function parseArgs(): Args {
@@ -67,6 +80,13 @@ function parseArgs(): Args {
     capRate: get("--cap") ? Number(get("--cap")) : undefined,
     jibun: get("--jibun"),
     pnu: get("--pnu"),
+    noticeSource: (get("--source") as "applyhome" | "lh" | undefined) ?? "applyhome",
+    sido: get("--sido"),
+    sgguCd: get("--sggu"),
+    parcelId: get("--parcel"),
+    noticeId: get("--notice"),
+    radiusM: get("--radius") ? Number(get("--radius")) : undefined,
+    enrich: argv.includes("--enrich"),
   };
 }
 
@@ -198,6 +218,57 @@ async function runMassing(args: Args) {
   await runLand(args);
 }
 
+async function runNotice(args: Args) {
+  if (args.noticeSource === "lh") {
+    const r = await syncLh();
+    console.log(`[notice/lh] fetched=${r.fetched} upserted=${r.upserted} geocoded=${r.geocoded} errors=${r.errors.length}`);
+  } else {
+    const today = new Date();
+    const from = new Date(today); from.setMonth(from.getMonth() - 6);
+    const fmt = (d: Date) => `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;
+    const r = await syncApplyhome({
+      sido: args.sido,
+      fromDate: fmt(from),
+      toDate: fmt(today),
+      numOfRows: 200,
+    });
+    console.log(`[notice/applyhome] fetched=${r.fetched} upserted=${r.upserted} geocoded=${r.geocoded} errors=${r.errors.length}`);
+  }
+}
+
+async function runCensus(args: Args) {
+  if (args.cortarNos.length === 0) throw new Error("--cortar 1168010100 (10자리 행정동) 필요");
+  const r = await syncCensus({ cortarNos: args.cortarNos, months: 3 });
+  console.log(`[census] fetched=${r.fetched} upserted=${r.upserted} errors=${r.errors.length}`);
+}
+
+async function runMatch(args: Args) {
+  if (args.noticeId) {
+    const r = await matchNoticeNeighbors(args.noticeId, { radiusM: args.radiusM ?? 1000 });
+    console.log(`[match] notice=${args.noticeId} parcels=${r.parcels} listings=${r.listings}`);
+    return;
+  }
+  const r = await matchAllNotices({ radiusM: args.radiusM ?? 1000 });
+  console.log(`[match] notices=${r.notices} parcels=${r.parcels} listings=${r.listings}`);
+}
+
+async function runHira(args: Args) {
+  const r = await syncHira({
+    sidoCd: args.sido,
+    sgguCd: args.sgguCd,
+    enrich: args.enrich,
+    maxPages: 10,
+    numOfRows: 100,
+  });
+  console.log(`[hira] fetched=${r.fetched} upserted=${r.upserted} enriched=${r.enriched} errors=${r.errors.length}`);
+}
+
+async function runScore(args: Args) {
+  if (!args.parcelId) throw new Error("--parcel <Parcel.id> 필요");
+  const s = await computeScore({ parcelId: args.parcelId });
+  console.log(JSON.stringify(s, null, 2));
+}
+
 async function main() {
   const args = parseArgs();
   if (args.cmd === "detail") {
@@ -215,6 +286,16 @@ async function main() {
     await runLand(args);
   } else if (args.cmd === "massing") {
     await runMassing(args);
+  } else if (args.cmd === "notice") {
+    await runNotice(args);
+  } else if (args.cmd === "census") {
+    await runCensus(args);
+  } else if (args.cmd === "match") {
+    await runMatch(args);
+  } else if (args.cmd === "hira") {
+    await runHira(args);
+  } else if (args.cmd === "score") {
+    await runScore(args);
   } else {
     await runScrape(args);
   }

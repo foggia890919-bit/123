@@ -19,7 +19,12 @@
     "re:sbiz": "tsx src/realestate/run.ts sbiz",
     "re:valuate": "tsx src/realestate/run.ts valuate",
     "re:land": "tsx src/realestate/run.ts land",
-    "re:massing": "tsx src/realestate/run.ts massing"
+    "re:massing": "tsx src/realestate/run.ts massing",
+    "re:notice": "tsx src/realestate/run.ts notice",
+    "re:census": "tsx src/realestate/run.ts census",
+    "re:match": "tsx src/realestate/run.ts match",
+    "re:hira": "tsx src/realestate/run.ts hira",
+    "re:score": "tsx src/realestate/run.ts score"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",

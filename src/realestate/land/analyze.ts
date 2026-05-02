@@ -15,6 +15,7 @@ import { getTitleInfo, type BuildingTitleInfo } from "./buildingHub";
 import { compute as computeMassing, DEFAULT_MEDICAL, type MassingScenario } from "./massing";
 import { saveMassingResult, upsertBuildingLedgers, upsertParcel } from "./storage";
 import { regionalEstimatedRent } from "@/realestate/valuation";
+import { computeScore, type ScoreOutput } from "@/realestate/scout/score";
 import type { Parcel } from "@prisma/client";
 
 export interface LandAnalyzeInput {
@@ -48,6 +49,7 @@ export interface LandAnalyzeResult {
   };
   notes: string[];
   massingResultId?: string;
+  score?: ScoreOutput;
 }
 
 const ACQ_TAX = 0.046;       // 4.6%
@@ -150,6 +152,14 @@ export async function analyze(input: LandAnalyzeInput): Promise<LandAnalyzeResul
     estimatedRoi: roi ?? undefined,
   });
 
+  // 10) 종합 입지 점수 (Phase 4 + 5 데이터 활용)
+  let score: ScoreOutput | undefined;
+  try {
+    score = await computeScore({ parcelId: parcel.id });
+  } catch (e) {
+    notes.push(`입지 점수 계산 스킵: ${(e as Error).message}`);
+  }
+
   return {
     parcel,
     buildings,
@@ -168,6 +178,7 @@ export async function analyze(input: LandAnalyzeInput): Promise<LandAnalyzeResul
     },
     notes,
     massingResultId: massingId,
+    score,
   };
 }
 

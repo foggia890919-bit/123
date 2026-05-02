@@ -744,3 +744,166 @@ model MassingResult {
   @@index([parcelId])
   @@index([scenario])
 }
+
+// ─── Phase 4: 분양·입주 예정지 + 인구통계 ─────────────────────────────
+// 청약홈/LH/공공데이터포털에서 수집. proximity matcher가 인접 후보 필지를 자동 매칭.
+
+model ApartmentNotice {
+  id              String   @id @default(cuid())
+  externalId      String   @unique // 청약홈 공고번호 또는 LH 공고일련번호
+  source          String   // "applyhome" | "lh" | "manual"
+  noticeName      String
+  houseType       String?  // 아파트/오피스텔/도시형생활주택 등
+  totalHouseholds Int?
+  generalHouseholds Int?
+  specialHouseholds Int?
+  // 위치
+  region          String?  // 시도/시군구/동
+  cortarNo        String?  // 행정동 10자리
+  address         String?
+  latitude        Float?
+  longitude       Float?
+  // 일정
+  noticeAt        DateTime?  // 공고일
+  applyStartAt    DateTime?  // 청약 시작
+  applyEndAt      DateTime?
+  contractAt      DateTime?
+  moveInAt        DateTime?  // 입주 예정월 (1일로 정규화)
+  // 가격
+  priceMin        Int?       // 분양가 최저(만원)
+  priceMax        Int?
+  // 평형
+  areaMin         Float?     // ㎡
+  areaMax         Float?
+  raw             Json?
+  fetchedAt       DateTime   @default(now())
+  // 매칭 결과 캐시 (proximity)
+  matches         NoticeParcelMatch[]
+
+  @@index([source])
+  @@index([cortarNo])
+  @@index([moveInAt])
+  @@index([latitude, longitude])
+}
+
+model NoticeParcelMatch {
+  id          String   @id @default(cuid())
+  noticeId    String
+  notice      ApartmentNotice @relation(fields: [noticeId], references: [id], onDelete: Cascade)
+  parcelId    String?
+  listingId   String?
+  // 거리 (m)
+  distanceM   Float
+  // 방향 (단지 정문 → 매물). 향후 보행 동선 분석에 활용.
+  bearing     Float?
+  matchType   String   // "parcel" | "listing"
+  createdAt   DateTime @default(now())
+
+  @@index([noticeId])
+  @@index([parcelId])
+  @@index([listingId])
+  @@index([distanceM])
+}
+
+model Census {
+  id          String   @id @default(cuid())
+  cortarNo    String   // 10자리 행정동
+  yearMonth   String   // YYYYMM
+  totalPop    Int?
+  households  Int?
+  // 연령대
+  age0_9      Int?
+  age10_19    Int?
+  age20_29    Int?
+  age30_39    Int?
+  age40_49    Int?
+  age50_59    Int?
+  age60_69    Int?
+  age70Plus   Int?
+  // 성별
+  malePop     Int?
+  femalePop   Int?
+  raw         Json?
+  fetchedAt   DateTime @default(now())
+
+  @@unique([cortarNo, yearMonth])
+  @@index([cortarNo])
+  @@index([yearMonth])
+}
+
+// ─── Phase 5: 의료기관 + 처방 통계 ────────────────────────────────────
+// 심평원(HIRA) 병의원정보서비스 + 보건의료빅데이터 통계.
+
+model MedicalFacility {
+  id              String   @id @default(cuid())
+  ykiho           String   @unique // HIRA 의료기관 식별자 (암호화)
+  name            String
+  // 분류
+  facilityType    String?  // 종합병원/병원/의원/치과/한의원/약국
+  specialties     String[] @default([]) // 진료과목 (내과,소아과,정형외과 등)
+  // 규모
+  bedCount        Int?
+  doctorCount     Int?
+  equipment       String[] @default([]) // CT, MRI, 초음파 등
+  // 위치
+  address         String?
+  cortarNo        String?
+  sigungu         String?
+  latitude        Float?
+  longitude       Float?
+  // 운영 상태
+  openedAt        DateTime?
+  closedAt        DateTime?
+  status          String   @default("OPEN") // OPEN | CLOSED | RELOCATED
+  raw             Json?
+  fetchedAt       DateTime @default(now())
+
+  @@index([cortarNo])
+  @@index([sigungu])
+  @@index([facilityType])
+  @@index([status])
+  @@index([latitude, longitude])
+}
+
+model PrescriptionStat {
+  id              String   @id @default(cuid())
+  cortarNo        String   // 행정동 (또는 시군구 lawdCd)
+  yearMonth       String   // YYYYMM
+  scope           String   // "dong" | "sigungu"
+  // 진료과목별 (있으면)
+  specialty       String?  // 내과/소아과/정형외과 등
+  // 측정값
+  patientCount    Int?     // 진료받은 환자 수
+  visitCount      Int?     // 내원 일수
+  prescriptionCount Int?   // 처방전 발급 건수
+  totalAmount     Int?     // 총 진료비 (천원 단위)
+  raw             Json?
+  fetchedAt       DateTime @default(now())
+
+  @@unique([cortarNo, yearMonth, scope, specialty])
+  @@index([cortarNo, yearMonth])
+  @@index([specialty])
+}
+
+// 입지 종합 점수 — Phase 6에서 가중치 모델로 갱신.
+model LocationScore {
+  id                  String   @id @default(cuid())
+  parcelId            String   @unique
+  computedAt          DateTime @default(now())
+  // 입력 메트릭
+  backingHouseholds   Int?     // 반경 1km 내 분양 예정 세대수 합
+  competitorClinics   Int?     // 반경 500m 내 경쟁 의원 수
+  populationDensity   Float?   // 행정동 인구밀도
+  prescriptionDemand  Float?   // 처방수요 추정값
+  supplyAdvantage     Float?   // 자체 약국 공급 매출(만원/월) 향후 회귀
+  buildableRoi        Float?   // Phase 2/3 ROI
+  trafficFlow         Float?   // 지하철/버스 (Phase 6)
+  pIndex              Float?   // 비급여 지불지수 (Phase 6, 유료)
+  // 가중치 적용 결과
+  prescriptionScore   Float?
+  compositeScore      Float?
+  recommendedSpecialties String[] @default([])
+  notes               String[] @default([])
+
+  @@index([compositeScore])
+}

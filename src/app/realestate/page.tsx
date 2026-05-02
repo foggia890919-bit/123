@@ -82,6 +82,9 @@ export default function RealEstatePage() {
           </p>
         </div>
         <div className="flex gap-2">
+          <a href="/realestate/scout" className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50">
+            입지 스카우팅
+          </a>
           <a href="/realestate/landplan" className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50">
             토지·가설계
           </a>
