@@ -65,6 +65,113 @@ export async function appendRows(
   if (!res.ok) throw new Error(`appendRows ${res.status}: ${await res.text()}`);
 }
 
+function colLetter(idx: number): string {
+  let result = "";
+  let n = idx;
+  while (n >= 0) {
+    result = String.fromCharCode(65 + (n % 26)) + result;
+    n = Math.floor(n / 26) - 1;
+  }
+  return result;
+}
+
+/**
+ * 키 기준 upsert. 이미 있으면 그 행 덮어쓰기, 없으면 append.
+ * 동일 키가 시트에 여러 번 있으면 첫 번째만 남기고 나머지 삭제 (자동 dedup).
+ */
+export async function upsertRows(
+  c: SheetCreds,
+  tabName: string,
+  rows: (string | number)[][],
+  getKey: (row: (string | number)[]) => string,
+): Promise<{ updated: number; appended: number; deduped: number }> {
+  if (rows.length === 0) return { updated: 0, appended: 0, deduped: 0 };
+  const numCols = rows[0].length;
+  const lastCol = colLetter(numCols - 1);
+  const token = await getToken(c);
+
+  const existing = await readRange(c, `${tabName}!A2:${lastCol}100000`);
+  const keyToRow = new Map<string, number>();
+  const dupRows: number[] = [];
+  existing.forEach((row, idx) => {
+    const k = getKey(row as (string | number)[]);
+    if (!k) return;
+    const rowNum = idx + 2;
+    if (keyToRow.has(k)) dupRows.push(rowNum);
+    else keyToRow.set(k, rowNum);
+  });
+
+  if (dupRows.length > 0) {
+    const meta = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}?fields=sheets.properties`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (meta.ok) {
+      const json = (await meta.json()) as {
+        sheets?: { properties: { title: string; sheetId: number } }[];
+      };
+      const sheetId = json.sheets?.find((s) => s.properties.title === tabName)?.properties.sheetId;
+      if (sheetId != null) {
+        const sortedDesc = [...dupRows].sort((a, b) => b - a);
+        const requests = sortedDesc.map((rowNum) => ({
+          deleteDimension: {
+            range: { sheetId, dimension: "ROWS", startIndex: rowNum - 1, endIndex: rowNum },
+          },
+        }));
+        const res = await fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}:batchUpdate`,
+          {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ requests }),
+          },
+        );
+        if (!res.ok) throw new Error(`dedup ${res.status}: ${await res.text()}`);
+        const sortedAsc = [...dupRows].sort((a, b) => a - b);
+        for (const [k, rowNum] of keyToRow.entries()) {
+          let shift = 0;
+          for (const dup of sortedAsc) {
+            if (dup < rowNum) shift++;
+            else break;
+          }
+          if (shift > 0) keyToRow.set(k, rowNum - shift);
+        }
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  const updates: { range: string; values: (string | number)[][] }[] = [];
+  const appends: (string | number)[][] = [];
+  for (const row of rows) {
+    const k = getKey(row);
+    if (k && seen.has(k)) continue;
+    if (k) seen.add(k);
+    if (k && keyToRow.has(k)) {
+      const rowNum = keyToRow.get(k)!;
+      updates.push({ range: `${tabName}!A${rowNum}:${lastCol}${rowNum}`, values: [row] });
+    } else {
+      appends.push(row);
+    }
+  }
+
+  if (updates.length > 0) {
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values:batchUpdate`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ valueInputOption: "USER_ENTERED", data: updates }),
+      },
+    );
+    if (!res.ok) throw new Error(`values:batchUpdate ${res.status}: ${await res.text()}`);
+  }
+  if (appends.length > 0) {
+    await appendRows(c, `${tabName}!A2`, appends);
+  }
+  return { updated: updates.length, appended: appends.length, deduped: dupRows.length };
+}
+
 export async function readRange(c: SheetCreds, rangeA1: string): Promise<string[][]> {
   const token = await getToken(c);
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values/${encodeURIComponent(rangeA1)}`;

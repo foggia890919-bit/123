@@ -20,11 +20,11 @@
 import "dotenv/config";
 import bcrypt from "bcryptjs";
 import {
-  appendRows,
   applyCancelRedRule,
   ensureTab,
   readRange,
   loadCredsFromEnv,
+  upsertRows,
   type SheetCreds,
 } from "./sheets";
 
@@ -288,10 +288,10 @@ async function sendTelegram(text: string): Promise<void> {
 // ─────────────────── 메인
 const RAW_HEADERS = [
   "결제일", "스토어", "주문번호", "상품주문번호", "상품번호",
-  "상품명", "옵션", "키워드", "수량", "병수",
+  "상품명", "옵션", "키워드", "수량", "출고수량",
   "매출", "수수료", "정산예정", "상태", "구매자",
 ];
-const SUMMARY_HEADERS = ["보고일", "키워드", "병수", "수량", "건수", "매출", "수수료"];
+const SUMMARY_HEADERS = ["보고일", "키워드", "출고수량", "수량", "건수", "매출", "수수료"];
 
 interface Row {
   paymentDate: string;
@@ -384,8 +384,17 @@ async function main() {
         r.productName, r.optionName, r.keyword, r.quantity, r.bottles,
         r.salesAmount, r.commission, r.settlement, r.status, r.buyer,
       ]);
-      await appendRows(SHEET_CREDS, "주문원본!A2", rawRows);
-      console.log(`✅ 시트 「주문원본」에 ${rawRows.length}행 추가`);
+      // 상품주문번호(D열, idx 3) 기준 upsert. 이미 있으면 갱신, 중복 자동 정리.
+      const result = await upsertRows(
+        SHEET_CREDS,
+        "주문원본",
+        rawRows,
+        (r) => String(r[3] ?? ""),
+      );
+      console.log(
+        `✅ 「주문원본」: 신규 ${result.appended} / 갱신 ${result.updated}` +
+          (result.deduped > 0 ? ` / 중복정리 ${result.deduped}` : ""),
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("시트 「주문원본」 쓰기 실패:", msg);
@@ -415,15 +424,23 @@ async function main() {
   }
   const summary = Array.from(byKeyword.values()).sort((a, b) => b.sales - a.sales);
 
-  // 집계 시트도 입력
+  // 집계 시트도 입력 — (보고일+키워드) 기준 upsert
   if (SHEET_CREDS && summary.length > 0) {
     try {
       await ensureTab(SHEET_CREDS, "일일집계", SUMMARY_HEADERS);
       const sumRows = summary.map((r) => [
         range.dateStr, r.keyword, r.bottles, r.qty, r.orderIds.size, r.sales, r.commission,
       ]);
-      await appendRows(SHEET_CREDS, "일일집계!A2", sumRows);
-      console.log(`✅ 시트 「일일집계」에 ${sumRows.length}행 추가`);
+      const sumResult = await upsertRows(
+        SHEET_CREDS,
+        "일일집계",
+        sumRows,
+        (r) => `${r[0]}|${r[1]}`,
+      );
+      console.log(
+        `✅ 「일일집계」: 신규 ${sumResult.appended} / 갱신 ${sumResult.updated}` +
+          (sumResult.deduped > 0 ? ` / 중복정리 ${sumResult.deduped}` : ""),
+      );
     } catch (err) {
       console.error("시트 「일일집계」 쓰기 실패:", err instanceof Error ? err.message : String(err));
     }
@@ -447,7 +464,7 @@ async function main() {
   }
   lines.push(`✅ <b>최종매출 ${won(liveSales)}</b> (${live.length}건)`);
   lines.push("");
-  lines.push(`📦 ${totalShipments}건 배송 / ${totalBottles}병 / ${totalQty}개 품목`);
+  lines.push(`📦 ${totalShipments}건 배송 / 출고 ${totalBottles}개 / ${totalQty}개 품목`);
   lines.push(`💳 수수료 ${won(totalCommission)}`);
   lines.push("");
 
@@ -456,7 +473,7 @@ async function main() {
   } else {
     lines.push("<b>━━ 키워드별 ━━</b>");
     for (const r of summary) {
-      lines.push(`• <b>${r.keyword}</b>\n   ${r.bottles}병 · ${r.qty}개 · ${r.orderIds.size}건 · ${won(r.sales)}`);
+      lines.push(`• <b>${r.keyword}</b>\n   ${r.bottles}개 · ${r.orderIds.size}건 · ${won(r.sales)}`);
     }
   }
   if (errors.length > 0) {
