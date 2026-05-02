@@ -20,9 +20,11 @@ import type { MolitEndpoint } from "./molit/client";
 import { syncRone, recentQuarters } from "./rone/sync";
 import { snapshotDong } from "./sbiz/sync";
 import { valuateListing, regionalEstimatedRent } from "./valuation";
+import { geocodeJibun, getParcelByPnu, getLandUse } from "./land/vworld";
+import { compute as computeMassing, DEFAULT_MEDICAL } from "./land/massing";
 
 interface Args {
-  cmd: "scrape" | "detail" | "molit" | "rone" | "sbiz" | "valuate";
+  cmd: "scrape" | "detail" | "molit" | "rone" | "sbiz" | "valuate" | "land" | "massing";
   cortarNos: string[];
   propertyTypes: string[];
   tradeTypes: string[];
@@ -35,6 +37,8 @@ interface Args {
   quarters: number;
   listingId?: string;
   capRate?: number;
+  jibun?: string;
+  pnu?: string;
 }
 
 function parseArgs(): Args {
@@ -62,6 +66,8 @@ function parseArgs(): Args {
     quarters: Number(get("--quarters") ?? 4),
     listingId: get("--listing"),
     capRate: get("--cap") ? Number(get("--cap")) : undefined,
+    jibun: get("--jibun"),
+    pnu: get("--pnu"),
   };
 }
 
@@ -174,6 +180,33 @@ async function runValuate(args: Args) {
   throw new Error("--listing <id> 또는 --lawd 11680 중 하나 필요");
 }
 
+async function runLand(args: Args) {
+  if (!args.jibun && !args.pnu) throw new Error("--jibun '서울특별시 강남구 역삼동 825-22' 또는 --pnu 1168010100... 필요");
+  let pnu = args.pnu;
+  if (args.jibun && !pnu) {
+    const g = await geocodeJibun(args.jibun);
+    if (!g) throw new Error("지번 검색 실패");
+    pnu = g.pnu;
+    console.log(`[land] geocoded → pnu=${pnu} lat=${g.lat} lng=${g.lng}`);
+  }
+  const parcel = await getParcelByPnu(pnu!);
+  const landuse = await getLandUse(pnu!);
+  console.log(JSON.stringify({ parcel, landuse }, null, 2));
+}
+
+async function runMassing(args: Args) {
+  if (!args.pnu) throw new Error("--pnu 1168010100... 필요");
+  const parcel = await getParcelByPnu(args.pnu);
+  if (!parcel || parcel.area == null) throw new Error("필지 정보 또는 면적 없음");
+  const landuse = await getLandUse(args.pnu);
+  const zone = landuse.zones.find(z => z.type === "용도지역")?.name ?? "";
+  const result = computeMassing(
+    { pnu: args.pnu, area: parcel.area, zoneName: zone },
+    DEFAULT_MEDICAL,
+  );
+  console.log(JSON.stringify(result, null, 2));
+}
+
 async function main() {
   const args = parseArgs();
   if (args.cmd === "detail") {
@@ -187,6 +220,10 @@ async function main() {
     await runSbiz(args);
   } else if (args.cmd === "valuate") {
     await runValuate(args);
+  } else if (args.cmd === "land") {
+    await runLand(args);
+  } else if (args.cmd === "massing") {
+    await runMassing(args);
   } else {
     await runScrape(args);
   }

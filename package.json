@@ -17,7 +17,9 @@
     "re:molit": "tsx src/realestate/run.ts molit",
     "re:rone": "tsx src/realestate/run.ts rone",
     "re:sbiz": "tsx src/realestate/run.ts sbiz",
-    "re:valuate": "tsx src/realestate/run.ts valuate"
+    "re:valuate": "tsx src/realestate/run.ts valuate",
+    "re:land": "tsx src/realestate/run.ts land",
+    "re:massing": "tsx src/realestate/run.ts massing"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",
