@@ -92,53 +92,14 @@ export async function upsertRows(
 
   const existing = await readRange(c, `${tabName}!A2:${lastCol}100000`);
   const keyToRow = new Map<string, number>();
-  const dupRows: number[] = [];
+  // 중복은 건드리지 않음 — 사용자가 옆 칼럼에 붙여놓은 데이터/2차 가공 보호.
+  // 첫 번째 발견된 행만 기억하고 거기에 update 함.
   existing.forEach((row, idx) => {
     const k = getKey(row as (string | number)[]);
     if (!k) return;
     const rowNum = idx + 2;
-    if (keyToRow.has(k)) dupRows.push(rowNum);
-    else keyToRow.set(k, rowNum);
+    if (!keyToRow.has(k)) keyToRow.set(k, rowNum);
   });
-
-  if (dupRows.length > 0) {
-    const meta = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}?fields=sheets.properties`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-    if (meta.ok) {
-      const json = (await meta.json()) as {
-        sheets?: { properties: { title: string; sheetId: number } }[];
-      };
-      const sheetId = json.sheets?.find((s) => s.properties.title === tabName)?.properties.sheetId;
-      if (sheetId != null) {
-        const sortedDesc = [...dupRows].sort((a, b) => b - a);
-        const requests = sortedDesc.map((rowNum) => ({
-          deleteDimension: {
-            range: { sheetId, dimension: "ROWS", startIndex: rowNum - 1, endIndex: rowNum },
-          },
-        }));
-        const res = await fetch(
-          `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}:batchUpdate`,
-          {
-            method: "POST",
-            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-            body: JSON.stringify({ requests }),
-          },
-        );
-        if (!res.ok) throw new Error(`dedup ${res.status}: ${await res.text()}`);
-        const sortedAsc = [...dupRows].sort((a, b) => a - b);
-        for (const [k, rowNum] of keyToRow.entries()) {
-          let shift = 0;
-          for (const dup of sortedAsc) {
-            if (dup < rowNum) shift++;
-            else break;
-          }
-          if (shift > 0) keyToRow.set(k, rowNum - shift);
-        }
-      }
-    }
-  }
 
   const seen = new Set<string>();
   const updates: { range: string; values: (string | number)[][] }[] = [];
@@ -169,7 +130,7 @@ export async function upsertRows(
   if (appends.length > 0) {
     await appendRows(c, `${tabName}!A2`, appends);
   }
-  return { updated: updates.length, appended: appends.length, deduped: dupRows.length };
+  return { updated: updates.length, appended: appends.length, deduped: 0 };
 }
 
 export async function readRange(c: SheetCreds, rangeA1: string): Promise<string[][]> {
@@ -262,7 +223,12 @@ export async function applyCancelRedRule(
         ],
         booleanRule: {
           condition: { type: "CUSTOM_FORMULA", values: [{ userEnteredValue: formula }] },
-          format: { textFormat: { foregroundColor: { red: 0.85, green: 0.1, blue: 0.1 } } },
+          format: {
+            textFormat: {
+              foregroundColor: { red: 0.85, green: 0.1, blue: 0.1 },
+              strikethrough: true,
+            },
+          },
         },
       },
       index: 0,

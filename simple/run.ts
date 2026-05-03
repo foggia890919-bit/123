@@ -345,15 +345,16 @@ interface Row {
   isCanceled: boolean;
 }
 
-async function main() {
-  if (STORES.length === 0) throw new Error("NAVER_STORES_JSON 비어있음");
-  const arg = process.argv[2];
-  const range = arg ? dateKstRange(arg) : previousDayKstRange();
-  console.log(`보고일: ${range.dateStr} (KST 00:00~24:00)`);
+interface ProcessOptions {
+  sendTelegram: boolean;
+}
 
-  const rules = await loadRules();
-  console.log(`키워드 룰 ${rules.length}개`);
-
+async function processDay(
+  range: { fromIso: string; toIso: string; dateStr: string },
+  rules: Rule[],
+  options: ProcessOptions,
+): Promise<void> {
+  console.log(`\n[${range.dateStr}] ${options.sendTelegram ? '메인 보고' : '시트 동기화 only'}`);
   const allRows: Row[] = [];
   const errors: string[] = [];
 
@@ -525,9 +526,54 @@ async function main() {
     for (const e of errors) lines.push(`• ${e.slice(0, 250)}`);
   }
 
-  console.log("\n=== 미리보기 ===\n" + lines.join("\n").replace(/<[^>]+>/g, ""));
-  await sendTelegram(lines.join("\n"));
-  console.log("\n✅ 완료");
+  if (options.sendTelegram) {
+    console.log("\n=== 미리보기 ===\n" + lines.join("\n").replace(/<[^>]+>/g, ""));
+    await sendTelegram(lines.join("\n"));
+  }
+  console.log(`[${range.dateStr}] ✅ 완료`);
+}
+
+function previousDaysKstRanges(daysBack: number): { fromIso: string; toIso: string; dateStr: string }[] {
+  const now = new Date();
+  const kst = new Date(now.getTime() + KST_OFFSET);
+  const y = kst.getUTCFullYear(), m = kst.getUTCMonth(), d = kst.getUTCDate();
+  const out: { fromIso: string; toIso: string; dateStr: string }[] = [];
+  for (let i = 1; i <= daysBack; i++) {
+    const start = Date.UTC(y, m, d - i) - KST_OFFSET;
+    const end = Date.UTC(y, m, d - i + 1) - KST_OFFSET;
+    out.push({
+      fromIso: new Date(start).toISOString(),
+      toIso: new Date(end).toISOString(),
+      dateStr: new Date(Date.UTC(y, m, d - i)).toISOString().slice(0, 10),
+    });
+  }
+  return out;
+}
+
+async function main() {
+  if (STORES.length === 0) throw new Error("NAVER_STORES_JSON 비어있음");
+  const arg = process.argv[2];
+  const rules = await loadRules();
+  console.log(`키워드 룰 ${rules.length}개`);
+
+  if (arg) {
+    // 백필: 특정 날짜만 — 텔레그램 발송
+    await processDay(dateKstRange(arg), rules, { sendTelegram: true });
+    return;
+  }
+
+  // 일상 cron: 7일 롤링
+  // 1일째(어제) = 텔레그램 + 시트, 2~7일째 = 시트만 (취소/반품 상태변경 캐치)
+  const ranges = previousDaysKstRanges(7);
+  for (let i = 0; i < ranges.length; i++) {
+    const range = ranges[i];
+    const sendTg = (i === 0);
+    try {
+      await processDay(range, rules, { sendTelegram: sendTg });
+    } catch (err) {
+      console.error(`[${range.dateStr}] 실패:`, err instanceof Error ? err.message : String(err));
+    }
+  }
 }
 
 main().catch(async (err) => {
