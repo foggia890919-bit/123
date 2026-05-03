@@ -190,17 +190,20 @@ export async function ensureTab(c: SheetCreds, name: string, headers: string[]):
   );
   if (!meta.ok) throw new Error(`meta ${meta.status}: ${await meta.text()}`);
   const json = (await meta.json()) as { sheets?: { properties: { title: string } }[] };
-  if (json.sheets?.some((s) => s.properties.title === name)) return;
-  const add = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}:batchUpdate`,
-    {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ requests: [{ addSheet: { properties: { title: name } } }] }),
-    },
-  );
-  if (!add.ok) throw new Error(`addSheet ${add.status}: ${await add.text()}`);
+  const exists = json.sheets?.some((s) => s.properties.title === name);
+  if (!exists) {
+    const add = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}:batchUpdate`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ requests: [{ addSheet: { properties: { title: name } } }] }),
+      },
+    );
+    if (!add.ok) throw new Error(`addSheet ${add.status}: ${await add.text()}`);
+  }
   if (headers.length > 0) {
+    // 항상 헤더 덮어쓰기 (idempotent: 같으면 변화 없음, 칼럼 추가 시 자동 업데이트)
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values/${encodeURIComponent(name + "!A1")}?valueInputOption=USER_ENTERED`;
     const res = await fetch(url, {
       method: "PUT",

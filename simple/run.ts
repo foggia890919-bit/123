@@ -41,13 +41,19 @@ const TG_CHAT = process.env.TELEGRAM_CHAT_ID;
 const SHEET_CREDS: SheetCreds | null = loadCredsFromEnv();
 
 // 시트 「옵션매핑」 탭 없을 때 사용할 코드 기본값
-const DEFAULT_RULES: { pattern: string; keyword: string }[] = [
-  { pattern: "피쿠알", keyword: "피쿠알" },
-  { pattern: "picual", keyword: "피쿠알" },
-  { pattern: "아르베키나", keyword: "아르베키나" },
-  { pattern: "arbequina", keyword: "아르베키나" },
-  { pattern: "블렌딩", keyword: "블렌딩" },
-  { pattern: "blending", keyword: "블렌딩" },
+interface Rule {
+  pattern: string;
+  keyword: string;
+  costPerUnit: number;
+  logisticsPerUnit: number;
+}
+const DEFAULT_RULES: Rule[] = [
+  { pattern: "피쿠알", keyword: "피쿠알", costPerUnit: 0, logisticsPerUnit: 0 },
+  { pattern: "picual", keyword: "피쿠알", costPerUnit: 0, logisticsPerUnit: 0 },
+  { pattern: "아르베키나", keyword: "아르베키나", costPerUnit: 0, logisticsPerUnit: 0 },
+  { pattern: "arbequina", keyword: "아르베키나", costPerUnit: 0, logisticsPerUnit: 0 },
+  { pattern: "블렌딩", keyword: "블렌딩", costPerUnit: 0, logisticsPerUnit: 0 },
+  { pattern: "blending", keyword: "블렌딩", costPerUnit: 0, logisticsPerUnit: 0 },
 ];
 
 // ─────────────────── 시간 (KST)
@@ -233,17 +239,22 @@ async function fetchOrdersForDay(store: StoreConfig, fromIso: string, toIso: str
 }
 
 // ─────────────────── 키워드 매핑
-async function loadRules(): Promise<{ pattern: string; keyword: string }[]> {
-  // 시트 「옵션매핑」 (A=패턴, B=키워드) 우선, 없으면 코드 기본값
+async function loadRules(): Promise<Rule[]> {
+  // 시트 「옵션매핑」 (A=패턴, B=키워드, C=원가(개당), D=물류비(개당)) 우선, 없으면 코드 기본값
   if (!SHEET_CREDS) return DEFAULT_RULES;
   try {
-    const rows = await readRange(SHEET_CREDS, "옵션매핑!A2:B10000");
+    await ensureTab(SHEET_CREDS, "옵션매핑", ["패턴", "키워드", "원가(개당)", "물류비(개당)"]);
+    const rows = await readRange(SHEET_CREDS, "옵션매핑!A2:D10000");
     const fromSheet = rows
       .filter((r) => r[0] && r[1])
-      .map((r) => ({ pattern: String(r[0]), keyword: String(r[1]) }));
+      .map((r) => ({
+        pattern: String(r[0]),
+        keyword: String(r[1]),
+        costPerUnit: Number(String(r[2] ?? "").replace(/,/g, "")) || 0,
+        logisticsPerUnit: Number(String(r[3] ?? "").replace(/,/g, "")) || 0,
+      }));
     if (fromSheet.length > 0) {
       console.log(`시트 옵션매핑 ${fromSheet.length}개 로드`);
-      // 시트 우선 + 코드 기본값 보충
       return [...fromSheet, ...DEFAULT_RULES];
     }
   } catch (err) {
@@ -252,12 +263,12 @@ async function loadRules(): Promise<{ pattern: string; keyword: string }[]> {
   return DEFAULT_RULES;
 }
 
-function classify(text: string, rules: { pattern: string; keyword: string }[]): string {
+function classify(text: string, rules: Rule[]): Rule | null {
   const lower = text.toLowerCase();
   for (const r of rules) {
-    if (lower.includes(r.pattern.toLowerCase())) return r.keyword;
+    if (lower.includes(r.pattern.toLowerCase())) return r;
   }
-  return "";
+  return null;
 }
 
 function extractBottles(text: string): number {
@@ -290,6 +301,7 @@ const RAW_HEADERS = [
   "결제일", "스토어", "주문번호", "상품주문번호", "상품번호",
   "상품명", "옵션", "키워드", "수량", "출고수량",
   "매출", "수수료", "정산예정", "상태", "구매자",
+  "원가", "물류비", "이익",
 ];
 const SUMMARY_HEADERS = ["보고일", "키워드", "출고수량", "수량", "건수", "매출", "수수료"];
 
@@ -309,6 +321,9 @@ interface Row {
   settlement: number;
   status: string;
   buyer: string;
+  cost: number;
+  logistics: number;
+  profit: number;
   isCanceled: boolean;
 }
 
@@ -333,8 +348,9 @@ async function main() {
       for (const o of orders) {
         const po = o.productOrder;
         const optionText = `${po.productName} ${po.productOption ?? ""}`;
-        const keyword = classify(optionText, rules);
+        const matched = classify(optionText, rules);
         const perUnitBottles = extractBottles(po.productOption ?? po.productName);
+        const totalUnits = po.quantity * perUnitBottles;
         const commission =
           (po.knowledgeShoppingSellingInterlockCommission ?? 0) + (po.payCommissionAmount ?? 0);
         const settlement =
@@ -342,6 +358,9 @@ async function main() {
           ?? po.settlementAmount
           ?? po.settleAmount
           ?? (po.totalPaymentAmount - commission);
+        const cost = (matched?.costPerUnit ?? 0) * totalUnits;
+        const logistics = (matched?.logisticsPerUnit ?? 0) * totalUnits;
+        const profit = settlement - cost - logistics;
         allRows.push({
           paymentDate: po.paymentDate ?? o.order?.paymentDate ?? "",
           store: store.name,
@@ -350,14 +369,17 @@ async function main() {
           channelProductNo: po.channelProductNo ?? po.productId ?? "",
           productName: po.productName,
           optionName: po.productOption ?? "",
-          keyword,
+          keyword: matched?.keyword ?? "",
           quantity: po.quantity,
-          bottles: po.quantity * perUnitBottles,
+          bottles: totalUnits,
           salesAmount: po.totalPaymentAmount,
           commission,
           settlement,
           status: po.productOrderStatus ?? "",
           buyer: o.order?.ordererName ?? "",
+          cost,
+          logistics,
+          profit,
           isCanceled: isCanceled(po.productOrderStatus ?? ""),
         });
       }
@@ -383,6 +405,9 @@ async function main() {
         r.paymentDate, r.store, r.orderId, r.productOrderId, r.channelProductNo,
         r.productName, r.optionName, r.keyword, r.quantity, r.bottles,
         r.salesAmount, r.commission, r.isCanceled ? "" : r.settlement, r.status, r.buyer,
+        r.isCanceled ? "" : r.cost,
+        r.isCanceled ? "" : r.logistics,
+        r.isCanceled ? "" : r.profit,
       ]);
       // 상품주문번호(D열, idx 3) 기준 upsert. 이미 있으면 갱신, 중복 자동 정리.
       const result = await upsertRows(
