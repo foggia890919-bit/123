@@ -177,6 +177,8 @@ function UploadTab() {
 
   const [mapFile, setMapFile] = useState<File | null>(null);
   const [mapLoading, setMapLoading] = useState(false);
+  const [missingCodeCount, setMissingCodeCount] = useState<number | null>(null);
+  const [missingDownloading, setMissingDownloading] = useState(false);
   const [mapResult, setMapResult] = useState<{ success?: boolean; mapped?: number; updated?: number; ingredientUpdated?: number; ingredientAttempted?: number; total?: number; filled?: number; lastSync?: string | null; error?: string; sampleKeys?: string[]; diagnostics?: { sampleKeys?: string[]; sampleItem?: Record<string, unknown> | null; withName?: number; withSpec?: number; withEither?: number; sampleRows?: { productName: string; ingredientName: string; insuranceCode: string | null }[] } } | null>(null);
   const mapInputRef = useRef<HTMLInputElement>(null);
 
@@ -252,15 +254,42 @@ function UploadTab() {
     setMapLoading(true); setMapResult(null);
     try {
       const res = await fetch("/api/medications/sync-ingredient-codes", { method: "POST" });
-      setMapResult(await res.json());
+      const data = await res.json();
+      setMapResult(data);
+      // 동기화 후 공란 카운트 갱신
+      fetch("/api/medications/missing-codes?format=json")
+        .then((r) => r.json())
+        .then((d) => { if (d.missingCount !== undefined) setMissingCodeCount(d.missingCount); })
+        .catch(() => null);
     } catch { setMapResult({ error: "동기화 중 오류가 발생했어요." }); }
     finally { setMapLoading(false); }
+  }
+
+  async function handleDownloadMissingCodes(insuranceOnly: boolean) {
+    setMissingDownloading(true);
+    try {
+      const url = `/api/medications/missing-codes?format=excel${insuranceOnly ? "&hasInsuranceCode=true" : ""}`;
+      const res = await fetch(url);
+      if (!res.ok) { alert("다운로드 실패"); return; }
+      const blob = await res.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = insuranceOnly ? "보험코드있음_주성분코드공란.xlsx" : "주성분코드공란_전체.xlsx";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } finally {
+      setMissingDownloading(false);
+    }
   }
 
   useEffect(() => {
     fetch("/api/medications/sync-ingredient-codes")
       .then((r) => r.json())
       .then((d) => setMapResult(d))
+      .catch(() => null);
+    fetch("/api/medications/missing-codes?format=json")
+      .then((r) => r.json())
+      .then((d) => { if (d.missingCount !== undefined) setMissingCodeCount(d.missingCount); })
       .catch(() => null);
   }, []);
 
@@ -603,7 +632,7 @@ function UploadTab() {
             {mapResult.sampleKeys && <div className="mt-1 font-mono">응답 필드: {mapResult.sampleKeys.join(", ")}</div>}
           </div>
         )}
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button onClick={handleIngredientSync} disabled={mapLoading} className="bg-purple-600 hover:bg-purple-700">
             {mapLoading ? "동기화 중..." : "API로 주성분코드 동기화"}
           </Button>
@@ -618,6 +647,38 @@ function UploadTab() {
           )}
           <input ref={mapInputRef} type="file" accept=".xlsx,.xls" className="hidden"
             onChange={(e) => { setMapFile(e.target.files?.[0] || null); setMapResult(null); }} />
+        </div>
+        {/* 공란 목록 다운로드 */}
+        <div className="border-t border-gray-100 pt-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-gray-700">주성분코드 공란 목록</span>
+            {missingCodeCount !== null && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${missingCodeCount === 0 ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                {missingCodeCount.toLocaleString()}건 누락
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-gray-400">동기화 후에도 매칭 안 된 품목 목록을 내려받아 수동 보정하거나 제약사에 코드 문의 시 사용하세요.</p>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => handleDownloadMissingCodes(true)}
+              disabled={missingDownloading}
+              className="text-xs border-red-200 text-red-600 hover:bg-red-50"
+            >
+              <Download className="w-3.5 h-3.5 mr-1" />
+              보험코드 있는 것만 (sync 대상)
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => handleDownloadMissingCodes(false)}
+              disabled={missingDownloading}
+              className="text-xs border-gray-200 text-gray-600 hover:bg-gray-50"
+            >
+              <Download className="w-3.5 h-3.5 mr-1" />
+              전체 공란 목록
+            </Button>
+          </div>
         </div>
       </div>
 
