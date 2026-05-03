@@ -481,11 +481,16 @@ async function callGeminiVision(
 - 인접 행의 숫자가 같은 행처럼 보일 때 약품명이 어느 라인에 있는지 다시 확인하세요.
 
 # 출력 필드
-- insuranceCode: **9자리 숫자**인 경우만 채움. EMR 내부 약품코드(예: mosapit, ultra5)
-  는 9자리가 아니면 빈 문자열로 두세요.
-- productName: 정확한 제품명 (예: "모사피트정5밀리그람"). 약품명/제품명 컬럼 사용
+- insuranceCode: **9자리 숫자**인 경우만 채움. EMR 내부 약품코드(예: mosapit, ultra5,
+  처방코드 103/219+/223* 같은 짧은 숫자)는 9자리가 아니면 빈 문자열로 두세요.
+- productName: 정확한 제품명 (예: "모사피트정5밀리그람", "로수듀오정(rosuva/ezt10/10)").
+  약품명/제품명/처방명칭 컬럼 사용. 제약사명은 productName 끝에서 제거.
 - companyName: 제약회사명 ("(주)" 표기는 유지해도 됨, 단 이름 끝의 (주)는 제거)
-- quantity: 처방 수량/투여량/총사용량 컬럼 값. 숫자만
+- quantity: **반드시 "사용량"·"총사용량"·"총투여량"·"수량" 컬럼의 값**.
+  ⚠️ 절대 단가/금액/총액/환자수가 아님. 헤더에 "단가"라고 적힌 컬럼은 단위가격이지
+  수량이 아닙니다. 헤더에 "환자수"는 환자 명수이지 약품 수량이 아닙니다.
+  표 헤더 예시: [처방코드 / 처방명칭 / 환자수 / 단가 / 사용량 / 총액] →
+  수량 = 사용량 컬럼 값. 단가(118)·환자수(36)·총액(70446)을 절대 수량으로 쓰지 마세요.
 - confidence: 이 행 인식 확신도 0~100 (제품명·수량·제약사 모두 명확하면 90+,
   제품명만 명확하면 70~85, 일부 결손 50~70)
 
@@ -566,7 +571,9 @@ ${args.masterCandidates.length ? JSON.stringify(args.masterCandidates, null, 2) 
   빈 문자열로 두기.
 - 보험코드 없어도 제품명 명확하면 추출 (confidence 70+).
 - 헤더, 합계, 검색기간, 내원구분 같은 메타 라인은 제외.
-- quantity 는 숫자만.
+- quantity 는 **사용량·총사용량·총투여량·수량 컬럼의 숫자만**. 단가/환자수/총액
+  컬럼 값은 절대 수량이 아니다. 표 헤더가 [처방코드/처방명칭/환자수/단가/사용량/총액]
+  이면 사용량 컬럼만 사용.
 - confidence: 양쪽 OCR 일치 90+, 한쪽만 70~85, 마스터 매칭 시 95+.
 
 JSON: { "drugs": [ { "insuranceCode": "", "productName": "", "companyName": "", "quantity": "", "confidence": 0 } ] }${clientContextHint(args.clientContext)}`;
@@ -648,50 +655,68 @@ async function matchMedication(
     };
   }
 
-  // productName + companyName 동시 매치가 가장 강함
-  if (item.productName.length >= 3 && item.companyName.length >= 2) {
-    const companyKey = item.companyName.replace(/\(주\)|\(유\)|주식회사|㈜/g, "").trim();
-    const candidates = await prisma.medication.findMany({
-      where: {
-        productName: { contains: item.productName.slice(0, 8), mode: "insensitive" },
-        companyName: { contains: companyKey.slice(0, 6), mode: "insensitive" },
-      },
+  // 한글 약품 prefix + 용량 분리
+  // 예: "로수듀오정(rosuva/ezt10/20)HLB제약" → korean="로수듀오정", dose="10/20"
+  // 예: "셀토젯정Atorva/ezt10/10mg셀트리온" → korean="셀토젯정", dose="10/10"
+  // 예: "디오디핀정(amlo+valsar5/80mg)알리코" → korean="디오디핀정", dose="5/80"
+  const parsed = parseDrugName(item.productName);
+  const koreanCore = parsed.korean;
+  const doseToken = parsed.dose;
+
+  async function searchAndPick(
+    where: object,
+    requireDose: boolean
+  ): Promise<{ row: MasterRow; exact: boolean } | null> {
+    const rows = await prisma.medication.findMany({
+      where,
       select: { id: true, insuranceCode: true, productName: true, companyName: true, price: true },
-      take: 5,
+      take: 20,
     });
-    const exact = candidates.find((c: MasterRow) => c.productName === item.productName);
-    const partial = exact ?? candidates[0];
-    if (partial) {
-      return {
-        insuranceCode: partial.insuranceCode ?? item.insuranceCode,
-        productName: partial.productName,
-        companyName: partial.companyName,
-        unitPrice: partial.price,
-        matchedMedicationId: partial.id,
-        matchConfidence: exact ? 98 : 90,
-      };
+    if (rows.length === 0) return null;
+    // 용량 필터 — 마스터 productName에 dose token이 포함되는 row 우선
+    let pool = rows;
+    if (requireDose && doseToken) {
+      const filtered = rows.filter((r: MasterRow) => normalizeForDose(r.productName).includes(normalizeForDose(doseToken)));
+      if (filtered.length) pool = filtered;
     }
+    const exact = pool.find((r: MasterRow) => r.productName === item.productName);
+    return { row: exact ?? pool[0], exact: !!exact };
   }
 
-  // productName 부분 일치 fallback
-  if (item.productName.length >= 3) {
-    const candidates = await prisma.medication.findMany({
-      where: { productName: { contains: item.productName.slice(0, 8), mode: "insensitive" } },
-      select: { id: true, insuranceCode: true, productName: true, companyName: true, price: true },
-      take: 5,
-    });
-    const exact = candidates.find((c: MasterRow) => c.productName === item.productName);
-    const partial = exact ?? candidates[0];
-    if (partial) {
-      return {
-        insuranceCode: partial.insuranceCode ?? item.insuranceCode,
-        productName: partial.productName,
-        companyName: partial.companyName,
-        unitPrice: partial.price,
-        matchedMedicationId: partial.id,
-        matchConfidence: exact ? 92 : 78,
-      };
-    }
+  // 1차: 한글 약품명 + 제약사 + dose
+  if (koreanCore.length >= 2 && item.companyName.length >= 2) {
+    const companyKey = item.companyName.replace(/\(주\)|\(유\)|주식회사|㈜/g, "").trim();
+    const r = await searchAndPick(
+      {
+        productName: { contains: koreanCore, mode: "insensitive" },
+        companyName: { contains: companyKey.slice(0, 6), mode: "insensitive" },
+      },
+      true
+    );
+    if (r) return {
+      insuranceCode: r.row.insuranceCode ?? item.insuranceCode,
+      productName: r.row.productName,
+      companyName: r.row.companyName,
+      unitPrice: r.row.price,
+      matchedMedicationId: r.row.id,
+      matchConfidence: r.exact ? 98 : 92,
+    };
+  }
+
+  // 2차: 한글 약품명 + dose (제약사 무시 — Vision/Clova가 회사명을 못 잡았을 때)
+  if (koreanCore.length >= 2) {
+    const r = await searchAndPick(
+      { productName: { contains: koreanCore, mode: "insensitive" } },
+      true
+    );
+    if (r) return {
+      insuranceCode: r.row.insuranceCode ?? item.insuranceCode,
+      productName: r.row.productName,
+      companyName: r.row.companyName,
+      unitPrice: r.row.price,
+      matchedMedicationId: r.row.id,
+      matchConfidence: r.exact ? 95 : 85,
+    };
   }
 
   return {
@@ -705,6 +730,26 @@ async function matchMedication(
 }
 
 // ── 유틸 ──────────────────────────────────────────────────────────────────────
+
+// "로수듀오정(rosuva/ezt10/20)HLB제약" 같은 OCR 결과에서 한글 약품명과 용량을 분리.
+function parseDrugName(s: string): { korean: string; dose: string } {
+  if (!s) return { korean: "", dose: "" };
+  // 한글 + 한글 사이 공백/숫자 허용 (정/캡슐/시럽 등 제형 포함). 영문 또는 ( 가 나오면 종료.
+  const koreanMatch = s.match(/^[\s]*([가-힣][가-힣\s]*(?:정|캡슐|캅셀|시럽|주사액|주사|연고|크림|겔|패취|포|산제|환제|액|주|에스|서방정|장용정)?)/);
+  const korean = (koreanMatch?.[1] ?? "").replace(/\s+$/, "").trim();
+  // 용량: 숫자/숫자 또는 단일 숫자 + mg/g/밀리그램 허용
+  const doseMatch = s.match(/(\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?)/);
+  const dose = doseMatch?.[1]?.replace(/\s+/g, "") ?? "";
+  return { korean, dose };
+}
+
+// 마스터 productName 안에서 dose 비교 시 표기 차이(공백/단위) 흡수
+function normalizeForDose(s: string): string {
+  return s.toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/밀리그램|밀리그람/g, "mg")
+    .replace(/마이크로그램|마이크로그람/g, "ug");
+}
 
 function clamp01_100(n: number): number {
   if (!Number.isFinite(n)) return 0;
