@@ -287,17 +287,16 @@ async function loadRules(): Promise<Rule[]> {
 }
 
 function classify(productName: string, option: string, rules: Rule[]): Rule | null {
-  // 옵션 우선 매칭 (상품명에 다른 키워드 들어있어도 옵션이 진짜 산 상품을 결정)
-  // 옵션 없으면 상품명으로 fallback (단일 상품)
-  const primary = (option || productName).toLowerCase();
+  // 상품명 우선 매칭 (어떤 상품의 주문전환인지가 먼저).
+  // 상품명에 매칭 없으면 옵션으로 fallback.
+  const namelower = productName.toLowerCase();
   for (const r of rules) {
-    if (primary.includes(r.pattern.toLowerCase())) return r;
+    if (namelower.includes(r.pattern.toLowerCase())) return r;
   }
-  // 옵션에 매칭 없을 때만 상품명으로 보조 검사
   if (option) {
-    const fallback = productName.toLowerCase();
+    const optlower = option.toLowerCase();
     for (const r of rules) {
-      if (fallback.includes(r.pattern.toLowerCase())) return r;
+      if (optlower.includes(r.pattern.toLowerCase())) return r;
     }
   }
   return null;
