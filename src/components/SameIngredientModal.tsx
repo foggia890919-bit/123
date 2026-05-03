@@ -22,6 +22,7 @@ interface SelectContext {
 interface Props {
   ingredientName: string;
   ingredientCode?: string;
+  sourceProductName?: string;
   userId?: string;
   proposals?: Proposal[];
   onProposalAdded?: (proposalId: string, added: number) => void;
@@ -58,7 +59,7 @@ function splitProductName(name: string): [string, string | null, string | null] 
   return [rest, null, ingredient];
 }
 
-export default function SameIngredientModal({ ingredientName, ingredientCode, userId, proposals: externalProposals, onProposalAdded, onClose, initialCols, replaceContext, selectContext }: Props) {
+export default function SameIngredientModal({ ingredientName, ingredientCode, sourceProductName, userId, proposals: externalProposals, onProposalAdded, onClose, initialCols, replaceContext, selectContext }: Props) {
   const [medications, setMedications] = useState<MedicationItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -183,9 +184,25 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
   // matchLevel 섹션 순서: exact → same_form → same_ingredient → name_match → null(코드 없음)
   const matchOrder: Record<string, number> = { exact: 0, same_form: 1, same_ingredient: 2, name_match: 3 };
 
-  const sorted = [...medications].sort((a, b) => {
+  // HIRA 주성분코드가 강도(dose)를 구분하지 않는 경우(같은 코드 → 250mg·500mg 모두 "exact"),
+  // sourceProductName에서 용량을 파싱해 강도가 다른 결과를 "same_form"으로 재분류.
+  const [, sourceDose] = sourceProductName ? splitProductName(sourceProductName) : ["", null, null];
+  const medicationsForDisplay = sourceDose
+    ? medications.map((med) => {
+        if (med.matchLevel !== "exact") return med;
+        const [, medDose] = splitProductName(med.productName);
+        const normSource = sourceDose.toLowerCase().replace(/\s/g, "");
+        const normMed = medDose?.toLowerCase().replace(/\s/g, "") ?? "";
+        if (normMed && normSource && normMed !== normSource) {
+          return { ...med, matchLevel: "same_form" as const };
+        }
+        return med;
+      })
+    : medications;
+
+  const sorted = [...medicationsForDisplay].sort((a, b) => {
     // ingredientCode 기반 검색이면 matchLevel 우선 정렬
-    const hasMatch = medications.some((m) => m.matchLevel != null);
+    const hasMatch = medicationsForDisplay.some((m) => m.matchLevel != null);
     if (hasMatch && !sortKey) {
       const la = matchOrder[a.matchLevel ?? ""] ?? 3;
       const lb = matchOrder[b.matchLevel ?? ""] ?? 3;
@@ -211,7 +228,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
 
   // ingredientCode 기반 검색이면 matchLevel 필터 적용.
   // showOtherDose=false이면 same_form 제외, showOtherForm=false이면 same_ingredient/name_match 제외.
-  const hasIngredientCodeSearch = medications.some((m) => m.matchLevel != null);
+  const hasIngredientCodeSearch = medicationsForDisplay.some((m) => m.matchLevel != null);
   const visibleSorted = hasIngredientCodeSearch
     ? sorted.filter((m) => {
         if (m.matchLevel === "exact") return true;

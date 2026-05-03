@@ -89,6 +89,7 @@ function extractCodes(item: AtcItem): AtcExtract | null {
     /^주성분명?$/,
     /^성분명?$/,
     /ingdtName|ingredientName|mainIngdtName/i,
+    /ATC코드.*명칭|ATC.*명칭/i,
   ]);
   // 규격 / 함량 / 용량 / strength / spec (단위 제외 — "정"·"캡슐" 같은 값은 부적합)
   const spec = findValue(item, [
