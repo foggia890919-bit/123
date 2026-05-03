@@ -286,10 +286,19 @@ async function loadRules(): Promise<Rule[]> {
   return DEFAULT_RULES;
 }
 
-function classify(text: string, rules: Rule[]): Rule | null {
-  const lower = text.toLowerCase();
+function classify(productName: string, option: string, rules: Rule[]): Rule | null {
+  // 옵션 우선 매칭 (상품명에 다른 키워드 들어있어도 옵션이 진짜 산 상품을 결정)
+  // 옵션 없으면 상품명으로 fallback (단일 상품)
+  const primary = (option || productName).toLowerCase();
   for (const r of rules) {
-    if (lower.includes(r.pattern.toLowerCase())) return r;
+    if (primary.includes(r.pattern.toLowerCase())) return r;
+  }
+  // 옵션에 매칭 없을 때만 상품명으로 보조 검사
+  if (option) {
+    const fallback = productName.toLowerCase();
+    for (const r of rules) {
+      if (fallback.includes(r.pattern.toLowerCase())) return r;
+    }
   }
   return null;
 }
@@ -371,8 +380,7 @@ async function processDay(
       const orders = await fetchOrdersForDay(store, range.fromIso, range.toIso);
       for (const o of orders) {
         const po = o.productOrder;
-        const optionText = `${po.productName} ${po.productOption ?? ""}`;
-        const matched = classify(optionText, rules);
+        const matched = classify(po.productName, po.productOption ?? "", rules);
         const perUnitBottles = extractBottles(po.productOption ?? po.productName);
         const totalUnits = po.quantity * perUnitBottles;
         const commission =
