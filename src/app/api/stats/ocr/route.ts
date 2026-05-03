@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
 
     const clovaResult = clovaOut.status === "fulfilled" ? clovaOut.value : null;
     const clovaText = clovaResult?.text ?? "";
-    const clovaFields = clovaResult?.fields ?? [];
+    const clovaRows = clovaResult?.rows ?? [];
     const clovaImageHeight = clovaResult?.imageHeight ?? 0;
     const geminiDraft = geminiOut.status === "fulfilled" ? geminiOut.value : null;
     const geminiText = geminiDraft ? JSON.stringify(geminiDraft, null, 2) : "";
@@ -167,7 +167,7 @@ export async function POST(req: NextRequest) {
         matchedMedicationId: matched.matchedMedicationId,
         finalConfidence,
         manualCheck,
-        anchorY: locateRowInClova(item, clovaFields, clovaImageHeight),
+        anchorY: locateRowInClova(item, clovaRows, clovaImageHeight),
         productNameRaw: matched.productName || item.productName,
         insuranceCodeRaw: (matched.insuranceCode || item.insuranceCode).replace(/\D/g, ""),
       });
@@ -272,7 +272,7 @@ interface ClovaField {
 async function callClovaOcr(
   base64: string,
   ext: string
-): Promise<{ text: string; fields: ClovaField[]; imageHeight: number }> {
+): Promise<{ text: string; fields: ClovaField[]; imageHeight: number; rows: ClovaRow[] }> {
   const rawUrl = process.env.CLOVA_OCR_INVOKE_URL?.trim();
   const clovaUrl = rawUrl?.replace(/^http:\/\//, "https://");
   const clovaSecret = process.env.CLOVA_OCR_SECRET_KEY?.trim();
@@ -296,15 +296,8 @@ async function callClovaOcr(
   if (!image || image.inferResult !== "SUCCESS") throw new Error(image?.message ?? "Clova 인식 실패");
 
   const fields: ClovaField[] = image.fields || [];
-  const lines: string[] = [];
-  let cur = "";
-  for (const f of fields) {
-    cur += (cur ? " " : "") + f.inferText;
-    if (f.lineBreak !== false) { lines.push(cur.trim()); cur = ""; }
-  }
-  if (cur) lines.push(cur.trim());
-  // 이미지 실제 높이 — Clova v2 가 convertedImageInfo 로 알려주면 그 값 사용,
-  // 없으면 모든 vertex Y 의 max + 약간의 여유로 근사 (텍스트 아래 여백 보정)
+
+  // 이미지 실제 높이 먼저 계산 (행 클러스터 tolerance 산정에 사용)
   let imageHeight = 0;
   const cii = image.convertedImageInfo;
   if (cii && typeof cii.height === "number" && cii.height > 0) {
@@ -315,29 +308,74 @@ async function callClovaOcr(
         if (v.y > imageHeight) imageHeight = v.y;
       }
     }
-    // 텍스트 max Y 는 이미지의 실제 끝이 아니라 글자 끝이므로 살짝 키워 % 계산을 보수적으로
     imageHeight = Math.round(imageHeight * 1.05);
   }
-  return { text: lines.join("\n"), fields, imageHeight };
+
+  // ── Y 클러스터링으로 행 재구성 (Clova 의 lineBreak 가 비뚤어진 사진에서 신뢰 어려움) ─
+  // 같은 행으로 묶을 Y 허용 오차: 이미지 높이의 1.5% (즉 처방전 약 60~80개 행 가정의
+  // 대략 절반). skew 가 있어도 같은 줄의 시작/끝이 이 안에 들어옴.
+  const rowTolerance = Math.max(12, Math.round(imageHeight * 0.012));
+  const rows = clusterFieldsToRows(fields, rowTolerance);
+  const lines = rows.map((r) => r.fields.map((f) => f.inferText).join(" ").trim());
+  return { text: lines.join("\n"), fields, imageHeight, rows };
 }
 
-// 약품의 보험코드 또는 제품명 일부가 포함된 Clova field를 찾아 그 행의 Y%를 계산
+// Y 좌표 기준으로 필드를 행으로 묶음. skew 허용.
+export interface ClovaRow {
+  avgY: number;
+  fields: ClovaField[];
+  text: string;       // 행 내 텍스트를 X 순서로 이어붙인 결과 (검색용)
+}
+
+function fieldYCenter(f: ClovaField): number {
+  const ys = (f.boundingPoly?.vertices ?? []).map((v) => v.y);
+  if (!ys.length) return 0;
+  return (Math.min(...ys) + Math.max(...ys)) / 2;
+}
+
+function fieldXCenter(f: ClovaField): number {
+  const xs = (f.boundingPoly?.vertices ?? []).map((v) => v.x);
+  if (!xs.length) return 0;
+  return (Math.min(...xs) + Math.max(...xs)) / 2;
+}
+
+function clusterFieldsToRows(fields: ClovaField[], tolerance: number): ClovaRow[] {
+  if (!fields.length) return [];
+  const sorted = [...fields].sort((a, b) => fieldYCenter(a) - fieldYCenter(b));
+  const rows: ClovaRow[] = [];
+  let cur: ClovaRow | null = null;
+  for (const f of sorted) {
+    const y = fieldYCenter(f);
+    if (cur && Math.abs(y - cur.avgY) <= tolerance) {
+      cur.fields.push(f);
+      // 누적 평균 갱신
+      cur.avgY = (cur.avgY * (cur.fields.length - 1) + y) / cur.fields.length;
+    } else {
+      cur = { avgY: y, fields: [f], text: "" };
+      rows.push(cur);
+    }
+  }
+  for (const r of rows) {
+    r.fields.sort((a, b) => fieldXCenter(a) - fieldXCenter(b));
+    r.text = r.fields.map((f) => f.inferText).join(" ");
+  }
+  return rows;
+}
+
+// 약품을 행 클러스터에 매칭해 Y% 반환 — 행 단위 텍스트로 검색하므로 OCR 분할에 견고
 function locateRowInClova(
   item: { insuranceCode: string; productName: string },
-  fields: ClovaField[],
+  rows: ClovaRow[],
   imageHeight: number
 ): number | null {
-  if (!fields.length || !imageHeight) return null;
+  if (!rows.length || !imageHeight) return null;
   const code = item.insuranceCode.replace(/\D/g, "");
   const productKey = item.productName.replace(/\s+/g, "").slice(0, 5).toLowerCase();
-  for (const f of fields) {
-    const t = f.inferText.replace(/\s+/g, "").toLowerCase();
+  for (const r of rows) {
+    const t = r.text.replace(/\s+/g, "").toLowerCase();
     const matched = (code.length === 9 && t.includes(code)) || (productKey.length >= 3 && t.includes(productKey));
     if (!matched) continue;
-    const ys = (f.boundingPoly?.vertices ?? []).map((v) => v.y);
-    if (!ys.length) continue;
-    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-    return Math.max(0, Math.min(100, Math.round((cy / imageHeight) * 1000) / 10));
+    return Math.max(0, Math.min(100, Math.round((r.avgY / imageHeight) * 1000) / 10));
   }
   return null;
 }
@@ -434,6 +472,13 @@ async function callGeminiVision(
      총투여량, 총사용량, 단가, 금액, 송금액, 제약회사, 제약사, 보험코드, 청구코드
 2. 각 약품 행에서 헤더에 맞춰 값을 뽑으세요.
 3. 합계/소계, 검색기간, 내원구분/급비구분 같은 메타데이터 행은 제외하세요.
+
+# 사진이 비뚤어진 경우 (중요)
+사진이 카메라로 찍혀 약간 기울거나 원근 왜곡이 있을 수 있습니다.
+- 약품명의 가로선(같은 글자 위/아래 라인)을 행의 기준선으로 삼고, 그 라인을 따라
+  좌→우로 같은 행의 데이터를 모으세요.
+- 절대 이미지 좌표 Y 가 약간 다르더라도, 시각적으로 같은 행처럼 정렬돼있다면 같은 행입니다.
+- 인접 행의 숫자가 같은 행처럼 보일 때 약품명이 어느 라인에 있는지 다시 확인하세요.
 
 # 출력 필드
 - insuranceCode: **9자리 숫자**인 경우만 채움. EMR 내부 약품코드(예: mosapit, ultra5)
