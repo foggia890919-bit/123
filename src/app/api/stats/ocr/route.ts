@@ -231,12 +231,20 @@ async function callClovaOcr(
     if (f.lineBreak !== false) { lines.push(cur.trim()); cur = ""; }
   }
   if (cur) lines.push(cur.trim());
-  // 이미지 높이는 Clova가 직접 안 주므로 모든 vertex Y 값의 max로 근사
+  // 이미지 실제 높이 — Clova v2 가 convertedImageInfo 로 알려주면 그 값 사용,
+  // 없으면 모든 vertex Y 의 max + 약간의 여유로 근사 (텍스트 아래 여백 보정)
   let imageHeight = 0;
-  for (const f of fields) {
-    for (const v of f.boundingPoly?.vertices ?? []) {
-      if (v.y > imageHeight) imageHeight = v.y;
+  const cii = image.convertedImageInfo;
+  if (cii && typeof cii.height === "number" && cii.height > 0) {
+    imageHeight = cii.height;
+  } else {
+    for (const f of fields) {
+      for (const v of f.boundingPoly?.vertices ?? []) {
+        if (v.y > imageHeight) imageHeight = v.y;
+      }
     }
+    // 텍스트 max Y 는 이미지의 실제 끝이 아니라 글자 끝이므로 살짝 키워 % 계산을 보수적으로
+    imageHeight = Math.round(imageHeight * 1.05);
   }
   return { text: lines.join("\n"), fields, imageHeight };
 }
