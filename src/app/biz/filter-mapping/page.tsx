@@ -2,11 +2,12 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { BizLayout } from "@/app/biz/page";
-import { Plus, Pencil, Trash2, Search, ToggleLeft, ToggleRight, Loader2, X, ChevronDown } from "lucide-react";
+import { Plus, Pencil, Trash2, Search, ToggleLeft, ToggleRight, Loader2, X, ChevronDown, Upload, Download, CheckCircle, AlertCircle } from "lucide-react";
+import * as XLSX from "xlsx";
+import { normalizeCompanyName } from "@/lib/company-name";
 
 interface FilterMapping {
   id: string;
-  clientName: string;
   companyName: string;
   submissionEntity: string;
   managerName: string | null;
@@ -16,9 +17,8 @@ interface FilterMapping {
   createdAt: string;
 }
 
-interface ClientSuggestion { clientName: string; bizNumber: string }
 interface CompanySuggestion { companyName: string }
-interface DealerSuggestion { clientName: string; bizNumber: string; dealerType: string }
+interface DealerSuggestion { clientName: string; bizNumber: string; dealerType: string; managerName?: string | null; managerPhone?: string | null; memo?: string | null }
 
 const DEALER_LABEL: Record<string, string> = {
   CORPORATION: "법인",
@@ -29,8 +29,6 @@ const DEALER_LABEL: Record<string, string> = {
 };
 
 const EMPTY_FORM = {
-  clientName: "",
-  bizNumber: "",
   companyName: "",
   submissionEntity: "",
   managerName: "",
@@ -145,8 +143,38 @@ function Autocomplete<T>({
   );
 }
 
-// ── 메인 페이지 ───────────────────────────────────────────────
-export default function FilterMappingPage() {
+// ── 엑셀 템플릿 다운로드 (세로형식, 요율표 기반 전체 제약사 포함) ─────
+async function downloadTemplate() {
+  // 요율표 기반 전체 제약사 목록 조회
+  let companies: string[] = [];
+  try {
+    const res = await fetch("/api/filter-mapping/suggestions?type=company&all=true");
+    const data = await res.json();
+    companies = Array.isArray(data) ? data.map((d: { companyName: string }) => d.companyName) : [];
+  } catch {
+    companies = [];
+  }
+
+  // 헤더 행 + 데이터 행 (제약사 한 줄씩)
+  const rows: (string | null)[][] = [
+    ["상위법인", "담당자명", "담당자연락처", "제약사"],
+    ...companies.map((c) => [null, null, null, c]),
+  ];
+  if (companies.length === 0) {
+    rows.push([null, null, null, "에이치엘비제약(주)"]);
+    rows.push([null, null, null, "(주)메디카코리아"]);
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws["!cols"] = [16, 10, 14, 20].map((w) => ({ wch: w }));
+  ws["!freeze"] = { xSplit: 0, ySplit: 1 }; // 첫 행 고정
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "매핑");
+  XLSX.writeFile(wb, "필터매핑_템플릿.xlsx");
+}
+
+// ── 메인 컨텐츠 (탭 임베드용 named export) ───────────────────
+export function FilterMappingContent() {
   const [mappings, setMappings] = useState<FilterMapping[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -156,6 +184,15 @@ export default function FilterMappingPage() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [bulkUploading, setBulkUploading] = useState(false);
+  const [templateDownloading, setTemplateDownloading] = useState(false);
+  const [bulkResult, setBulkResult] = useState<{ created: number; updated: number; errors: string[] } | null>(null);
+  const bulkRef = useRef<HTMLInputElement>(null);
+
+  async function handleDownloadTemplate() {
+    setTemplateDownloading(true);
+    try { await downloadTemplate(); } finally { setTemplateDownloading(false); }
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -169,6 +206,44 @@ export default function FilterMappingPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  async function handleBulkUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setBulkUploading(true);
+    setBulkResult(null);
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf);
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const raw: string[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+      const [, ...dataRows] = raw; // 헤더 행 제외
+
+      // 세로 형식: A=상위법인, B=담당자명, C=연락처, D=제약사
+      const rows = dataRows
+        .filter((r) => String(r[0] ?? "").trim() && String(r[3] ?? "").trim())
+        .map((r) => ({
+          submissionEntity: String(r[0]).trim(),
+          managerName: String(r[1] ?? "").trim() || undefined,
+          managerPhone: String(r[2] ?? "").trim() || undefined,
+          companyName: normalizeCompanyName(String(r[3]).trim()),
+        }))
+        .filter((r) => r.companyName);
+
+      if (rows.length === 0) { alert("유효한 행이 없어요. A열(상위법인)과 D열(제약사)을 확인해주세요."); return; }
+      const res = await fetch("/api/filter-mapping/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(rows),
+      });
+      const result = await res.json();
+      setBulkResult(result);
+      load();
+    } finally {
+      setBulkUploading(false);
+    }
+  }
+
   function openAdd() {
     setForm(EMPTY_FORM);
     setEditTarget(null);
@@ -178,8 +253,6 @@ export default function FilterMappingPage() {
 
   function openEdit(m: FilterMapping) {
     setForm({
-      clientName: m.clientName,
-      bizNumber: "",
       companyName: m.companyName,
       submissionEntity: m.submissionEntity,
       managerName: m.managerName ?? "",
@@ -193,15 +266,16 @@ export default function FilterMappingPage() {
 
   async function handleSave() {
     setError(null);
-    if (!form.clientName || !form.companyName || !form.submissionEntity) {
-      setError("거래처명, 제약사명, 제출처는 필수입니다.");
+    if (!form.companyName || !form.submissionEntity) {
+      setError("제약사명과 제출처는 필수입니다.");
       return;
     }
     setSaving(true);
     try {
       const method = modal === "edit" ? "PATCH" : "POST";
-      const { bizNumber: _, ...rest } = form;
-      const body = modal === "edit" ? { id: editTarget!.id, ...rest } : rest;
+      const body = modal === "edit"
+        ? { id: editTarget!.id, submissionEntity: form.submissionEntity, managerName: form.managerName, managerPhone: form.managerPhone, notes: form.notes }
+        : { companyName: form.companyName, submissionEntity: form.submissionEntity, managerName: form.managerName, managerPhone: form.managerPhone, notes: form.notes };
       const res = await fetch("/api/filter-mapping", {
         method,
         headers: { "Content-Type": "application/json" },
@@ -226,32 +300,54 @@ export default function FilterMappingPage() {
   }
 
   async function handleDelete(m: FilterMapping) {
-    if (!confirm(`"${m.clientName} × ${m.companyName}" 매핑을 삭제할까요?`)) return;
+    if (!confirm(`"${m.companyName}" 매핑을 삭제할까요?`)) return;
     await fetch(`/api/filter-mapping?id=${m.id}`, { method: "DELETE" });
     load();
   }
 
   const filtered = mappings.filter((m) => {
     const q = search.toLowerCase();
-    return !q || m.clientName.toLowerCase().includes(q) || m.companyName.toLowerCase().includes(q) || m.submissionEntity.toLowerCase().includes(q);
+    return !q || m.companyName.toLowerCase().includes(q) || m.submissionEntity.toLowerCase().includes(q);
   });
 
   return (
-    <BizLayout>
-      <div className="space-y-5">
+    <><div className="space-y-5">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-gray-900">필터링 매핑 관리</h1>
-            <p className="text-sm text-gray-500 mt-0.5">거래처 × 제약사별 제출처 및 담당자 설정</p>
+            <p className="text-sm text-gray-500 mt-0.5">제약사별 제출처(상위법인) 및 담당자 설정</p>
           </div>
-          <button
-            onClick={openAdd}
-            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            매핑 추가
-          </button>
+          <div className="flex items-center gap-2">
+            <input ref={bulkRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleBulkUpload} />
+            <button onClick={handleDownloadTemplate} disabled={templateDownloading}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50">
+              {templateDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              템플릿
+            </button>
+            <button onClick={() => bulkRef.current?.click()} disabled={bulkUploading}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50">
+              {bulkUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              엑셀 업로드
+            </button>
+            <button onClick={openAdd}
+              className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors">
+              <Plus className="w-4 h-4" />매핑 추가
+            </button>
+          </div>
         </div>
+
+        {bulkResult && (
+          <div className={`flex items-start gap-2 text-sm rounded-lg px-4 py-3 ${bulkResult.errors.length > 0 ? "bg-yellow-50 border border-yellow-200" : "bg-green-50 border border-green-200"}`}>
+            {bulkResult.errors.length === 0
+              ? <CheckCircle className="w-4 h-4 text-green-600 shrink-0 mt-0.5" />
+              : <AlertCircle className="w-4 h-4 text-yellow-600 shrink-0 mt-0.5" />}
+            <div>
+              <p className="font-medium text-gray-800">신규 {bulkResult.created}건 등록 · 수정 {bulkResult.updated}건</p>
+              {bulkResult.errors.map((e, i) => <p key={i} className="text-xs text-red-600 mt-0.5">{e}</p>)}
+            </div>
+            <button onClick={() => setBulkResult(null)} className="ml-auto text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
+          </div>
+        )}
 
         <div className="flex items-center gap-3">
           <div className="relative flex-1 max-w-sm">
@@ -259,7 +355,7 @@ export default function FilterMappingPage() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="거래처명, 제약사명, 제출처 검색"
+              placeholder="제약사명, 제출처 검색"
               className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -288,7 +384,6 @@ export default function FilterMappingPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
-                    <Th>병의원</Th>
                     <Th>제약사명</Th>
                     <Th>제출처(상위법인)</Th>
                     <Th>담당자</Th>
@@ -300,8 +395,7 @@ export default function FilterMappingPage() {
                 <tbody className="divide-y divide-gray-50">
                   {filtered.map((m) => (
                     <tr key={m.id} className={`hover:bg-gray-50 transition-colors ${!m.active ? "opacity-50" : ""}`}>
-                      <td className="px-4 py-3 font-medium text-gray-900">{m.clientName}</td>
-                      <td className="px-4 py-3 text-gray-700">{m.companyName}</td>
+                      <td className="px-4 py-3 font-medium text-gray-900">{m.companyName}</td>
                       <td className="px-4 py-3 text-gray-700">{m.submissionEntity}</td>
                       <td className="px-4 py-3 text-gray-600">{m.managerName || "-"}</td>
                       <td className="px-4 py-3 text-gray-600">{m.managerPhone || "-"}</td>
@@ -351,29 +445,6 @@ export default function FilterMappingPage() {
             <div className="px-6 py-5 space-y-4">
               {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
 
-              {/* 병의원 — 병·의원 등록/관리에서 등록한 거래처 */}
-              <Field label="병의원 *">
-                {modal === "edit" ? (
-                  <input value={form.clientName} disabled
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-500" />
-                ) : (
-                  <>
-                    <Autocomplete<ClientSuggestion>
-                      value={form.clientName}
-                      onChange={(v) => setForm((f) => ({ ...f, clientName: v, bizNumber: "" }))}
-                      onSelect={(item) => setForm((f) => ({ ...f, clientName: item.clientName, bizNumber: item.bizNumber }))}
-                      fetchUrl={(q) => `/api/filter-mapping/suggestions?type=client&q=${encodeURIComponent(q)}`}
-                      getLabel={(item) => item.clientName}
-                      getSub={(item) => item.bizNumber}
-                      placeholder="병의원명 또는 사업자번호 입력"
-                    />
-                    {form.bizNumber && (
-                      <p className="text-xs text-blue-600 mt-1">사업자번호: {form.bizNumber}</p>
-                    )}
-                  </>
-                )}
-              </Field>
-
               {/* 제약사명 */}
               <Field label="제약사명 *">
                 {modal === "edit" ? (
@@ -395,7 +466,13 @@ export default function FilterMappingPage() {
                 <Autocomplete<DealerSuggestion>
                   value={form.submissionEntity}
                   onChange={(v) => setForm((f) => ({ ...f, submissionEntity: v }))}
-                  onSelect={(item) => setForm((f) => ({ ...f, submissionEntity: item.clientName }))}
+                  onSelect={(item) => setForm((f) => ({
+                    ...f,
+                    submissionEntity: item.clientName,
+                    managerName: item.managerName ?? f.managerName,
+                    managerPhone: item.managerPhone ?? f.managerPhone,
+                    notes: item.memo ?? f.notes,
+                  }))}
                   fetchUrl={(q) => `/api/filter-mapping/suggestions?type=dealer&q=${encodeURIComponent(q)}`}
                   getLabel={(item) => item.clientName}
                   getSub={(item) => DEALER_LABEL[item.dealerType] ?? item.dealerType}
@@ -448,8 +525,12 @@ export default function FilterMappingPage() {
           </div>
         </div>
       )}
-    </BizLayout>
+    </>
   );
+}
+
+export default function FilterMappingPage() {
+  return <BizLayout><FilterMappingContent /></BizLayout>;
 }
 
 function Th({ children }: { children: React.ReactNode }) {

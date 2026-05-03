@@ -58,7 +58,7 @@ CREATE INDEX IF NOT EXISTS "ScrapeJob_siteKey_startedAt_idx"
 -- 4. Seed wholesale sites (3 active: ibjp, inchun, family)
 INSERT INTO "WholesaleSite" ("key", "name", "baseUrl", "loginUrl", "active", "createdAt", "updatedAt")
 VALUES
-  ('ibjp',   '이비젠팜',   'https://ibjp.co.kr',           'https://ibjp.co.kr/login',                                         true, NOW(), NOW()),
+  ('ibjp',   '백제약품',   'https://ibjp.co.kr',           'https://ibjp.co.kr/dist/login',                                    true, NOW(), NOW()),
   ('inchun', '인천약품',   'https://inchunpharm.com',      'https://inchunpharm.com/Homepage/contents/login/login.asp',        true, NOW(), NOW()),
   ('family', '훼밀리팜',   'http://family-pharm.co.kr',    'http://family-pharm.co.kr/member/',                                true, NOW(), NOW())
 ON CONFLICT ("key") DO NOTHING;

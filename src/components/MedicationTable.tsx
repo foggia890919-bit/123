@@ -163,7 +163,7 @@ function SettlementBadge({ med }: { med: MedicationItem }) {
 }
 
 export default function MedicationTable({ medications, loading, userId, showCategoryA, showIngredientName, showCategoryB, showRate, showBioStatus, showPrice, showOriginalDrug, showInsuranceCode, showNotes, showStock }: Props) {
-  const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null } | null>(null);
+  const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null; productName?: string } | null>(null);
   const [stockModal, setStockModal] = useState<{ insuranceCode: string; productName: string } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
@@ -370,7 +370,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                             + 제안서
                           </button>
                           <button type="button"
-                            onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.ingredientCode ?? null })}
+                            onClick={() => setIngredientModal({ name: med.ingredientName, categoryB: med.ingredientCode ?? null, productName: med.productName })}
                             className="text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 active:bg-blue-200 border border-blue-200 px-2.5 py-1 rounded-full whitespace-nowrap transition-colors">
                             동일성분
                           </button>
@@ -523,6 +523,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
         <SameIngredientModal
           ingredientName={ingredientModal.name}
           ingredientCode={ingredientModal.categoryB ?? undefined}
+          sourceProductName={ingredientModal.productName}
           userId={userId}
           proposals={proposals}
           onProposalAdded={(proposalId, added) => setProposals((prev) => prev.map((p) => p.id === proposalId ? { ...p, _count: { items: p._count.items + added } } : p))}

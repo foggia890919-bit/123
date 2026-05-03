@@ -12,17 +12,15 @@ export async function GET(req: NextRequest) {
   if (!bizOrAdmin(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
   const { searchParams } = req.nextUrl;
-  const clientName = searchParams.get("clientName");
   const companyName = searchParams.get("companyName");
   const active = searchParams.get("active");
 
   const mappings = await prisma.filterMapping.findMany({
     where: {
-      ...(clientName ? { clientName: { contains: clientName } } : {}),
       ...(companyName ? { companyName: { contains: companyName } } : {}),
       ...(active !== null ? { active: active === "true" } : {}),
     },
-    orderBy: [{ clientName: "asc" }, { companyName: "asc" }],
+    orderBy: { companyName: "asc" },
   });
 
   return NextResponse.json(mappings);
@@ -33,18 +31,17 @@ export async function POST(req: NextRequest) {
   if (isNextResponse(user)) return user;
   if (!bizOrAdmin(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
-  const { clientName, companyName, submissionEntity, managerName, managerPhone, notes } =
+  const { companyName, submissionEntity, managerName, managerPhone, notes } =
     await req.json();
 
-  if (!clientName || !companyName || !submissionEntity) {
-    return NextResponse.json({ error: "거래처명, 제약사명, 제출처는 필수입니다." }, { status: 400 });
+  if (!companyName || !submissionEntity) {
+    return NextResponse.json({ error: "제약사명과 제출처는 필수입니다." }, { status: 400 });
   }
 
   const mapping = await prisma.filterMapping.upsert({
-    where: { clientName_companyName: { clientName, companyName } },
+    where: { companyName },
     create: {
       id: crypto.randomUUID(),
-      clientName,
       companyName,
       submissionEntity,
       managerName: managerName || null,

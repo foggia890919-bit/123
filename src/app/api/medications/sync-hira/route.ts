@@ -104,12 +104,15 @@ async function processPage(pageItems: HiraDrug[]): Promise<number> {
 
   const codes = drugs.map((d) => d.insuranceCode).filter(Boolean) as string[];
   const existing = codes.length > 0
-    ? await withDbRetry(() => prisma.medication.findMany({
-        where: { insuranceCode: { in: codes } },
-        select: { id: true, insuranceCode: true },
-      }))
+    ? await withDbRetry(() => prisma.$queryRaw<{ id: string; matched: string }[]>`
+        SELECT m.id, TRIM(code) AS matched
+        FROM "Medication" m,
+             UNNEST(string_to_array(m."insuranceCode", ',')) AS code
+        WHERE m."insuranceCode" IS NOT NULL
+          AND TRIM(code) = ANY(${codes})
+      `)
     : [];
-  const existingMap = new Map(existing.map((e) => [e.insuranceCode, e]));
+  const existingMap = new Map(existing.map((e) => [e.matched, e]));
 
   const toCreate: typeof drugs = [];
   const toUpdate: { id: string; data: Partial<ReturnType<typeof mapDrug>> }[] = [];

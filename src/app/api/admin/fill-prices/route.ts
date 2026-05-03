@@ -141,28 +141,34 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "HIRA에서 가격 데이터를 가져오지 못했습니다.", scanned, companyErrors });
     }
 
-    // DB에서 insuranceCode가 mdsCd와 일치하는 약품 전체 조회 (기존 약가도 갱신)
+    // DB에서 보험코드 매칭 — comma-separated insuranceCode도 처리 (UNNEST)
     const codes = Array.from(priceMap.keys());
-    const targets = await prisma.medication.findMany({
-      where: { insuranceCode: { in: codes } },
-      select: { id: true, insuranceCode: true, price: true },
-    });
+    const targets = await prisma.$queryRaw<{ id: string; matched: string; price: number | null }[]>`
+      SELECT m.id, TRIM(code) AS matched, m.price
+      FROM "Medication" m,
+           UNNEST(string_to_array(m."insuranceCode", ',')) AS code
+      WHERE m."insuranceCode" IS NOT NULL
+        AND TRIM(code) = ANY(${codes})
+    `;
 
-    // 배치 업데이트
+    // 중복 제거 후 가격 변경된 것만 업데이트
+    const updates = new Map<string, number>();
+    for (const t of targets) {
+      const price = priceMap.get(t.matched);
+      if (price && t.price !== price) updates.set(t.id, price);
+    }
+
     const CHUNK = 200;
-    for (let i = 0; i < targets.length; i += CHUNK) {
-      const slice = targets.slice(i, i + CHUNK);
+    const ids = Array.from(updates.keys());
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const slice = ids.slice(i, i + CHUNK);
       const tuples: string[] = [];
       const params: (string | number)[] = [];
       let p = 1;
-      for (const t of slice) {
-        const price = priceMap.get(t.insuranceCode!);
-        if (!price) continue;
-        if (t.price === price) continue; // 동일하면 스킵
+      for (const id of slice) {
         tuples.push(`($${p++}::text, $${p++}::int)`);
-        params.push(t.id, price);
+        params.push(id, updates.get(id)!);
       }
-      if (tuples.length === 0) continue;
       await prisma.$executeRawUnsafe(`
         UPDATE "Medication" AS m
         SET "price" = v.price, "updatedAt" = NOW()

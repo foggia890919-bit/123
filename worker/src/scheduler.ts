@@ -1,8 +1,9 @@
 import cron from "node-cron";
-import { ALL_ADAPTERS } from "../../src/scrapers/adapters/index.ts";
+import { ALL_ADAPTERS, DISABLED_SITES } from "../../src/scrapers/adapters/index.ts";
 import type { Credentials, WholesaleAdapter } from "../../src/scrapers/core/types.ts";
 import {
   hasDb,
+  ensureSite,
   loadExcelMedicationCodes,
   saveSnapshots,
   startJob,
@@ -45,7 +46,13 @@ export async function runScheduledJob(
     codes = codes.slice(0, opts.limit);
   }
 
-  let sitesWithCreds = Object.values(ALL_ADAPTERS).filter(a => deps.getCreds(a.key));
+  let sitesWithCreds = Object.values(ALL_ADAPTERS).filter(a => {
+    if (DISABLED_SITES.has(a.key)) {
+      console.warn(`[crawler] ${a.key} disabled — login popup issue`);
+      return false;
+    }
+    return deps.getCreds(a.key) !== null;
+  });
   if (opts.sites && opts.sites.length > 0) {
     const want = new Set(opts.sites);
     sitesWithCreds = sitesWithCreds.filter(a => want.has(a.key));
@@ -64,6 +71,13 @@ export async function runScheduledJob(
     `[scheduler] starting batch: ${codes.length} codes × ${sitesWithCreds.length} sites = ${codes.length * sitesWithCreds.length} fetches`
   );
   const startedAt = Date.now();
+
+  // Ensure WholesaleSite rows exist before creating ScrapeJob rows (FK guard).
+  for (const site of sitesWithCreds) {
+    await ensureSite(site).catch(err =>
+      console.error(`[scheduler] ensureSite failed for ${site.key}:`, (err as Error).message)
+    );
+  }
 
   const jobMode = opts.mode ?? "scheduled";
   // One ScrapeJob row per site so we can see per-site progress later

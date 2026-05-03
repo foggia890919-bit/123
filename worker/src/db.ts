@@ -1,6 +1,6 @@
 import { Pool } from "pg";
 import { createId } from "@paralleldrive/cuid2";
-import type { InventoryItem } from "../../src/scrapers/core/types.ts";
+import type { InventoryItem, WholesaleAdapter } from "../../src/scrapers/core/types.ts";
 
 // Worker uses pg directly (no Prisma). All schemas mirror prisma/schema.prisma.
 // IDs are generated client-side as cuid2 to match Prisma's @default(cuid()) behavior
@@ -25,6 +25,19 @@ function getPool(): Pool {
     });
   }
   return pool;
+}
+
+// Ensure the WholesaleSite row exists before any job or snapshot is written.
+// Without this, the FK constraint on InventorySnapshot.siteKey → WholesaleSite.key
+// causes every INSERT to fail when the DB has just been provisioned.
+export async function ensureSite(adapter: WholesaleAdapter): Promise<void> {
+  await getPool().query(
+    `INSERT INTO "WholesaleSite" ("key","name","baseUrl","loginUrl","active","createdAt","updatedAt")
+     VALUES ($1,$2,$3,$4,true,NOW(),NOW())
+     ON CONFLICT ("key") DO UPDATE
+       SET "name"=$2, "baseUrl"=$3, "loginUrl"=$4, "updatedAt"=NOW()`,
+    [adapter.key, adapter.name, adapter.baseUrl, adapter.loginUrl]
+  );
 }
 
 export interface ExcelMedRow {
@@ -83,7 +96,8 @@ export async function saveSnapshots(rows: SnapshotInsert[]): Promise<number> {
       }
       const sql = `INSERT INTO "InventorySnapshot"
         ("id","siteKey","insuranceCode","productName","spec","manufacturer","unitPrice","stock","raw","scrapedAt")
-        VALUES ${placeholders.join(",")}`;
+        VALUES ${placeholders.join(",")}
+        ON CONFLICT ("siteKey","insuranceCode","scrapedAt") DO NOTHING`;
       const res = await client.query(sql, values);
       written += res.rowCount ?? slice.length;
     }
@@ -100,6 +114,17 @@ export interface JobStart {
 }
 
 export async function startJob({ siteKey, mode, totalCodes }: JobStart): Promise<string> {
+  // Ensure WholesaleSite row exists so ScrapeJob.siteKey never violates the FK.
+  // We look up adapter metadata from the ALL_ADAPTERS registry.
+  // (Inline import to avoid circular deps — db.ts has no adapter dependency otherwise.)
+  try {
+    const { ALL_ADAPTERS } = await import("../../src/scrapers/adapters/index.ts");
+    const adapter = ALL_ADAPTERS[siteKey];
+    if (adapter) await ensureSite(adapter);
+  } catch (err) {
+    console.error(`[db] ensureSite failed for ${siteKey}:`, (err as Error).message);
+  }
+
   const id = createId();
   await getPool().query(
     `INSERT INTO "ScrapeJob" ("id","siteKey","mode","totalCodes","doneCodes","failedCodes","startedAt")

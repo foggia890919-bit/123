@@ -9,28 +9,61 @@ export async function GET(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
   const all = req.nextUrl.searchParams.get("all") === "true";
-  // Exclude heavy bizDocument from list responses — download via /api/files/filter-request/[id]
   const select = {
     id: true, userId: true, userName: true, clientName: true, bizNumber: true,
     bizFileName: true, bizFileKey: true, companyName: true, status: true,
     replyText: true, repliedAt: true, createdAt: true, updatedAt: true,
     requestType: true, mappingId: true, respondedAt: true, respondedResult: true,
     alimtalkSentAt: true, salesNotifiedAt: true,
+    upperCorpName: true, lowerCorpName: true,
+    mapping: { select: { managerName: true, managerPhone: true } },
   } as const;
-  if (all) {
-    if (user.role !== "ADMIN") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
-    const requests = await prisma.filterRequest.findMany({
-      orderBy: { createdAt: "desc" },
-      select: { ...select, user: { select: { name: true, email: true } } },
-    });
-    return NextResponse.json(requests.map((r) => ({ ...r, bizDocument: null, hasBizDocument: !!r.bizFileName })));
+
+  const rawRequests = all
+    ? (user.role !== "ADMIN"
+        ? null
+        : await prisma.filterRequest.findMany({
+            orderBy: { createdAt: "desc" },
+            select: { ...select, user: { select: { name: true, email: true } } },
+          }))
+    : await prisma.filterRequest.findMany({
+        where: { userId: user.id },
+        orderBy: { createdAt: "desc" },
+        select: { ...select, user: { select: { name: true, email: true } } },
+      });
+
+  if (rawRequests === null) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+
+  // 상위법인 연락처를 UserClient에서 실시간 조회 (FilterMapping 복사본보다 우선)
+  const corpNames = [...new Set(rawRequests.map((r) => r.upperCorpName).filter(Boolean))] as string[];
+  let livePhoneMap = new Map<string, { managerName: string | null; managerPhone: string | null }>();
+  if (corpNames.length > 0) {
+    try {
+      const dealers = await prisma.userClient.findMany({
+        where: { clientName: { in: corpNames }, dealerType: { not: null } },
+        select: { clientName: true, managerName: true, managerPhone: true },
+        distinct: ["clientName"],
+      });
+      livePhoneMap = new Map(dealers.map((d) => [d.clientName, { managerName: d.managerName, managerPhone: d.managerPhone }]));
+    } catch {
+      // managerPhone 컬럼 미존재 시 fallback
+    }
   }
-  const requests = await prisma.filterRequest.findMany({
-    where: { userId: user.id },
-    orderBy: { createdAt: "desc" },
-    select: { ...select, user: { select: { name: true, email: true } } },
+
+  const requests = rawRequests.map((r) => {
+    const live = r.upperCorpName ? livePhoneMap.get(r.upperCorpName) : null;
+    return {
+      ...r,
+      bizDocument: null,
+      hasBizDocument: !!r.bizFileName,
+      mapping: {
+        managerName: live?.managerName ?? r.mapping?.managerName ?? null,
+        managerPhone: live?.managerPhone ?? r.mapping?.managerPhone ?? null,
+      },
+    };
   });
-  return NextResponse.json(requests.map((r) => ({ ...r, bizDocument: null, hasBizDocument: !!r.bizFileName })));
+
+  return NextResponse.json(requests);
 }
 
 export async function POST(req: NextRequest) {
@@ -49,9 +82,9 @@ export async function POST(req: NextRequest) {
   const { fileKey: bizFileKey, fileData: bizDocumentFallback } =
     await persistDataUri(BUCKETS.filterRequestBiz, user.id, bizDocument);
 
-  // Lookup FilterMapping entries for this client × each company
+  // Lookup FilterMapping entries by company name (제약사 → 상위법인)
   const mappings = await prisma.filterMapping.findMany({
-    where: { clientName, active: true },
+    where: { companyName: { in: companies as string[] }, active: true },
   });
   const mappingByCompany = new Map(mappings.map((m) => [m.companyName, m]));
 
@@ -74,6 +107,7 @@ export async function POST(req: NextRequest) {
       requestType: requestType || "신규",
       mappingId: mapping?.id ?? null,
       responseToken,
+      upperCorpName: mapping?.submissionEntity ?? null,
       updatedAt: now,
     };
   });
@@ -101,6 +135,7 @@ export async function POST(req: NextRequest) {
                 "#{거래처명}": clientName,
                 "#{제약사명}": r.companyName,
                 "#{영업사원}": user.name ?? user.email ?? "",
+                "#{요청유형}": r.requestType || "신규",
               },
               buttons: [
                 {
@@ -128,16 +163,112 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
-  const guard = await requireAdmin();
-  if (isNextResponse(guard)) return guard;
-  const { id, status, replyText } = await req.json();
+  const user = await requireSession();
+  if (isNextResponse(user)) return user;
+
+  const { id, status, replyText, upperCorpName, lowerCorpName, respondedResult } = await req.json();
   if (!id) return NextResponse.json({ error: "id 필수" }, { status: 400 });
+
+  const record = await prisma.filterRequest.findUnique({
+    where: { id },
+    select: { userId: true, clientName: true, companyName: true, lowerCorpName: true },
+  });
+  if (!record) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+
   const data: Prisma.FilterRequestUpdateInput = { updatedAt: new Date() };
-  if (status !== undefined) data.status = status;
-  if (replyText !== undefined) {
-    data.replyText = replyText || null;
-    data.repliedAt = new Date();
+
+  if (user.role === "ADMIN") {
+    if (status !== undefined) data.status = status;
+    if (replyText !== undefined) { data.replyText = replyText || null; data.repliedAt = new Date(); }
+    if (respondedResult !== undefined) applyResult(data, respondedResult);
+  } else if (user.role === "BIZ") {
+    if (status !== undefined || replyText !== undefined) {
+      return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+    }
+    // BIZ는 모든 요청에 결과 설정 가능
+    if (respondedResult !== undefined) applyResult(data, respondedResult);
+  } else {
+    // 일반 사용자: 본인 요청에만 corp 필드 수정 가능
+    if (status !== undefined || replyText !== undefined || respondedResult !== undefined) {
+      return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+    }
+    if (record.userId !== user.id) {
+      return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+    }
   }
+
+  if (upperCorpName !== undefined) data.upperCorpName = upperCorpName ?? null;
+  if (lowerCorpName !== undefined) data.lowerCorpName = lowerCorpName ?? null;
+
   const updated = await prisma.filterRequest.update({ where: { id }, data });
+
+  // BIZ/ADMIN이 결과를 설정할 때 영업사원 + 하위법인에 알림
+  if ((user.role === "BIZ" || user.role === "ADMIN") && respondedResult) {
+    const effectiveLowerCorp = (lowerCorpName !== undefined ? lowerCorpName : record.lowerCorpName) as string | null;
+    notifyResultAsync({
+      clientName: record.clientName,
+      companyName: record.companyName,
+      respondedResult,
+      salesRepUserId: record.userId,
+      lowerCorpName: effectiveLowerCorp,
+    }).catch(() => {});
+  }
+
   return NextResponse.json(updated);
+}
+
+function applyResult(data: Prisma.FilterRequestUpdateInput, result: string | null) {
+  data.respondedResult = result ?? null;
+  if (result) {
+    data.status = result === "가능" ? "APPROVED" : "REJECTED";
+    data.respondedAt = new Date();
+  } else {
+    data.status = "PENDING";
+    data.respondedAt = null;
+  }
+}
+
+async function notifyResultAsync({
+  clientName, companyName, respondedResult, salesRepUserId, lowerCorpName,
+}: {
+  clientName: string; companyName: string; respondedResult: string;
+  salesRepUserId: string; lowerCorpName: string | null;
+}) {
+  const pfId = process.env.KAKAO_PF_ID;
+  const templateId = process.env.KAKAO_TEMPLATE_FILTER_RESULT;
+  if (!pfId || !templateId) return;
+
+  const targets: string[] = [];
+
+  // 영업사원 전화번호
+  const salesRep = await prisma.user.findUnique({
+    where: { id: salesRepUserId },
+    select: { phone: true },
+  });
+  if (salesRep?.phone) targets.push(salesRep.phone);
+
+  // 하위법인 담당자 전화번호
+  if (lowerCorpName) {
+    const dealer = await prisma.userClient.findFirst({
+      where: { clientName: lowerCorpName, dealerType: { not: null } },
+      select: { managerPhone: true },
+    });
+    if (dealer?.managerPhone) targets.push(dealer.managerPhone);
+  }
+
+  const fallbackText = `[KMD] 필터링 결과 안내\n거래처: ${clientName}\n제약사: ${companyName}\n결과: ${respondedResult}`;
+  await Promise.allSettled(
+    targets.map((phone) =>
+      sendAlimtalk(phone, {
+        pfId,
+        templateId,
+        variables: {
+          "#{거래처명}": clientName,
+          "#{제약사명}": companyName,
+          "#{결과}": respondedResult,
+        },
+        buttons: [],
+      }, fallbackText)
+    )
+  );
 }

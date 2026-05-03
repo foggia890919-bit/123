@@ -3,7 +3,7 @@
 import { useState, useEffect, Fragment } from "react";
 import { X, RefreshCw, ChevronUp, ChevronDown, ChevronsUpDown, Loader2, Plus, FileText } from "lucide-react";
 import { formatPrice } from "@/lib/utils";
-import type { MedicationItem } from "@/types";
+import type { MedicationItem, IngredientMatchLevel } from "@/types";
 
 interface Proposal { id: string; title: string; _count: { items: number } }
 
@@ -22,6 +22,7 @@ interface SelectContext {
 interface Props {
   ingredientName: string;
   ingredientCode?: string;
+  sourceProductName?: string;
   userId?: string;
   proposals?: Proposal[];
   onProposalAdded?: (proposalId: string, added: number) => void;
@@ -53,12 +54,27 @@ function splitProductName(name: string): [string, string | null, string | null] 
     ingredient = parenMatch[1];
     rest = rest.slice(0, rest.lastIndexOf("(")).trim();
   }
-  const doseMatch = rest.match(/^(.+?)\s*(\d[\d.,/]*\s*(?:mg|mcg|μg|ug|g|ml|mL|IU|iu|%|mEq)[^\s]*)/i);
+  // Latin 단위 + 한국어 단위(밀리그람/마이크로그람/그람/밀리리터 등) 모두 매칭
+  const UNIT = "(?:mg|mcg|μg|ug|g|ml|mL|IU|iu|%|mEq|밀리그람|마이크로그람|그람|밀리리터|리터|유닛|단위)";
+  const doseMatch = rest.match(new RegExp(`^(.+?)\\s*(\\d[\\d.,/]*\\s*${UNIT}[^\\s]*)`, "i"));
   if (doseMatch) return [doseMatch[1].trim(), doseMatch[2].trim(), ingredient];
   return [rest, null, ingredient];
 }
 
-export default function SameIngredientModal({ ingredientName, ingredientCode, userId, proposals: externalProposals, onProposalAdded, onClose, initialCols, replaceContext, selectContext }: Props) {
+// 한국어 단위 → Latin 정규화 후 소문자·공백 제거 (용량 비교용)
+function normalizeDose(dose: string): string {
+  return dose
+    .replace(/밀리그람/gi, "mg")
+    .replace(/마이크로그람/gi, "mcg")
+    .replace(/그람/gi, "g")
+    .replace(/밀리리터/gi, "ml")
+    .replace(/리터/gi, "l")
+    .replace(/유닛|단위/gi, "iu")
+    .toLowerCase()
+    .replace(/\s/g, "");
+}
+
+export default function SameIngredientModal({ ingredientName, ingredientCode, sourceProductName, userId, proposals: externalProposals, onProposalAdded, onClose, initialCols, replaceContext, selectContext }: Props) {
   const [medications, setMedications] = useState<MedicationItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -77,6 +93,9 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
   const [dropdown, setDropdown] = useState<DropdownState | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [localProposals, setLocalProposals] = useState<Proposal[]>(externalProposals ?? []);
+  // 기본 = exact(용량까지 정확 일치)만 표시. 토글로 하위 단계 노출.
+  const [showOtherDose, setShowOtherDose] = useState(false);
+  const [showOtherForm, setShowOtherForm] = useState(false);
 
   useEffect(() => { setLocalProposals(externalProposals ?? []); }, [externalProposals]);
 
@@ -116,8 +135,10 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
   useEffect(() => {
     if (!ingredientCode && !ingredientName) { setLoading(false); return; }
     const uid = userId ? `&userId=${userId}` : "";
+    // ingredientCode가 있을 때 ingredientName도 함께 전달 →
+    // 코드 미매핑 약품을 성분명으로 포함하여 누락 방지 (name_match 그룹)
     const url = ingredientCode
-      ? `/api/medications/search?ingredientCode=${encodeURIComponent(ingredientCode)}${uid}&limit=500`
+      ? `/api/medications/search?ingredientCode=${encodeURIComponent(ingredientCode)}&ingredientName=${encodeURIComponent(ingredientName)}${uid}&limit=500`
       : `/api/medications/search?q=${encodeURIComponent(ingredientName)}${uid}&ingredientOnly=true&limit=500`;
     fetch(url)
       .then((r) => r.json())
@@ -175,7 +196,34 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
     }
   }
 
-  const sorted = [...medications].sort((a, b) => {
+  // matchLevel 섹션 순서: exact → same_form → same_ingredient → name_match → null(코드 없음)
+  const matchOrder: Record<string, number> = { exact: 0, same_form: 1, same_ingredient: 2, name_match: 3 };
+
+  // HIRA 주성분코드가 강도(dose)를 구분하지 않는 경우(같은 코드 → 250mg·500mg 모두 "exact"),
+  // sourceProductName에서 용량을 파싱해 강도가 다른 결과를 "same_form"으로 재분류.
+  const [, sourceDose] = sourceProductName ? splitProductName(sourceProductName) : ["", null, null];
+  const medicationsForDisplay = sourceDose
+    ? medications.map((med) => {
+        if (med.matchLevel !== "exact") return med;
+        const [, medDose] = splitProductName(med.productName);
+        const normSource = normalizeDose(sourceDose);
+        const normMed = medDose ? normalizeDose(medDose) : "";
+        if (normMed && normSource && normMed !== normSource) {
+          return { ...med, matchLevel: "same_form" as const };
+        }
+        return med;
+      })
+    : medications;
+
+  const sorted = [...medicationsForDisplay].sort((a, b) => {
+    // ingredientCode 기반 검색이면 matchLevel 우선 정렬
+    const hasMatch = medicationsForDisplay.some((m) => m.matchLevel != null);
+    if (hasMatch && !sortKey) {
+      const la = matchOrder[a.matchLevel ?? ""] ?? 3;
+      const lb = matchOrder[b.matchLevel ?? ""] ?? 3;
+      if (la !== lb) return la - lb;
+      return (a.price ?? 999999999) - (b.price ?? 999999999);
+    }
     if (!sortKey) return 0;
     const getVal = (m: MedicationItem) => {
       const base = m.commissionRate ?? 0;
@@ -193,6 +241,27 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
     return sortDir === "asc" ? (va as number) - (vb as number) : (vb as number) - (va as number);
   });
 
+  // ingredientCode 기반 검색이면 matchLevel 필터 적용.
+  // showOtherDose=false이면 same_form 제외, showOtherForm=false이면 same_ingredient/name_match 제외.
+  const hasIngredientCodeSearch = medicationsForDisplay.some((m) => m.matchLevel != null);
+  const visibleSorted = hasIngredientCodeSearch
+    ? sorted.filter((m) => {
+        if (m.matchLevel === "exact") return true;
+        if (m.matchLevel === "same_form") return showOtherDose;
+        if (m.matchLevel === "same_ingredient" || m.matchLevel === "name_match") return showOtherForm;
+        return true;
+      })
+    : sorted;
+
+  const hasMatchLevel = visibleSorted.some((m) => m.matchLevel != null);
+
+  const MATCH_SECTION_LABELS: Record<IngredientMatchLevel, { label: string; color: string }> = {
+    exact:           { label: "정확히 일치 (동일 성분·제형·용량)", color: "bg-blue-50 text-blue-800 border-blue-200" },
+    same_form:       { label: "동일 성분 + 동일 제형, 용량만 다름", color: "bg-amber-50 text-amber-800 border-amber-200" },
+    same_ingredient: { label: "동일 성분 (제형·용량 다름)", color: "bg-gray-50 text-gray-600 border-gray-200" },
+    name_match:      { label: "성분명 일치 (보험코드 미매핑)", color: "bg-slate-50 text-slate-500 border-slate-200" },
+  };
+
   function SortIcon({ k }: { k: SortKey }) {
     if (sortKey !== k) return <ChevronsUpDown className="w-3 h-3 inline ml-0.5 text-gray-300" />;
     return sortDir === "asc" ? <ChevronUp className="w-3 h-3 inline ml-0.5 text-blue-500" /> : <ChevronDown className="w-3 h-3 inline ml-0.5 text-blue-500" />;
@@ -206,7 +275,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
     );
   }
 
-  const hasRate = sorted.some((m) => m.commissionRate != null);
+  const hasRate = visibleSorted.some((m) => m.commissionRate != null);
   const totalCols = 1 + (hasDetailPanel ? 1 : 0) + 1 + (hasRate ? 4 : 0) + 1;
 
   return (
@@ -217,7 +286,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
             <div>
               <h2 className="font-bold text-gray-900 text-sm">동일성분 검색</h2>
               <p className="text-xs text-gray-500 mt-0.5 break-all">
-                {ingredientCode ? `주성분코드: ${ingredientCode}` : ingredientName} · 총 {total}개
+                {ingredientCode ? `주성분코드: ${ingredientCode}` : ingredientName} · {visibleSorted.length}개 표시 (전체 {total}개)
               </p>
             </div>
             <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 shrink-0"><X className="w-5 h-5" /></button>
@@ -266,12 +335,54 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
             </div>
           </div>
 
+          {/* 용량/제형 범위 토글 — ingredientCode 기반 검색에서만 표시 */}
+          {hasIngredientCodeSearch && (
+            <div className="px-4 py-2 border-b bg-blue-50 flex flex-wrap gap-2 text-xs shrink-0 items-center">
+              <span className="text-blue-700 font-medium">표시 범위:</span>
+              <button
+                type="button"
+                onClick={() => setShowOtherDose((v) => !v)}
+                className={`px-2.5 py-1 rounded-full border text-xs font-medium transition-colors ${
+                  showOtherDose
+                    ? "bg-amber-500 text-white border-amber-500"
+                    : "bg-white text-amber-700 border-amber-300 hover:bg-amber-50"
+                }`}
+              >
+                {showOtherDose ? "다른 용량 숨기기" : "다른 용량 보기"}
+                {!showOtherDose && (
+                  <span className="ml-1 opacity-60">
+                    ({sorted.filter((m) => m.matchLevel === "same_form").length})
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowOtherForm((v) => !v)}
+                className={`px-2.5 py-1 rounded-full border text-xs font-medium transition-colors ${
+                  showOtherForm
+                    ? "bg-gray-500 text-white border-gray-500"
+                    : "bg-white text-gray-600 border-gray-300 hover:bg-gray-50"
+                }`}
+              >
+                {showOtherForm ? "다른 제형도 숨기기" : "다른 제형도 보기"}
+                {!showOtherForm && (
+                  <span className="ml-1 opacity-60">
+                    ({sorted.filter((m) => m.matchLevel === "same_ingredient" || m.matchLevel === "name_match").length})
+                  </span>
+                )}
+              </button>
+              <span className="text-blue-500 ml-1">
+                정확 일치 {sorted.filter((m) => m.matchLevel === "exact").length}개 표시 중
+              </span>
+            </div>
+          )}
+
           <div className="overflow-auto flex-1">
             {!ingredientCode && !ingredientName ? (
               <div className="flex justify-center py-16 text-gray-400 text-sm">검색 정보가 없습니다.</div>
             ) : loading ? (
               <div className="flex justify-center py-16 text-gray-400 text-sm">검색 중...</div>
-            ) : sorted.length === 0 ? (
+            ) : visibleSorted.length === 0 ? (
               <div className="flex justify-center py-16 text-gray-400 text-sm">결과가 없어요.</div>
             ) : (
               <table className="text-xs" style={{ minWidth: "max-content", width: "100%" }}>
@@ -292,7 +403,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {sorted.map((med) => {
+                  {visibleSorted.map((med, idx) => {
                     const base = med.commissionRate ?? null;
                     const extra = med.additionalRate ?? null;
                     const totalRate = base != null ? base + (extra ?? 0) : null;
@@ -300,8 +411,27 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, us
                     const isExpanded = expandedRows.has(med.id);
                     const [nameBase, dose, ingredient] = splitProductName(med.productName);
 
+                    // matchLevel 섹션 헤더: 이전 행과 matchLevel이 달라질 때만 표시
+                    const prevLevel = idx > 0 ? visibleSorted[idx - 1].matchLevel : undefined;
+                    const showSectionHeader =
+                      hasMatchLevel &&
+                      med.matchLevel != null &&
+                      med.matchLevel !== prevLevel;
+
                     return (
                       <Fragment key={med.id}>
+                        {showSectionHeader && (
+                          <tr>
+                            <td colSpan={totalCols} className="px-0 pt-1 pb-0">
+                              <div className={`px-3 py-1.5 text-[11px] font-semibold border-y ${MATCH_SECTION_LABELS[med.matchLevel!].color}`}>
+                                {MATCH_SECTION_LABELS[med.matchLevel!].label}
+                                <span className="ml-2 font-normal opacity-70">
+                                  ({visibleSorted.filter((m) => m.matchLevel === med.matchLevel).length}개)
+                                </span>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
                         <tr className="hover:bg-gray-50">
                           <td className="px-2 py-2 min-w-[160px] max-w-[240px]">
                             <p className="font-medium text-gray-900 leading-tight">

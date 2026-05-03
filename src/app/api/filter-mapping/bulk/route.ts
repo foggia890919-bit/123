@@ -1,0 +1,70 @@
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { normalizeCompanyName } from "@/lib/company-name";
+
+// 세로 형식: 각 row = { submissionEntity, managerName?, managerPhone?, companyName }
+interface BulkRow {
+  submissionEntity: string;
+  managerName?: string;
+  managerPhone?: string;
+  companyName: string;
+}
+
+export async function POST(req: NextRequest) {
+  const user = await requireSession();
+  if (isNextResponse(user)) return user;
+  if (user.role !== "BIZ" && user.role !== "ADMIN") {
+    return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+  }
+
+  const rows: BulkRow[] = await req.json();
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return NextResponse.json({ error: "rows 필요" }, { status: 400 });
+  }
+
+  let created = 0;
+  let updated = 0;
+  const errors: string[] = [];
+
+  for (const row of rows) {
+    if (!row.submissionEntity || !row.companyName) {
+      errors.push(`제출처 또는 제약사 누락: ${JSON.stringify(row)}`);
+      continue;
+    }
+    const companyName = normalizeCompanyName(row.companyName.trim());
+    if (!companyName) continue;
+    try {
+      const existing = await prisma.filterMapping.findUnique({ where: { companyName } });
+      if (existing) {
+        await prisma.filterMapping.update({
+          where: { id: existing.id },
+          data: {
+            submissionEntity: row.submissionEntity,
+            managerName: row.managerName || null,
+            managerPhone: row.managerPhone || null,
+            active: true,
+            updatedAt: new Date(),
+          },
+        });
+        updated++;
+      } else {
+        await prisma.filterMapping.create({
+          data: {
+            id: crypto.randomUUID(),
+            companyName,
+            submissionEntity: row.submissionEntity,
+            managerName: row.managerName || null,
+            managerPhone: row.managerPhone || null,
+            updatedAt: new Date(),
+          },
+        });
+        created++;
+      }
+    } catch (e) {
+      errors.push(`${companyName}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  return NextResponse.json({ created, updated, errors });
+}

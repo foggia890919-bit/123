@@ -89,6 +89,7 @@ function extractCodes(item: AtcItem): AtcExtract | null {
     /^주성분명?$/,
     /^성분명?$/,
     /ingdtName|ingredientName|mainIngdtName/i,
+    /ATC코드.*명칭|ATC.*명칭/i,
   ]);
   // 규격 / 함량 / 용량 / strength / spec (단위 제외 — "정"·"캡슐" 같은 값은 부적합)
   const spec = findValue(item, [
@@ -169,48 +170,48 @@ export async function POST() {
       }, { status: 400 });
     }
 
-    // bulk UPDATE:
-    //   - apiName+apiSpec 모두 있으면 "name spec"으로 교체
-    //   - apiName만 있으면 apiName으로 교체
-    //   - apiSpec만 있으면 기존 성분명에 이미 없는 경우 뒤에 이어붙임
-    //   - 둘 다 없으면 기존 성분명 유지
+    // bulk UPDATE using UNNEST to handle comma-separated insuranceCodes
+    // (fixes: exact-match was missing meds where insuranceCode = "CodeA,CodeB")
     let updated = 0;
-    let ingredientAttempted = 0;
     let ingredientChanged = 0;
-    const entries = Array.from(infoMap.entries());
+    const allProductCodes = Array.from(infoMap.keys());
     const BATCH = 500;
 
-    for (let i = 0; i < entries.length; i += BATCH) {
-      const batch = entries.slice(i, i + BATCH);
-      const values = batch.map((_, j) => `($${j * 4 + 1}, $${j * 4 + 2}, $${j * 4 + 3}, $${j * 4 + 4})`).join(", ");
-      const params: string[] = [];
-      for (const [productCode, info] of batch) {
-        params.push(productCode, info.ingredientCode, info.apiName, info.apiSpec);
-      }
+    for (let i = 0; i < allProductCodes.length; i += BATCH) {
+      const batch = allProductCodes.slice(i, i + BATCH);
 
-      const result = await withDbRetry(() => prisma.$queryRawUnsafe<{ id: string; apiName: string; apiSpec: string; oldName: string; newName: string }[]>(
-        `UPDATE "Medication" AS m
-         SET "ingredientCode" = v."ingredientCode",
-             "ingredientName" = CASE
-               WHEN v."apiName" <> '' AND v."apiSpec" <> '' THEN v."apiName" || ' ' || v."apiSpec"
-               WHEN v."apiName" <> '' THEN v."apiName"
-               WHEN v."apiSpec" <> '' AND position(v."apiSpec" in COALESCE(m."ingredientName", '')) = 0
-                 THEN COALESCE(NULLIF(m."ingredientName", ''), '') ||
-                      CASE WHEN COALESCE(m."ingredientName", '') = '' THEN '' ELSE ' ' END ||
-                      v."apiSpec"
-               ELSE m."ingredientName"
-             END,
-             "updatedAt" = NOW()
-         FROM (VALUES ${values}) AS v("insuranceCode", "ingredientCode", "apiName", "apiSpec")
-         WHERE m."insuranceCode" = v."insuranceCode"
-         RETURNING m.id, v."apiName" AS "apiName", v."apiSpec" AS "apiSpec",
-                   COALESCE(m."ingredientName", '') AS "newName"`,
-        ...params
-      ));
-      updated += result.length;
-      for (const r of result) {
-        if (r.apiName || r.apiSpec) ingredientAttempted++;
-        if (r.apiName || (r.apiSpec && r.newName.includes(r.apiSpec))) ingredientChanged++;
+      // STEP 1: find medication IDs whose insuranceCode (possibly comma-separated) contains any code in this batch
+      const matchRows = await withDbRetry(() => prisma.$queryRaw<{ id: string; matched: string }[]>`
+        SELECT m.id, TRIM(code) AS matched
+        FROM "Medication" m,
+             UNNEST(string_to_array(m."insuranceCode", ',')) AS code
+        WHERE m."insuranceCode" IS NOT NULL
+          AND TRIM(code) = ANY(${batch})
+      `);
+
+      // STEP 2: update each matched med (deduplicated by id, first match wins)
+      const seen = new Set<string>();
+      for (const row of matchRows) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        const info = infoMap.get(row.matched);
+        if (!info) continue;
+
+        const newIngredientName =
+          info.apiName && info.apiSpec ? `${info.apiName} ${info.apiSpec}`
+          : info.apiName ? info.apiName
+          : null;
+
+        await withDbRetry(() => prisma.medication.update({
+          where: { id: row.id },
+          data: {
+            ingredientCode: info.ingredientCode,
+            ...(newIngredientName ? { ingredientName: newIngredientName } : {}),
+            updatedAt: new Date(),
+          },
+        }));
+        updated++;
+        if (newIngredientName) ingredientChanged++;
       }
     }
 
@@ -235,19 +236,25 @@ export async function POST() {
       orderBy: { updatedAt: "desc" },
     })).catch(() => []);
 
+    // "ATC코드 명칭" 실제 값 샘플 (비어있으면 추출 0건 원인)
+    const atcNameSamples = firstItems.slice(0, 5).map((it) => {
+      const key = Object.keys(it).find((k) => /ATC코드.*명칭|ATC.*명칭/i.test(k)) ?? "(없음)";
+      return { key, value: it[key] ?? "" };
+    });
+
     return NextResponse.json({
       success: true,
       total: totalCount,
       mapped: infoMap.size,
       updated,
       ingredientUpdated: ingredientChanged,
-      ingredientAttempted,
       filled,
       lastSync: now,
       totalInDb: total,
       diagnostics: {
         sampleKeys: Object.keys(firstItems[0] ?? {}),
         sampleItem: firstItems[0] ?? null,
+        atcNameSamples,
         withName,
         withSpec,
         withEither,

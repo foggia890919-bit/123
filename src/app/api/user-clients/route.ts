@@ -31,14 +31,27 @@ export async function GET(req: NextRequest) {
   if (all) {
     if (user.role !== "ADMIN") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
     // Exclude heavy bizDocument (base64) from list; download via /api/files/user-client-biz/[id]
-    const rows = await prisma.userClient.findMany({
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true, userId: true, clientName: true, bizNumber: true,
-        bizFileName: true, bizFileKey: true, approved: true, createdAt: true,
-        user: { select: { name: true, email: true } },
-      },
-    });
+    let rows;
+    try {
+      rows = await prisma.userClient.findMany({
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true, userId: true, clientName: true, bizNumber: true,
+          bizFileName: true, bizFileKey: true, approved: true, createdAt: true,
+          dealerType: true,
+          user: { select: { name: true, email: true } },
+        },
+      });
+    } catch {
+      rows = await prisma.userClient.findMany({
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true, userId: true, clientName: true, bizNumber: true,
+          bizFileName: true, bizFileKey: true, approved: true, createdAt: true,
+          user: { select: { name: true, email: true } },
+        },
+      });
+    }
     // hasBizDocument flag keeps existing UI logic working without transferring megabytes
     const annotated = rows.map((r) => ({ ...r, bizDocument: null, hasBizDocument: !!r.bizFileName }));
     return NextResponse.json(annotated);
@@ -59,7 +72,7 @@ export async function GET(req: NextRequest) {
       orderBy: { createdAt: "desc" },
       select: {
         id: true, clientName: true, bizNumber: true,
-        bizFileName: true, approved: true, createdAt: true,
+        bizFileName: true, approved: true, createdAt: true, code: true,
       },
     });
   } catch {
@@ -116,10 +129,30 @@ export async function PATCH(req: NextRequest) {
   if (!id) return NextResponse.json({ error: "id 필요" }, { status: 400 });
   const existing = await prisma.userClient.findUnique({ where: { id }, select: { userId: true } });
   if (!existing) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
-  // approved 변경은 관리자만
-  const { approved } = await req.json();
-  if (user.role !== "ADMIN") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
-  const row = await prisma.userClient.update({ where: { id }, data: { approved: Boolean(approved) } });
+
+  const isAdmin = user.role === "ADMIN";
+  const isOwner = existing.userId === user.id;
+  const body = await req.json();
+  const { approved, bizDocument, bizFileName } = body;
+
+  if (approved !== undefined && !isAdmin) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+  if ((bizDocument !== undefined || bizFileName !== undefined) && !isAdmin && !isOwner) {
+    return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+  }
+
+  const data: Record<string, unknown> = {};
+  if (approved !== undefined) data.approved = Boolean(approved);
+  if (bizDocument !== undefined) {
+    const { fileKey: bizFileKey, fileData: bizDocumentFallback } =
+      await persistDataUri(BUCKETS.userClientBiz, existing.userId, bizDocument);
+    data.bizDocument = bizDocumentFallback;
+    data.bizFileKey = bizFileKey;
+    data.bizFileName = bizFileName ?? null;
+  } else if (bizFileName !== undefined) {
+    data.bizFileName = bizFileName ?? null;
+  }
+
+  const row = await prisma.userClient.update({ where: { id }, data });
   return NextResponse.json(row);
 }
 

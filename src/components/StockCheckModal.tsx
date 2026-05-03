@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { X, Loader2, AlertCircle, CheckCircle2, RefreshCw } from "lucide-react";
+import { X, Loader2, AlertCircle, CheckCircle2, RefreshCw, AlertTriangle, Info } from "lucide-react";
 
 interface InventoryItem {
   insuranceCode: string;
@@ -119,10 +119,7 @@ export default function StockCheckModal({ open, onClose, insuranceCode, productN
           )}
 
           {!loading && !error && results.length > 0 && results.every(r => r.error === "no snapshot yet") && (
-            <div className="bg-amber-50 border border-amber-200 rounded-md p-4 text-sm text-amber-800">
-              <p className="font-medium mb-1">아직 저장된 스냅샷이 없어요</p>
-              <p>자동 스크래핑은 매일 06시 / 12시 / 18시 (KST)에 돌아요. 그 전까지는 우측 상단의 <b>지금 새로 조회</b>를 눌러주세요.</p>
-            </div>
+            <NoSnapshotBanner onLive={() => fetchData(true)} />
           )}
 
           {!loading && !error && results.length > 0 && !results.every(r => r.error === "no snapshot yet") && (() => {
@@ -186,6 +183,116 @@ export default function StockCheckModal({ open, onClose, insuranceCode, productN
             );
           })()}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── NoSnapshotBanner ────────────────────────────────────────────────────────
+// Fetches /api/admin/inventory-status to determine *why* the snapshot is empty
+// and shows a specific, actionable message for each root-cause scenario.
+
+interface DiagInfo {
+  tableExists: boolean;
+  scrapeJobCount24h: number;
+  scrapeJobSuccessCount24h: number;
+  scrapeJobFailedCount24h: number;
+  snapshotCount24h: number;
+  workerEnvConfigured: boolean;
+  diagMessage: string;
+}
+
+function NoSnapshotBanner({ onLive }: { onLive: () => void }) {
+  const [diag, setDiag] = useState<DiagInfo | null>(null);
+
+  useEffect(() => {
+    fetch("/api/admin/inventory-status?limit=1")
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.diag) setDiag(data.diag as DiagInfo);
+      })
+      .catch(() => {/* best-effort */});
+  }, []);
+
+  // Derive specific guidance from diagnostic data
+  let title = "아직 저장된 스냅샷이 없어요";
+  let body: React.ReactNode;
+  let icon = <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />;
+  let colorClass = "bg-amber-50 border-amber-200 text-amber-800";
+
+  if (diag) {
+    if (!diag.tableExists) {
+      title = "DB 마이그레이션이 필요합니다";
+      body = (
+        <>
+          <span>InventorySnapshot 테이블이 없습니다. Supabase에서 </span>
+          <code className="font-mono text-xs bg-amber-100 px-1 rounded">_MASTER_MIGRATION.sql</code>
+          <span>을 실행해주세요.</span>
+        </>
+      );
+      icon = <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />;
+      colorClass = "bg-red-50 border-red-200 text-red-800";
+    } else if (diag.scrapeJobCount24h === 0) {
+      title = "Worker가 아직 실행되지 않았습니다";
+      body = (
+        <>
+          24시간 내 크롤 작업 기록이 없습니다.{" "}
+          {diag.workerEnvConfigured
+            ? "WORKER_URL은 설정됐지만 Worker 프로세스가 실행 중이지 않을 수 있습니다."
+            : "Vercel 환경변수에 WORKER_URL과 WORKER_TOKEN을 설정하고 Lightsail 워커를 실행하세요."}{" "}
+          <a href="/biz/inventory-status" className="underline font-medium">재고 크롤러 현황</a>에서 설정 상태를 확인하세요.
+        </>
+      );
+      icon = <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />;
+      colorClass = "bg-red-50 border-red-200 text-red-800";
+    } else if (diag.scrapeJobSuccessCount24h === 0) {
+      title = "최근 크롤 시도가 모두 실패했습니다";
+      body = (
+        <>
+          최근 24h {diag.scrapeJobCount24h}건 시도 중 성공 0건.{" "}
+          <a href="/biz/inventory-status" className="underline font-medium">재고 크롤러 현황</a>에서 에러 메시지를 확인하세요.
+          자격증명(SCRAPER_*_ID/PW) 또는 사이트 접속 이슈일 수 있습니다.
+        </>
+      );
+      icon = <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />;
+      colorClass = "bg-red-50 border-red-200 text-red-800";
+    } else if (diag.snapshotCount24h === 0) {
+      title = "크롤은 성공했지만 스냅샷이 저장되지 않았습니다";
+      body = (
+        <>
+          Worker에서 크롤은 완료됐지만 InventorySnapshot에 데이터가 없습니다.
+          Worker의 DATABASE_URL 미설정 또는 어댑터 파싱 결함일 수 있습니다.{" "}
+          <a href="/biz/inventory-status" className="underline font-medium">재고 크롤러 현황</a>을 확인하세요.
+        </>
+      );
+      icon = <Info className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />;
+    } else {
+      // snapshots exist globally but not for this specific code
+      body = (
+        <>
+          이 보험코드에 대한 스냅샷이 아직 없습니다. 자동 크롤링은 매일 06시 / 12시 / 18시 (KST)에 실행됩니다.
+          지금 바로 조회하려면 우측 상단의{" "}
+          <button onClick={onLive} className="underline font-medium">지금 새로 조회</button>를 누르세요.
+        </>
+      );
+      icon = <Info className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />;
+    }
+  } else {
+    // Diag not loaded yet or admin API inaccessible (non-biz user)
+    body = (
+      <>
+        자동 스크래핑은 매일 06시 / 12시 / 18시 (KST)에 돌아요. 그 전까지는 우측 상단의{" "}
+        <button onClick={onLive} className="underline font-medium">지금 새로 조회</button>를 눌러주세요.
+      </>
+    );
+  }
+
+  return (
+    <div className={`border rounded-md p-4 text-sm flex items-start gap-2.5 ${colorClass}`}>
+      {icon}
+      <div className="space-y-1">
+        <p className="font-medium">{title}</p>
+        <p className="leading-relaxed">{body}</p>
       </div>
     </div>
   );

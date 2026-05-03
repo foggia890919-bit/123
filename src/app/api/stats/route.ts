@@ -3,13 +3,30 @@ import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 import { BUCKETS, persistDataUri } from "@/lib/storage";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
+
+  // ?yearMonth=2026-04&clientId=xxx  → 특정 거래처+월 조회
+  // ?yearMonth=2026-04               → 해당 월 전체 (거래처별 최신 1건씩)
+  // (파라미터 없음)                   → 전체 목록
+  const yearMonthParam = req.nextUrl.searchParams.get("yearMonth");
+  const clientIdParam  = req.nextUrl.searchParams.get("clientId");
+
+  const yearInt  = yearMonthParam ? parseInt(yearMonthParam.split("-")[0] ?? "") : null;
+  const monthInt = yearMonthParam ? parseInt(yearMonthParam.split("-")[1] ?? "") : null;
+
+  const where: Parameters<typeof prisma.prescriptionReport.findMany>[0]["where"] = {
+    userId: user.id,
+    ...(yearInt  && { year: yearInt }),
+    ...(monthInt && { month: monthInt }),
+    ...(clientIdParam && { clientId: clientIdParam }),
+  };
+
   // Exclude heavy imageData from list responses — fetch individual image via /api/files/prescription-report/[id]
   try {
     const reports = await prisma.prescriptionReport.findMany({
-      where: { userId: user.id },
+      where,
       orderBy: { createdAt: "desc" },
       select: {
         id: true, userId: true, clientId: true, year: true, month: true,
@@ -118,4 +135,18 @@ export async function PATCH(req: NextRequest) {
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }
+}
+
+export async function DELETE(req: NextRequest) {
+  const user = await requireSession();
+  if (isNextResponse(user)) return user;
+  const id = req.nextUrl.searchParams.get("id");
+  if (!id) return NextResponse.json({ error: "id 필수" }, { status: 400 });
+  const existing = await prisma.prescriptionReport.findUnique({ where: { id }, select: { userId: true } });
+  if (!existing) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+  if (user.role !== "ADMIN" && existing.userId !== user.id) {
+    return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+  }
+  await prisma.prescriptionReport.delete({ where: { id } });
+  return NextResponse.json({ success: true });
 }

@@ -73,19 +73,21 @@ export async function GET(req: NextRequest) {
   }
 
   if (type === "company") {
+    const all = req.nextUrl.searchParams.get("all") === "true";
+    const limit = all ? 5000 : 20;
     const companies = await prisma.memberCompanyRate.findMany({
       where: q ? { companyName: { contains: q, mode: "insensitive" } } : {},
       select: { companyName: true },
       distinct: ["companyName"],
       orderBy: { companyName: "asc" },
-      take: 20,
+      take: limit,
     });
     const fromRequests = await prisma.filterRequest.findMany({
       where: q ? { companyName: { contains: q, mode: "insensitive" } } : {},
       select: { companyName: true },
       distinct: ["companyName"],
       orderBy: { companyName: "asc" },
-      take: 20,
+      take: limit,
     });
     const allNames = [
       ...new Set([
@@ -95,27 +97,39 @@ export async function GET(req: NextRequest) {
     ]
       .filter((n) => !q || n.toLowerCase().includes(q.toLowerCase()))
       .sort()
-      .slice(0, 20);
+      .slice(0, limit);
     return NextResponse.json(allNames.map((companyName) => ({ companyName })));
   }
 
   if (type === "dealer") {
     const stripped = q.replace(/\D/g, "");
     const isDigits = stripped.length > 0 && q.replace(/-/g, "") === stripped;
-    const dealers = await prisma.userClient.findMany({
-      where: {
-        dealerType: { not: null },
-        ...(q
-          ? isDigits
-            ? bizWhere(stripped)
-            : { clientName: { contains: q, mode: "insensitive" } }
-          : {}),
-      },
-      select: { clientName: true, bizNumber: true, dealerType: true },
-      distinct: ["clientName"],
-      orderBy: { clientName: "asc" },
-      take: 20,
-    });
+    const where = {
+      dealerType: { not: null },
+      ...(q
+        ? isDigits
+          ? bizWhere(stripped)
+          : { clientName: { contains: q, mode: "insensitive" as const } }
+        : {}),
+    };
+    let dealers;
+    try {
+      dealers = await prisma.userClient.findMany({
+        where,
+        select: { clientName: true, bizNumber: true, dealerType: true, managerName: true, managerPhone: true, memo: true },
+        distinct: ["clientName"],
+        orderBy: { clientName: "asc" },
+        take: 20,
+      });
+    } catch {
+      dealers = await prisma.userClient.findMany({
+        where,
+        select: { clientName: true, bizNumber: true, dealerType: true },
+        distinct: ["clientName"],
+        orderBy: { clientName: "asc" },
+        take: 20,
+      });
+    }
     return NextResponse.json(dealers);
   }
 

@@ -1,5 +1,14 @@
 export type Role = "ADMIN" | "SALES_REP" | "DOCTOR" | "PHARMACIST";
 
+/**
+ * HIRA 주성분코드 정밀 매칭 레벨
+ *  exact           — 9자리 완전일치 (동일 성분/제형/단위/용량)
+ *  same_form       — 8자리 prefix 일치 (동일 성분/제형/단위, 용량만 다름)
+ *  same_ingredient — 6자리 prefix 일치 (동일 성분, 제형/용량 다름)
+ *  name_match      — ingredientCode 미매핑, 성분명으로 포함된 약품
+ */
+export type IngredientMatchLevel = "exact" | "same_form" | "same_ingredient" | "name_match";
+
 export interface MedicationItem {
   id: string;
   categoryA: string | null;
@@ -19,6 +28,8 @@ export interface MedicationItem {
   settlementType?: string | null;
   source: "EXCEL" | "PUBLIC_API";
   additionalRate?: number | null;
+  /** ingredientCode 검색 시에만 포함 — 주성분코드 prefix 기반 매칭 수준 */
+  matchLevel?: IngredientMatchLevel;
 }
 
 export interface ProposalCartItem {
