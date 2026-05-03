@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { XMLParser } from "fast-xml-parser";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 
@@ -12,26 +13,40 @@ const BASE_URL = "https://apis.data.go.kr/B551182/msupCmpnMeftInfoService/getMaj
 
 interface CmpnItem { [key: string]: string | undefined }
 
+const xmlParser = new XMLParser({ ignoreAttributes: false, parseTagValue: true });
+
 async function fetchPage(pageNo: number, perPage = 1000): Promise<{ items: CmpnItem[]; totalCount: number }> {
   const url = new URL(BASE_URL);
   url.searchParams.set("serviceKey", API_KEY);
   url.searchParams.set("pageNo", String(pageNo));
   url.searchParams.set("numOfRows", String(perPage));
-  url.searchParams.set("type", "json");
+  // type=json 파라미터 제거 — HIRA B551182 서비스는 XML만 반환함
 
   const res = await fetch(url.toString(), { cache: "no-store" });
+  const text = await res.text();
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`HIRA cmpn API ${res.status}: ${body.slice(0, 300)}`);
+    throw new Error(`HIRA cmpn API ${res.status}: ${text.slice(0, 300)}`);
   }
 
-  const json = await res.json();
-  // HIRA 표준 응답: { response: { body: { items: [...], totalCount: N } } } 또는 { body: ... }
-  const body = json?.response?.body ?? json?.body ?? json;
-  const rawItems = body?.items ?? body?.item ?? [];
+  // XML 파싱
+  const parsed = xmlParser.parse(text);
+  const body = parsed?.response?.body ?? parsed?.OpenAPI_ServiceResponse?.cmmMsgHeader ?? parsed;
+
+  // 오류 코드 체크 (HIRA XML 오류 응답)
+  const resultCode = parsed?.response?.header?.resultCode ?? parsed?.OpenAPI_ServiceResponse?.cmmMsgHeader?.returnReasonCode;
+  if (resultCode && String(resultCode) !== "00" && String(resultCode) !== "0000") {
+    const resultMsg = parsed?.response?.header?.resultMsg ?? parsed?.OpenAPI_ServiceResponse?.cmmMsgHeader?.returnAuthMsg ?? "API 오류";
+    throw new Error(`HIRA API 오류 (${resultCode}): ${resultMsg}`);
+  }
+
+  const rawItems = body?.items?.item ?? body?.item ?? [];
   const items: CmpnItem[] = Array.isArray(rawItems) ? rawItems : (rawItems ? [rawItems] : []);
-  const totalCount = parseInt(String(body?.totalCount ?? body?.total_count ?? "0"));
-  return { items, totalCount };
+  // 각 필드를 문자열로 정규화
+  const normalizedItems: CmpnItem[] = items.map((it) =>
+    Object.fromEntries(Object.entries(it).map(([k, v]) => [k, v != null ? String(v) : undefined]))
+  );
+  const totalCount = parseInt(String(body?.totalCount ?? body?.numOfRows ?? "0"));
+  return { items: normalizedItems, totalCount };
 }
 
 async function fetchPageWithRetry(pageNo: number, retries = 3): Promise<{ items: CmpnItem[]; totalCount: number }> {
