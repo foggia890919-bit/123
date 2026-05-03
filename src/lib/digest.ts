@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 export async function pushDigest({
@@ -19,7 +20,7 @@ export async function pushDigest({
       category,
       title,
       body,
-      decisionOptions: decisionOptions ?? null,
+      decisionOptions: decisionOptions ? (decisionOptions as Prisma.InputJsonValue) : Prisma.JsonNull,
     },
   });
 }

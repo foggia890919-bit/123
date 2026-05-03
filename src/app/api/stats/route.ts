@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 import { BUCKETS, persistDataUri } from "@/lib/storage";
@@ -16,7 +17,7 @@ export async function GET(req: NextRequest) {
   const yearInt  = yearMonthParam ? parseInt(yearMonthParam.split("-")[0] ?? "") : null;
   const monthInt = yearMonthParam ? parseInt(yearMonthParam.split("-")[1] ?? "") : null;
 
-  const where: Parameters<typeof prisma.prescriptionReport.findMany>[0]["where"] = {
+  const where: Prisma.PrescriptionReportWhereInput = {
     userId: user.id,
     ...(yearInt  && { year: yearInt }),
     ...(monthInt && { month: monthInt }),

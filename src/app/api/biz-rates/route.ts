@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
     ...(corpClientId ? { corpClientId } : {}),
     ...(companyName ? { companyName: { contains: companyName, mode: "insensitive" as const } } : {}),
     ...(applyMonth ? { applyMonth } : {}),
-    corpClient: { dealerType: { in: CORP_DEALER_TYPES } },
+    corpClient: { dealerType: { in: [...CORP_DEALER_TYPES] } },
   };
 
   const [total, items] = await Promise.all([
