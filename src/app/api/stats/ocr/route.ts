@@ -131,10 +131,22 @@ export async function POST(req: NextRequest) {
     });
 
     // ── 4단계: 약품마다 마스터 매칭 + 신뢰도 계산 ──────────────────────────
-    const drugs: FusionDrug[] = [];
+    interface PendingDrug {
+      insuranceCode: Field;
+      companyName: Field;
+      productName: Field;
+      quantity: Field;
+      unitPrice: number | null;
+      matchedMedicationId: string | null;
+      finalConfidence: number;
+      manualCheck: boolean;
+      anchorY: number | null;       // locator 가 자신 있게 찾은 경우 raw % (없으면 보간 대상)
+      productNameRaw: string;       // 보간 후처리에서도 매칭 시도 가능하게 유지
+      insuranceCodeRaw: string;
+    }
+    const pendingDrugs: PendingDrug[] = [];
     for (const item of boostedMerged) {
       const matched = await matchMedication(item, masterByCode);
-      // 데이터 완성도 기반 baseline (LLM 자체신뢰도가 누락/0 이어도 합리적 값 보장)
       const fieldsFilled =
         (item.productName ? 1 : 0) +
         (item.companyName ? 1 : 0) +
@@ -143,15 +155,10 @@ export async function POST(req: NextRequest) {
       const completeness = fieldsFilled >= 4 ? 90 : fieldsFilled === 3 ? 80 : fieldsFilled === 2 ? 65 : 50;
       const llmConf = clamp01_100(item.confidence);
       const baselineConf = Math.max(llmConf, completeness);
-      // 마스터 매칭 시 매칭 신뢰도가 곧 finalConfidence (마스터 정보가 권위 있음)
-      // 미매칭이어도 baselineConf 그대로 사용 (50% 캡 제거)
-      const finalConfidence = matched.matchedMedicationId
-        ? matched.matchConfidence
-        : baselineConf;
+      const finalConfidence = matched.matchedMedicationId ? matched.matchConfidence : baselineConf;
       const manualCheck = finalConfidence < 95;
 
-      const bboxYPercent = locateRowInClova(item, clovaFields, clovaImageHeight);
-      drugs.push({
+      pendingDrugs.push({
         insuranceCode: { value: matched.insuranceCode, confidence: matched.matchedMedicationId ? 100 : baselineConf },
         companyName:   { value: matched.companyName,   confidence: matched.matchedMedicationId ? 100 : baselineConf },
         productName:   { value: matched.productName,   confidence: matched.matchedMedicationId ? 100 : baselineConf },
@@ -160,9 +167,74 @@ export async function POST(req: NextRequest) {
         matchedMedicationId: matched.matchedMedicationId,
         finalConfidence,
         manualCheck,
-        bboxYPercent,
+        anchorY: locateRowInClova(item, clovaFields, clovaImageHeight),
+        productNameRaw: matched.productName || item.productName,
+        insuranceCodeRaw: (matched.insuranceCode || item.insuranceCode).replace(/\D/g, ""),
       });
     }
+
+    // ── 4-2단계: bboxYPercent 계산 — 견고한 위치 정렬 ──────────────────────
+    // 개별 텍스트 매칭(locator) 은 OCR 분할/오탈자에 취약. 다음 전략으로 보강:
+    //   1) anchor (locator 가 찾은 위치) 가 단조 증가하면 그대로 사용
+    //   2) anchor 가 비어있거나 비단조면 인덱스 비례 (10~90% 영역)
+    //   3) 인접 anchor 가 있으면 그 사이 선형 보간
+    const N = pendingDrugs.length;
+    const cleanAnchors: Array<{ idx: number; y: number } | null> = pendingDrugs.map(
+      (d, i) => (d.anchorY != null ? { idx: i, y: d.anchorY } : null)
+    );
+    // 단조성 위반 anchor 는 버림 (잘못된 매칭일 가능성)
+    let prevY = -Infinity;
+    for (let i = 0; i < cleanAnchors.length; i++) {
+      const a = cleanAnchors[i];
+      if (!a) continue;
+      if (a.y < prevY) {
+        cleanAnchors[i] = null;
+      } else {
+        prevY = a.y;
+      }
+    }
+    function fallbackY(i: number): number {
+      if (N <= 1) return 50;
+      return 10 + (i / (N - 1)) * 80;
+    }
+    const drugs: FusionDrug[] = pendingDrugs.map((d, i) => {
+      let bboxYPercent: number | null = null;
+      const own = cleanAnchors[i];
+      if (own) {
+        bboxYPercent = own.y;
+      } else {
+        // 가장 가까운 이전/다음 anchor 사이 선형 보간
+        let prev: { idx: number; y: number } | null = null;
+        let next: { idx: number; y: number } | null = null;
+        for (let j = i - 1; j >= 0; j--) { if (cleanAnchors[j]) { prev = cleanAnchors[j]; break; } }
+        for (let j = i + 1; j < N; j++) { if (cleanAnchors[j]) { next = cleanAnchors[j]; break; } }
+        if (prev && next) {
+          const t = (i - prev.idx) / (next.idx - prev.idx);
+          bboxYPercent = prev.y + t * (next.y - prev.y);
+        } else if (prev || next) {
+          // 한쪽 anchor 만 있으면 인덱스 비례 fallback 결과와 평균
+          const onlyAnchor = (prev ?? next)!;
+          const onlyAnchorFallback = fallbackY(onlyAnchor.idx);
+          const myFallback = fallbackY(i);
+          // anchor 가 fallback 이랑 큰 차이면 anchor 신뢰도 낮음 — fallback 우선
+          bboxYPercent = Math.abs(onlyAnchor.y - onlyAnchorFallback) > 25 ? myFallback : myFallback;
+        } else {
+          bboxYPercent = fallbackY(i);
+        }
+      }
+      bboxYPercent = Math.max(0, Math.min(100, Math.round(bboxYPercent * 10) / 10));
+      return {
+        insuranceCode: d.insuranceCode,
+        companyName: d.companyName,
+        productName: d.productName,
+        quantity: d.quantity,
+        unitPrice: d.unitPrice,
+        matchedMedicationId: d.matchedMedicationId,
+        finalConfidence: d.finalConfidence,
+        manualCheck: d.manualCheck,
+        bboxYPercent,
+      };
+    });
 
     const avgConfidence = drugs.length
       ? Math.round(drugs.reduce((s, d) => s + d.finalConfidence, 0) / drugs.length)
