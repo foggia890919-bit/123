@@ -243,15 +243,20 @@ async function fetchOrdersForDay(store: StoreConfig, fromIso: string, toIso: str
     for (const row of data.data ?? []) raw.push(row);
   }
 
-  // Step 4: paymentDate 가 윈도우 안인 것만
+  // Step 4: paymentDate 가 윈도우 안인 것만 + productOrderId 기준 dedup
   const fromMs = new Date(fromIso).getTime();
   const toMs = new Date(toIso).getTime();
-  const out = raw.filter((row) => {
+  const seenPids = new Set<string>();
+  const out: BulkOrder[] = [];
+  for (const row of raw) {
+    const pid = row.productOrder.productOrderId;
+    if (seenPids.has(pid)) continue;
+    seenPids.add(pid);
     const dateStr = row.productOrder.paymentDate ?? row.order?.paymentDate;
-    if (!dateStr) return false;
+    if (!dateStr) continue;
     const t = new Date(dateStr).getTime();
-    return t >= fromMs && t < toMs;
-  });
+    if (t >= fromMs && t < toMs) out.push(row);
+  }
   console.log(`[${store.name}] bulk ${raw.length} → 결제일 필터 ${out.length}개`);
   return out;
 }
