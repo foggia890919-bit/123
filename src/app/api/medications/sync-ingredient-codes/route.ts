@@ -236,6 +236,12 @@ export async function POST() {
       orderBy: { updatedAt: "desc" },
     })).catch(() => []);
 
+    // "ATC코드 명칭" 실제 값 샘플 (비어있으면 추출 0건 원인)
+    const atcNameSamples = firstItems.slice(0, 5).map((it) => {
+      const key = Object.keys(it).find((k) => /ATC코드.*명칭|ATC.*명칭/i.test(k)) ?? "(없음)";
+      return { key, value: it[key] ?? "" };
+    });
+
     return NextResponse.json({
       success: true,
       total: totalCount,
@@ -248,6 +254,7 @@ export async function POST() {
       diagnostics: {
         sampleKeys: Object.keys(firstItems[0] ?? {}),
         sampleItem: firstItems[0] ?? null,
+        atcNameSamples,
         withName,
         withSpec,
         withEither,

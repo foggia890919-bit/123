@@ -54,9 +54,24 @@ function splitProductName(name: string): [string, string | null, string | null] 
     ingredient = parenMatch[1];
     rest = rest.slice(0, rest.lastIndexOf("(")).trim();
   }
-  const doseMatch = rest.match(/^(.+?)\s*(\d[\d.,/]*\s*(?:mg|mcg|μg|ug|g|ml|mL|IU|iu|%|mEq)[^\s]*)/i);
+  // Latin 단위 + 한국어 단위(밀리그람/마이크로그람/그람/밀리리터 등) 모두 매칭
+  const UNIT = "(?:mg|mcg|μg|ug|g|ml|mL|IU|iu|%|mEq|밀리그람|마이크로그람|그람|밀리리터|리터|유닛|단위)";
+  const doseMatch = rest.match(new RegExp(`^(.+?)\\s*(\\d[\\d.,/]*\\s*${UNIT}[^\\s]*)`, "i"));
   if (doseMatch) return [doseMatch[1].trim(), doseMatch[2].trim(), ingredient];
   return [rest, null, ingredient];
+}
+
+// 한국어 단위 → Latin 정규화 후 소문자·공백 제거 (용량 비교용)
+function normalizeDose(dose: string): string {
+  return dose
+    .replace(/밀리그람/gi, "mg")
+    .replace(/마이크로그람/gi, "mcg")
+    .replace(/그람/gi, "g")
+    .replace(/밀리리터/gi, "ml")
+    .replace(/리터/gi, "l")
+    .replace(/유닛|단위/gi, "iu")
+    .toLowerCase()
+    .replace(/\s/g, "");
 }
 
 export default function SameIngredientModal({ ingredientName, ingredientCode, sourceProductName, userId, proposals: externalProposals, onProposalAdded, onClose, initialCols, replaceContext, selectContext }: Props) {
@@ -191,8 +206,8 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
     ? medications.map((med) => {
         if (med.matchLevel !== "exact") return med;
         const [, medDose] = splitProductName(med.productName);
-        const normSource = sourceDose.toLowerCase().replace(/\s/g, "");
-        const normMed = medDose?.toLowerCase().replace(/\s/g, "") ?? "";
+        const normSource = normalizeDose(sourceDose);
+        const normMed = medDose ? normalizeDose(medDose) : "";
         if (normMed && normSource && normMed !== normSource) {
           return { ...med, matchLevel: "same_form" as const };
         }
