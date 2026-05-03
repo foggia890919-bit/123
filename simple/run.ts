@@ -552,13 +552,40 @@ function previousDaysKstRanges(daysBack: number): { fromIso: string; toIso: stri
 
 async function main() {
   if (STORES.length === 0) throw new Error("NAVER_STORES_JSON 비어있음");
-  const arg = process.argv[2];
+  const arg1 = process.argv[2];
+  const arg2 = process.argv[3];
   const rules = await loadRules();
   console.log(`키워드 룰 ${rules.length}개`);
 
-  if (arg) {
-    // 백필: 특정 날짜만 — 텔레그램 발송
-    await processDay(dateKstRange(arg), rules, { sendTelegram: true });
+  // 범위 백필: `npx tsx run.ts 2026-04-01 2026-05-01` → 텔레그램 X, 시트만 갱신
+  if (arg1 && arg2) {
+    const fromMs = new Date(`${arg1}T00:00:00`).getTime();
+    const toMs = new Date(`${arg2}T00:00:00`).getTime();
+    if (Number.isNaN(fromMs) || Number.isNaN(toMs)) {
+      throw new Error("날짜 형식 오류 (YYYY-MM-DD 두 개)");
+    }
+    if (fromMs > toMs) throw new Error("시작일이 종료일보다 늦음");
+    const dayMs = 24 * 60 * 60 * 1000;
+    const days: string[] = [];
+    for (let cur = fromMs; cur <= toMs; cur += dayMs) {
+      days.push(new Date(cur).toISOString().slice(0, 10));
+    }
+    console.log(`범위 백필: ${days.length}일 (${arg1} ~ ${arg2}) — 텔레그램 발송 안 함`);
+    for (let i = 0; i < days.length; i++) {
+      console.log(`\n[${i + 1}/${days.length}] ${days[i]}`);
+      try {
+        await processDay(dateKstRange(days[i]), rules, { sendTelegram: false });
+      } catch (err) {
+        console.error(`[${days[i]}] 실패:`, err instanceof Error ? err.message : String(err));
+      }
+    }
+    console.log(`\n✅ 범위 백필 완료: ${days.length}일`);
+    return;
+  }
+
+  // 단일 날짜 백필: 텔레그램 발송
+  if (arg1) {
+    await processDay(dateKstRange(arg1), rules, { sendTelegram: true });
     return;
   }
 
