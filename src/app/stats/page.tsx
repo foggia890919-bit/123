@@ -2,11 +2,10 @@
 
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { useSession } from "next-auth/react";
-import { Upload, ZoomIn, ZoomOut, Maximize2, Minimize2, AlertTriangle, CheckCircle, BarChart3, UserPlus, X, Search, ArrowRight, Plus, Trash2, FileImage, ChevronDown, ChevronUp, ScanLine } from "lucide-react";
+import { Upload, ZoomIn, ZoomOut, Maximize2, Minimize2, AlertTriangle, CheckCircle, BarChart3, UserPlus, X, Search, ArrowRight, Plus, Trash2, FileImage, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import RequireRole from "@/components/RequireRole";
-import { extractPaper } from "@/lib/scanner";
 
 interface OcrField { value: string; confidence: number }
 interface FusionDrug {
@@ -407,14 +406,6 @@ export default function StatsPage() {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
-
-  // 캠스캐너식 보정 이미지 (모서리 자동 감지 + 원근 변환)
-  const [originalFile, setOriginalFile] = useState<File | null>(null);
-  const [scannedFile, setScannedFile] = useState<File | null>(null);
-  const [scannedUrl, setScannedUrl] = useState<string | null>(null);
-  const [scannerBusy, setScannerBusy] = useState(false);
-  const [scannerError, setScannerError] = useState("");
-  const [useScanned, setUseScanned] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageScrollRef = useRef<HTMLDivElement>(null);
   const imageElRef = useRef<HTMLImageElement>(null);
@@ -562,54 +553,17 @@ export default function StatsPage() {
     }
   }
 
-  const applyImage = useCallback((file: File) => {
+  const handleFile = useCallback((file: File) => {
     setImageFile(file);
     setImageUrl(URL.createObjectURL(file));
     const reader = new FileReader();
     reader.onload = (e) => setImageBase64(e.target?.result as string);
     reader.readAsDataURL(file);
-  }, []);
-
-  const handleFile = useCallback(async (file: File) => {
-    setOriginalFile(file);
-    setScannedFile(null);
-    setScannedUrl(null);
-    setScannerError("");
-    setUseScanned(false);  // 기본 원본. 스캐너 결과는 사용자가 토글해야 적용됨.
-    applyImage(file);
     setOcr(null); setEditOcr(null);
     setManualDrugs([emptyManualDrug()]);
     setZoomEnabled(false); setIsZoomed(false); setZoomLevel(100);
     setSubmitted(false); setSubmitError("");
-
-    // 백그라운드로 캠스캐너 보정 시도 — 결과는 토글 버튼으로만 노출.
-    // 자동 감지가 사진 종류(여백 적은 사진, 배경 대비 약함 등)에 따라 종종 실패하므로
-    // 결과를 사용자에게 강제로 보여주지 않는다.
-    setScannerBusy(true);
-    try {
-      const blob = await extractPaper(file);
-      if (!blob) { setScannerError("문서 모서리 자동 감지 실패"); return; }
-      const corrected = new File([blob], `scanned-${file.name.replace(/\.[^.]+$/, "")}.jpg`, { type: "image/jpeg" });
-      setScannedFile(corrected);
-      setScannedUrl(URL.createObjectURL(corrected));
-      // 자동 적용 안 함 — 사용자가 토글 버튼으로 비교 후 선택
-    } catch (e) {
-      setScannerError(`스캐너 보정 실패: ${String(e).slice(0, 80)}`);
-    } finally {
-      setScannerBusy(false);
-    }
-  }, [applyImage]);
-
-  // 보정본 ↔ 원본 토글
-  function toggleScanned() {
-    if (!originalFile) return;
-    const next = !useScanned;
-    setUseScanned(next);
-    const target = next && scannedFile ? scannedFile : originalFile;
-    applyImage(target);
-    // 이미 OCR 했으면 결과는 무효화 (이미지가 바뀌면 다시 인식해야 함)
-    if (ocr) { setOcr(null); setEditOcr(null); setManualDrugs([emptyManualDrug()]); }
-  }
+  }, []);
 
   function onDrop(e: React.DragEvent) {
     e.preventDefault();
@@ -1022,24 +976,6 @@ export default function StatsPage() {
             {imageUrl && !selectedClient && (
               <span className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 px-2 py-0.5 rounded">
                 ⓘ 거래처를 먼저 선택하세요
-              </span>
-            )}
-            {/* 스캐너 상태 / 토글 */}
-            {scannerBusy && (
-              <span className="text-xs text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded inline-flex items-center gap-1">
-                <ScanLine className="w-3 h-3 animate-pulse" />스캐너 보정 중...
-              </span>
-            )}
-            {!scannerBusy && originalFile && scannedFile && (
-              <button onClick={toggleScanned}
-                className={`text-xs px-2 py-0.5 rounded border inline-flex items-center gap-1 ${useScanned ? "bg-blue-50 border-blue-300 text-blue-700" : "bg-white border-gray-300 text-gray-600 hover:bg-gray-50"}`}
-                title="자동 보정 결과 미리보기. 결과가 이상하면 다시 눌러 원본으로 복귀.">
-                <ScanLine className="w-3 h-3" />{useScanned ? "원본으로 복귀" : "스캐너 보정 미리보기"}
-              </button>
-            )}
-            {!scannerBusy && scannerError && (
-              <span className="text-xs text-gray-500 bg-gray-50 border border-gray-200 px-2 py-0.5 rounded" title={scannerError}>
-                스캐너 미적용
               </span>
             )}
             <div className="ml-auto flex items-center gap-2 flex-wrap">
