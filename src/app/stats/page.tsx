@@ -575,26 +575,26 @@ export default function StatsPage() {
     setScannedFile(null);
     setScannedUrl(null);
     setScannerError("");
-    setUseScanned(true);
+    setUseScanned(false);  // 기본 원본. 스캐너 결과는 사용자가 토글해야 적용됨.
     applyImage(file);
     setOcr(null); setEditOcr(null);
     setManualDrugs([emptyManualDrug()]);
     setZoomEnabled(false); setIsZoomed(false); setZoomLevel(100);
     setSubmitted(false); setSubmitError("");
 
-    // 백그라운드로 캠스캐너 보정 시도. 첫 호출은 OpenCV.js 다운로드 때문에 5~10초 걸릴 수 있음.
+    // 백그라운드로 캠스캐너 보정 시도 — 결과는 토글 버튼으로만 노출.
+    // 자동 감지가 사진 종류(여백 적은 사진, 배경 대비 약함 등)에 따라 종종 실패하므로
+    // 결과를 사용자에게 강제로 보여주지 않는다.
     setScannerBusy(true);
     try {
       const blob = await extractPaper(file);
-      if (!blob) { setScannerError("문서 모서리 자동 감지 실패 — 원본 사용"); setUseScanned(false); return; }
+      if (!blob) { setScannerError("문서 모서리 자동 감지 실패"); return; }
       const corrected = new File([blob], `scanned-${file.name.replace(/\.[^.]+$/, "")}.jpg`, { type: "image/jpeg" });
       setScannedFile(corrected);
       setScannedUrl(URL.createObjectURL(corrected));
-      // 자동으로 보정본 적용
-      applyImage(corrected);
+      // 자동 적용 안 함 — 사용자가 토글 버튼으로 비교 후 선택
     } catch (e) {
       setScannerError(`스캐너 보정 실패: ${String(e).slice(0, 80)}`);
-      setUseScanned(false);
     } finally {
       setScannerBusy(false);
     }
@@ -1033,8 +1033,8 @@ export default function StatsPage() {
             {!scannerBusy && originalFile && scannedFile && (
               <button onClick={toggleScanned}
                 className={`text-xs px-2 py-0.5 rounded border inline-flex items-center gap-1 ${useScanned ? "bg-blue-50 border-blue-300 text-blue-700" : "bg-white border-gray-300 text-gray-600 hover:bg-gray-50"}`}
-                title="원본 ↔ 스캐너 보정본 전환">
-                <ScanLine className="w-3 h-3" />{useScanned ? "스캐너 보정본" : "원본"}
+                title="자동 보정 결과 미리보기. 결과가 이상하면 다시 눌러 원본으로 복귀.">
+                <ScanLine className="w-3 h-3" />{useScanned ? "원본으로 복귀" : "스캐너 보정 미리보기"}
               </button>
             )}
             {!scannerBusy && scannerError && (

@@ -97,10 +97,46 @@ export async function extractPaper(file: File): Promise<Blob | null> {
     }
     if (!extracted) return null;
 
+    // 결과 위생 검사 — 모서리를 잘못 잡아 좁은 영역만 늘어나면 픽셀이 세로/가로 줄무늬로 나옴.
+    // 행별 변동성이 거의 없으면 (= 가로 방향으로 변화 없음 = 세로 줄무늬) 거부.
+    if (looksDegenerate(extracted)) return null;
+
     return await new Promise<Blob | null>((resolve) => {
       extracted.toBlob((b) => resolve(b), "image/jpeg", 0.92);
     });
   } finally {
     bitmap.close();
   }
+}
+
+// 잘못된 원근 변환 감지 — 좁은 영역을 출력 전체 크기로 늘리면 픽셀이 세로 줄무늬가 된다.
+// 가로 방향 표준편차의 평균을 보고 거의 0 이면 (= 행마다 같은 색) degenerate.
+function looksDegenerate(canvas: HTMLCanvasElement): boolean {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return false;
+  // 다운샘플 — 전체 픽셀 검사 비용 줄이기
+  const sampleW = 80;
+  const sampleH = 60;
+  const tmp = document.createElement("canvas");
+  tmp.width = sampleW; tmp.height = sampleH;
+  const tctx = tmp.getContext("2d");
+  if (!tctx) return false;
+  tctx.drawImage(canvas, 0, 0, sampleW, sampleH);
+  const data = tctx.getImageData(0, 0, sampleW, sampleH).data;
+  // 행별 가로 방향 분산 평균
+  let rowVarSum = 0;
+  for (let y = 0; y < sampleH; y++) {
+    let sum = 0, sumSq = 0;
+    for (let x = 0; x < sampleW; x++) {
+      const i = (y * sampleW + x) * 4;
+      const lum = (data[i] + data[i + 1] + data[i + 2]) / 3;
+      sum += lum; sumSq += lum * lum;
+    }
+    const mean = sum / sampleW;
+    rowVarSum += sumSq / sampleW - mean * mean;
+  }
+  const meanRowVar = rowVarSum / sampleH;
+  // 정상적인 처방전 사진이면 행 안에 다양한 글자/숫자가 있어 분산이 충분히 큼.
+  // 임계값 50 은 경험치 — 명도 0~255 스케일에서 표준편차 7 이상이면 통과.
+  return meanRowVar < 50;
 }
