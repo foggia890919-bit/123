@@ -103,25 +103,43 @@ async function processPage(pageItems: HiraDrug[]): Promise<number> {
   if (drugs.length === 0) return 0;
 
   const codes = drugs.map((d) => d.insuranceCode).filter(Boolean) as string[];
-  const existing = codes.length > 0
-    ? await withDbRetry(() => prisma.$queryRaw<{ id: string; matched: string }[]>`
-        SELECT m.id, TRIM(code) AS matched
-        FROM "Medication" m,
-             UNNEST(string_to_array(m."insuranceCode", ',')) AS code
-        WHERE m."insuranceCode" IS NOT NULL
-          AND TRIM(code) = ANY(${codes})
-      `)
-    : [];
-  const existingMap = new Map(existing.map((e) => [e.matched, e]));
+  // 보험코드 없는 약품은 (productName + companyName)으로 중복 체크
+  const noCodeKeys = drugs.filter((d) => !d.insuranceCode).map((d) => `${d.productName}||${d.companyName}`);
+
+  const [existingByCode, existingByName] = await Promise.all([
+    codes.length > 0
+      ? withDbRetry(() => prisma.$queryRaw<{ id: string; matched: string }[]>`
+          SELECT m.id, TRIM(code) AS matched
+          FROM "Medication" m,
+               UNNEST(string_to_array(m."insuranceCode", ',')) AS code
+          WHERE m."insuranceCode" IS NOT NULL
+            AND TRIM(code) = ANY(${codes})
+        `)
+      : Promise.resolve([] as { id: string; matched: string }[]),
+    noCodeKeys.length > 0
+      ? withDbRetry(() => prisma.$queryRaw<{ id: string; key: string }[]>`
+          SELECT DISTINCT ON ("productName", "companyName") id,
+                 "productName" || '||' || "companyName" AS key
+          FROM "Medication"
+          WHERE "insuranceCode" IS NULL
+            AND ("productName" || '||' || "companyName") = ANY(${noCodeKeys})
+        `)
+      : Promise.resolve([] as { id: string; key: string }[]),
+  ]);
+
+  const existingMap = new Map(existingByCode.map((e) => [e.matched, e.id]));
+  const existingByNameMap = new Map(existingByName.map((e) => [e.key, e.id]));
 
   const toCreate: typeof drugs = [];
   const toUpdate: { id: string; data: Partial<ReturnType<typeof mapDrug>> }[] = [];
 
   for (const drug of drugs) {
-    const found = drug.insuranceCode ? existingMap.get(drug.insuranceCode) : null;
-    if (found) {
+    const foundId = drug.insuranceCode
+      ? existingMap.get(drug.insuranceCode)
+      : existingByNameMap.get(`${drug.productName}||${drug.companyName}`);
+    if (foundId) {
       toUpdate.push({
-        id: found.id,
+        id: foundId,
         data: {
           productName: drug.productName,
           ingredientName: drug.ingredientName,

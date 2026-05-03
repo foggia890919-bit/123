@@ -333,6 +333,28 @@ function UploadTab() {
   }
 
 
+  const [dedupStats, setDedupStats] = useState<{ totalDupeGroups?: number; totalExtraRows?: number; samples?: { productName: string; companyName: string; count: number }[] } | null>(null);
+  const [dedupLoading, setDedupLoading] = useState(false);
+  const [dedupResult, setDedupResult] = useState<{ deleted?: number; totalAfter?: number; error?: string } | null>(null);
+
+  useEffect(() => {
+    fetch("/api/admin/dedup-medications").then((r) => r.json()).then(setDedupStats).catch(() => null);
+  }, []);
+
+  async function handleDedup() {
+    if (!confirm(`중복 약품 ${dedupStats?.totalExtraRows?.toLocaleString()}건을 삭제할까요? (제안서에 사용 중인 건은 보존됩니다)`)) return;
+    setDedupLoading(true); setDedupResult(null);
+    try {
+      const res = await fetch("/api/admin/dedup-medications", { method: "POST" });
+      const data = await res.json();
+      setDedupResult(data);
+      if (data.success) {
+        fetch("/api/admin/dedup-medications").then((r) => r.json()).then(setDedupStats).catch(() => null);
+      }
+    } catch (e) { setDedupResult({ error: String(e) }); }
+    finally { setDedupLoading(false); }
+  }
+
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncResult, setSyncResult] = useState<{ success?: boolean; synced?: number; totalPublic?: number; publicCount?: number; excelCount?: number; lastSync?: string | null; lastTestSync?: string | null; error?: string; pageErrors?: { page: number; error: string }[] } | null>(null);
   const [syncProgress, setSyncProgress] = useState<{ current: number; total: number; synced: number; errors: number } | null>(null);
@@ -616,6 +638,41 @@ function UploadTab() {
             {result.success
               ? <><CheckCircle className="w-4 h-4 shrink-0" />총 {result.count?.toLocaleString()}건 — 공공데이터 머지: {result.updated}건 / 신규생성: {result.created}건{(result.skipped ?? 0) > 0 ? ` / 미매칭 스킵: ${result.skipped}건` : ""}</>
               : <><AlertCircle className="w-4 h-4 shrink-0" />{result.error}</>}
+          </div>
+        )}
+      </div>
+
+      {/* 중복 약품 정리 */}
+      <div className="bg-white rounded-lg border border-orange-200 p-4 space-y-2">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-semibold text-orange-800">① -보완: 중복 약품 정리</h2>
+            <p className="text-xs text-gray-500 mt-0.5">보험코드 없는 약품(수출용 등)이 sync 반복 시 중복 생성됩니다. 동일 제품명+제조사 기준으로 중복 제거합니다.</p>
+          </div>
+          {dedupStats && dedupStats.totalExtraRows !== undefined && (
+            <button
+              onClick={handleDedup}
+              disabled={dedupLoading || dedupStats.totalExtraRows === 0}
+              className="shrink-0 text-xs px-3 py-1.5 rounded border border-orange-300 text-orange-700 hover:bg-orange-50 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+            >
+              {dedupLoading ? "삭제 중..." : `중복 ${dedupStats.totalExtraRows.toLocaleString()}건 제거`}
+            </button>
+          )}
+        </div>
+        {dedupStats && dedupStats.totalDupeGroups !== undefined && dedupStats.totalDupeGroups > 0 && (
+          <details className="text-xs text-orange-700">
+            <summary className="cursor-pointer">▶ 중복 그룹 {dedupStats.totalDupeGroups}개 상세보기</summary>
+            <div className="mt-1 space-y-0.5 font-mono text-[10px] bg-orange-50 rounded p-2">
+              {dedupStats.samples?.map((s, i) => (
+                <div key={i}>{s.productName} / {s.companyName} → {s.count}건</div>
+              ))}
+            </div>
+          </details>
+        )}
+        {dedupStats?.totalExtraRows === 0 && <p className="text-xs text-green-600">중복 없음</p>}
+        {dedupResult && (
+          <div className={`text-xs rounded p-2 ${dedupResult.error ? "bg-red-50 text-red-700" : "bg-green-50 text-green-700"}`}>
+            {dedupResult.error ? dedupResult.error : `${dedupResult.deleted?.toLocaleString()}건 삭제 완료 · 남은 약품: ${dedupResult.totalAfter?.toLocaleString()}건`}
           </div>
         )}
       </div>
