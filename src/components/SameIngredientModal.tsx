@@ -56,8 +56,8 @@ function splitProductName(name: string): [string, string | null, string | null] 
     rest = rest.slice(0, rest.lastIndexOf("(")).trim();
   }
   // Latin 단위 + 한국어 단위(밀리그람/마이크로그람/그람/밀리리터 등) 모두 매칭
-  const UNIT = "(?:mg|mcg|μg|ug|g|ml|mL|IU|iu|%|mEq|밀리그람|마이크로그람|그람|밀리리터|리터|유닛|단위)";
-  const doseMatch = rest.match(new RegExp(`^(.+?)\\s*(\\d[\\d.,/]*\\s*${UNIT}[^\\s]*)`, "i"));
+  const UNIT = "(?:mg|mcg|μg|ug|g|ml|mL|IU|iu|%|mEq|밀리그[람램]|마이크로그[람램]|그[람램]|밀리리터|리터|유닛|단위)";
+  const doseMatch = rest.match(new RegExp(`^(.+?)\\s*(\\d[\\d.,/]*\\s*${UNIT})`, "i"));
   if (doseMatch) return [doseMatch[1].trim(), doseMatch[2].trim(), ingredient];
   return [rest, null, ingredient];
 }
@@ -65,9 +65,9 @@ function splitProductName(name: string): [string, string | null, string | null] 
 // 한국어 단위 → Latin 정규화 후 소문자·공백 제거 (용량 비교용)
 function normalizeDose(dose: string): string {
   return dose
-    .replace(/밀리그람/gi, "mg")
-    .replace(/마이크로그람/gi, "mcg")
-    .replace(/그람/gi, "g")
+    .replace(/밀리그[람램]/gi, "mg")
+    .replace(/마이크로그[람램]/gi, "mcg")
+    .replace(/그[람램]/gi, "g")
     .replace(/밀리리터/gi, "ml")
     .replace(/리터/gi, "l")
     .replace(/유닛|단위/gi, "iu")
@@ -136,10 +136,9 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
   useEffect(() => {
     if (!ingredientCode && !ingredientName) { setLoading(false); return; }
     const uid = userId ? `&userId=${userId}` : "";
-    // ingredientCode가 있을 때 ingredientName도 함께 전달 →
-    // 코드 미매핑 약품을 성분명으로 포함하여 누락 방지 (name_match 그룹)
+    // ingredientCode 있으면 ATC 주성분코드 기반 검색만 수행 (name_match 제외)
     const url = ingredientCode
-      ? `/api/medications/search?ingredientCode=${encodeURIComponent(ingredientCode)}&ingredientName=${encodeURIComponent(ingredientName)}${uid}&limit=500`
+      ? `/api/medications/search?ingredientCode=${encodeURIComponent(ingredientCode)}${uid}&limit=500`
       : `/api/medications/search?q=${encodeURIComponent(ingredientName)}${uid}&ingredientOnly=true&limit=500`;
     fetch(url)
       .then((r) => r.json())
@@ -260,7 +259,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
     exact:           { label: "정확히 일치 (동일 성분·제형·용량)", color: "bg-blue-50 text-blue-800 border-blue-200" },
     same_form:       { label: "동일 성분 + 동일 제형, 용량만 다름", color: "bg-amber-50 text-amber-800 border-amber-200" },
     same_ingredient: { label: "동일 성분 (제형·용량 다름)", color: "bg-gray-50 text-gray-600 border-gray-200" },
-    name_match:      { label: "성분명 일치 (보험코드 미매핑)", color: "bg-slate-50 text-slate-500 border-slate-200" },
+    name_match:      { label: "성분명 일치 (주성분코드 미매핑)", color: "bg-slate-50 text-slate-500 border-slate-200" },
   };
 
   const MATCH_LABEL: Record<string, string> = {
