@@ -45,15 +45,15 @@ interface Rule {
   pattern: string;
   keyword: string;
   costPerUnit: number;
-  logisticsPerUnit: number;
+  logisticsPerOrder: number;
 }
 const DEFAULT_RULES: Rule[] = [
-  { pattern: "피쿠알", keyword: "피쿠알", costPerUnit: 0, logisticsPerUnit: 0 },
-  { pattern: "picual", keyword: "피쿠알", costPerUnit: 0, logisticsPerUnit: 0 },
-  { pattern: "아르베키나", keyword: "아르베키나", costPerUnit: 0, logisticsPerUnit: 0 },
-  { pattern: "arbequina", keyword: "아르베키나", costPerUnit: 0, logisticsPerUnit: 0 },
-  { pattern: "블렌딩", keyword: "블렌딩", costPerUnit: 0, logisticsPerUnit: 0 },
-  { pattern: "blending", keyword: "블렌딩", costPerUnit: 0, logisticsPerUnit: 0 },
+  { pattern: "피쿠알", keyword: "피쿠알", costPerUnit: 0, logisticsPerOrder: 0 },
+  { pattern: "picual", keyword: "피쿠알", costPerUnit: 0, logisticsPerOrder: 0 },
+  { pattern: "아르베키나", keyword: "아르베키나", costPerUnit: 0, logisticsPerOrder: 0 },
+  { pattern: "arbequina", keyword: "아르베키나", costPerUnit: 0, logisticsPerOrder: 0 },
+  { pattern: "블렌딩", keyword: "블렌딩", costPerUnit: 0, logisticsPerOrder: 0 },
+  { pattern: "blending", keyword: "블렌딩", costPerUnit: 0, logisticsPerOrder: 0 },
 ];
 
 // ─────────────────── 시간 (KST)
@@ -261,7 +261,7 @@ async function loadRules(): Promise<Rule[]> {
   // 시트 「옵션매핑」 (A=패턴, B=키워드, C=원가(개당), D=물류비(개당)) 우선, 없으면 코드 기본값
   if (!SHEET_CREDS) return DEFAULT_RULES;
   try {
-    await ensureTab(SHEET_CREDS, "옵션매핑", ["패턴", "키워드", "원가(개당)", "물류비(개당)"]);
+    await ensureTab(SHEET_CREDS, "옵션매핑", ["패턴", "키워드", "원가(개당)", "물류비(건당)"]);
     const rows = await readRange(SHEET_CREDS, "옵션매핑!A2:D10000");
     const fromSheet = rows
       .filter((r) => r[0] && r[1])
@@ -269,7 +269,7 @@ async function loadRules(): Promise<Rule[]> {
         pattern: String(r[0]),
         keyword: String(r[1]),
         costPerUnit: Number(String(r[2] ?? "").replace(/,/g, "")) || 0,
-        logisticsPerUnit: Number(String(r[3] ?? "").replace(/,/g, "")) || 0,
+        logisticsPerOrder: Number(String(r[3] ?? "").replace(/,/g, "")) || 0,
       }));
     if (fromSheet.length > 0) {
       console.log(`시트 옵션매핑 ${fromSheet.length}개 로드`);
@@ -378,7 +378,7 @@ async function processDay(
           ?? po.settleAmount
           ?? (po.totalPaymentAmount - commission);
         const cost = (matched?.costPerUnit ?? 0) * totalUnits;
-        const logistics = (matched?.logisticsPerUnit ?? 0) * totalUnits;
+        const logistics = matched?.logisticsPerOrder ?? 0; // 건당 (행 1건에 1번)
         const profit = settlement - cost - logistics;
         allRows.push({
           paymentDate: po.paymentDate ?? o.order?.paymentDate ?? "",
