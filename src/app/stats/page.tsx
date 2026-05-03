@@ -396,13 +396,16 @@ export default function StatsPage() {
     const scrollEl = imageScrollRef.current;
     const imgEl = imageElRef.current;
     if (!scrollEl || !imgEl) return;
+    // 이미지가 scrollEl 안에서 어디에 있는지 정확히 계산 (패딩/wrapper 보정)
+    const imgRect = imgEl.getBoundingClientRect();
+    const scrollRect = scrollEl.getBoundingClientRect();
+    const imgTopInScroll = imgRect.top - scrollRect.top + scrollEl.scrollTop;
     if (yPercent != null) {
-      const targetY = (imgEl.clientHeight * yPercent) / 100;
+      const targetY = imgTopInScroll + (imgEl.clientHeight * yPercent) / 100;
       scrollEl.scrollTo({ top: Math.max(0, targetY - scrollEl.clientHeight / 2), behavior: "smooth" });
     } else if (editOcr?.drugs.length) {
-      // bbox 없으면 행 인덱스 비례로 스크롤 (위→아래 가정)
-      const proportional = (idx / editOcr.drugs.length) * imgEl.clientHeight;
-      scrollEl.scrollTo({ top: Math.max(0, proportional - scrollEl.clientHeight / 2), behavior: "smooth" });
+      const targetY = imgTopInScroll + (idx / editOcr.drugs.length) * imgEl.clientHeight;
+      scrollEl.scrollTo({ top: Math.max(0, targetY - scrollEl.clientHeight / 2), behavior: "smooth" });
     }
   }
 
@@ -659,20 +662,25 @@ export default function StatsPage() {
           >
             {imageUrl ? (
               <div onClick={handleImageClick}
-                className={`w-full min-h-full flex items-start justify-center p-2 relative select-none ${isPanning.current ? "cursor-grabbing" : zoomEnabled ? (isZoomed ? "cursor-zoom-out" : "cursor-zoom-in") : "cursor-grab"}`}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img ref={imageElRef} src={imageUrl} alt="처방전"
-                  style={{ width: `${zoomLevel}%`, transition: "width 0.2s ease", maxWidth: "none" }}
-                  className="rounded object-contain" draggable={false} />
-                {focusedIdx != null && editOcr?.drugs[focusedIdx]?.bboxYPercent != null && (
-                  <div
-                    className="absolute left-2 right-2 pointer-events-none border-y-2 border-yellow-400 bg-yellow-300/15 transition-all"
-                    style={{
-                      top: `calc(${editOcr.drugs[focusedIdx]!.bboxYPercent}% - 14px)`,
-                      height: "28px",
-                    }}
-                  />
-                )}
+                className={`w-full min-h-full flex items-start justify-center p-2 select-none ${isPanning.current ? "cursor-grabbing" : zoomEnabled ? (isZoomed ? "cursor-zoom-out" : "cursor-zoom-in") : "cursor-grab"}`}>
+                {/* 이미지 + 행 하이라이트는 같은 relative 박스 안에 — 좌표가 이미지 크기에 정확히 매핑됨 */}
+                <div className="relative shrink-0"
+                  style={{ width: `${zoomLevel}%`, transition: "width 0.2s ease" }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img ref={imageElRef} src={imageUrl} alt="처방전"
+                    style={{ width: "100%", display: "block" }}
+                    className="rounded" draggable={false} />
+                  {focusedIdx != null && editOcr?.drugs[focusedIdx]?.bboxYPercent != null && (
+                    <div
+                      className="absolute left-0 right-0 pointer-events-none border-y-2 border-yellow-400 bg-yellow-300/20 transition-all"
+                      style={{
+                        top: `${editOcr.drugs[focusedIdx]!.bboxYPercent}%`,
+                        height: "32px",
+                        transform: "translateY(-50%)",
+                      }}
+                    />
+                  )}
+                </div>
               </div>
             ) : (
               <div onDrop={onDrop} onDragOver={(e) => e.preventDefault()}
