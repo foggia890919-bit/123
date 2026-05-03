@@ -180,85 +180,56 @@ export async function GET(req: NextRequest) {
 }
 
 // SYNC: POST /api/medications/sync-cmpn-codes
-// 전체 hira_cmpn 다운로드 → ingredientName 매칭으로 ingredientCode가 null인 약품들에 코드 채움
+// DB 내 (ingredientName → ingredientCode) 맵을 이용해 코드 없는 약품에 코드 채움
+// 외부 API 불필요 — 이미 ATC sync로 채워진 19K건을 사전으로 활용
 export async function POST() {
   const guard = await requireAdmin();
   if (isNextResponse(guard)) return guard;
 
   try {
-    // 1) 전체 페이지 다운로드
-    const { items: firstItems, totalCount } = await fetchPageWithRetry(1);
-    if (totalCount === 0 || firstItems.length === 0) {
-      return NextResponse.json({
-        error: "API 데이터 없음. GET /api/medications/sync-cmpn-codes 로 응답 구조 확인하세요.",
-        sampleKeys: firstItems[0] ? Object.keys(firstItems[0]) : [],
-      }, { status: 502 });
-    }
+    // 1) 이미 ingredientCode가 있는 약품에서 (정규화 성분명 → 코드) 사전 구축
+    const seeded = await withDbRetry(() => prisma.medication.findMany({
+      where: { ingredientCode: { not: null }, ingredientName: { not: "" } },
+      select: { ingredientName: true, ingredientCode: true },
+    }));
 
-    const totalPages = Math.ceil(totalCount / 1000);
-    const allItems: CmpnItem[] = [...firstItems];
-    for (let p = 2; p <= totalPages; p++) {
-      const { items } = await fetchPageWithRetry(p);
-      allItems.push(...items);
-    }
-
-    // 2) (정규화 이름) → Set<주성분코드> 매핑
-    // 한 성분명에 여러 코드가 매칭될 수 있음 (제형/용량별로 코드가 다름)
     const nameToCodes = new Map<string, Set<string>>();
-    let extracted = 0;
-    for (const item of allItems) {
-      const c = extractCmpn(item);
-      if (!c) continue;
-      extracted++;
-      const norm = normalizeName(c.name);
+    for (const med of seeded) {
+      const norm = normalizeName(med.ingredientName ?? "");
+      if (!norm || !med.ingredientCode) continue;
       if (!nameToCodes.has(norm)) nameToCodes.set(norm, new Set());
-      nameToCodes.get(norm)!.add(c.code);
-      // 영문도 같은 코드로 매핑
-      if (c.engName) {
-        const engNorm = normalizeName(c.engName);
-        if (engNorm && engNorm !== norm) {
-          if (!nameToCodes.has(engNorm)) nameToCodes.set(engNorm, new Set());
-          nameToCodes.get(engNorm)!.add(c.code);
-        }
-      }
+      nameToCodes.get(norm)!.add(med.ingredientCode);
     }
 
     if (nameToCodes.size === 0) {
       return NextResponse.json({
-        error: "주성분코드/주성분명 필드를 찾지 못했어요. GET으로 응답 구조 확인하세요.",
-        sampleKeys: Object.keys(firstItems[0] ?? {}),
-        sampleItem: firstItems[0],
+        error: "DB에 ingredientCode가 있는 약품이 없어요. 먼저 ③ ATC 동기화를 실행하세요.",
       }, { status: 400 });
     }
 
-    // 3) ingredientCode가 null인 약품 + ingredientName 있는 약품 후보 조회
+    // 2) ingredientCode가 null인 약품 + ingredientName 있는 약품 후보 조회
     const candidates = await withDbRetry(() => prisma.medication.findMany({
       where: { ingredientCode: null, ingredientName: { not: "" } },
-      select: { id: true, ingredientName: true, productName: true },
+      select: { id: true, ingredientName: true },
     }));
 
-    // 4) 매칭 + bulk update
+    // 3) 매칭 + bulk update (UNNEST로 한 번에 처리)
     let exactMatched = 0;
     let containsMatched = 0;
     let multiCandidate = 0;
-    let updated = 0;
+    const updates: { id: string; code: string }[] = [];
 
-    // 정렬된 키 목록 (긴 것부터 매칭하면 더 정확)
     const sortedKeys = Array.from(nameToCodes.keys()).sort((a, b) => b.length - a.length);
 
     for (const med of candidates) {
-      const ingrName = med.ingredientName ?? "";
-      if (!ingrName) continue;
-      const norm = normalizeName(ingrName);
+      const norm = normalizeName(med.ingredientName ?? "");
       if (!norm) continue;
 
       let codes: Set<string> | undefined;
-      // 4-1) 정확 매칭
       if (nameToCodes.has(norm)) {
         codes = nameToCodes.get(norm);
         exactMatched++;
       } else {
-        // 4-2) contains 매칭 — DB 성분명이 cmpn 사전의 어느 항목을 포함하거나 그 반대
         for (const key of sortedKeys) {
           if (norm.includes(key) || key.includes(norm)) {
             codes = nameToCodes.get(key);
@@ -267,21 +238,32 @@ export async function POST() {
           }
         }
       }
-
       if (!codes || codes.size === 0) continue;
       const codeArr = Array.from(codes);
       if (codeArr.length > 1) multiCandidate++;
-      // 여러 코드 후보면 첫 번째 (TODO: productName 용량 파싱으로 고도화 가능)
-      const chosen = codeArr[0];
-
-      await withDbRetry(() => prisma.medication.update({
-        where: { id: med.id },
-        data: { ingredientCode: chosen, updatedAt: new Date() },
-      }));
-      updated++;
+      updates.push({ id: med.id, code: codeArr[0] });
     }
 
-    // 5) 마지막 동기화 기록
+    // bulk UPDATE via UNNEST
+    let updated = 0;
+    if (updates.length > 0) {
+      const BATCH = 500;
+      for (let i = 0; i < updates.length; i += BATCH) {
+        const batch = updates.slice(i, i + BATCH);
+        const ids = batch.map((u) => u.id);
+        const codes = batch.map((u) => u.code);
+        await withDbRetry(() => prisma.$executeRaw`
+          UPDATE "Medication" m
+          SET "ingredientCode" = v.code, "updatedAt" = NOW()
+          FROM (
+            SELECT UNNEST(${ids}::text[]) AS id, UNNEST(${codes}::text[]) AS code
+          ) v
+          WHERE m.id = v.id
+        `);
+        updated += batch.length;
+      }
+    }
+
     const now = new Date().toISOString();
     await withDbRetry(() => prisma.$executeRaw`
       INSERT INTO "SystemSetting" ("key", "value", "updatedAt")
@@ -296,9 +278,7 @@ export async function POST() {
 
     return NextResponse.json({
       success: true,
-      apiTotalCount: totalCount,
-      extractedCmpns: extracted,
-      uniqueNames: nameToCodes.size,
+      seededNames: nameToCodes.size,
       candidates: candidates.length,
       exactMatched,
       containsMatched,

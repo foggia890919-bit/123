@@ -304,7 +304,7 @@ function UploadTab() {
     multiCandidate?: number; updated?: number; lastSync?: string;
     finalState?: { withCode: number; totalDb: number; coverage: string };
     sampleKeys?: string[]; sampleItems?: unknown[]; sampleExtracts?: unknown[];
-    note?: string; error?: string; rawXml?: string; parsedStructure?: string;
+    note?: string; error?: string; rawXml?: string; parsedStructure?: string; seededNames?: number;
   } | null>(null);
 
   async function handleCmpnProbe() {
@@ -780,12 +780,10 @@ function UploadTab() {
               ) : (
                 <>
                   <div><CheckCircle className="w-3.5 h-3.5 inline mr-1" />
-                    API <strong>{cmpnResult.apiTotalCount?.toLocaleString()}</strong>건 다운로드 ·
-                    추출 <strong>{cmpnResult.extractedCmpns?.toLocaleString()}</strong>건 ·
-                    고유 성분명 <strong>{cmpnResult.uniqueNames?.toLocaleString()}</strong>개
+                    DB 사전: <strong>{cmpnResult.seededNames?.toLocaleString() ?? cmpnResult.uniqueNames?.toLocaleString()}</strong>개 성분명 ·
+                    매칭 후보: <strong>{cmpnResult.candidates?.toLocaleString()}</strong>건
                   </div>
                   <div>
-                    null코드 약품 후보 <strong>{cmpnResult.candidates?.toLocaleString()}</strong>건 →
                     정확매칭 <strong>{cmpnResult.exactMatched?.toLocaleString()}</strong>,
                     포함매칭 <strong>{cmpnResult.containsMatched?.toLocaleString()}</strong>,
                     복수후보 <strong>{cmpnResult.multiCandidate?.toLocaleString()}</strong>
