@@ -144,31 +144,36 @@ interface BulkOrder {
 async function fetchOrdersForDay(store: StoreConfig, fromIso: string, toIso: string): Promise<BulkOrder[]> {
   const token = await getAccessToken(store.clientId, store.clientSecret);
 
-  // 결제일 이후 상태변경(배송/도착/구매확정 등)도 잡기 위해 lastChanged 창을 넓힘.
-  // 결제일은 [fromIso, toIso] 그대로 두고, lastChangedTo 만 +30일 또는 NOW (둘 중 작은 값) 까지 확장.
-  const lastChangedFromIso = fromIso;
+  // Naver last-changed-statuses 는 최대 24시간 창. 결제일 이후 30일까지 (또는 NOW 까지)
+  // 상태변경된 주문도 캐치하기 위해 24시간씩 청크로 쪼개서 호출.
+  const lastChangedFromMs = new Date(fromIso).getTime();
   const lastChangedToMs = Math.min(
     new Date(toIso).getTime() + 30 * 24 * 60 * 60 * 1000,
     Date.now(),
   );
-  const lastChangedToIso = new Date(lastChangedToMs).toISOString();
+  const dayMs = 24 * 60 * 60 * 1000;
+  const chunks: { from: string; to: string }[] = [];
+  for (let cur = lastChangedFromMs; cur < lastChangedToMs; cur += dayMs) {
+    const next = Math.min(cur + dayMs, lastChangedToMs);
+    chunks.push({
+      from: new Date(cur).toISOString(),
+      to: new Date(next).toISOString(),
+    });
+  }
 
-  // Step 1: 다중 status type 호출 (4초 사이딜레이로 RATE_LIMIT 회피)
-  const types: (string | undefined)[] = [undefined, "PAYED", "DISPATCHED", "DELIVERED", "PURCHASE_DECIDED"];
   const allIds = new Set<string>();
   const orderIds = new Set<string>();
 
-  for (let ti = 0; ti < types.length; ti++) {
-    if (ti > 0) await sleep(4000);
-    const type = types[ti];
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const chunk = chunks[ci];
+    if (ci > 0) await sleep(1500);
     let cursor: string | undefined;
     for (let page = 0; page < 100; page++) {
-      if (page > 0) await sleep(1500);
+      if (page > 0) await sleep(1200);
       const params = new URLSearchParams({
-        lastChangedFrom: lastChangedFromIso,
-        lastChangedTo: lastChangedToIso,
+        lastChangedFrom: chunk.from,
+        lastChangedTo: chunk.to,
       });
-      if (type) params.set("lastChangedType", type);
       if (cursor) params.set("moreSequence", cursor);
       try {
         const data = await naverFetch<{
@@ -185,16 +190,17 @@ async function fetchOrdersForDay(store: StoreConfig, fromIso: string, toIso: str
         if (!cursor) break;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes(" 400 ") || msg.includes(" 401 ")) break; // unsupported type
         if (msg.includes(" 429 ")) {
-          console.warn(`[${store.name}] RATE_LIMIT — 60초 대기`);
-          await sleep(60_000);
+          console.warn(`[${store.name}] RATE_LIMIT — 30초 대기`);
+          await sleep(30_000);
+        } else {
+          console.warn(`[${store.name}] chunk ${ci + 1}/${chunks.length}: ${msg.slice(0, 100)}`);
         }
         break;
       }
     }
   }
-  console.log(`[${store.name}] step1: productOrderIds=${allIds.size}, orderIds=${orderIds.size}`);
+  console.log(`[${store.name}] step1 (${chunks.length}청크): productOrderIds=${allIds.size}, orderIds=${orderIds.size}`);
 
   // Step 2: orderId 별 productOrderId 재조회 (형제 productOrder 누락 방지)
   if (orderIds.size > 0 && orderIds.size <= 500) {
