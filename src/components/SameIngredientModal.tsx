@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, Fragment } from "react";
-import { X, RefreshCw, ChevronUp, ChevronDown, ChevronsUpDown, Loader2, Plus, FileText } from "lucide-react";
+import { X, RefreshCw, ChevronUp, ChevronDown, ChevronsUpDown, Loader2, Plus, FileText, Download } from "lucide-react";
+import * as XLSX from "xlsx";
 import { formatPrice } from "@/lib/utils";
 import type { MedicationItem, IngredientMatchLevel } from "@/types";
 
@@ -262,6 +263,31 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
     name_match:      { label: "성분명 일치 (보험코드 미매핑)", color: "bg-slate-50 text-slate-500 border-slate-200" },
   };
 
+  const MATCH_LABEL: Record<string, string> = {
+    exact: "정확일치", same_form: "동일제형(용량다름)", same_ingredient: "동일성분(제형다름)", name_match: "성분명일치",
+  };
+
+  function downloadExcel() {
+    const rows = visibleSorted.map((m) => ({
+      "제품명": m.productName,
+      "성분명": m.ingredientName,
+      "주성분코드": m.ingredientCode ?? "",
+      "제조사": m.companyName,
+      "약가(원)": m.price ?? "",
+      "보험코드": m.insuranceCode ?? "",
+      "생동/생산": m.bioStatus ?? "",
+      "오리지날": m.originalDrug ?? "",
+      "수수료율(%)": m.commissionRate != null ? m.commissionRate * 100 : "",
+      "추가수수료(%)": m.additionalRate != null ? m.additionalRate * 100 : "",
+      "매칭수준": m.matchLevel ? (MATCH_LABEL[m.matchLevel] ?? m.matchLevel) : "",
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "동일성분");
+    const safe = ingredientName.replace(/[/\\?*[\]]/g, "_").slice(0, 30);
+    XLSX.writeFile(wb, `동일성분_${safe}.xlsx`);
+  }
+
   function SortIcon({ k }: { k: SortKey }) {
     if (sortKey !== k) return <ChevronsUpDown className="w-3 h-3 inline ml-0.5 text-gray-300" />;
     return sortDir === "asc" ? <ChevronUp className="w-3 h-3 inline ml-0.5 text-blue-500" /> : <ChevronDown className="w-3 h-3 inline ml-0.5 text-blue-500" />;
@@ -289,7 +315,18 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
                 {ingredientCode ? `주성분코드: ${ingredientCode}` : ingredientName} · {visibleSorted.length}개 표시 (전체 {total}개)
               </p>
             </div>
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 shrink-0"><X className="w-5 h-5" /></button>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                onClick={downloadExcel}
+                disabled={visibleSorted.length === 0}
+                title="엑셀로 내려받기"
+                className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded border border-green-200 text-green-700 hover:bg-green-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Download className="w-3.5 h-3.5" />
+                엑셀
+              </button>
+              <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X className="w-5 h-5" /></button>
+            </div>
           </div>
 
           {replaceContext && (
