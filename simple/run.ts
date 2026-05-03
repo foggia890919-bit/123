@@ -144,6 +144,15 @@ interface BulkOrder {
 async function fetchOrdersForDay(store: StoreConfig, fromIso: string, toIso: string): Promise<BulkOrder[]> {
   const token = await getAccessToken(store.clientId, store.clientSecret);
 
+  // 결제일 이후 상태변경(배송/도착/구매확정 등)도 잡기 위해 lastChanged 창을 넓힘.
+  // 결제일은 [fromIso, toIso] 그대로 두고, lastChangedTo 만 +30일 또는 NOW (둘 중 작은 값) 까지 확장.
+  const lastChangedFromIso = fromIso;
+  const lastChangedToMs = Math.min(
+    new Date(toIso).getTime() + 30 * 24 * 60 * 60 * 1000,
+    Date.now(),
+  );
+  const lastChangedToIso = new Date(lastChangedToMs).toISOString();
+
   // Step 1: 다중 status type 호출 (4초 사이딜레이로 RATE_LIMIT 회피)
   const types: (string | undefined)[] = [undefined, "PAYED", "DISPATCHED", "DELIVERED", "PURCHASE_DECIDED"];
   const allIds = new Set<string>();
@@ -155,7 +164,10 @@ async function fetchOrdersForDay(store: StoreConfig, fromIso: string, toIso: str
     let cursor: string | undefined;
     for (let page = 0; page < 100; page++) {
       if (page > 0) await sleep(1500);
-      const params = new URLSearchParams({ lastChangedFrom: fromIso, lastChangedTo: toIso });
+      const params = new URLSearchParams({
+        lastChangedFrom: lastChangedFromIso,
+        lastChangedTo: lastChangedToIso,
+      });
       if (type) params.set("lastChangedType", type);
       if (cursor) params.set("moreSequence", cursor);
       try {
@@ -185,7 +197,7 @@ async function fetchOrdersForDay(store: StoreConfig, fromIso: string, toIso: str
   console.log(`[${store.name}] step1: productOrderIds=${allIds.size}, orderIds=${orderIds.size}`);
 
   // Step 2: orderId 별 productOrderId 재조회 (형제 productOrder 누락 방지)
-  if (orderIds.size > 0 && orderIds.size <= 200) {
+  if (orderIds.size > 0 && orderIds.size <= 500) {
     let added = 0;
     for (const oid of orderIds) {
       await sleep(500);
