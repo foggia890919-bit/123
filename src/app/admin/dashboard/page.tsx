@@ -261,7 +261,7 @@ function UploadTab() {
         .then((r) => r.json())
         .then((d) => { if (d.missingCount !== undefined) setMissingCodeCount(d.missingCount); })
         .catch(() => null);
-    } catch { setMapResult({ error: "동기화 중 오류가 발생했어요." }); }
+    } catch (e) { setMapResult({ error: `동기화 중 오류: ${e instanceof Error ? e.message : String(e)}` }); }
     finally { setMapLoading(false); }
   }
 
