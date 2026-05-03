@@ -149,6 +149,15 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    // probe는 raw text도 함께 반환해서 XML 구조 확인 가능하게
+    const url = new URL(BASE_URL);
+    url.searchParams.set("serviceKey", API_KEY);
+    url.searchParams.set("pageNo", "1");
+    url.searchParams.set("numOfRows", "5");
+    const rawRes = await fetch(url.toString(), { cache: "no-store" });
+    const rawText = await rawRes.text();
+    const parsed = xmlParser.parse(rawText);
+
     const { items, totalCount } = await fetchPage(1, 5);
     const sampleKeys = items[0] ? Object.keys(items[0]) : [];
     const sampleExtracts = items.map(extractCmpn);
@@ -159,6 +168,8 @@ export async function GET(req: NextRequest) {
       sampleKeys,
       sampleItems: items,
       sampleExtracts,
+      rawXml: rawText.slice(0, 2000),
+      parsedStructure: JSON.stringify(parsed).slice(0, 2000),
       note: totalCount > 0
         ? `사용 가능 (전체 ${totalCount}건). POST로 전체 동기화 실행.`
         : "데이터 없음 - API 키 또는 응답 구조 확인 필요",

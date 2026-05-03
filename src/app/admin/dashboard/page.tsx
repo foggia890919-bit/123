@@ -304,7 +304,7 @@ function UploadTab() {
     multiCandidate?: number; updated?: number; lastSync?: string;
     finalState?: { withCode: number; totalDb: number; coverage: string };
     sampleKeys?: string[]; sampleItems?: unknown[]; sampleExtracts?: unknown[];
-    note?: string; error?: string;
+    note?: string; error?: string; rawXml?: string; parsedStructure?: string;
   } | null>(null);
 
   async function handleCmpnProbe() {
@@ -763,14 +763,18 @@ function UploadTab() {
               ) : cmpnResult.probe ? (
                 <>
                   <div><CheckCircle className="w-3.5 h-3.5 inline mr-1" />{cmpnResult.note}</div>
-                  <div className="font-mono text-[10px]">응답 필드: {cmpnResult.sampleKeys?.join(", ")}</div>
+                  <div className="font-mono text-[10px]">응답 필드: {cmpnResult.sampleKeys?.join(", ") || "(없음)"}</div>
                   <details>
-                    <summary className="cursor-pointer text-[10px] underline">▶ 샘플 아이템 ({cmpnResult.sampleItems?.length}건)</summary>
-                    <pre className="text-[10px] bg-white rounded p-2 mt-1 overflow-auto max-h-48">{JSON.stringify(cmpnResult.sampleItems, null, 2)}</pre>
+                    <summary className="cursor-pointer text-[10px] underline">▶ 실제 XML 응답 (구조 확인)</summary>
+                    <pre className="text-[10px] bg-white rounded p-2 mt-1 overflow-auto max-h-48">{cmpnResult.rawXml}</pre>
                   </details>
                   <details>
-                    <summary className="cursor-pointer text-[10px] underline">▶ 추출 결과 (extractCmpn 동작 확인)</summary>
-                    <pre className="text-[10px] bg-white rounded p-2 mt-1 overflow-auto max-h-48">{JSON.stringify(cmpnResult.sampleExtracts, null, 2)}</pre>
+                    <summary className="cursor-pointer text-[10px] underline">▶ 파싱된 JSON 구조</summary>
+                    <pre className="text-[10px] bg-white rounded p-2 mt-1 overflow-auto max-h-48">{cmpnResult.parsedStructure}</pre>
+                  </details>
+                  <details>
+                    <summary className="cursor-pointer text-[10px] underline">▶ 추출 샘플 ({cmpnResult.sampleItems?.length}건)</summary>
+                    <pre className="text-[10px] bg-white rounded p-2 mt-1 overflow-auto max-h-48">{JSON.stringify(cmpnResult.sampleItems, null, 2)}</pre>
                   </details>
                 </>
               ) : (
