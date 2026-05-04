@@ -22,6 +22,7 @@ interface Medication {
   price: number | null; commissionRate: number | null; insuranceCode: string | null;
   categoryB: string | null; ingredientCode: string | null; bioStatus: string | null; originalDrug: string | null; notes: string | null;
   isSettlement: boolean; settlementType?: string | null; additionalRate?: number | null;
+  paymentType?: string | null;
 }
 interface ProposalItem {
   id: string;
@@ -35,6 +36,18 @@ interface Proposal {
   id: string; title: string; clientId?: string | null;
   client?: UserClient | null;
   _count?: { items: number }; items?: ProposalItem[]; createdAt: string;
+}
+
+function PaymentTypeBadge({ value }: { value: string | null | undefined }) {
+  const v = value?.trim();
+  if (!v) return null;
+  const cls =
+    v === "급여" ? "text-emerald-700 bg-emerald-50 border-emerald-200" :
+    v === "비급여" ? "text-orange-700 bg-orange-50 border-orange-200" :
+    v === "선별급여" ? "text-violet-700 bg-violet-50 border-violet-200" :
+    v === "전액본인부담" ? "text-rose-700 bg-rose-50 border-rose-200" :
+    "text-gray-600 bg-gray-50 border-gray-200";
+  return <span className={`inline-block text-[10px] border px-1 py-0.5 rounded align-middle shrink-0 ${cls}`}>{v}</span>;
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -413,6 +426,7 @@ function ProposalsContent() {
       if (cols.showInsuranceCode) row["보험코드"] = m?.insuranceCode || "-";
       if (cols.showNotes) row["특이사항"] = m?.notes || "-";
       row["약가"] = m?.price ?? "-";
+      row["급여구분"] = m?.paymentType ?? "";
       if (withRate) {
         row["기본수수료(%)"] = base ?? "-"; row["추가수수료(%)"] = extra ?? "-";
         row["합계수수료(%)"] = total ?? "-"; row["정산금액"] = settlement ?? "-";
@@ -450,6 +464,7 @@ function ProposalsContent() {
     if (cols.showInsuranceCode) head.push("보험코드");
     if (cols.showNotes) head.push("특이사항");
     head.push("약가");
+    head.push("급여구분");
     if (withRate) head.push("기본수수료", "추가수수료", "합계수수료", "정산금액");
 
     const bodyRows = selected.items.map((item, i) => {
@@ -465,6 +480,7 @@ function ProposalsContent() {
       if (cols.showInsuranceCode) row.push(m?.insuranceCode || "-");
       if (cols.showNotes) row.push(m?.notes || "-");
       row.push(m?.price ? `${m.price.toLocaleString()}원` : "-");
+      row.push(m?.paymentType ?? "");
       if (withRate) {
         row.push(
           base != null ? `${base}%` : "-",
@@ -898,6 +914,7 @@ function ProposalsContent() {
                                         m.settlementType === "원외" ? "text-blue-700 bg-blue-50 border-blue-200" : "text-indigo-700 bg-indigo-50 border-indigo-200"
                                       }`}>{m.settlementType === "원외" ? "cso" : "원내가능"}</span>
                                     )}
+                                    <PaymentTypeBadge value={m?.paymentType} />
                                   </p>
                                 </div>
                               )}

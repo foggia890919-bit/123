@@ -162,6 +162,18 @@ function SettlementBadge({ med }: { med: MedicationItem }) {
   return null;
 }
 
+function PaymentTypeBadge({ value }: { value: string | null | undefined }) {
+  const v = value?.trim();
+  if (!v) return null;
+  const cls =
+    v === "급여" ? "text-emerald-700 bg-emerald-50 border-emerald-200" :
+    v === "비급여" ? "text-orange-700 bg-orange-50 border-orange-200" :
+    v === "선별급여" ? "text-violet-700 bg-violet-50 border-violet-200" :
+    v === "전액본인부담" ? "text-rose-700 bg-rose-50 border-rose-200" :
+    "text-gray-600 bg-gray-50 border-gray-200";
+  return <span className={`inline-block text-[10px] border px-1 py-0.5 rounded ml-1 align-middle ${cls}`}>{v}</span>;
+}
+
 export default function MedicationTable({ medications, loading, userId, showCategoryA, showIngredientName, showCategoryB, showRate, showBioStatus, showPrice, showOriginalDrug, showInsuranceCode, showNotes, showStock }: Props) {
   const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null; productName?: string } | null>(null);
   const [stockModal, setStockModal] = useState<{ insuranceCode: string; productName: string } | null>(null);
@@ -362,6 +374,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                           <p className="font-medium text-gray-900 leading-snug">
                             <ProductName name={med.productName} />
                             <SettlementBadge med={med} />
+                            <PaymentTypeBadge value={med.paymentType} />
                           </p>
                           <p className="text-[11px] text-gray-500 mt-0.5">{med.companyName}</p>
                           <div className="flex gap-1 mt-1.5 flex-wrap">

@@ -62,6 +62,18 @@ function splitProductName(name: string): [string, string | null, string | null] 
   return [rest, null, ingredient];
 }
 
+function PaymentTypeBadge({ value }: { value: string | null | undefined }) {
+  const v = value?.trim();
+  if (!v) return null;
+  const cls =
+    v === "급여" ? "text-emerald-700 bg-emerald-50 border-emerald-200" :
+    v === "비급여" ? "text-orange-700 bg-orange-50 border-orange-200" :
+    v === "선별급여" ? "text-violet-700 bg-violet-50 border-violet-200" :
+    v === "전액본인부담" ? "text-rose-700 bg-rose-50 border-rose-200" :
+    "text-gray-600 bg-gray-50 border-gray-200";
+  return <span className={`inline-block text-[10px] border px-1 py-0.5 rounded ml-1 align-middle ${cls}`}>{v}</span>;
+}
+
 // 한국어 단위 → Latin 정규화 후 소문자·공백 제거 (용량 비교용)
 function normalizeDose(dose: string): string {
   return dose
@@ -273,6 +285,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
       "주성분코드": m.ingredientCode ?? "",
       "제조사": m.companyName,
       "약가(원)": m.price ?? "",
+      "급여구분": m.paymentType ?? "",
       "보험코드": m.insuranceCode ?? "",
       "생동/생산": m.bioStatus ?? "",
       "오리지날": m.originalDrug ?? "",
@@ -480,6 +493,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
                                   {med.settlementType === "원외" ? "cso" : "원내"}
                                 </span>
                               )}
+                              <PaymentTypeBadge value={med.paymentType} />
                               {dose && <span className="block text-[11px] font-normal text-gray-400 mt-0.5">{dose}</span>}
                               {ingredient && <span className="block text-[10px] font-normal text-gray-400 mt-0.5">{ingredient}</span>}
                               <span className="block text-[11px] font-normal text-gray-500 mt-0.5">{med.companyName}</span>
