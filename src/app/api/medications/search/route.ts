@@ -55,6 +55,8 @@ export async function GET(req: NextRequest) {
   const ingredientOnly = req.nextUrl.searchParams.get("ingredientOnly") === "true";
   const companiesRaw = req.nextUrl.searchParams.get("companies") || "";
   const companyList = companiesRaw.split(",").map((s) => s.trim()).filter(Boolean);
+  // fast=true: 자동완성 전용 — productName 만 검색, count/stock 스킵
+  const fast = req.nextUrl.searchParams.get("fast") === "true";
 
   if (!q && !ingredientCodeParam && companyList.length === 0) return NextResponse.json({ medications: [], total: 0 });
 
@@ -98,14 +100,16 @@ export async function GET(req: NextRequest) {
         : q
           ? ingredientOnly
             ? { ingredientName: { contains: q, mode: "insensitive" as const } }
-            : {
-                OR: [
-                  { productName: { contains: q, mode: "insensitive" as const } },
-                  { ingredientName: { contains: q, mode: "insensitive" as const } },
-                  { companyName: { contains: q, mode: "insensitive" as const } },
-                  { insuranceCode: { contains: q, mode: "insensitive" as const } },
-                ],
-              }
+            : fast
+              ? { productName: { contains: q, mode: "insensitive" as const } }
+              : {
+                  OR: [
+                    { productName: { contains: q, mode: "insensitive" as const } },
+                    { ingredientName: { contains: q, mode: "insensitive" as const } },
+                    { companyName: { contains: q, mode: "insensitive" as const } },
+                    { insuranceCode: { contains: q, mode: "insensitive" as const } },
+                  ],
+                }
           : {},
     ],
   };
@@ -116,8 +120,15 @@ export async function GET(req: NextRequest) {
       orderBy: [{ isSettlement: "desc" }, { commissionRate: "desc" }],
       skip: (page - 1) * limit,
       take: limit,
+      ...(fast ? {
+        select: {
+          id: true, insuranceCode: true, productName: true, companyName: true,
+          ingredientCode: true, ingredientName: true,
+          price: true, commissionRate: true, isSettlement: true,
+        },
+      } : {}),
     }),
-    prisma.medication.count({ where }),
+    fast ? Promise.resolve(0) : prisma.medication.count({ where }),
   ]);
 
   // 로그인 회원의 추가수수료 적용 — 제약사명은 (주)/공백 무시하고 정규화 키로 매칭
@@ -166,7 +177,7 @@ export async function GET(req: NextRequest) {
   }
 
   const insuranceCodes = result.map((m) => m.insuranceCode).filter((c): c is string => !!c);
-  if (insuranceCodes.length > 0) {
+  if (!fast && insuranceCodes.length > 0) {
     const rows = await prisma.$queryRaw<Array<{ insuranceCode: string; stock: number }>>`
       SELECT DISTINCT ON ("siteKey", "insuranceCode")
              "insuranceCode",
