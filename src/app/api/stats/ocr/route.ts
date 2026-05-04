@@ -13,6 +13,15 @@ interface Field {
   confidence: number; // 0-100
 }
 
+export interface DrugDebug {
+  // 모두 0~1 비율 (이미지 너비/높이 기준)
+  anchorXPct: number;        // 약품명 anchor field 의 X 중심
+  anchorTopPct: number;      // 약품명 anchor field 의 윗선 (밴드 위)
+  anchorBotPct: number;      // 약품명 anchor field 의 아랫선 (밴드 아래)
+  slopePerWidth: number;     // 행 기울기 (dy / imageWidth — 1.0 이면 imageWidth 만큼 X 이동 시 imageHeight 만큼 Y 변화)
+  qtyBoxPct: { left: number; top: number; right: number; bottom: number } | null;  // 매칭된 사용량 bbox
+}
+
 export interface FusionDrug {
   insuranceCode: Field;
   companyName: Field;
@@ -25,6 +34,7 @@ export interface FusionDrug {
   finalConfidence: number;            // 최종 신뢰도 0-100
   manualCheck: boolean;               // < 95 이면 true
   bboxYPercent: number | null;        // 이미지 내 행의 Y 중심 (0~100), 없으면 null
+  debug: DrugDebug | null;            // 행 밴드 시각화용 (디버그 토글에서 사용)
 }
 
 // 거래처별 EMR 표 양식 — 컬럼 X 좌표를 이미지 너비 비율로 저장. 다음 사진 OCR 시 그대로
@@ -161,14 +171,15 @@ export async function POST(req: NextRequest) {
         const inContext = contextKeys.has(key);
         return inContext ? { ...m, confidence: Math.min(100, m.confidence + 5) } : m;
       })
-      // 3) Clova 컬럼 X 좌표로 사용량 보정 — LLM 이 단가/사용량 헷갈리면 여기서 정정
+      // 3) Clova 컬럼 X 좌표로 사용량 보정 + 디버그 밴드 정보 부착
       .map((m) => {
         if (!colMap) return m;
-        const colQty = quantityFromColumnMap(m.productName, clovaRows, colMap);
-        if (colQty && colQty !== m.quantity.replace(/[^\d.]/g, "")) {
-          return { ...m, quantity: colQty };
+        const r = extractByColumnMap(m.productName, clovaRows, colMap);
+        const next: MergedDrug & { _extract?: ExtractResult | null } = { ...m, _extract: r };
+        if (r?.quantity && r.quantity !== m.quantity.replace(/[^\d.]/g, "")) {
+          next.quantity = r.quantity;
         }
-        return m;
+        return next;
       });
 
     // ── 4단계: 약품마다 마스터 매칭 + 신뢰도 계산 ──────────────────────────
@@ -185,6 +196,7 @@ export async function POST(req: NextRequest) {
       anchorY: number | null;       // locator 가 자신 있게 찾은 경우 raw % (없으면 보간 대상)
       productNameRaw: string;       // 보간 후처리에서도 매칭 시도 가능하게 유지
       insuranceCodeRaw: string;
+      extract: ExtractResult | null; // 디버그용 — 행 밴드/매칭 qty bbox
     }
     const pendingDrugs: PendingDrug[] = [];
     for (const item of boostedMerged) {
@@ -200,6 +212,7 @@ export async function POST(req: NextRequest) {
       const finalConfidence = matched.matchedMedicationId ? matched.matchConfidence : baselineConf;
       const manualCheck = finalConfidence < 95;
 
+      const itemWithExtract = item as MergedDrug & { _extract?: ExtractResult | null };
       pendingDrugs.push({
         insuranceCode: { value: matched.insuranceCode, confidence: matched.matchedMedicationId ? 100 : baselineConf },
         companyName:   { value: matched.companyName,   confidence: matched.matchedMedicationId ? 100 : baselineConf },
@@ -213,6 +226,7 @@ export async function POST(req: NextRequest) {
         anchorY: locateRowInClova(item, clovaRows, clovaImageHeight),
         productNameRaw: matched.productName || item.productName,
         insuranceCodeRaw: (matched.insuranceCode || item.insuranceCode).replace(/\D/g, ""),
+        extract: itemWithExtract._extract ?? null,
       });
     }
 
@@ -296,6 +310,32 @@ export async function POST(req: NextRequest) {
       bboxYPercent = Math.max(0, Math.min(100, Math.round(bboxYPercent * 10) / 10));
       const norm = (s: string) => s.replace(/\(주\)|\(유\)|주식회사|㈜|\s+/g, "").toLowerCase();
       const additionalRate = additionalRateByCompany.get(norm(d.companyName.value)) ?? null;
+      // 디버그용 — 행 밴드 ratios + 매칭된 qty bbox ratios
+      let debug: DrugDebug | null = null;
+      if (d.extract && clovaImageWidth > 0 && clovaImageHeight > 0) {
+        const b = d.extract.band;
+        const qf = d.extract.qtyField;
+        let qtyBoxPct = null;
+        if (qf?.boundingPoly?.vertices?.length) {
+          const xs = qf.boundingPoly.vertices.map((v) => v.x);
+          const ys = qf.boundingPoly.vertices.map((v) => v.y);
+          qtyBoxPct = {
+            left: Math.min(...xs) / clovaImageWidth,
+            top: Math.min(...ys) / clovaImageHeight,
+            right: Math.max(...xs) / clovaImageWidth,
+            bottom: Math.max(...ys) / clovaImageHeight,
+          };
+        }
+        debug = {
+          anchorXPct: b.anchorX / clovaImageWidth,
+          anchorTopPct: b.top / clovaImageHeight,
+          anchorBotPct: b.bot / clovaImageHeight,
+          // slope 정규화: dy/dx (raw px) → dy/imageWidth (현재 dx 1px 당 dy * imageWidth/imageHeight 정규화)
+          // 프론트가 width % 단위로 X 를 다룰 때 동일한 스케일 비율로 적용 가능하게 한다.
+          slopePerWidth: (b.slope * clovaImageWidth) / clovaImageHeight,
+          qtyBoxPct,
+        };
+      }
       return {
         insuranceCode: d.insuranceCode,
         companyName: d.companyName,
@@ -308,6 +348,7 @@ export async function POST(req: NextRequest) {
         finalConfidence: d.finalConfidence,
         manualCheck: d.manualCheck,
         bboxYPercent,
+        debug,
       };
     });
 
@@ -538,11 +579,17 @@ function valueAtColumn(row: ClovaRow, columnX: number, tolerance = 120): string 
 // productName 텍스트가 들어있는 Clova field 의 Y 좌표를 기준선으로 잡고, 같은 Y 라인의
 // quantity 컬럼 X 위치에 있는 숫자 필드를 반환. 행 클러스터링이 어긋나도 영향받지 않음.
 // 반환: { quantity, rowY } 또는 null
+interface ExtractResult {
+  quantity: string | null;
+  rowY: number;
+  band: RowBand;
+  qtyField: ClovaField | null;
+}
 function extractByColumnMap(
   productName: string,
   rows: ClovaRow[],
   colMap: ColumnMap
-): { quantity: string | null; rowY: number } | null {
+): ExtractResult | null {
   if (!productName || !colMap.quantity) return null;
   const parsed = parseDrugName(productName);
   const koreanKey = parsed.korean.replace(/\s+/g, "").toLowerCase();
@@ -599,10 +646,10 @@ function extractByColumnMap(
       }
     }
   }
-  if (!qtyField) return { quantity: null, rowY: band.centerY };
+  if (!qtyField) return { quantity: null, rowY: band.centerY, band, qtyField: null };
 
   const cleaned = qtyField.inferText.replace(/[^\d.]/g, "");
-  return { quantity: cleaned || null, rowY: band.centerY };
+  return { quantity: cleaned || null, rowY: band.centerY, band, qtyField };
 }
 
 // anchor field 의 boundingPoly 로부터 행 띠(top, bot, anchorX, slope) 추출.
