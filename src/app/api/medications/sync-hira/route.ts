@@ -48,16 +48,16 @@ async function fetchPageWithRetry(pageNo: number, retries = 3): Promise<{ items:
 function mapDrug(item: HiraDrug) {
   // HIRA 약가마스터_의약품주성분 필드명 (실제 응답 확인 후 조정)
   // 공통 필드명 후보들을 순서대로 시도
-  const productNameRaw = (
+  const productNameRaw = String(
     item["품목명"] ?? item["제품명"] ?? item["ITEM_NAME"] ?? item["itemName"] ?? ""
   ).trim();
-  const companyName = (
+  const companyName = String(
     item["업체명"] ?? item["제조사명"] ?? item["ENTP_NAME"] ?? item["entpName"] ?? "미상"
   ).trim();
-  const ingredientName = (
+  const ingredientName = String(
     item["주성분명"] ?? item["성분명"] ?? item["INGD_NM"] ?? item["ingdNm"] ?? item["주성분"] ?? ""
   ).trim();
-  const insuranceCode = (
+  const insuranceCode = String(
     item["급여코드"] ?? item["보험코드"] ?? item["EDI_CODE"] ?? item["ediCode"] ?? item["품목기준코드"] ?? ""
   ).trim() || null;
   const priceRaw = parseInt(String(
@@ -65,7 +65,7 @@ function mapDrug(item: HiraDrug) {
   ));
   const price = isNaN(priceRaw) ? null : priceRaw;
   // 규격(용량) 별도 필드 — productName에 용량이 없으면 보완
-  const spec = (
+  const spec = String(
     item["규격"] ?? item["함량"] ?? item["용량"] ?? item["SPEC"] ?? item["spec"] ?? ""
   ).trim();
   const productName = (spec && !DOSE_UNIT_RE.test(productNameRaw))
