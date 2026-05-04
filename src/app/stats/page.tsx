@@ -676,6 +676,8 @@ export default function StatsPage() {
 
   const handleFile = useCallback((file: File) => {
     setImageFile(file);
+    // 원본이 따로 저장되어 있지 않으면 이 파일을 원본으로 간주 (재보정 fallback 용).
+    setOriginalImageFile((cur) => cur ?? file);
     setImageUrl(URL.createObjectURL(file));
     const reader = new FileReader();
     reader.onload = (e) => setImageBase64(e.target?.result as string);
@@ -689,7 +691,10 @@ export default function StatsPage() {
   function onDrop(e: React.DragEvent) {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
-    if (file && file.type.startsWith("image/")) handleFile(file);
+    if (file && file.type.startsWith("image/")) {
+      setOriginalImageFile(file);
+      setPendingScanFile(file);
+    }
   }
 
   async function compressImage(file: File, maxDim = 2000, quality = 0.82): Promise<Blob> {
@@ -1133,8 +1138,10 @@ export default function StatsPage() {
             <Button type="button" variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} className="text-xs">
               <Upload className="w-3.5 h-3.5 mr-1" />파일 선택
             </Button>
-            {originalImageFile && (
-              <Button type="button" variant="outline" size="sm" onClick={() => setPendingScanFile(originalImageFile)} className="text-xs">
+            {(originalImageFile || imageFile) && (
+              <Button type="button" variant="outline" size="sm"
+                      onClick={() => setPendingScanFile(originalImageFile ?? imageFile)}
+                      className="text-xs bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-700">
                 재보정
               </Button>
             )}
