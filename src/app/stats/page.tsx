@@ -1285,8 +1285,8 @@ export default function StatsPage() {
             title="드래그하여 높이 조절" />
         </div>
 
-        {/* 3-pane data view: 사진매칭 / 저번달처방 / 최종수정 */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* 2-pane data view: 사진매칭 / 최종수정 */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* 사진매칭: OCR 인식 원본 (read-only, 항상 4컬럼 헤더 표시) */}
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col">
             <div className="border-b border-gray-100 px-3 h-[44px] flex items-center gap-2 overflow-x-auto">
@@ -1438,68 +1438,11 @@ export default function StatsPage() {
             )}
           </div>
 
-          {/* 저번달처방: 직전월 확정 자료 (read-only) */}
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col">
-            <div className="border-b border-gray-100 px-3 h-[44px] flex items-center gap-2 overflow-x-auto">
-              <span className="text-xs font-semibold text-gray-700">② 저번달 처방</span>
-              {selectedClient ? (
-                lastMonthLoading ? (
-                  <span className="text-xs text-gray-400">로딩 중...</span>
-                ) : lastMonth ? (
-                  <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">
-                    {lastMonth.year}년 {lastMonth.month}월 · {lastMonth.drugs.length}건
-                  </span>
-                ) : (
-                  <span className="text-xs text-gray-400">없음</span>
-                )
-              ) : (
-                <span className="text-xs text-gray-400">거래처 선택 후 자동 로드</span>
-              )}
-              {lastMonth && lastMonth.drugs.length > 0 && (
-                <button onClick={() => setManualDrugs([...lastMonth.drugs.map((d) => ({ ...d })), emptyManualDrug()])}
-                  className="ml-auto text-[11px] px-2 py-1 rounded border border-blue-300 bg-blue-50 hover:bg-blue-100 text-blue-700 flex items-center gap-1"
-                  title="저번달 데이터를 오른쪽 최종 수정 패널에 복사">
-                  최종으로 복사<ArrowRight className="w-3 h-3" />
-                </button>
-              )}
-            </div>
-            <div className="flex-1 overflow-y-auto p-3">
-              <table className="w-full text-xs table-fixed">
-                <thead>
-                  <tr className="border-b border-gray-200 bg-gray-50">
-                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[26%]">보험코드</th>
-                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[20%]">제약사</th>
-                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500">제품명</th>
-                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[14%]">수량</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {!lastMonth || lastMonth.drugs.length === 0 ? (
-                    <tr><td colSpan={4} className="py-10 text-center text-gray-400 text-xs">
-                      {!selectedClient ? "거래처를 선택하세요" : lastMonthLoading ? "로딩 중..." : "직전월 자료 없음"}
-                    </td></tr>
-                  ) : lastMonth.drugs.map((d, i) => (
-                    <tr key={i} className="border-b border-gray-100 h-9">
-                      <td className="py-1.5 px-1.5 font-mono text-[11px] truncate" title={d.insuranceCode}>{d.insuranceCode || "—"}</td>
-                      <td className="py-1.5 px-1.5 text-[11px] truncate" title={d.companyName}>{d.companyName || "—"}</td>
-                      <td className="py-1.5 px-1.5 text-[11px] truncate" title={d.productName}>{d.productName || "—"}</td>
-                      <td className="py-1.5 px-1.5 text-[11px] truncate">{d.quantity || "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {lastMonth && lastMonth.drugs.length > 0 && (
-                <p className="mt-2 text-[10px] text-gray-400">
-                  같은 거래처의 직전월 확정 자료입니다. AI 인식 시 이 패턴을 참고합니다.
-                </p>
-              )}
-            </div>
-          </div>
 
           {/* 최종수정: 사람 확정 입력 */}
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col">
             <div className="border-b border-gray-100 px-3 h-[44px] flex items-center gap-2 overflow-x-auto">
-              <span className="text-xs font-semibold text-gray-700">③ 최종 수정</span>
+              <span className="text-xs font-semibold text-gray-700">② 최종 수정</span>
               <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{filledManualDrugs.length}건</span>
               {isClientUnnapproved && (
                 <span className="text-xs bg-yellow-100 text-yellow-700 border border-yellow-300 px-1.5 py-0.5 rounded font-semibold">정산서 미반영</span>
