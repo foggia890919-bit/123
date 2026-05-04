@@ -789,23 +789,25 @@ model LedgerSyncLog {
 // 자동주문 시스템 — 상품 마스터 + 거래처별 단가
 // =====================================================================
 
-// 이팜스 상품 마스터. 사장님 master 계정으로 워커가 자동 동기화하거나
-// 사장님이 엑셀 업로드해서 임포트.
+// 이팜스 상품 마스터.
+// (priceCode, spec) 복합 unique — 같은 보험코드라도 포장 다르면 별도 SKU로 취급.
 model EpharmsProduct {
   id              String                @id @default(cuid())
-  priceCode       String                @unique  // 기준단가코드 (이팜스 고유 식별자, 예: "645100741")
+  priceCode       String                // 기준단가코드 (보험코드)
   productName     String                // 상품명
   manufacturer    String                // 제약사
-  spec            String?               // 규격 (예: "200기타/1개", "625mg/100정")
-  productGroup    String?               // 상품그룹 (대분류)
+  spec            String                @default("") // 규격/포장단위 — NULL 대신 빈 문자열
+  productGroup    String?               // 상품그룹
   ingredient      String?               // 성분명
-  basePrice       Decimal               @default(0) @db.Decimal(18, 2) // 이팜스 마스터 단가 (모든 거래처 공통 기본값)
+  basePrice       Decimal               @default(0) @db.Decimal(18, 2)
   active          Boolean               @default(true)
   fetchedAt       DateTime              @default(now())
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
   clientPrices    ClientProductPrice[]
 
+  @@unique([priceCode, spec])
+  @@index([priceCode])
   @@index([productName])
   @@index([manufacturer])
   @@index([ingredient])
@@ -813,20 +815,18 @@ model EpharmsProduct {
 }
 
 // 거래처별 상품 단가 (L2 캐시).
-// L1(매출원장 학습)은 LedgerEntry에서 동적 조회, L2는 이 테이블에 영구 저장.
-// 영업사원이 주문 작성 시 단가를 수정하면 자동으로 여기 upsert.
 model ClientProductPrice {
   id           String          @id @default(cuid())
-  bizNumber    String          // 거래처 사업자번호
-  priceCode    String          // EpharmsProduct.priceCode
-  product      EpharmsProduct  @relation(fields: [priceCode], references: [priceCode], onDelete: Cascade)
+  bizNumber    String
+  productId    String
+  product      EpharmsProduct  @relation(fields: [productId], references: [id], onDelete: Cascade)
   unitPrice    Decimal         @db.Decimal(18, 2)
-  source       String          // "manual" | "ledger" | "import" — 어디서 들어왔는지
-  setByUserId  String?         // 영업사원 id (manual 일 때)
+  source       String          // "manual" | "ledger" | "import"
+  setByUserId  String?
   setAt        DateTime        @default(now())
 
-  @@unique([bizNumber, priceCode])
-  @@index([priceCode])
+  @@unique([bizNumber, productId])
+  @@index([productId])
   @@index([bizNumber])
 }
 

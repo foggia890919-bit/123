@@ -62,21 +62,20 @@ export async function finishProductSyncLog(
   );
 }
 
-/** 페이지에서 긁은 상품들을 priceCode 기준 upsert. (inserted, updated) 반환. */
+/** 페이지에서 긁은 상품들을 (priceCode, spec) 복합키 기준 upsert. */
 export async function upsertProducts(rows: ProductRow[]): Promise<{ inserted: number; updated: number }> {
   if (rows.length === 0) return { inserted: 0, updated: 0 };
 
-  // 배치 내 priceCode 중복 제거.
-  // 이팜스는 같은 보험코드를 포장단위 다른 행으로 별도 표시함 (예: PTP / 병).
-  // 우리 schema는 priceCode UNIQUE이므로 한 배치에 같은 priceCode가 두 번
-  // 들어가면 PG의 "ON CONFLICT DO UPDATE cannot affect row a second time" 에러 발생.
-  // → 첫 등장만 유지.
+  // 배치 내 (priceCode + spec) 중복 제거.
+  // 같은 보험코드 다른 포장은 별도 SKU로 유지. 같은 코드+같은 포장만 dedup.
   const seen = new Set<string>();
   const deduped: ProductRow[] = [];
   for (const r of rows) {
-    if (seen.has(r.priceCode)) continue;
-    seen.add(r.priceCode);
-    deduped.push(r);
+    const spec = r.spec ?? "";
+    const key = `${r.priceCode}|${spec}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push({ ...r, spec });
   }
   if (deduped.length === 0) return { inserted: 0, updated: 0 };
 
@@ -104,10 +103,9 @@ export async function upsertProducts(rows: ProductRow[]): Promise<{ inserted: nu
       `INSERT INTO "EpharmsProduct"
          ("id","priceCode","productName","manufacturer","spec","basePrice","createdAt","updatedAt")
        VALUES ${placeholders.join(",")}
-       ON CONFLICT ("priceCode") DO UPDATE SET
+       ON CONFLICT ("priceCode","spec") DO UPDATE SET
          "productName"  = EXCLUDED."productName",
          "manufacturer" = EXCLUDED."manufacturer",
-         "spec"         = EXCLUDED."spec",
          "basePrice"    = EXCLUDED."basePrice",
          "active"       = true,
          "fetchedAt"    = NOW(),
