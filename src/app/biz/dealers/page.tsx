@@ -186,25 +186,8 @@ export default function BizDealersPage() {
   const [query, setQuery] = useState("");
   const [filterType, setFilterType] = useState<string>("ALL");
 
-  type ClassificationTab = "all" | "settlement" | "rate" | "incomplete";
+  type ClassificationTab = "all" | "settlement" | "rate";
   const [classificationTab, setClassificationTab] = useState<ClassificationTab>("all");
-
-  // 거래처 정보 누락 여부 — dealerType / code / 담당자(이름·연락처) 중 하나라도 비어있으면 누락
-  function isIncomplete(c: Client): boolean {
-    if (!c.dealerType) return true;
-    if (!c.code) return true;
-    if (!c.managerName || !c.managerName.trim()) return true;
-    if (!c.managerPhone || !c.managerPhone.trim()) return true;
-    return false;
-  }
-  function missingFields(c: Client): string[] {
-    const m: string[] = [];
-    if (!c.dealerType) m.push("분류");
-    if (!c.code) m.push("코드");
-    if (!c.managerName || !c.managerName.trim()) m.push("담당자명");
-    if (!c.managerPhone || !c.managerPhone.trim()) m.push("연락처");
-    return m;
-  }
 
   // 등록 모달 state
   const [modal, setModal] = useState(false);
@@ -403,13 +386,10 @@ export default function BizDealersPage() {
     // 분류 뷰 탭 필터
     if (classificationTab === "settlement" && !(c.isSettlementTarget ?? false)) return false;
     if (classificationTab === "rate"       && !(c.isRateTarget ?? false)) return false;
-    if (classificationTab === "incomplete" && !isIncomplete(c)) return false;
     const matchQ = !query || c.clientName.includes(query) || c.bizNumber.includes(query);
     const matchT = filterType === "ALL" || (filterType === "NONE" ? !c.dealerType : c.dealerType === filterType);
     return matchQ && matchT;
   });
-
-  const incompleteCount = clients.filter(isIncomplete).length;
 
   const counts: Record<string, number> = { ALL: clients.length, NONE: 0 };
   for (const t of TYPE_ORDER) counts[t] = 0;
@@ -447,29 +427,20 @@ export default function BizDealersPage() {
         </div>
 
         {/* 분류 뷰 탭 */}
-        <div className="flex gap-1 mb-2 flex-wrap">
-          {(["all", "settlement", "rate", "incomplete"] as const).map((tab) => {
-            const isActive = classificationTab === tab;
-            const isIncompleteTab = tab === "incomplete";
-            return (
-              <button
-                key={tab}
-                onClick={() => setClassificationTab(tab)}
-                className={`text-xs px-2.5 py-1 rounded-full font-medium transition-colors ${
-                  isActive
-                    ? isIncompleteTab ? "bg-red-600 text-white" : "bg-teal-700 text-white"
-                    : isIncompleteTab && incompleteCount > 0
-                      ? "bg-red-50 text-red-700 hover:bg-red-100"
-                      : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                }`}
-              >
-                {tab === "all" ? "전체"
-                  : tab === "settlement" ? "정산 대상"
-                  : tab === "rate" ? "요율 대상"
-                  : `정보 누락 (${incompleteCount})`}
-              </button>
-            );
-          })}
+        <div className="flex gap-1 mb-2">
+          {(["all", "settlement", "rate"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setClassificationTab(tab)}
+              className={`text-xs px-2.5 py-1 rounded-full font-medium transition-colors ${
+                classificationTab === tab
+                  ? "bg-teal-700 text-white"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              }`}
+            >
+              {tab === "all" ? "전체" : tab === "settlement" ? "정산 대상" : "요율 대상"}
+            </button>
+          ))}
         </div>
 
         {/* 타입 필터 탭 */}
@@ -513,11 +484,6 @@ export default function BizDealersPage() {
                       <p className="text-xs text-gray-400">{formatBiz(c.bizNumber)}</p>
                       {c.managerName && (
                         <p className="text-xs text-gray-400 mt-0.5">담당: {c.managerName}{c.managerPhone ? ` · ${c.managerPhone}` : ""}</p>
-                      )}
-                      {missingFields(c).length > 0 && (
-                        <p className="text-[11px] text-red-500 mt-0.5">
-                          누락: {missingFields(c).join(", ")}
-                        </p>
                       )}
                     </div>
                   </div>
