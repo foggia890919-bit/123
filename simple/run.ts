@@ -480,6 +480,22 @@ async function processDay(
   }
   const summary = Array.from(byKeyword.values()).sort((a, b) => b.sales - a.sales);
 
+  // 취소건도 키워드별 집계 (별도)
+  const byKeywordCanceled = new Map<
+    string,
+    { keyword: string; qty: number; bottles: number; sales: number; orderIds: Set<string> }
+  >();
+  for (const r of canceled) {
+    const k = r.keyword || `(미분류)${r.productName.slice(0, 20)}`;
+    const cur = byKeywordCanceled.get(k) ?? { keyword: k, qty: 0, bottles: 0, sales: 0, orderIds: new Set() };
+    cur.qty += r.quantity;
+    cur.bottles += r.bottles;
+    cur.sales += r.salesAmount;
+    cur.orderIds.add(r.orderId);
+    byKeywordCanceled.set(k, cur);
+  }
+  const summaryCanceled = Array.from(byKeywordCanceled.values()).sort((a, b) => b.sales - a.sales);
+
   // 집계 시트도 입력 — (보고일+키워드) 기준 upsert
   if (SHEET_CREDS && summary.length > 0) {
     try {
@@ -524,12 +540,21 @@ async function processDay(
   lines.push(`💳 수수료 ${won(totalCommission)}`);
   lines.push("");
 
-  if (summary.length === 0) {
+  if (summary.length === 0 && summaryCanceled.length === 0) {
     lines.push("매출 없음.");
   } else {
-    lines.push("<b>━━ 키워드별 ━━</b>");
-    for (const r of summary) {
-      lines.push(`• <b>${r.keyword}</b>\n   ${r.bottles}개 · ${r.orderIds.size}건 · ${won(r.sales)}`);
+    if (summary.length > 0) {
+      lines.push("<b>━━ 키워드별 (결제완료) ━━</b>");
+      for (const r of summary) {
+        lines.push(`• <b>${r.keyword}</b>\n   ${r.bottles}개 · ${r.orderIds.size}건 · ${won(r.sales)}`);
+      }
+    }
+    if (summaryCanceled.length > 0) {
+      if (summary.length > 0) lines.push("");
+      lines.push("<b>━━ 키워드별 (취소) ━━</b>");
+      for (const r of summaryCanceled) {
+        lines.push(`• <s>${r.keyword}</s>\n   ${r.bottles}개 · ${r.orderIds.size}건 · -${won(r.sales)}`);
+      }
     }
   }
   if (errors.length > 0) {
