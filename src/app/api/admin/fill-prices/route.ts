@@ -97,8 +97,10 @@ export async function POST(req: NextRequest) {
       .map((c) => c.companyName!)
       .filter(Boolean);
 
-    // 전체 HIRA 가격 맵: mdsCd → price
-    const priceMap = new Map<string, number>();
+    // 전체 HIRA 맵: mdsCd(LTRIM) → { price, payTpNm }
+    // - leading-zero 정규화: HIRA mdsCd 가 "053..." 인 경우와 KMD 가 "053..." 또는 "53..." 인 경우 모두 매칭
+    // - payTpNm: HIRA 가 알려주는 급여구분 ("급여"/"비급여"/"전액본인부담"/"선별급여" 등)
+    const hiraMap = new Map<string, { price: number | null; payTpNm: string | null }>();
 
     async function processCompany(company: string): Promise<{ items: number; errors: number }> {
       const searchName = normalizeCompanyForSearch(company);
@@ -112,9 +114,14 @@ export async function POST(req: NextRequest) {
           allItems.push(...items);
         }
         for (const item of allItems) {
-          if (!item.mdsCd || !item.mxCprc) continue;
-          const price = parseInt(item.mxCprc.replace(/,/g, ""));
-          if (!isNaN(price) && price > 0) priceMap.set(item.mdsCd, price);
+          if (!item.mdsCd) continue;
+          const normCode = item.mdsCd.replace(/^0+/, "");
+          if (!normCode) continue;
+          const priceNum = item.mxCprc ? parseInt(item.mxCprc.replace(/,/g, "")) : NaN;
+          const price = !isNaN(priceNum) && priceNum > 0 ? priceNum : null;
+          const payTpNm = item.payTpNm?.trim() || null;
+          if (price === null && payTpNm === null) continue;
+          hiraMap.set(normCode, { price, payTpNm });
         }
         return { items: allItems.length, errors: 0 };
       } catch {
@@ -137,50 +144,64 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (priceMap.size === 0) {
+    if (hiraMap.size === 0) {
       return NextResponse.json({ success: false, error: "HIRA에서 가격 데이터를 가져오지 못했습니다.", scanned, companyErrors });
     }
 
-    // DB에서 보험코드 매칭 — comma-separated insuranceCode도 처리 (UNNEST)
-    const codes = Array.from(priceMap.keys());
-    const targets = await prisma.$queryRaw<{ id: string; matched: string; price: number | null }[]>`
-      SELECT m.id, TRIM(code) AS matched, m.price
+    // DB 매칭: insuranceCode 콤마분리(UNNEST) + leading-zero 정규화(LTRIM) — HIRA 측 키와 동일 형태로 비교
+    const codes = Array.from(hiraMap.keys());
+    const targets = await prisma.$queryRaw<{ id: string; matched: string; price: number | null; paymentType: string | null }[]>`
+      SELECT m.id, LTRIM(TRIM(code), '0') AS matched, m.price, m."paymentType"
       FROM "Medication" m,
            UNNEST(string_to_array(m."insuranceCode", ',')) AS code
       WHERE m."insuranceCode" IS NOT NULL
-        AND TRIM(code) = ANY(${codes})
+        AND LTRIM(TRIM(code), '0') = ANY(${codes})
     `;
 
-    // 중복 제거 후 가격 변경된 것만 업데이트
-    const updates = new Map<string, number>();
+    // 변경 필요한 약품만 수집 — price/paymentType 둘 다 변경 가능, 둘 중 하나만 바뀌어도 업데이트
+    const updates = new Map<string, { price: number | null; payTpNm: string | null }>();
     for (const t of targets) {
-      const price = priceMap.get(t.matched);
-      if (price && t.price !== price) updates.set(t.id, price);
+      const entry = hiraMap.get(t.matched);
+      if (!entry) continue;
+      const priceChanged = entry.price !== null && t.price !== entry.price;
+      const payTypeChanged = entry.payTpNm !== null && t.paymentType !== entry.payTpNm;
+      if (!priceChanged && !payTypeChanged) continue;
+      updates.set(t.id, {
+        price: priceChanged ? entry.price : null,
+        payTpNm: payTypeChanged ? entry.payTpNm : null,
+      });
     }
 
+    // bulk UPDATE — COALESCE 로 null 인 컬럼은 기존 값 유지 (변경된 컬럼만 적용)
     const CHUNK = 200;
     const ids = Array.from(updates.keys());
     for (let i = 0; i < ids.length; i += CHUNK) {
       const slice = ids.slice(i, i + CHUNK);
       const tuples: string[] = [];
-      const params: (string | number)[] = [];
+      const params: (string | number | null)[] = [];
       let p = 1;
       for (const id of slice) {
-        tuples.push(`($${p++}::text, $${p++}::int)`);
-        params.push(id, updates.get(id)!);
+        const u = updates.get(id)!;
+        tuples.push(`($${p++}::text, $${p++}::int, $${p++}::text)`);
+        params.push(id, u.price, u.payTpNm);
       }
       await prisma.$executeRawUnsafe(`
         UPDATE "Medication" AS m
-        SET "price" = v.price, "updatedAt" = NOW()
-        FROM (VALUES ${tuples.join(", ")}) AS v(id, price)
+        SET
+          "price"       = COALESCE(v.price, m."price"),
+          "paymentType" = COALESCE(v.payment_type, m."paymentType"),
+          "updatedAt"   = NOW()
+        FROM (VALUES ${tuples.join(", ")}) AS v(id, price, payment_type)
         WHERE m.id = v.id
       `, ...params);
       filled += slice.length;
     }
 
-    const [totalMeds, nullPriceMeds] = await Promise.all([
+    const [totalMeds, nullPriceMeds, withPayType, nonReimbursed] = await Promise.all([
       prisma.medication.count(),
       prisma.medication.count({ where: { price: null } }),
+      prisma.medication.count({ where: { paymentType: { not: null } } }),
+      prisma.medication.count({ where: { paymentType: "비급여" } }),
     ]);
 
     return NextResponse.json({
@@ -189,9 +210,11 @@ export async function POST(req: NextRequest) {
       scanned,
       companyErrors,
       companiesProcessed: companies.length,
-      priceMapSize: priceMap.size,
+      hiraMapSize: hiraMap.size,
       totalMeds,
       nullPriceMeds,
+      withPaymentType: withPayType,
+      nonReimbursedCount: nonReimbursed,
       filledPriceMeds: totalMeds - nullPriceMeds,
     });
   } catch (err) {

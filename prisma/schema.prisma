@@ -148,6 +148,7 @@ model Medication {
   bioStatus      String?
   productName    String
   price          Int?
+  paymentType    String?   // HIRA payTpNm: "급여" | "비급여" | "전액본인부담" | "선별급여" 등 | null=미확인
   originalDrug   String?
   insuranceCode  String?
   notes          String?
@@ -167,6 +168,7 @@ model Medication {
   @@index([ingredientCode])
   @@index([source])
   @@index([settlementType])
+  @@index([paymentType])
 }
 
 enum MedSource {
