@@ -8,7 +8,7 @@ import {
   Hospital, Building2, FileUp, FileSearch,
   ChevronRight, LayoutDashboard, ClipboardList,
   BarChart3, PercentCircle, Pill, UserCheck,
-  Calculator, Network, Users, PackageSearch, Mail,
+  Calculator, Network, Users, PackageSearch, Mail, KeyRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -138,6 +138,13 @@ const BIZ_MENU_GROUPS = [
         desc: "지메일 자동 수신 + 발신자 매핑 + 첨부 자동 분류·등록",
         icon: Mail,
         color: "bg-pink-50 text-pink-600",
+      },
+      {
+        href: "/biz/epharms-accounts",
+        label: "ePharms 매출원장 자동수집",
+        desc: "거래처별 yk.ep45.co.kr 계정 등록 → 매일 자정 자동 sync → 영업사원 포털에 표시",
+        icon: KeyRound,
+        color: "bg-amber-50 text-amber-600",
       },
     ],
   },

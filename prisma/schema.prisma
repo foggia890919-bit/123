@@ -721,3 +721,65 @@ model TelegramReply {
 
   @@index([digestQueueId])
 }
+
+// =====================================================================
+// ePharms 매출원장 자동수집 (yk.ep45.co.kr)
+// 거래처별 ePharms 계정 1개 등록 → 매일 자정 자동 로그인 → 원장집계 스크래핑
+// → KMD 포털에서 영업사원/거래처가 본인 분만 조회.
+// =====================================================================
+
+// 거래처별 ePharms 로그인 계정. PW는 AES-256-GCM 암호화하여 저장.
+model EpharmsAccount {
+  id              String          @id @default(cuid())
+  bizNumber       String          @unique
+  clientName      String
+  loginId         String
+  // "<ivBase64>:<authTagBase64>:<cipherBase64>"
+  loginPwEnc      String
+  active          Boolean         @default(true)
+  lastSyncedAt    DateTime?
+  lastSyncStatus  String?         // "ok" | "error"
+  lastSyncError   String?
+  memo            String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  ledgerEntries   LedgerEntry[]
+  syncLogs        LedgerSyncLog[]
+
+  @@index([active])
+}
+
+// 매출원장 한 줄 (원장집계 화면 컬럼 그대로).
+model LedgerEntry {
+  id           String         @id @default(cuid())
+  accountId    String
+  account      EpharmsAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  bizNumber    String         // 빠른 필터링용 비정규화
+  entryDate    DateTime       // 명세일자
+  itemName     String         // 항목
+  sales        Decimal        @default(0) @db.Decimal(18, 2)
+  payment      Decimal        @default(0) @db.Decimal(18, 2)
+  balance      Decimal        @default(0) @db.Decimal(18, 2)
+  rowHash      String         // entryDate+itemName+sales+payment SHA-1
+  fetchedAt    DateTime       @default(now())
+
+  @@unique([accountId, rowHash])
+  @@index([bizNumber, entryDate])
+  @@index([accountId, entryDate])
+}
+
+// 동기화 시도 기록
+model LedgerSyncLog {
+  id           String         @id @default(cuid())
+  accountId    String
+  account      EpharmsAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  startedAt    DateTime       @default(now())
+  finishedAt   DateTime?
+  status       String         // "running" | "ok" | "error"
+  rowsFetched  Int            @default(0)
+  rowsInserted Int            @default(0)
+  errorMsg     String?
+
+  @@index([accountId, startedAt])
+  @@index([status])
+}
