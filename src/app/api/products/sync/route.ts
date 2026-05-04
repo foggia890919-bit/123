@@ -18,10 +18,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 워커가 다운로드한 xlsx를 다시 업로드할 우리 자신 URL
-  const origin = req.nextUrl.origin;
-  const uploadUrl = `${origin}/api/products/upload`;
-
   try {
     const r = await fetch(new URL("/epharms/sync-products", baseUrl), {
       method: "POST",
@@ -29,11 +25,7 @@ export async function POST(req: NextRequest) {
         authorization: `Bearer ${token}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({
-        uploadUrl,
-        uploadToken: token,
-        triggeredBy: user.id,
-      }),
+      body: JSON.stringify({ triggeredBy: user.id }),
     });
     const body = await r.json().catch(() => ({}));
     return NextResponse.json(body, { status: r.status });

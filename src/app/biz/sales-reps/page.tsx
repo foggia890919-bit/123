@@ -28,6 +28,7 @@ interface BulkRow {
 interface BulkResult {
   row: number;
   status: "ok" | "error";
+  createdNew?: boolean;
   email?: string;
   salesCode?: string;
   mappedClients?: number;
@@ -309,8 +310,15 @@ export default function SalesRepsPage() {
                   <div className="font-semibold mb-1">등록 결과</div>
                   <div className="text-gray-600">
                     총 {bulkResults.length}명 중{" "}
-                    <span className="text-green-700 font-semibold">{bulkResults.filter(r => r.status === "ok").length}명 성공</span>{", "}
-                    <span className="text-red-700 font-semibold">{bulkResults.filter(r => r.status === "error").length}명 실패</span>
+                    <span className="text-green-700 font-semibold">
+                      {bulkResults.filter(r => r.status === "ok" && r.createdNew).length}명 신규
+                    </span>{" / "}
+                    <span className="text-blue-700 font-semibold">
+                      {bulkResults.filter(r => r.status === "ok" && !r.createdNew).length}명 매핑추가
+                    </span>{" / "}
+                    <span className="text-red-700 font-semibold">
+                      {bulkResults.filter(r => r.status === "error").length}명 실패
+                    </span>
                   </div>
                 </div>
                 <div className="border border-gray-200 rounded-lg overflow-hidden">
@@ -330,7 +338,9 @@ export default function SalesRepsPage() {
                           <td className="px-3 py-2 font-mono">{r.email}</td>
                           <td className="px-3 py-2">
                             {r.status === "ok"
-                              ? <span className="text-green-700">✅ 성공</span>
+                              ? r.createdNew
+                                ? <span className="text-green-700">✨ 신규</span>
+                                : <span className="text-blue-700">🔗 매핑추가</span>
                               : <span className="text-red-700">❌ {r.error}</span>}
                           </td>
                           <td className="px-3 py-2 text-gray-600">
@@ -370,8 +380,9 @@ export default function SalesRepsPage() {
                   <button onClick={copyTemplate} className="mt-1 inline-flex items-center gap-1 px-2 py-1 bg-white border border-blue-300 rounded text-blue-700 hover:bg-blue-50">
                     <FileSpreadsheet className="w-3.5 h-3.5" /> 양식 클립보드 복사
                   </button>
-                  <div className="text-[11px] text-blue-700 mt-1">
-                    💡 엑셀에서 작성 후 행 통째로 복사 → 아래 칸에 붙여넣으세요. 첫 헤더 행은 자동 무시.
+                  <div className="text-[11px] text-blue-700 mt-1 space-y-0.5">
+                    <div>💡 엑셀에서 작성 후 행 통째로 복사 → 아래 칸에 붙여넣으세요. 첫 헤더 행은 자동 무시.</div>
+                    <div>💡 <b>이미 가입된 이메일</b>은 신규 생성 X — 거래처 매핑만 추가됩니다 (비밀번호·이름은 기존 유지).</div>
                   </div>
                 </div>
 
