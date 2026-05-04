@@ -607,62 +607,78 @@ interface PositionalDrug {
 function extractDrugsPositional(rows: ClovaRow[], colMap: ColumnMap | null): PositionalDrug[] {
   if (!colMap || colMap.productName == null || colMap.quantity == null) return [];
   const drugs: PositionalDrug[] = [];
-  for (const row of rows) {
-    if (row.avgY <= colMap.headerY) continue;
 
-    // 약품명 — productName X 근처 + isLikelyDrug 통과 fields, 같은 Y 라인 인접 fields 까지 합쳐 풀네임
-    let anchorField: ClovaField | null = null;
-    let anchorDist = Infinity;
+  // 모든 fields 를 평탄화 — qty/price 검색 시 클러스터 경계 무시
+  const allFields: ClovaField[] = [];
+  for (const r of rows) for (const f of r.fields) allFields.push(f);
+
+  // 처리된 약품명 fields 추적 (중복 출력 방지)
+  const processed = new Set<ClovaField>();
+
+  // 약품명 후보를 모아 Y 정렬 — Clova 클러스터링이 두 행을 합쳤어도 각 약품명 field 가
+  // 자체 Y 를 가지므로 위→아래 순으로 처리 가능.
+  type DrugField = { field: ClovaField; rowIdx: number; y: number };
+  const drugCandidates: DrugField[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (row.avgY <= colMap.headerY) continue;
     for (const f of row.fields) {
       if (!isLikelyDrug(f.inferText)) continue;
       const dist = Math.abs(fieldXCenter(f) - colMap.productName);
       if (dist > 250) continue;
-      if (dist < anchorDist) { anchorField = f; anchorDist = dist; }
+      drugCandidates.push({ field: f, rowIdx: i, y: fieldYCenter(f) });
     }
-    if (!anchorField) continue;
-    const anchorY = fieldYCenter(anchorField);
-    // productName 영역 (insuranceCode X 이후 ~ unitPrice/quantity X 이전) 안의 fields 결합
+  }
+  // Y 순서 정렬
+  drugCandidates.sort((a, b) => a.y - b.y);
+
+  for (const cand of drugCandidates) {
+    if (processed.has(cand.field)) continue;
+    processed.add(cand.field);
+    const anchorY = cand.y;
+    const row = rows[cand.rowIdx];
+
+    // 같은 약품명에 대한 풀네임 만들기 — anchor Y ±20px + productName 컬럼 X 영역의 fields
     const leftBound = (colMap.insuranceCode ?? 0) + 30;
-    const rightBound = Math.min(
-      colMap.unitPrice ?? colMap.quantity,
-      colMap.quantity
-    ) - 30;
-    const productFields = row.fields
+    const rightBound = Math.min(colMap.unitPrice ?? colMap.quantity, colMap.quantity) - 30;
+    const productFields = allFields
       .filter((f) => {
         const fx = fieldXCenter(f);
         const fy = fieldYCenter(f);
-        return fx >= leftBound && fx <= rightBound && Math.abs(fy - anchorY) < 25;
+        return Math.abs(fy - anchorY) < 18 && fx >= leftBound && fx <= rightBound;
       })
       .sort((a, b) => fieldXCenter(a) - fieldXCenter(b));
-    const productName = (productFields.length ? productFields : [anchorField])
+    productFields.forEach((f) => processed.add(f));
+    const productName = (productFields.length ? productFields : [cand.field])
       .map((f) => f.inferText).join(" ").trim();
 
-    // 같은 행 fields 중 X 가까운 숫자 선택
-    function nearestNumberAt(colX: number | null, exclude?: ClovaField | null): { value: string; field: ClovaField | null } {
-      if (colX == null) return { value: "", field: null };
+    // 사용량/단가: anchor Y ±15px + 컬럼 X ±100px 범위의 숫자 field 중 X 가장 가까운 것
+    function nearestNumberAt(colX: number | null): string {
+      if (colX == null) return "";
       let best: ClovaField | null = null;
       let bestDist = Infinity;
-      for (const f of row.fields) {
-        if (f === exclude) continue;
+      for (const f of allFields) {
+        if (Math.abs(fieldYCenter(f) - anchorY) > 15) continue;
         if (!/\d/.test(f.inferText)) continue;
         const dist = Math.abs(fieldXCenter(f) - colX);
         if (dist > 100) continue;
         if (dist < bestDist) { best = f; bestDist = dist; }
       }
-      return {
-        value: best ? best.inferText.replace(/[^\d.]/g, "") : "",
-        field: best,
-      };
+      return best ? best.inferText.replace(/[^\d.]/g, "") : "";
     }
-    const unitPrice = nearestNumberAt(colMap.unitPrice).value;
-    const quantity = nearestNumberAt(colMap.quantity).value;
+    const unitPrice = nearestNumberAt(colMap.unitPrice);
+    const quantity = nearestNumberAt(colMap.quantity);
 
-    // 9자리 보험코드 (같은 행 어디든)
+    // 9자리 보험코드: 같은 Y ±15 범위에서 검색
     let insuranceCode = "";
-    for (const f of row.fields) {
+    for (const f of allFields) {
+      if (Math.abs(fieldYCenter(f) - anchorY) > 15) continue;
       const m = f.inferText.match(/\b(\d{9})\b/);
       if (m) { insuranceCode = m[1]; break; }
     }
+
+    // 같은 클러스터의 다른 row 정보도 사용했을 수 있으니 row 변수 자체는 더 사용 안 함
+    void row;
 
     drugs.push({ productName, unitPrice, quantity, insuranceCode });
   }
