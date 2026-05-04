@@ -32,7 +32,10 @@ const SEL = {
   pwInput:    '#userPwd',
   loginBtn:   '#loginBtn',
   // ----- 원장집계 (확정) -----
-  // 둘 다 readonly + jQuery UI datepicker(.hasDatepicker) — setDate()에서 별도 처리.
+  // 페이지에 1개월/3개월/6개월/1년 빠른 선택 버튼이 있어서 이걸 쓰는 게 가장 안정적.
+  // (datepicker 직접 조작은 페이지의 dateFormat·내부 상태 동기화 문제로 깨지기 쉬움)
+  periodYearBtn: 'button.PeriodBtn[data-periodtyp="Y"][data-periodnum="1"]',
+  // 백업: 직접 날짜 인풋 조작 (위 버튼이 없을 때만)
   dateFromInput: '#search_pd_start',
   dateToInput:   '#search_pd_end',
   searchBtn:     '#btnSrch',
@@ -92,56 +95,28 @@ export async function isLoggedIn(page: Page): Promise<boolean> {
 }
 
 /** 지정 기간의 원장집계를 긁는다. (default: 최근 1년) */
-export async function fetchLedger(
-  page: Page,
-  opts: { from?: string; to?: string } = {}
-): Promise<LedgerRow[]> {
-  const today = new Date();
-  const oneYearAgo = new Date(today.getTime() - 365 * 24 * 60 * 60 * 1000);
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-
-  const from = opts.from ?? fmt(oneYearAgo);
-  const to   = opts.to   ?? fmt(today);
-
+export async function fetchLedger(page: Page): Promise<LedgerRow[]> {
   await page.goto(LEDGER_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
   await page.waitForTimeout(800);
 
-  // 날짜 입력칸은 readonly + jQuery UI datepicker (.hasDatepicker).
-  // 일반 fill()이 안 먹으므로 evaluate로 직접 value set + jQuery datepicker
-  // 메소드 호출 + native change 이벤트 dispatch까지 함께 트리거한다.
-  const setDate = async (selector: string, value: string) => {
-    const el = page.locator(selector).first();
-    if (!(await el.count())) return;
-    await el.evaluate((node, v) => {
-      const input = node as HTMLInputElement;
-      input.removeAttribute("readonly"); // 안전하게 readonly 일시 해제
-      input.value = v;
-      // jQuery UI datepicker가 있으면 setDate 호출로 내부 상태 동기화
-      const w = window as unknown as {
-        jQuery?: (el: HTMLElement) => {
-          datepicker?: (cmd: string, val: string) => unknown;
-          trigger?: (ev: string) => unknown;
-        };
-      };
-      try {
-        const $el = w.jQuery?.(input);
-        $el?.datepicker?.("setDate", v);
-        $el?.trigger?.("change");
-      } catch { /* jQuery 없으면 무시 */ }
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-    }, value);
-  };
-  await setDate(SEL.dateFromInput, from);
-  await setDate(SEL.dateToInput, to);
-  await page.waitForTimeout(300);
+  // 페이지의 "1년" 빠른선택 버튼 클릭 — datepicker 내부 상태까지 정확히 세팅됨.
+  // (readonly + jQuery UI datepicker 직접 조작은 dateFormat·내부 상태 동기화 문제로 깨지기 쉬움)
+  const yearBtn = page.locator(SEL.periodYearBtn).first();
+  if (await yearBtn.count() > 0) {
+    await yearBtn.click();
+    console.log('[ePharms] clicked "1년" period button');
+    await page.waitForTimeout(500);
+  } else {
+    console.warn('[ePharms] "1년" period button not found — falling back to default page state');
+  }
 
+  // 검색 버튼 클릭 (페이지가 자동으로 검색 안 한 경우 대비)
   const sBtn = page.locator(SEL.searchBtn).first();
   if (await sBtn.isVisible().catch(() => false)) {
     await sBtn.click();
-    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {});
   }
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(1500); // 결과 테이블 렌더링 대기
 
   // 결과 테이블 파싱
   const rows = await page.locator(SEL.resultRows).all();
