@@ -1520,29 +1520,31 @@ export default function StatsPage() {
                             placeholder="제약사"
                             className="w-full h-7 border border-gray-300 rounded px-1.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
                         </td>
-                        <td className="px-1 align-middle relative">
-                          <input value={d.productName}
-                            ref={(el) => { manualInputRefs.current[`${i}:productName`] = el; }}
-                            onFocus={() => { handleManualFocus(i); setAutocompleteIdx(i); }}
-                            onBlur={() => { window.setTimeout(() => { setAutocompleteIdx((cur) => (cur === i ? null : cur)); }, 150); }}
-                            onKeyDown={(e) => handleManualKey(e, i, "productName")}
-                            onChange={(e) => { updateManualField(i, "productName", e.target.value); setAutocompleteIdx(i); }}
-                            placeholder="제품명"
-                            className="w-full h-7 border border-gray-300 rounded px-1.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                          {autocompleteIdx === i && autocompleteOptions.length > 0 && (
-                            <div className="absolute z-30 left-0 right-0 top-full mt-0.5 bg-white border border-gray-300 rounded shadow-lg max-h-56 overflow-y-auto">
-                              {autocompleteOptions.map((opt, j) => (
-                                <button key={opt.id} type="button"
-                                  onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(i, opt); }}
-                                  className={`block w-full text-left px-2 py-1 text-[11px] border-b border-gray-100 last:border-b-0 ${j === autocompleteFocus ? "bg-blue-100" : "hover:bg-blue-50"}`}>
-                                  <div className="font-medium text-gray-900 truncate">{opt.productName}</div>
-                                  <div className="text-gray-500 text-[10px] truncate">
-                                    {opt.companyName || "-"} · {opt.price ? `${opt.price.toLocaleString()}원` : "단가-"} · {opt.insuranceCode || "코드없음"}
-                                  </div>
-                                </button>
-                              ))}
-                            </div>
-                          )}
+                        <td className="px-1 align-middle">
+                          <div className="relative">
+                            <input value={d.productName}
+                              ref={(el) => { manualInputRefs.current[`${i}:productName`] = el; }}
+                              onFocus={() => { handleManualFocus(i); setAutocompleteIdx(i); }}
+                              onBlur={() => { window.setTimeout(() => { setAutocompleteIdx((cur) => (cur === i ? null : cur)); }, 150); }}
+                              onKeyDown={(e) => handleManualKey(e, i, "productName")}
+                              onChange={(e) => { updateManualField(i, "productName", e.target.value); setAutocompleteIdx(i); }}
+                              placeholder="제품명"
+                              className="w-full h-7 border border-gray-300 rounded px-1.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                            {autocompleteIdx === i && autocompleteOptions.length > 0 && (
+                              <div className="absolute z-40 left-0 right-0 top-full mt-0.5 bg-white border border-gray-300 rounded shadow-lg max-h-56 overflow-y-auto">
+                                {autocompleteOptions.map((opt, j) => (
+                                  <button key={opt.id} type="button"
+                                    onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(i, opt); }}
+                                    className={`block w-full text-left px-2 py-1 text-[11px] border-b border-gray-100 last:border-b-0 ${j === autocompleteFocus ? "bg-blue-100" : "hover:bg-blue-50"}`}>
+                                    <div className="font-medium text-gray-900 truncate">{opt.productName}</div>
+                                    <div className="text-gray-500 text-[10px] truncate">
+                                      {opt.companyName || "-"} · {opt.price ? `${opt.price.toLocaleString()}원` : "단가-"} · {opt.insuranceCode || "코드없음"}
+                                    </div>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </td>
                         <td className="px-1 align-middle">
                           <input value={d.quantity}
