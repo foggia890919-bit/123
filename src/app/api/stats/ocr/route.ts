@@ -562,22 +562,24 @@ function extractByColumnMap(
   }
   if (!targetRow) return null;
 
-  // 약품명 컬럼 X 에 가장 가까운 raw field 의 정확한 (X, Y) 를 anchor 로 사용.
-  // 클러스터의 avgY 보다 정밀.
-  let anchorX = colMap.productName ?? targetRow.avgY;
-  let anchorY = targetRow.avgY;
+  // 약품명 텍스트가 들어있는 raw field 를 anchor 로. 그 field 의 boundingPoly 4 vertex
+  // 자체가 행의 위/아래 가장자리 + 행의 실제 기울기를 알려준다 (사용자 지적 그대로).
+  let anchorField: ClovaField | null = null;
   for (const f of targetRow.fields) {
     const t = f.inferText.replace(/\s+/g, "").toLowerCase();
     if (!t.includes(koreanKey)) continue;
-    anchorX = fieldXCenter(f);
-    anchorY = fieldYCenter(f);
+    anchorField = f;
     break;
   }
+  if (!anchorField) return null;
 
-  // 2) Slope-aware Y 매칭: 사진이 비뚤어졌을 때, X 거리에 비례해 기대 Y 가 달라짐.
-  //    expectedY(X) = anchorY + slope * (X - anchorX)
-  //    각 후보 field 의 실제 Y 가 expectedY ±15px 안에 있으면 같은 행으로 인정.
-  const slope = colMap.slope || 0;
+  const band = bandFromField(anchorField, colMap.slope || 0);
+  if (!band) return null;
+
+  // 2) 후보 field 가 anchor 의 위·아래 가장자리 라인 사이에 들어오면 같은 행으로 인정.
+  //    각 라인은 X 에 따라 (anchor 의 자체 slope 또는 globalSlope 만큼) 기울어져 연장됨.
+  //    descender / 점·괄호 등 약간의 비어져 나오는 글자 보정용으로 ±6px 여유.
+  const yMargin = 6;
   let qtyField: ClovaField | null = null;
   let qtyDist = Infinity;
   for (const row of rows) {
@@ -586,8 +588,10 @@ function extractByColumnMap(
       const fy = fieldYCenter(f);
       const xDist = Math.abs(fx - colMap.quantity);
       if (xDist > 100) continue;
-      const expectedY = anchorY + slope * (fx - anchorX);
-      if (Math.abs(fy - expectedY) > 15) continue;
+      const dx = fx - band.anchorX;
+      const expectedTop = band.top + band.slope * dx;
+      const expectedBot = band.bot + band.slope * dx;
+      if (fy < expectedTop - yMargin || fy > expectedBot + yMargin) continue;
       if (!/\d/.test(f.inferText)) continue;
       if (xDist < qtyDist) {
         qtyField = f;
@@ -595,10 +599,45 @@ function extractByColumnMap(
       }
     }
   }
-  if (!qtyField) return { quantity: null, rowY: anchorY };
+  if (!qtyField) return { quantity: null, rowY: band.centerY };
 
   const cleaned = qtyField.inferText.replace(/[^\d.]/g, "");
-  return { quantity: cleaned || null, rowY: anchorY };
+  return { quantity: cleaned || null, rowY: band.centerY };
+}
+
+// anchor field 의 boundingPoly 로부터 행 띠(top, bot, anchorX, slope) 추출.
+// slope: 폭이 80px 이상이면 anchor 자체 top edge 의 dy/dx 사용 (per-row local slope).
+//        그보다 좁으면 글로벌 slope 를 fallback.
+interface RowBand {
+  top: number;
+  bot: number;
+  centerY: number;
+  anchorX: number;
+  slope: number;
+}
+function bandFromField(f: ClovaField, globalSlope: number): RowBand | null {
+  const vs = f.boundingPoly?.vertices ?? [];
+  if (vs.length < 3) return null;
+  const ys = vs.map((v) => v.y);
+  const xs = vs.map((v) => v.x);
+  const top = Math.min(...ys);
+  const bot = Math.max(...ys);
+  const anchorX = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const centerY = (top + bot) / 2;
+
+  // local slope: 4-vertex 인 경우 top-left·top-right 두 점으로
+  let slope = globalSlope;
+  if (vs.length === 4) {
+    const sortedY = [...vs].sort((a, b) => a.y - b.y);
+    const topPair = sortedY.slice(0, 2).sort((a, b) => a.x - b.x);
+    const dx = topPair[1].x - topPair[0].x;
+    const dy = topPair[1].y - topPair[0].y;
+    if (dx > 80 && Math.abs(dy / dx) < 0.3) {
+      slope = dy / dx;
+    }
+  }
+
+  return { top, bot, centerY, anchorX, slope };
 }
 
 // 호환용 wrapper — 기존 호출처에서 사용
