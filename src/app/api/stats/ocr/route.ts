@@ -482,6 +482,7 @@ export interface ColumnMap {
   quantity:      number | null;  // 사용량/총사용량/총량 컬럼 X
   total:         number | null;  // 총액/금액/송금액 컬럼 X
   headerY:       number;         // 헤더 행의 Y (이 아래 행만 데이터 행으로 간주)
+  slope:         number;         // 행 기울기 (dy / dx, 사진이 비뚤어진 경우 0이 아님)
 }
 
 function findColumnMap(rows: ClovaRow[]): ColumnMap | null {
@@ -491,12 +492,18 @@ function findColumnMap(rows: ClovaRow[]): ColumnMap | null {
     const row = rows[i];
     const hits = row.fields.filter((f) =>
       HEADER_KEYWORDS.some((k) => f.inferText.includes(k))
-    ).length;
-    if (hits < 3) continue;
+    );
+    if (hits.length < 3) continue;
+    // 헤더 필드들의 (X, Y) 로 행 기울기 추정 — 사진이 비뚤어졌을 때 사용
+    const points = hits.map((f) => ({ x: fieldXCenter(f), y: fieldYCenter(f) })).sort((a, b) => a.x - b.x);
+    const dx = points[points.length - 1].x - points[0].x;
+    const dy = points[points.length - 1].y - points[0].y;
+    const slope = dx > 100 ? dy / dx : 0; // dy per 1 px of dx
     const map: ColumnMap = {
       insuranceCode: null, productName: null, patientCount: null,
       unitPrice: null, quantity: null, total: null,
       headerY: row.avgY,
+      slope,
     };
     for (const f of row.fields) {
       const x = fieldXCenter(f);
@@ -555,19 +562,32 @@ function extractByColumnMap(
   }
   if (!targetRow) return null;
 
-  const productY = targetRow.avgY;
+  // 약품명 컬럼 X 에 가장 가까운 raw field 의 정확한 (X, Y) 를 anchor 로 사용.
+  // 클러스터의 avgY 보다 정밀.
+  let anchorX = colMap.productName ?? targetRow.avgY;
+  let anchorY = targetRow.avgY;
+  for (const f of targetRow.fields) {
+    const t = f.inferText.replace(/\s+/g, "").toLowerCase();
+    if (!t.includes(koreanKey)) continue;
+    anchorX = fieldXCenter(f);
+    anchorY = fieldYCenter(f);
+    break;
+  }
 
-  // 2) 같은 Y 라인 (±15px) + colMap.quantity X 근처 (±100px) 의 숫자 필드 찾기.
-  //    raw 필드를 직접 본다 — 클러스터링이 두 행을 합쳐버려도 Y 거리로 막아줌.
+  // 2) Slope-aware Y 매칭: 사진이 비뚤어졌을 때, X 거리에 비례해 기대 Y 가 달라짐.
+  //    expectedY(X) = anchorY + slope * (X - anchorX)
+  //    각 후보 field 의 실제 Y 가 expectedY ±15px 안에 있으면 같은 행으로 인정.
+  const slope = colMap.slope || 0;
   let qtyField: ClovaField | null = null;
   let qtyDist = Infinity;
   for (const row of rows) {
     for (const f of row.fields) {
-      const fy = fieldYCenter(f);
-      if (Math.abs(fy - productY) > 15) continue;
       const fx = fieldXCenter(f);
+      const fy = fieldYCenter(f);
       const xDist = Math.abs(fx - colMap.quantity);
       if (xDist > 100) continue;
+      const expectedY = anchorY + slope * (fx - anchorX);
+      if (Math.abs(fy - expectedY) > 15) continue;
       if (!/\d/.test(f.inferText)) continue;
       if (xDist < qtyDist) {
         qtyField = f;
@@ -575,10 +595,10 @@ function extractByColumnMap(
       }
     }
   }
-  if (!qtyField) return { quantity: null, rowY: productY };
+  if (!qtyField) return { quantity: null, rowY: anchorY };
 
   const cleaned = qtyField.inferText.replace(/[^\d.]/g, "");
-  return { quantity: cleaned || null, rowY: productY };
+  return { quantity: cleaned || null, rowY: anchorY };
 }
 
 // 호환용 wrapper — 기존 호출처에서 사용
@@ -629,6 +649,9 @@ function columnMapFromTemplate(
   // 데이터 시작점으로 보고, 그 위는 헤더 영역으로 간주.
   const firstDrugRow = rows.find((r) => r.fields.some((f) => isLikelyDrug(f.inferText)));
   const headerY = firstDrugRow ? firstDrugRow.avgY - 1 : 0;
+  // 캐시된 템플릿엔 slope 가 없으므로 현재 이미지의 약품명 fields 로 즉석 추정.
+  // 같은 X 컬럼(약품명)에 있는 fields 만으로는 slope 계산이 안 되므로(수직선),
+  // 헤더가 보이지 않으면 0 으로 둔다 (사진이 평평하다고 가정).
   return {
     insuranceCode: scale(tmpl.insuranceCode),
     productName: scale(tmpl.productName),
@@ -637,7 +660,29 @@ function columnMapFromTemplate(
     quantity: scale(tmpl.quantity),
     total: scale(tmpl.total),
     headerY,
+    slope: estimateSlopeFromDrugRows(rows),
   };
+}
+
+// 같은 행 안에 있는 (다양한 X 의) 필드들을 모아 slope 추정. 헤더가 안 잡혔을 때 fallback.
+// 임의의 약품명 field 와 그 행에서 X 가 가장 먼 다른 field 의 (dx, dy) 평균.
+function estimateSlopeFromDrugRows(rows: ClovaRow[]): number {
+  const samples: number[] = [];
+  for (const row of rows) {
+    if (row.fields.length < 3) continue;
+    const sorted = [...row.fields].sort((a, b) => fieldXCenter(a) - fieldXCenter(b));
+    const left = sorted[0];
+    const right = sorted[sorted.length - 1];
+    const dx = fieldXCenter(right) - fieldXCenter(left);
+    if (dx < 200) continue;
+    const dy = fieldYCenter(right) - fieldYCenter(left);
+    samples.push(dy / dx);
+    if (samples.length >= 5) break;
+  }
+  if (samples.length === 0) return 0;
+  // 중앙값 (이상치 제거)
+  samples.sort((a, b) => a - b);
+  return samples[Math.floor(samples.length / 2)];
 }
 
 // ColumnMap → ColumnTemplate (X / imageWidth 비율 로 정규화)
