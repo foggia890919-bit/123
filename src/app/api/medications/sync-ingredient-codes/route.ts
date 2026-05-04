@@ -5,38 +5,57 @@ import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 export const maxDuration = 300;
 
 const API_KEY = process.env.PUBLIC_DATA_API_KEY!;
-const BASE_URL = "https://api.odcloud.kr/api/15118958/v1/uddi:1d0f74ec-fc9e-4386-9f67-9b1295b4c149";
+// 두 UDDI 순서대로 시도 (1d0f74ec = 새버전, 6753c7f1 = 구버전 fallback)
+const UDDI_CANDIDATES = [
+  "1d0f74ec-fc9e-4386-9f67-9b1295b4c149",
+  "6753c7f1-65ed-4bbe-9e98-cd6b7b156a92",
+];
+const BASE = "https://api.odcloud.kr/api/15118958/v1/uddi:";
 
 interface AtcItem { [key: string]: string | number | undefined }
 
-async function fetchPage(page: number): Promise<{ items: AtcItem[]; totalCount: number }> {
-  const url = new URL(BASE_URL);
+async function fetchPage(page: number, uddi: string): Promise<{ items: AtcItem[]; totalCount: number }> {
+  const url = new URL(`${BASE}${uddi}`);
   url.searchParams.set("page", String(page));
   url.searchParams.set("perPage", "1000");
   url.searchParams.set("serviceKey", API_KEY);
 
   const res = await fetch(url.toString(), { cache: "no-store" });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`API ${res.status}: ${body.slice(0, 300)}`);
+  const text = await res.text().catch(() => "");
+  if (!res.ok || !text.trimStart().startsWith("{")) {
+    throw new Error(`API ${res.status}: ${text.slice(0, 300)}`);
   }
 
-  const json = await res.json();
-  const items: AtcItem[] = Array.isArray(json?.data) ? json.data : [];
-  const totalCount = parseInt(json?.totalCount ?? json?.matchCount ?? "0");
+  let json: Record<string, unknown>;
+  try { json = JSON.parse(text); } catch {
+    throw new Error(`JSON 파싱 실패: ${text.slice(0, 200)}`);
+  }
+  const items: AtcItem[] = Array.isArray(json?.data) ? (json.data as AtcItem[]) : [];
+  const totalCount = parseInt(String(json?.totalCount ?? json?.matchCount ?? "0"));
   return { items, totalCount };
 }
 
-async function fetchPageWithRetry(page: number, retries = 3): Promise<{ items: AtcItem[]; totalCount: number }> {
+async function fetchPageWithRetry(page: number, uddi: string, retries = 3): Promise<{ items: AtcItem[]; totalCount: number }> {
   let lastError: unknown = null;
   for (let i = 0; i < retries; i++) {
-    try { return await fetchPage(page); }
+    try { return await fetchPage(page, uddi); }
     catch (e) {
       lastError = e;
       if (i < retries - 1) await new Promise((r) => setTimeout(r, 800 * Math.pow(2, i)));
     }
   }
   throw new Error(`ATC 페이지 ${page} 실패: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+}
+
+// 두 UDDI 중 첫 번째로 응답하는 것 선택
+async function resolveUddi(): Promise<{ uddi: string; first: { items: AtcItem[]; totalCount: number } }> {
+  for (const uddi of UDDI_CANDIDATES) {
+    try {
+      const first = await fetchPageWithRetry(1, uddi, 2);
+      if (first.totalCount > 0) return { uddi, first };
+    } catch { /* 다음 시도 */ }
+  }
+  throw new Error(`모든 UDDI 시도 실패: ${UDDI_CANDIDATES.join(", ")}`);
 }
 
 function isTransientDbError(e: unknown): boolean {
@@ -137,11 +156,12 @@ export async function POST() {
   const guard = await requireAdmin();
   if (isNextResponse(guard)) return guard;
   try {
-    const { items: firstItems, totalCount } = await fetchPageWithRetry(1);
+    const { uddi, first: { items: firstItems, totalCount } } = await resolveUddi();
 
     if (totalCount === 0 || firstItems.length === 0) {
       return NextResponse.json({
         error: "ATC API에서 데이터를 가져오지 못했어요.",
+        uddi,
         sampleKeys: Object.keys(firstItems[0] ?? {}),
         sampleItem: firstItems[0] ?? null,
         totalCount,
@@ -151,7 +171,7 @@ export async function POST() {
     const totalPages = Math.ceil(totalCount / 1000);
     const allItems: AtcItem[] = [...firstItems];
     for (let page = 2; page <= totalPages; page++) {
-      const { items } = await fetchPageWithRetry(page);
+      const { items } = await fetchPageWithRetry(page, uddi);
       allItems.push(...items);
     }
 
@@ -264,6 +284,7 @@ export async function POST() {
 
     return NextResponse.json({
       success: true,
+      uddi,
       total: totalCount,
       mapped: infoMap.size,
       updated,
