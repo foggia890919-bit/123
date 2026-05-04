@@ -191,11 +191,15 @@ export async function POST() {
       if (apiName) withName++;
       if (apiSpec) withSpec++;
       if (apiName || apiSpec) withEither++;
-      const prev = infoMap.get(codes.productCode);
+      // 보험코드 정규화: HIRA는 8자리("53600230"), KMD는 9자리 0패딩("053600230")로
+      // 저장된 경우가 있어 leading zero 제거 후 비교 (DB 매칭도 LTRIM 처리).
+      const normProductCode = codes.productCode.replace(/^0+/, "");
+      if (!normProductCode) continue;
+      const prev = infoMap.get(normProductCode);
       const prevLen = prev ? prev.apiName.length + prev.apiSpec.length : -1;
       const curLen = apiName.length + apiSpec.length;
       if (curLen > prevLen) {
-        infoMap.set(codes.productCode, { ingredientCode: codes.ingredientCode, apiName, apiSpec, apiDose });
+        infoMap.set(normProductCode, { ingredientCode: codes.ingredientCode, apiName, apiSpec, apiDose });
       }
     }
 
@@ -217,12 +221,13 @@ export async function POST() {
     for (let i = 0; i < allProductCodes.length; i += BATCH) {
       const batch = allProductCodes.slice(i, i + BATCH);
 
+      // matched 도 LTRIM 한 값을 돌려줘야 위에서 만든 normProductCode 키로 infoMap.get 가능
       const matchRows = await withDbRetry(() => prisma.$queryRaw<{ id: string; productName: string; matched: string }[]>`
-        SELECT m.id, m."productName", TRIM(code) AS matched
+        SELECT m.id, m."productName", LTRIM(TRIM(code), '0') AS matched
         FROM "Medication" m,
              UNNEST(string_to_array(m."insuranceCode", ',')) AS code
         WHERE m."insuranceCode" IS NOT NULL
-          AND TRIM(code) = ANY(${batch})
+          AND LTRIM(TRIM(code), '0') = ANY(${batch})
       `);
 
       const seen = new Set<string>();
