@@ -902,7 +902,8 @@ export default function StatsPage() {
     if (nextIdx < 0 || nextIdx >= manualDrugs.length) return;
     const target = manualInputRefs.current[`${nextIdx}:${field}`];
     target?.focus();
-    target?.setSelectionRange(0, 0);
+    // 방향키 이동 시 텍스트 전체 선택 — 바로 타이핑으로 덮어쓰기 가능
+    target?.select();
     if (target) {
       target.scrollLeft = 0;
       target.scrollIntoView({ block: "center", behavior: "smooth" });
