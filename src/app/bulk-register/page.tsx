@@ -77,6 +77,20 @@ function ProductName({ name }: { name: string }) {
   );
 }
 
+// 제약사명에서 법인격 표기(주식회사, (주), ㈜, (유), 유한회사) 제거 — 표 시각 정돈용
+function stripCompanySuffix(name: string | null | undefined): string {
+  if (!name) return "-";
+  const cleaned = name
+    .replace(/\(주\)/g, "")
+    .replace(/㈜/g, "")
+    .replace(/주식회사/g, "")
+    .replace(/\(유\)/g, "")
+    .replace(/유한회사/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned || "-";
+}
+
 export default function BulkRegisterPage() {
   return (
     <RequireAuth>
@@ -785,10 +799,16 @@ function BulkRegisterInner() {
                     <th className="px-3 py-2 text-left">보험코드</th>
                     <th className="px-3 py-2 text-right">약가</th>
                     <th className="px-3 py-2 text-center w-8"></th>
-                    <th className="px-3 py-2 text-left bg-blue-50">대체 품목</th>
-                    <th className="px-3 py-2 text-left bg-blue-50">대체 제약사</th>
-                    <th className="px-3 py-2 text-right bg-blue-50">약가</th>
-                    {showRate && <th className="px-3 py-2 text-right bg-emerald-50">합계수수료</th>}
+                    <th className="px-2 py-2 text-left bg-blue-50">대체 품목</th>
+                    <th className="px-2 py-2 text-left bg-blue-50">대체 제약사</th>
+                    <th className="px-2 py-2 text-right bg-blue-50">약가</th>
+                    {showRate && (
+                      <>
+                        <th className="px-2 py-2 text-right bg-emerald-50">기본</th>
+                        <th className="px-2 py-2 text-right bg-emerald-50">추가</th>
+                        <th className="px-2 py-2 text-right bg-emerald-50">합계</th>
+                      </>
+                    )}
                     <th className="px-3 py-2 text-center w-36">액션</th>
                   </tr>
                 </thead>
@@ -809,23 +829,31 @@ function BulkRegisterInner() {
                             <span className="text-xs text-red-600 font-medium font-mono">{r.originalCode}</span>
                           )}
                         </td>
-                        <td className="px-3 py-2.5 text-xs text-gray-600 max-w-[110px] leading-tight">{o?.companyName ?? "-"}</td>
+                        <td className="px-3 py-2.5 text-xs text-gray-600 max-w-[110px] leading-tight">{stripCompanySuffix(o?.companyName)}</td>
                         <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{r.originalCode}</td>
                         <td className="px-3 py-2.5 text-right text-xs text-gray-700 whitespace-nowrap">{formatPrice(o?.price ?? null)}</td>
                         <td className="px-3 py-2.5 text-center text-gray-400">→</td>
-                        <td className="px-3 py-2.5 bg-blue-50/30 max-w-[220px]">
+                        <td className="px-2 py-2.5 bg-blue-50/30 max-w-[200px]">
                           {a ? (
                             <span className="text-xs font-medium text-gray-900 leading-tight block"><ProductName name={a.productName} /></span>
                           ) : (
                             <span className="text-xs text-gray-400">미선택</span>
                           )}
                         </td>
-                        <td className="px-3 py-2.5 text-xs text-gray-600 max-w-[110px] leading-tight bg-blue-50/30">{a?.companyName ?? "-"}</td>
-                        <td className="px-3 py-2.5 text-right text-xs text-gray-700 whitespace-nowrap bg-blue-50/30">{formatPrice(a?.price ?? null)}</td>
+                        <td className="px-2 py-2.5 text-xs text-gray-600 max-w-[100px] leading-tight bg-blue-50/30">{stripCompanySuffix(a?.companyName)}</td>
+                        <td className="px-2 py-2.5 text-right text-xs text-gray-700 whitespace-nowrap bg-blue-50/30">{formatPrice(a?.price ?? null)}</td>
                         {showRate && (
-                          <td className="px-3 py-2.5 text-right text-xs font-semibold text-blue-700 bg-emerald-50/30 whitespace-nowrap">
-                            {totalRate != null ? `${totalRate}%` : "-"}
-                          </td>
+                          <>
+                            <td className="px-2 py-2.5 text-right text-xs text-gray-700 bg-emerald-50/30 whitespace-nowrap">
+                              {base != null ? `${base}%` : "-"}
+                            </td>
+                            <td className="px-2 py-2.5 text-right text-xs text-gray-700 bg-emerald-50/30 whitespace-nowrap">
+                              {extra != null ? `${extra}%` : "-"}
+                            </td>
+                            <td className="px-2 py-2.5 text-right text-xs font-semibold text-blue-700 bg-emerald-50/30 whitespace-nowrap">
+                              {totalRate != null ? `${totalRate}%` : "-"}
+                            </td>
+                          </>
                         )}
                         <td className="px-3 py-2.5">
                           <div className="flex items-center gap-1 justify-center">
