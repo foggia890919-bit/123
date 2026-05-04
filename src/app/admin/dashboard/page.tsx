@@ -254,7 +254,10 @@ function UploadTab() {
     setMapLoading(true); setMapResult(null);
     try {
       const res = await fetch("/api/medications/sync-ingredient-codes", { method: "POST" });
-      const data = await res.json();
+      const text = await res.text();
+      let data: typeof mapResult;
+      try { data = JSON.parse(text); }
+      catch { data = { error: `API 응답이 JSON이 아닙니다 (HTTP ${res.status}): ${text.slice(0, 300)}` }; }
       setMapResult(data);
       // 동기화 후 공란 카운트 갱신
       fetch("/api/medications/missing-codes?format=json")
