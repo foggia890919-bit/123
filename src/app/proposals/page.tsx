@@ -76,6 +76,7 @@ function ProposalsContent() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [expandedCompanies, setExpandedCompanies] = useState<Set<string>>(new Set());
   const [requestingFilter, setRequestingFilter] = useState<Set<string>>(new Set());
+  const [requestingAll, setRequestingAll] = useState(false);
   const [saveClientError, setSaveClientError] = useState("");
   // 거래처 신규 등록 모달
   const [regOpen, setRegOpen] = useState(false);
@@ -306,6 +307,40 @@ function ProposalsContent() {
       setCompanyStatuses(await res.json());
     } finally {
       setRequestingFilter((prev) => { const n = new Set(prev); n.delete(companyName); return n; });
+    }
+  }
+
+  // 미요청 제약사(상태 비어있음) 일괄 요청
+  const pendingCompanies = useMemo(() => {
+    return companySummary
+      .map((c) => c.name)
+      .filter((name) => {
+        const s = companyStatuses[name];
+        return !s; // 빈 문자열/undefined만 — PENDING/REVIEWING/APPROVED/REJECTED는 제외
+      });
+  }, [companySummary, companyStatuses]);
+
+  async function requestFilterAll() {
+    if (!selected?.client) return;
+    if (pendingCompanies.length === 0) return;
+    if (!confirm(`미요청 제약사 ${pendingCompanies.length}개사에 한번에 필터링 요청을 보낼까요?`)) return;
+    setRequestingAll(true);
+    try {
+      await fetch("/api/filter-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          userName: session?.user?.name || "",
+          clientName: selected.client.clientName,
+          bizNumber: selected.client.bizNumber,
+          companies: pendingCompanies,
+        }),
+      });
+      const res = await fetch(`/api/filter-request/company-status?userId=${userId}`);
+      setCompanyStatuses(await res.json());
+    } finally {
+      setRequestingAll(false);
     }
   }
 
@@ -548,48 +583,30 @@ function ProposalsContent() {
           </Button>
         </div>
 
-        {/* 제안서 목록 */}
-        <div className="md:flex-1 md:overflow-y-auto md:min-h-0">
-          <button type="button" onClick={() => setSidebarOpen((v) => !v)}
-            className="w-full flex items-center justify-between px-1 py-1 text-xs font-semibold text-gray-500 md:pointer-events-none">
-            <span>제안서 목록 ({proposals.length})</span>
-            <span className="md:hidden">{sidebarOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}</span>
-          </button>
-          <div className={`space-y-1 ${sidebarOpen ? "block" : "hidden md:block"}`}>
-            {proposals.length === 0 ? (
-              <p className="text-xs text-gray-400 text-center py-4">제안서가 없어요</p>
-            ) : proposals.map((p) => (
-              <div key={p.id} onClick={() => loadProposal(p)}
-                className={`group flex items-center justify-between p-2.5 rounded-lg cursor-pointer transition-colors ${
-                  selected?.id === p.id ? "bg-blue-50 border border-blue-200" : "bg-white border border-gray-200 hover:bg-gray-50"
-                }`}>
-                <div className="flex items-center gap-2 min-w-0">
-                  <FileText className={`w-4 h-4 shrink-0 ${selected?.id === p.id ? "text-blue-600" : "text-gray-400"}`} />
-                  <div className="min-w-0">
-                    <p className={`text-sm font-medium truncate ${selected?.id === p.id ? "text-blue-700" : "text-gray-800"}`}>{p.title}</p>
-                    <p className="text-xs text-gray-400">
-                      {p._count?.items ?? 0}개 품목
-                      {p.client && <span className="ml-1 text-gray-400">· {p.client.clientName}</span>}
-                      {!p.client && <span className="ml-1 text-gray-300">· 미지정</span>}
-                    </p>
-                  </div>
-                </div>
-                <button onClick={(e) => { e.stopPropagation(); deleteProposal(p.id); }}
-                  className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 p-1 shrink-0">
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* 제약사 현황 */}
+        {/* 제약사 현황 — 사이드바 상단으로 이동 (스크롤 없이 바로 보이도록) */}
         {selected && companySummary.length > 0 && (
-          <div className="shrink-0 flex flex-col gap-2 md:max-h-[45%]">
-            <div className="flex items-center gap-2">
+          <div className="shrink-0 flex flex-col gap-2 md:max-h-[55%]">
+            <div className="flex items-center gap-2 flex-wrap">
               <Building2 className="w-4 h-4 text-gray-500" />
               <h3 className="text-sm font-semibold text-gray-800">제약사 현황</h3>
-              <span className="text-xs text-gray-400 ml-auto">{companySummary.length}개사</span>
+              <span className="text-xs text-gray-400">{companySummary.length}개사</span>
+              {isBiz && (
+                <button
+                  onClick={requestFilterAll}
+                  disabled={!selected?.client || requestingAll || pendingCompanies.length === 0}
+                  title={
+                    !selected?.client
+                      ? "거래처를 먼저 지정해야 필터링 요청이 가능합니다"
+                      : pendingCompanies.length === 0
+                        ? "미요청 제약사가 없습니다"
+                        : `미요청 ${pendingCompanies.length}개사에 한번에 요청`
+                  }
+                  className="ml-auto inline-flex items-center gap-1 text-[11px] rounded px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {requestingAll ? <Loader2 className="w-3 h-3 animate-spin" /> : <Filter className="w-3 h-3" />}
+                  전체 필터링 요청{pendingCompanies.length > 0 ? ` (${pendingCompanies.length})` : ""}
+                </button>
+              )}
             </div>
             {isBiz && !selected?.client && (
               <div className="flex items-center gap-1.5 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 text-xs text-orange-700">
@@ -656,6 +673,41 @@ function ProposalsContent() {
             </div>
           </div>
         )}
+
+        {/* 제안서 목록 — 사이드바 하단 (제약사 현황 이용 후 다른 제안서로 전환할 때 사용) */}
+        <div className="md:flex-1 md:overflow-y-auto md:min-h-0">
+          <button type="button" onClick={() => setSidebarOpen((v) => !v)}
+            className="w-full flex items-center justify-between px-1 py-1 text-xs font-semibold text-gray-500 md:pointer-events-none">
+            <span>제안서 목록 ({proposals.length})</span>
+            <span className="md:hidden">{sidebarOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}</span>
+          </button>
+          <div className={`space-y-1 ${sidebarOpen ? "block" : "hidden md:block"}`}>
+            {proposals.length === 0 ? (
+              <p className="text-xs text-gray-400 text-center py-4">제안서가 없어요</p>
+            ) : proposals.map((p) => (
+              <div key={p.id} onClick={() => loadProposal(p)}
+                className={`group flex items-center justify-between p-2.5 rounded-lg cursor-pointer transition-colors ${
+                  selected?.id === p.id ? "bg-blue-50 border border-blue-200" : "bg-white border border-gray-200 hover:bg-gray-50"
+                }`}>
+                <div className="flex items-center gap-2 min-w-0">
+                  <FileText className={`w-4 h-4 shrink-0 ${selected?.id === p.id ? "text-blue-600" : "text-gray-400"}`} />
+                  <div className="min-w-0">
+                    <p className={`text-sm font-medium truncate ${selected?.id === p.id ? "text-blue-700" : "text-gray-800"}`}>{p.title}</p>
+                    <p className="text-xs text-gray-400">
+                      {p._count?.items ?? 0}개 품목
+                      {p.client && <span className="ml-1 text-gray-400">· {p.client.clientName}</span>}
+                      {!p.client && <span className="ml-1 text-gray-300">· 미지정</span>}
+                    </p>
+                  </div>
+                </div>
+                <button onClick={(e) => { e.stopPropagation(); deleteProposal(p.id); }}
+                  className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 p-1 shrink-0">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* ── 왼쪽: 선택된 제안서 내용 (모바일: 하단) ── */}
