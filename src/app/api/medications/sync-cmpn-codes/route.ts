@@ -240,7 +240,7 @@ export async function POST() {
       }
       if (!codes || codes.size === 0) continue;
       const codeArr = Array.from(codes);
-      if (codeArr.length > 1) multiCandidate++;
+      if (codeArr.length > 1) { multiCandidate++; continue; } // 복수 후보 = 용량 구분 불가 → 스킵
       updates.push({ id: med.id, code: codeArr[0] });
     }
 
