@@ -571,11 +571,12 @@ async function main() {
 
   // 범위 백필: `npx tsx run.ts 2026-04-01 2026-05-01` → 텔레그램 X, 시트만 갱신
   if (arg1 && arg2) {
-    const fromMs = new Date(`${arg1}T00:00:00`).getTime();
-    const toMs = new Date(`${arg2}T00:00:00`).getTime();
-    if (Number.isNaN(fromMs) || Number.isNaN(toMs)) {
-      throw new Error("날짜 형식 오류 (YYYY-MM-DD 두 개)");
-    }
+    const m1 = arg1.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const m2 = arg2.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m1 || !m2) throw new Error("날짜 형식 오류 (YYYY-MM-DD 두 개)");
+    // UTC 기준으로 날짜 ms 계산 — 타임존 영향 없이 일자 +1 가능
+    const fromMs = Date.UTC(+m1[1], +m1[2] - 1, +m1[3]);
+    const toMs = Date.UTC(+m2[1], +m2[2] - 1, +m2[3]);
     if (fromMs > toMs) throw new Error("시작일이 종료일보다 늦음");
     const dayMs = 24 * 60 * 60 * 1000;
     const days: string[] = [];
