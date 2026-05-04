@@ -738,14 +738,13 @@ function ProposalsContent() {
                   <Upload className="w-3.5 h-3.5 mr-1" />엑셀 대량등록
                 </Button>
                 <Button variant="outline" size="sm" onClick={() => setBatchStockOpen(true)}
-                  disabled={!selected.items?.length}
                   className="text-emerald-700 border-emerald-200 hover:bg-emerald-50">
                   <Package className="w-3.5 h-3.5 mr-1" />재고확인
                 </Button>
-                <Button variant="outline" size="sm" onClick={exportExcel} disabled={!selected.items?.length}>
+                <Button variant="outline" size="sm" onClick={exportExcel}>
                   <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />엑셀
                 </Button>
-                <Button variant="outline" size="sm" onClick={exportPDF} disabled={!selected.items?.length}>
+                <Button variant="outline" size="sm" onClick={exportPDF}>
                   <FileDown className="w-3.5 h-3.5 mr-1" />PDF
                 </Button>
               </div>

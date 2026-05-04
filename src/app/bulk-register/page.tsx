@@ -703,6 +703,9 @@ function BulkRegisterInner() {
               <p className="text-xs text-gray-500 mt-1">
                 거래처의 기존 품목 보험코드를 엑셀 A열에 넣어 업로드하고, 각 품목에 대해 대체할 품목을 선택해서 PDF·Excel로 출력하세요.
               </p>
+              <p className="text-xs text-blue-600 mt-1">
+                재고확인은 제안서로 저장 후 <span className="font-semibold">제안서 메뉴</span>에서 이용하세요.
+              </p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <Button size="sm" onClick={() => setSaveModalOpen(true)} disabled={rows.length === 0}
