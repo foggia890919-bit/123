@@ -31,11 +31,9 @@ const SEL = {
   idInput:    '#userId',
   pwInput:    '#userPwd',
   loginBtn:   '#loginBtn',
-  // ----- 원장집계 -----
-  // 종료일은 확정 (#search_pd_end). 시작일은 명명규칙 추정값(#search_pd_start) +
-  // 흔한 패턴을 OR로 묶음 — 사장님 시작일 outerHTML 회신 시 단일 셀렉터로 정리.
-  dateFromInput:
-    '#search_pd_start, #search_pd_st, input[name="search_pd_start"], input[name="search_pd_st"], input[name="search_pd_from"]',
+  // ----- 원장집계 (확정) -----
+  // 둘 다 readonly + jQuery UI datepicker(.hasDatepicker) — setDate()에서 별도 처리.
+  dateFromInput: '#search_pd_start',
   dateToInput:   '#search_pd_end',
   searchBtn:     '#btnSrch',
   // 결과 테이블: 명세일자 헤더가 있는 테이블의 tbody tr.
