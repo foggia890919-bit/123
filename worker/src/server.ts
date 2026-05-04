@@ -167,24 +167,17 @@ app.post("/epharms/sync", async (req, res) => {
   res.json({ ok: true, started: true, onlyAccountId: onlyAccountId ?? null });
 });
 
-// 이팜스 상품 마스터 자동 동기화.
-// body: { uploadUrl: string, uploadToken: string, triggeredBy?: string }
-//   uploadUrl   = Vercel의 multipart 업로드 엔드포인트 (예: https://kmd.app/api/products/upload)
-//   uploadToken = WORKER_TOKEN (Vercel→Worker 공통)
-// fire-and-forget: 다운로드는 5~10분 걸릴 수 있음.
+// 이팜스 상품 마스터 자동 동기화 — 페이지별 크롤링.
+// body: { triggeredBy?: string }
+// 워커가 직접 DB에 upsert하므로 별도 업로드 URL 불필요.
+// fire-and-forget: 전체 카탈로그 순회는 10~30분 걸림.
 app.post("/epharms/sync-products", async (req, res) => {
   if (isProductSyncRunning()) {
     res.status(409).json({ error: "product sync already running" });
     return;
   }
-  const { uploadUrl, uploadToken, triggeredBy } = req.body as {
-    uploadUrl?: string; uploadToken?: string; triggeredBy?: string;
-  };
-  if (!uploadUrl || !uploadToken) {
-    res.status(400).json({ error: "uploadUrl, uploadToken 필수" });
-    return;
-  }
-  syncProductMaster({ uploadUrl, uploadToken, triggeredBy }).catch(err =>
+  const { triggeredBy } = (req.body ?? {}) as { triggeredBy?: string };
+  syncProductMaster({ triggeredBy }).catch(err =>
     console.error("[products] sync failed:", err)
   );
   res.json({ ok: true, started: true });
