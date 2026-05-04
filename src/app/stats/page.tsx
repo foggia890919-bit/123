@@ -54,6 +54,13 @@ interface PipelineDiagnostics {
   masterUnmatchedCount: number;
   dedupedCount: number;
   finalCount: number;
+  drugCandidates?: Array<{
+    text: string;
+    yPercent: number;
+    xPercent: number;
+    accepted: boolean;
+    droppedReason: string | null;
+  }>;
 }
 interface OcrResult {
   source: string;
@@ -1218,6 +1225,24 @@ export default function StatsPage() {
                       <div>중복 제거: -{editOcr.pipeline.dedupedCount}건</div>
                       <div className="font-bold pt-1">최종: {editOcr.pipeline.finalCount}건</div>
                     </div>
+                    {editOcr.pipeline.drugCandidates && editOcr.pipeline.drugCandidates.length > 0 && (
+                      <div className="mt-2">
+                        <p className="text-[10px] font-semibold text-gray-500 mb-1">
+                          Clova 약품명 후보 ({editOcr.pipeline.drugCandidates.length}건 — 그 중 {editOcr.pipeline.drugCandidates.filter((c) => c.accepted).length}건 채택)
+                        </p>
+                        <div className="text-[11px] bg-orange-50 border border-orange-200 rounded p-2 font-mono space-y-0.5 max-h-64 overflow-y-auto">
+                          {editOcr.pipeline.drugCandidates
+                            .slice()
+                            .sort((a, b) => a.yPercent - b.yPercent)
+                            .map((c, i) => (
+                              <div key={i} className={c.accepted ? "text-green-700" : "text-red-700"}>
+                                {c.accepted ? "✓" : "✗"} Y{c.yPercent.toFixed(1)}% &quot;{c.text}&quot;
+                                {c.droppedReason && <span className="text-gray-500"> — {c.droppedReason}</span>}
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
                 <div>

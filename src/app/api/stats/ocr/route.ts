@@ -66,6 +66,14 @@ export interface PipelineDiagnostics {
   masterUnmatchedCount: number;          // 매칭 실패 수
   dedupedCount: number;                  // dedupe 에서 제거된 중복 수
   finalCount: number;                    // 최종 응답 약품 수
+  // Clova 가 본 약품명 후보 전체 — 어느 게 최종 결과에 들어갔는지 사용자가 직접 검증
+  drugCandidates: Array<{
+    text: string;
+    yPercent: number;       // 이미지 내 Y 위치 (정렬용)
+    xPercent: number;       // X 위치
+    accepted: boolean;
+    droppedReason: string | null;  // 탈락한 경우 이유
+  }>;
 }
 
 export interface FusionResult {
@@ -174,6 +182,7 @@ export async function POST(req: NextRequest) {
       masterUnmatchedCount: 0,
       dedupedCount: 0,
       finalCount: 0,
+      drugCandidates: [],
     };
 
     // ── 3단계: 추출 우선순위
@@ -183,7 +192,16 @@ export async function POST(req: NextRequest) {
     const visionDrugs = geminiDraft?.drugs ?? [];
     let merged: MergedDrug[];
 
-    const positionalDrugs = colMap ? extractDrugsPositional(clovaRows, colMap) : [];
+    const positionalResult = extractDrugsPositionalWithDebug(clovaRows, colMap);
+    const positionalDrugs = positionalResult.drugs;
+    // 모든 약품명 후보를 진단에 첨부 — 사용자가 어느 게 채택/탈락됐는지 직접 검증
+    pipeline.drugCandidates = positionalResult.candidates.map((c) => ({
+      text: c.text,
+      yPercent: clovaImageHeight > 0 ? Math.round((c.y / clovaImageHeight) * 1000) / 10 : 0,
+      xPercent: clovaImageWidth > 0 ? Math.round((c.x / clovaImageWidth) * 1000) / 10 : 0,
+      accepted: c.accepted,
+      droppedReason: c.reason,
+    }));
     if (positionalDrugs.length >= 3) {
       // positional 추출이 충분하면 LLM 호출 자체 생략 — 단가/순서 보장됨
       pipeline.mergeUsed = "clova-positional";
@@ -226,6 +244,27 @@ export async function POST(req: NextRequest) {
       }
     }
     pipeline.mergeDrugCount = merged.length;
+
+    // FIX #19: LLM 경로에서도 priceHint 를 채워준다.
+    //   Vision/Merge LLM 이 productName 만 정확히 잡고 매칭이 dose 변형으로 떨어질 때,
+    //   Clova positional 에서 같은 약품의 단가를 찾아 매칭 키로 사용 → 정확한 master row.
+    if (pipeline.mergeUsed !== "clova-positional" && positionalDrugs.length > 0) {
+      const positionalByName = new Map<string, PositionalDrug>();
+      for (const p of positionalDrugs) {
+        const key = parseDrugName(p.productName).korean.replace(/\s+/g, "").toLowerCase();
+        if (key && !positionalByName.has(key)) positionalByName.set(key, p);
+      }
+      merged = merged.map((m) => {
+        if (m.priceHint) return m;
+        const key = parseDrugName(m.productName).korean.replace(/\s+/g, "").toLowerCase();
+        const pos = positionalByName.get(key);
+        if (pos && pos.unitPrice) {
+          const price = parseInt(pos.unitPrice.replace(/[^\d]/g, ""), 10);
+          if (Number.isFinite(price) && price > 0) return { ...m, priceHint: price };
+        }
+        return m;
+      });
+    }
 
     // LLM 둘 다 약품을 못 뽑았으면 결정론적 Clova-only 파서로 fallback.
     // (Gemini quota 초과 / 일시 outage 시에도 시스템이 동작하도록 보장)
@@ -604,8 +643,25 @@ interface PositionalDrug {
   quantity: string;
   insuranceCode: string;    // 9자리가 같은 행에 있으면 즉시
 }
-function extractDrugsPositional(rows: ClovaRow[], colMap: ColumnMap | null): PositionalDrug[] {
-  if (!colMap || colMap.productName == null || colMap.quantity == null) return [];
+interface PositionalResult {
+  drugs: PositionalDrug[];
+  candidates: Array<{ text: string; y: number; x: number; accepted: boolean; reason: string | null }>;
+}
+function extractDrugsPositionalWithDebug(rows: ClovaRow[], colMap: ColumnMap | null): PositionalResult {
+  const candidates: PositionalResult["candidates"] = [];
+  // colMap 없을 때라도 후보는 수집해서 사용자가 보게
+  if (!colMap || colMap.productName == null || colMap.quantity == null) {
+    for (const r of rows) {
+      for (const f of r.fields) {
+        if (!isLikelyDrug(f.inferText)) continue;
+        candidates.push({
+          text: f.inferText, y: fieldYCenter(f), x: fieldXCenter(f),
+          accepted: false, reason: "ColumnMap 없음 (헤더 감지 실패)",
+        });
+      }
+    }
+    return { drugs: [], candidates };
+  }
   const drugs: PositionalDrug[] = [];
 
   // 모든 fields 를 평탄화 — qty/price 검색 시 클러스터 경계 무시
@@ -621,24 +677,38 @@ function extractDrugsPositional(rows: ClovaRow[], colMap: ColumnMap | null): Pos
   const drugCandidates: DrugField[] = [];
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    if (row.avgY <= colMap.headerY) continue;
     for (const f of row.fields) {
       if (!isLikelyDrug(f.inferText)) continue;
-      const dist = Math.abs(fieldXCenter(f) - colMap.productName);
-      if (dist > 250) continue;
-      drugCandidates.push({ field: f, rowIdx: i, y: fieldYCenter(f) });
+      const x = fieldXCenter(f);
+      const y = fieldYCenter(f);
+      // 헤더 위/너무 멀리 있는 후보도 우선 candidates 에 기록 (사용자가 무엇이 떨어졌는지 봄)
+      if (row.avgY <= colMap.headerY) {
+        candidates.push({ text: f.inferText, y, x, accepted: false, reason: "헤더 위쪽 행 (헤더보다 위)" });
+        continue;
+      }
+      // FIX #5: X 허용오차를 컬럼 간 거리에 따라 동적으로. 좁은 표는 100px, 넓은 표는 quantity 컬럼까지의 거리 절반.
+      const productNameXTol = colMap.quantity ? Math.max(150, (colMap.quantity - colMap.productName) / 2) : 250;
+      const dist = Math.abs(x - colMap.productName);
+      if (dist > productNameXTol) {
+        candidates.push({ text: f.inferText, y, x, accepted: false, reason: `productName 컬럼 X(${Math.round(colMap.productName)})에서 ${Math.round(dist)}px 떨어짐 (${Math.round(productNameXTol)}px 초과)` });
+        continue;
+      }
+      drugCandidates.push({ field: f, rowIdx: i, y });
     }
   }
   // Y 순서 정렬
   drugCandidates.sort((a, b) => a.y - b.y);
 
   for (const cand of drugCandidates) {
-    if (processed.has(cand.field)) continue;
+    if (processed.has(cand.field)) {
+      candidates.push({ text: cand.field.inferText, y: cand.y, x: fieldXCenter(cand.field), accepted: false, reason: "이전 약품의 풀네임 일부로 합쳐짐" });
+      continue;
+    }
     processed.add(cand.field);
     const anchorY = cand.y;
     const row = rows[cand.rowIdx];
 
-    // 같은 약품명에 대한 풀네임 만들기 — anchor Y ±20px + productName 컬럼 X 영역의 fields
+    // 같은 약품명에 대한 풀네임 만들기 — anchor Y ±18px + productName 컬럼 X 영역의 fields
     const leftBound = (colMap.insuranceCode ?? 0) + 30;
     const rightBound = Math.min(colMap.unitPrice ?? colMap.quantity, colMap.quantity) - 30;
     const productFields = allFields
@@ -648,12 +718,27 @@ function extractDrugsPositional(rows: ClovaRow[], colMap: ColumnMap | null): Pos
         return Math.abs(fy - anchorY) < 18 && fx >= leftBound && fx <= rightBound;
       })
       .sort((a, b) => fieldXCenter(a) - fieldXCenter(b));
-    productFields.forEach((f) => processed.add(f));
+    // FIX #6: isLikelyDrug 통과한 field 는 processed 에 넣지 않음 — 인접 행이 클러스터에
+    // 합쳐졌을 때 다른 약품의 anchor 가 첫 약품의 풀네임 일부로 빨려들어가 사라지던 버그 수정.
+    // (단, 자기 자신 cand.field 는 이미 위에서 추가됨)
+    productFields.forEach((f) => {
+      if (f !== cand.field && !isLikelyDrug(f.inferText)) processed.add(f);
+    });
     const productName = (productFields.length ? productFields : [cand.field])
       .map((f) => f.inferText).join(" ").trim();
 
-    // 사용량/단가: anchor Y ±15px + 컬럼 X ±100px 범위의 숫자 field 중 X 가장 가까운 것
-    function nearestNumberAt(colX: number | null): string {
+    // FIX #8: 컬럼 간 거리 기반 X 허용오차 — 단가/사용량 컬럼이 200px 이내로 가까우면
+    // ±100px 가 두 컬럼을 모두 덮어 cross-pollination. 인접 컬럼까지 거리의 절반을 한도로.
+    function colTolerance(colX: number, ...neighbors: (number | null)[]): number {
+      let minNeighborDist = Infinity;
+      for (const n of neighbors) if (n != null) minNeighborDist = Math.min(minNeighborDist, Math.abs(n - colX));
+      return Math.max(20, Math.min(100, minNeighborDist / 2 - 10));
+    }
+    const unitPriceTol = colMap.unitPrice != null ? colTolerance(colMap.unitPrice, colMap.quantity, colMap.patientCount, colMap.productName) : 100;
+    const quantityTol = colMap.quantity != null ? colTolerance(colMap.quantity, colMap.unitPrice, colMap.total, colMap.productName) : 100;
+
+    // 사용량/단가: anchor Y ±15px + 컬럼 X ±tolerance 범위의 숫자 field 중 X 가장 가까운 것
+    function nearestNumberAt(colX: number | null, tol: number): string {
       if (colX == null) return "";
       let best: ClovaField | null = null;
       let bestDist = Infinity;
@@ -661,13 +746,13 @@ function extractDrugsPositional(rows: ClovaRow[], colMap: ColumnMap | null): Pos
         if (Math.abs(fieldYCenter(f) - anchorY) > 15) continue;
         if (!/\d/.test(f.inferText)) continue;
         const dist = Math.abs(fieldXCenter(f) - colX);
-        if (dist > 100) continue;
+        if (dist > tol) continue;
         if (dist < bestDist) { best = f; bestDist = dist; }
       }
       return best ? best.inferText.replace(/[^\d.]/g, "") : "";
     }
-    const unitPrice = nearestNumberAt(colMap.unitPrice);
-    const quantity = nearestNumberAt(colMap.quantity);
+    const unitPrice = nearestNumberAt(colMap.unitPrice, unitPriceTol);
+    const quantity = nearestNumberAt(colMap.quantity, quantityTol);
 
     // 9자리 보험코드: 같은 Y ±15 범위에서 검색
     let insuranceCode = "";
@@ -681,8 +766,14 @@ function extractDrugsPositional(rows: ClovaRow[], colMap: ColumnMap | null): Pos
     void row;
 
     drugs.push({ productName, unitPrice, quantity, insuranceCode });
+    candidates.push({ text: cand.field.inferText, y: anchorY, x: fieldXCenter(cand.field), accepted: true, reason: null });
   }
-  return drugs;
+  return { drugs, candidates };
+}
+
+// 호환 wrapper — 기존 호출처용
+function extractDrugsPositional(rows: ClovaRow[], colMap: ColumnMap | null): PositionalDrug[] {
+  return extractDrugsPositionalWithDebug(rows, colMap).drugs;
 }
 
 function parseDrugsFromClova(rows: ClovaRow[], colMap: ColumnMap | null): MergedDrug[] {
