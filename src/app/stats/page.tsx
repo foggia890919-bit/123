@@ -8,6 +8,13 @@ import { Input } from "@/components/ui/input";
 import RequireRole from "@/components/RequireRole";
 
 interface OcrField { value: string; confidence: number }
+interface DrugDebug {
+  anchorXPct: number;
+  anchorTopPct: number;
+  anchorBotPct: number;
+  slopePerWidth: number;
+  qtyBoxPct: { left: number; top: number; right: number; bottom: number } | null;
+}
 interface FusionDrug {
   insuranceCode: OcrField;
   companyName: OcrField;
@@ -20,6 +27,7 @@ interface FusionDrug {
   finalConfidence: number;
   manualCheck: boolean;
   bboxYPercent: number | null;
+  debug: DrugDebug | null;
 }
 interface ColumnTemplate {
   insuranceCode: number | null;
@@ -433,6 +441,7 @@ export default function StatsPage() {
   const imageElRef = useRef<HTMLImageElement>(null);
   const manualInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
+  const [showDebug, setShowDebug] = useState(false);
 
   // 줌
   const [zoomLevel, setZoomLevel] = useState(100);
@@ -1033,6 +1042,12 @@ export default function StatsPage() {
                   <span className="text-[10px] text-gray-500">
                     {zoomEnabled ? (isZoomed ? <Minimize2 className="w-3 h-3 inline text-blue-500" /> : <Maximize2 className="w-3 h-3 inline text-blue-500" />) : null}
                   </span>
+                  <span className="text-xs text-gray-600 ml-2">디버그</span>
+                  <button onClick={() => setShowDebug((v) => !v)}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${showDebug ? "bg-pink-500" : "bg-gray-300"}`}
+                    title="OCR 행 밴드와 매칭된 셀 위치를 이미지에 표시">
+                    <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${showDebug ? "translate-x-4" : "translate-x-1"}`} />
+                  </button>
                 </>
               )}
               {ocrError && <p className="text-xs text-red-500">{ocrError}</p>}
@@ -1062,6 +1077,45 @@ export default function StatsPage() {
                         transform: "translateY(-50%)",
                       }}
                     />
+                  )}
+                  {/* 디버그 SVG 오버레이 — 약품마다 행 밴드 (위/아래 2 라인) + 매칭된 사용량 bbox 표시 */}
+                  {showDebug && editOcr && (
+                    <svg className="absolute inset-0 pointer-events-none"
+                      viewBox="0 0 100 100" preserveAspectRatio="none"
+                      style={{ width: "100%", height: "100%" }}>
+                      {editOcr.drugs.map((d, i) => {
+                        if (!d.debug) return null;
+                        const { anchorXPct, anchorTopPct, anchorBotPct, slopePerWidth, qtyBoxPct } = d.debug;
+                        // 윗선/아랫선을 X=0 ~ X=100 까지 slope 로 연장
+                        const xLeft = 0, xRight = 100;
+                        const dxLeft = xLeft - anchorXPct * 100;
+                        const dxRight = xRight - anchorXPct * 100;
+                        const yTopLeft = anchorTopPct * 100 + slopePerWidth * (dxLeft / 100) * 100;
+                        const yTopRight = anchorTopPct * 100 + slopePerWidth * (dxRight / 100) * 100;
+                        const yBotLeft = anchorBotPct * 100 + slopePerWidth * (dxLeft / 100) * 100;
+                        const yBotRight = anchorBotPct * 100 + slopePerWidth * (dxRight / 100) * 100;
+                        const isFocus = focusedIdx === i;
+                        const stroke = isFocus ? "#dc2626" : "#fb7185";  // focus: red, else pink
+                        const op = isFocus ? 0.95 : 0.45;
+                        return (
+                          <g key={i} opacity={op}>
+                            <line x1={xLeft} y1={yTopLeft} x2={xRight} y2={yTopRight}
+                              stroke={stroke} strokeWidth={isFocus ? 0.25 : 0.12} vectorEffect="non-scaling-stroke" />
+                            <line x1={xLeft} y1={yBotLeft} x2={xRight} y2={yBotRight}
+                              stroke={stroke} strokeWidth={isFocus ? 0.25 : 0.12} vectorEffect="non-scaling-stroke" />
+                            {qtyBoxPct && (
+                              <rect
+                                x={qtyBoxPct.left * 100}
+                                y={qtyBoxPct.top * 100}
+                                width={(qtyBoxPct.right - qtyBoxPct.left) * 100}
+                                height={(qtyBoxPct.bottom - qtyBoxPct.top) * 100}
+                                fill="none" stroke="#16a34a" strokeWidth={isFocus ? 0.4 : 0.2}
+                                vectorEffect="non-scaling-stroke" />
+                            )}
+                          </g>
+                        );
+                      })}
+                    </svg>
                   )}
                 </div>
               </div>
