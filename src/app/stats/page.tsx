@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import RequireRole from "@/components/RequireRole";
 import DocumentScanner from "@/components/DocumentScanner";
+import CameraCapture from "@/components/CameraCapture";
 
 interface OcrField { value: string; confidence: number }
 interface DrugDebug {
@@ -462,7 +463,9 @@ export default function StatsPage() {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
+  const [originalImageFile, setOriginalImageFile] = useState<File | null>(null);
   const [pendingScanFile, setPendingScanFile] = useState<File | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const imageScrollRef = useRef<HTMLDivElement>(null);
@@ -1124,12 +1127,17 @@ export default function StatsPage() {
         {/* 이미지 — 상단 sticky strip (높이 조절 + pan/zoom + 커서 따라감) */}
         <div className="sticky top-0 z-30 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
           <div className="border-b border-gray-100 px-3 py-2 flex items-center gap-2 bg-gray-50 flex-wrap">
-            <Button type="button" variant="outline" size="sm" onClick={() => cameraInputRef.current?.click()} className="text-xs">
+            <Button type="button" variant="outline" size="sm" onClick={() => setCameraOpen(true)} className="text-xs">
               카메라
             </Button>
             <Button type="button" variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} className="text-xs">
               <Upload className="w-3.5 h-3.5 mr-1" />파일 선택
             </Button>
+            {originalImageFile && (
+              <Button type="button" variant="outline" size="sm" onClick={() => setPendingScanFile(originalImageFile)} className="text-xs">
+                재보정
+              </Button>
+            )}
             {imageUrl && (
               <Button type="button" size="sm" onClick={runOcr} disabled={ocrLoading || !selectedClient}
                 className="text-xs bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-300">
@@ -1249,7 +1257,7 @@ export default function StatsPage() {
                   <p className="text-xs text-gray-400 mt-1">파일 선택 후 4 모서리 보정 (캠스캐너 방식)</p>
                 </div>
                 <div className="flex gap-2 mt-2">
-                  <Button type="button" size="sm" onClick={() => cameraInputRef.current?.click()}
+                  <Button type="button" size="sm" onClick={() => setCameraOpen(true)}
                           className="bg-blue-600 hover:bg-blue-700 text-white">
                     카메라 촬영
                   </Button>
@@ -1260,9 +1268,9 @@ export default function StatsPage() {
               </div>
             )}
             <input ref={fileInputRef} type="file" accept="image/*" className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) setPendingScanFile(f); e.target.value = ""; }} />
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) { setOriginalImageFile(f); setPendingScanFile(f); } e.target.value = ""; }} />
             <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) setPendingScanFile(f); e.target.value = ""; }} />
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) { setOriginalImageFile(f); setPendingScanFile(f); } e.target.value = ""; }} />
           </div>
           {/* 높이 조절 핸들 — 아래로 드래그 */}
           <div onMouseDown={handleResizeMouseDown}
@@ -1658,6 +1666,13 @@ export default function StatsPage() {
           onConfirm={(corrected) => { setPendingScanFile(null); handleFile(corrected); }}
           onSkip={() => { const f = pendingScanFile; setPendingScanFile(null); if (f) handleFile(f); }}
           onCancel={() => setPendingScanFile(null)}
+        />
+      )}
+      {cameraOpen && (
+        <CameraCapture
+          onCapture={(f) => { setCameraOpen(false); setOriginalImageFile(f); setPendingScanFile(f); }}
+          onCancel={() => setCameraOpen(false)}
+          onUnsupported={() => { setCameraOpen(false); cameraInputRef.current?.click(); }}
         />
       )}
     </RequireRole>
