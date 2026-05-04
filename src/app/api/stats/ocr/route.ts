@@ -254,10 +254,11 @@ export async function POST(req: NextRequest) {
       matchedMedicationId: string | null;
       finalConfidence: number;
       manualCheck: boolean;
-      anchorY: number | null;       // locator 가 자신 있게 찾은 경우 raw % (없으면 보간 대상)
-      productNameRaw: string;       // 보간 후처리에서도 매칭 시도 가능하게 유지
+      anchorY: number | null;
+      productNameRaw: string;       // OCR/LLM 이 추출한 원본 productName (마스터 덮어쓰기 전)
       insuranceCodeRaw: string;
-      extract: ExtractResult | null; // 디버그용 — 행 밴드/매칭 qty bbox
+      rawDose: string;              // OCR/LLM 추출 dose — dedupe 에서 다른 dose 변형 구분용
+      extract: ExtractResult | null;
     }
     const pendingDrugs: PendingDrug[] = [];
     for (const item of boostedMerged) {
@@ -287,8 +288,9 @@ export async function POST(req: NextRequest) {
         finalConfidence,
         manualCheck,
         anchorY: locateRowInClova(item, clovaRows, clovaImageHeight),
-        productNameRaw: matched.productName || item.productName,
+        productNameRaw: item.productName,         // ← 마스터 덮어쓰기 전 LLM/Vision 원본
         insuranceCodeRaw: (matched.insuranceCode || item.insuranceCode).replace(/\D/g, ""),
+        rawDose: parseDrugName(item.productName).dose,
         extract: itemWithExtract._extract ?? null,
       });
     }
@@ -415,18 +417,20 @@ export async function POST(req: NextRequest) {
       };
     });
 
-    // 안전망 — 같은 마스터 ID + 같은 수량 + 같은 보험코드면 명백한 중복 (LLM 이 같은 행을
-    // 여러 번 뽑았거나 다른 dose 가 같은 master 로 잘못 매칭된 경우). 첫 번째만 유지.
-    const seen = new Set<string>();
-    const dedupedDrugs = drugs.filter((d) => {
-      const key = `${d.matchedMedicationId ?? "_"}|${d.insuranceCode.value}|${d.quantity.value}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
+    // 안전망 — pendingDrugs 단계에서 dedupe. **마스터 덮어쓰기 전 OCR 원본**으로
+    // 비교해 다른 약품이 같은 master 에 우연히 매칭됐어도 살린다.
+    const seenRaw = new Set<string>();
+    const dedupedPending = pendingDrugs.filter((p) => {
+      const key = `${p.productNameRaw}|${p.rawDose}|${p.quantity.value}`;
+      if (seenRaw.has(key)) return false;
+      seenRaw.add(key);
       return true;
     });
-    pipeline.dedupedCount = drugs.length - dedupedDrugs.length;
-    pipeline.finalCount = dedupedDrugs.length;
-    const finalDrugsList = dedupedDrugs;
+    pipeline.dedupedCount = pendingDrugs.length - dedupedPending.length;
+    const finalDrugsList = drugs.filter((_, i) =>
+      dedupedPending.includes(pendingDrugs[i])
+    );
+    pipeline.finalCount = finalDrugsList.length;
 
     const avgConfidence = finalDrugsList.length
       ? Math.round(finalDrugsList.reduce((s, d) => s + d.finalConfidence, 0) / finalDrugsList.length)
