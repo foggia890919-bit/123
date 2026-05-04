@@ -170,9 +170,14 @@ export async function POST() {
 
     const totalPages = Math.ceil(totalCount / 1000);
     const allItems: AtcItem[] = [...firstItems];
-    for (let page = 2; page <= totalPages; page++) {
-      const { items } = await fetchPageWithRetry(page, uddi);
-      allItems.push(...items);
+    if (totalPages > 1) {
+      const remainingPages = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
+      const PAGE_CONCURRENCY = 5;
+      for (let i = 0; i < remainingPages.length; i += PAGE_CONCURRENCY) {
+        const chunk = remainingPages.slice(i, i + PAGE_CONCURRENCY);
+        const results = await Promise.all(chunk.map((p) => fetchPageWithRetry(p, uddi)));
+        for (const r of results) allItems.push(...r.items);
+      }
     }
 
     const infoMap = new Map<string, { ingredientCode: string; apiName: string; apiSpec: string; apiDose: string | null }>();
@@ -201,9 +206,9 @@ export async function POST() {
       }, { status: 400 });
     }
 
-    // bulk UPDATE using UNNEST to handle comma-separated insuranceCodes
-    // (fixes: exact-match was missing meds where insuranceCode = "CodeA,CodeB")
-    let updated = 0;
+    // SELECT step: insuranceCode 가 콤마로 묶인 경우(CodeA,CodeB)도 UNNEST 로 매칭.
+    // UPDATE step: 매칭된 medication 들을 UNNEST 한 번 호출로 bulk UPDATE — 직렬 N개 UPDATE 대신 한 번의 round-trip.
+    const upd: { id: string; ingredientCode: string; ingredientName: string | null; productName: string | null }[] = [];
     let ingredientChanged = 0;
     let productNameUpdated = 0;
     const allProductCodes = Array.from(infoMap.keys());
@@ -212,7 +217,6 @@ export async function POST() {
     for (let i = 0; i < allProductCodes.length; i += BATCH) {
       const batch = allProductCodes.slice(i, i + BATCH);
 
-      // STEP 1: find medication IDs whose insuranceCode (possibly comma-separated) contains any code in this batch
       const matchRows = await withDbRetry(() => prisma.$queryRaw<{ id: string; productName: string; matched: string }[]>`
         SELECT m.id, m."productName", TRIM(code) AS matched
         FROM "Medication" m,
@@ -221,7 +225,6 @@ export async function POST() {
           AND TRIM(code) = ANY(${batch})
       `);
 
-      // STEP 2: update each matched med (deduplicated by id, first match wins)
       const seen = new Set<string>();
       for (const row of matchRows) {
         if (seen.has(row.id)) continue;
@@ -234,25 +237,48 @@ export async function POST() {
           : info.apiName ? info.apiName
           : null;
 
-        // productName에 용량이 없으면 API 제품명에서 추출한 용량으로 보완
         const currentDose = extractDoseFromName(row.productName);
         const newProductName = (!currentDose && info.apiDose)
           ? `${row.productName.trim()} ${info.apiDose}`
           : null;
 
-        await withDbRetry(() => prisma.medication.update({
-          where: { id: row.id },
-          data: {
-            ingredientCode: info.ingredientCode,
-            ...(newIngredientName ? { ingredientName: newIngredientName } : {}),
-            ...(newProductName ? { productName: newProductName } : {}),
-            updatedAt: new Date(),
-          },
-        }));
-        updated++;
+        upd.push({
+          id: row.id,
+          ingredientCode: info.ingredientCode,
+          ingredientName: newIngredientName,
+          productName: newProductName,
+        });
         if (newIngredientName) ingredientChanged++;
         if (newProductName) productNameUpdated++;
       }
+    }
+
+    // COALESCE: name/product 가 null 이면 기존 값 유지 (기존 ...(x ? {x} : {}) 와 동일 의미)
+    const UPDATE_CHUNK = 1000;
+    let updated = 0;
+    for (let i = 0; i < upd.length; i += UPDATE_CHUNK) {
+      const slice = upd.slice(i, i + UPDATE_CHUNK);
+      const ids = slice.map((u) => u.id);
+      const codes = slice.map((u) => u.ingredientCode);
+      const names = slice.map((u) => u.ingredientName);
+      const products = slice.map((u) => u.productName);
+
+      const n = await withDbRetry(() => prisma.$executeRaw`
+        UPDATE "Medication" m
+        SET
+          "ingredientCode" = v.ingredient_code,
+          "ingredientName" = COALESCE(v.ingredient_name, m."ingredientName"),
+          "productName"    = COALESCE(v.product_name,    m."productName"),
+          "updatedAt"      = NOW()
+        FROM UNNEST(
+          ${ids}::text[],
+          ${codes}::text[],
+          ${names}::text[],
+          ${products}::text[]
+        ) AS v(id, ingredient_code, ingredient_name, product_name)
+        WHERE m.id = v.id
+      `);
+      updated += Number(n);
     }
 
     const now = new Date().toISOString();
