@@ -494,19 +494,7 @@ export default function StatsPage() {
     commissionRate: number | null;
     additionalRate: number | null;
   }
-  const [autocompleteIdx, _setAutocompleteIdx] = useState<number | null>(null);
-  const setAutocompleteIdx: typeof _setAutocompleteIdx = (v) => {
-    if (typeof v === "function") {
-      _setAutocompleteIdx((cur) => {
-        const next = (v as (c: number | null) => number | null)(cur);
-        console.log("[AC] setIdx", { from: cur, to: next, stack: new Error().stack?.split("\n").slice(2, 5).join(" | ") });
-        return next;
-      });
-    } else {
-      console.log("[AC] setIdx", { to: v, stack: new Error().stack?.split("\n").slice(2, 5).join(" | ") });
-      _setAutocompleteIdx(v);
-    }
-  };
+  const [autocompleteIdx, setAutocompleteIdx] = useState<number | null>(null);
   const [autocompleteOptions, setAutocompleteOptions] = useState<AutocompleteOption[]>([]);
   const [autocompleteFocus, setAutocompleteFocus] = useState(0);
 
@@ -535,25 +523,28 @@ export default function StatsPage() {
       .catch(() => setClients([]));
   }, [session]);
 
-  // 제품명 자동완성 — 입력 중인 행의 productName 으로 마스터 검색 (200ms 디바운스)
+  // 제품명 자동완성 — 입력 중인 행의 productName 으로 마스터 검색 (80ms 디바운스 + 캐시)
   const autocompleteQuery = autocompleteIdx != null ? (manualDrugs[autocompleteIdx]?.productName ?? "") : "";
+  const autocompleteCache = useRef<Map<string, AutocompleteOption[]>>(new Map());
   useEffect(() => {
-    console.log("[AC] effect run", { autocompleteIdx, autocompleteQuery });
     if (autocompleteIdx == null) { setAutocompleteOptions([]); return; }
     const q = autocompleteQuery.trim();
     if (q.length < 2) { setAutocompleteOptions([]); return; }
     const userId = session?.user?.id;
+    const cacheKey = `${userId ?? ""}:${q}`;
+    const cached = autocompleteCache.current.get(cacheKey);
+    if (cached) { setAutocompleteOptions(cached); setAutocompleteFocus(0); return; }
     const t = setTimeout(async () => {
       try {
-        const url = `/api/medications/search?q=${encodeURIComponent(q)}&limit=8${userId ? `&userId=${userId}` : ""}`;
-        console.log("[AC] fetching", url);
+        const url = `/api/medications/search?q=${encodeURIComponent(q)}&limit=8&fast=true${userId ? `&userId=${userId}` : ""}`;
         const res = await fetch(url);
         const data = await res.json();
-        console.log("[AC] response", { count: data.medications?.length, sample: data.medications?.[0] });
-        setAutocompleteOptions(Array.isArray(data.medications) ? data.medications.slice(0, 8) : []);
+        const opts: AutocompleteOption[] = Array.isArray(data.medications) ? data.medications.slice(0, 8) : [];
+        autocompleteCache.current.set(cacheKey, opts);
+        setAutocompleteOptions(opts);
         setAutocompleteFocus(0);
-      } catch (err) { console.error("[AC] fetch error", err); setAutocompleteOptions([]); }
-    }, 200);
+      } catch { setAutocompleteOptions([]); }
+    }, 80);
     return () => clearTimeout(t);
   }, [autocompleteIdx, autocompleteQuery, session?.user?.id]);
 
@@ -1540,13 +1531,17 @@ export default function StatsPage() {
                             <input value={d.productName}
                               ref={(el) => { manualInputRefs.current[`${i}:productName`] = el; }}
                               onFocus={() => { handleManualFocus(i); setAutocompleteIdx(i); }}
-                              onBlur={(e) => { console.log("[AC] blur", { i, relatedTarget: (e.relatedTarget as HTMLElement | null)?.tagName }); }}
+                              onBlur={(e) => {
+                                const next = e.relatedTarget as HTMLElement | null;
+                                if (next?.closest?.("[data-ac-dropdown]")) return;
+                                window.setTimeout(() => { setAutocompleteIdx((cur) => (cur === i ? null : cur)); }, 200);
+                              }}
                               onKeyDown={(e) => handleManualKey(e, i, "productName")}
                               onChange={(e) => { updateManualField(i, "productName", e.target.value); setAutocompleteIdx(i); }}
                               placeholder="제품명"
                               className="w-full h-7 border border-gray-300 rounded px-1.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
                             {autocompleteIdx === i && autocompleteOptions.length > 0 && (
-                              <div className="absolute z-40 left-0 right-0 top-full mt-0.5 bg-white border border-gray-300 rounded shadow-lg max-h-56 overflow-y-auto">
+                              <div data-ac-dropdown className="absolute z-40 left-0 right-0 top-full mt-0.5 bg-white border border-gray-300 rounded shadow-lg max-h-56 overflow-y-auto">
                                 {autocompleteOptions.map((opt, j) => (
                                   <button key={opt.id} type="button"
                                     onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(i, opt); }}
