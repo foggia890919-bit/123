@@ -122,11 +122,19 @@ async function parseCurrentPage(page: Page): Promise<ProductRow[]> {
 
     const bodyRows = Array.from(target.querySelectorAll("tbody tr"));
     for (const tr of bodyRows) {
+      // Mustache 템플릿 행 ({{...}}) 또는 hidden 행은 스킵
+      if ((tr as HTMLElement).style?.display === "none") continue;
+      const rowText = (tr.textContent ?? "");
+      if (rowText.includes("{{") || rowText.includes("}}")) continue;
+
       const cells = Array.from(tr.querySelectorAll("td")).map((td) => (td.textContent ?? "").trim());
       if (cells.length === 0) continue;
-      const priceCode = cells[cCode] ?? "";
+      const priceCode = (cells[cCode] ?? "").replace(/\s+/g, "");
       const productName = cells[cName] ?? "";
-      if (!priceCode || !productName) continue; // 코드 없는 신규제품은 skip
+      // 진짜 상품 행만 통과: 코드는 9자리 이상의 숫자/영문 포함 + 상품명이 mustache가 아님
+      if (!priceCode || !productName) continue;
+      if (priceCode.length < 6) continue;
+      if (productName.startsWith("{{") || priceCode.startsWith("{{")) continue;
 
       const manufacturer = cManu >= 0 ? (cells[cManu] ?? "") : "";
       const spec = cSpec >= 0 ? cells[cSpec] : null;
@@ -134,7 +142,7 @@ async function parseCurrentPage(page: Page): Promise<ProductRow[]> {
       const basePrice = Number((priceText || "0").replace(/[^\d.-]/g, "")) || 0;
 
       out.push({
-        priceCode: priceCode.replace(/\s+/g, ""),
+        priceCode,
         productName,
         manufacturer,
         spec: spec || null,
@@ -143,6 +151,26 @@ async function parseCurrentPage(page: Page): Promise<ProductRow[]> {
     }
     return out;
   });
+}
+
+/** 페이지가 AJAX로 실제 데이터 채울 때까지 대기. 템플릿/placeholder만 있으면 false. */
+async function waitForRealRows(page: Page, timeoutMs = 20_000): Promise<boolean> {
+  return await page.waitForFunction(
+    () => {
+      const rows = document.querySelectorAll("tbody tr");
+      let realCount = 0;
+      for (const row of Array.from(rows)) {
+        const text = (row.textContent ?? "");
+        if (text.includes("{{") || text.length < 10) continue;
+        if ((row as HTMLElement).style?.display === "none") continue;
+        realCount++;
+        if (realCount >= 3) return true; // 최소 3개 실제 행 확인되면 OK
+      }
+      return false;
+    },
+    undefined,
+    { timeout: timeoutMs }
+  ).then(() => true).catch(() => false);
 }
 
 /**
@@ -259,15 +287,24 @@ export async function syncProductMaster(opts: { triggeredBy?: string } = {}): Pr
     await dismissNoticePopup(page);
     console.log(`[products] landed on ${LIST_URL}`);
 
+    // AJAX로 실제 상품 데이터가 로드될 때까지 대기 (mustache 템플릿만 있으면 false)
+    const hasData = await waitForRealRows(page, 30_000);
+    if (!hasData) {
+      throw new Error("페이지 로드 후 30초 안에 실제 상품 행이 안 보임 — 로그인/네트워크 문제 가능성");
+    }
+    console.log("[products] real data rows detected — starting scrape");
+
     // 첫 페이지(1)는 이미 로드된 상태 — 바로 파싱부터 시작
     for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
-      // 페이지 1은 이동 불필요 (이미 로드됨), 2 이상은 클릭 이동
+      // 페이지 1은 이동 불필요 (이미 로드됨), 2 이상은 클릭 이동 + 데이터 대기
       if (pageNum > 1) {
         const ok = await goToPage(page, pageNum);
         if (!ok) {
           console.log(`[products] page ${pageNum} not reachable — done`);
           break;
         }
+        // 새 페이지 데이터 로드 대기
+        await waitForRealRows(page, 15_000);
       }
 
       const rows = await parseCurrentPage(page);
