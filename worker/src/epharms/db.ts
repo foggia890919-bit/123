@@ -65,6 +65,21 @@ export async function finishProductSyncLog(
 /** 페이지에서 긁은 상품들을 priceCode 기준 upsert. (inserted, updated) 반환. */
 export async function upsertProducts(rows: ProductRow[]): Promise<{ inserted: number; updated: number }> {
   if (rows.length === 0) return { inserted: 0, updated: 0 };
+
+  // 배치 내 priceCode 중복 제거.
+  // 이팜스는 같은 보험코드를 포장단위 다른 행으로 별도 표시함 (예: PTP / 병).
+  // 우리 schema는 priceCode UNIQUE이므로 한 배치에 같은 priceCode가 두 번
+  // 들어가면 PG의 "ON CONFLICT DO UPDATE cannot affect row a second time" 에러 발생.
+  // → 첫 등장만 유지.
+  const seen = new Set<string>();
+  const deduped: ProductRow[] = [];
+  for (const r of rows) {
+    if (seen.has(r.priceCode)) continue;
+    seen.add(r.priceCode);
+    deduped.push(r);
+  }
+  if (deduped.length === 0) return { inserted: 0, updated: 0 };
+
   const client = await getPool().connect();
   let inserted = 0, updated = 0;
   try {
@@ -72,7 +87,7 @@ export async function upsertProducts(rows: ProductRow[]): Promise<{ inserted: nu
     const values: unknown[] = [];
     const placeholders: string[] = [];
     let p = 1;
-    for (const r of rows) {
+    for (const r of deduped) {
       placeholders.push(
         `($${p++},$${p++},$${p++},$${p++},$${p++},$${p++},NOW(),NOW())`
       );
