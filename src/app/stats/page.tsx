@@ -808,8 +808,12 @@ export default function StatsPage() {
     const target = manualInputRefs.current[`${nextIdx}:${field}`];
     target?.focus();
     target?.setSelectionRange(0, 0);
-    // 입력란이 길어서 가로로 잘려 보이면 맨 앞으로 스크롤
-    if (target) target.scrollLeft = 0;
+    if (target) {
+      // 입력란이 길어서 가로로 잘려 보이면 맨 앞으로 스크롤
+      target.scrollLeft = 0;
+      // 행이 화면 밖이면 부모 스크롤 컨테이너를 움직여 보이게 — 키보드 검수 시 시야 따라감
+      target.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
   }
   // 보험코드 입력 후 마스터에서 제품명/제약사/단가 자동 채움
   async function lookupByInsuranceCode(idx: number) {
