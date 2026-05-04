@@ -62,6 +62,7 @@ interface AtcExtract {
   productCode: string;
   ingredientName: string;
   spec: string;
+  apiProductName: string;
 }
 
 // 필드명 패턴 매칭으로 extract (정확한 키명을 몰라도 "주성분"·"규격" 포함된 키 찾음)
@@ -99,7 +100,8 @@ function extractCodes(item: AtcItem): AtcExtract | null {
     /strength|dosage/i,
     /^spec$/i,
   ]);
-  return { ingredientCode, productCode, ingredientName, spec };
+  const apiProductName = findValue(item, [/^제품명$/]);
+  return { ingredientCode, productCode, ingredientName, spec, apiProductName };
 }
 
 // "10MG" → "10mg", "10 mg" → "10mg", "5ML" → "5ml"
@@ -113,6 +115,14 @@ function normalizeSpec(spec: string): string {
     .replace(/IU\b/gi, "IU")
     .replace(/G\b/gi, "g")
     .trim();
+}
+
+// 제품명에서 용량(숫자+단위) 추출 — productName 보완용
+function extractDoseFromName(name: string): string | null {
+  if (!name) return null;
+  const UNIT = "(?:mg|mcg|μg|ug|g|ml|mL|IU|iu|%|mEq|밀리그[람램]|마이크로그[람램]|그[람램]|밀리리터|리터|유닛|단위)";
+  const m = name.match(new RegExp(`(\\d[\\d.,/]*\\s*${UNIT})`, "i"));
+  return m ? m[1].trim() : null;
 }
 
 // "아토르바스타틴" + "10mg" → "아토르바스타틴 10mg"
@@ -145,13 +155,14 @@ export async function POST() {
       allItems.push(...items);
     }
 
-    const infoMap = new Map<string, { ingredientCode: string; apiName: string; apiSpec: string }>();
+    const infoMap = new Map<string, { ingredientCode: string; apiName: string; apiSpec: string; apiDose: string | null }>();
     let withName = 0, withSpec = 0, withEither = 0;
     for (const item of allItems) {
       const codes = extractCodes(item);
       if (!codes) continue;
       const apiName = codes.ingredientName;
       const apiSpec = normalizeSpec(codes.spec);
+      const apiDose = extractDoseFromName(codes.apiProductName) ?? extractDoseFromName(apiSpec) ?? null;
       if (apiName) withName++;
       if (apiSpec) withSpec++;
       if (apiName || apiSpec) withEither++;
@@ -159,7 +170,7 @@ export async function POST() {
       const prevLen = prev ? prev.apiName.length + prev.apiSpec.length : -1;
       const curLen = apiName.length + apiSpec.length;
       if (curLen > prevLen) {
-        infoMap.set(codes.productCode, { ingredientCode: codes.ingredientCode, apiName, apiSpec });
+        infoMap.set(codes.productCode, { ingredientCode: codes.ingredientCode, apiName, apiSpec, apiDose });
       }
     }
 
@@ -174,6 +185,7 @@ export async function POST() {
     // (fixes: exact-match was missing meds where insuranceCode = "CodeA,CodeB")
     let updated = 0;
     let ingredientChanged = 0;
+    let productNameUpdated = 0;
     const allProductCodes = Array.from(infoMap.keys());
     const BATCH = 500;
 
@@ -181,8 +193,8 @@ export async function POST() {
       const batch = allProductCodes.slice(i, i + BATCH);
 
       // STEP 1: find medication IDs whose insuranceCode (possibly comma-separated) contains any code in this batch
-      const matchRows = await withDbRetry(() => prisma.$queryRaw<{ id: string; matched: string }[]>`
-        SELECT m.id, TRIM(code) AS matched
+      const matchRows = await withDbRetry(() => prisma.$queryRaw<{ id: string; productName: string; matched: string }[]>`
+        SELECT m.id, m."productName", TRIM(code) AS matched
         FROM "Medication" m,
              UNNEST(string_to_array(m."insuranceCode", ',')) AS code
         WHERE m."insuranceCode" IS NOT NULL
@@ -202,16 +214,24 @@ export async function POST() {
           : info.apiName ? info.apiName
           : null;
 
+        // productName에 용량이 없으면 API 제품명에서 추출한 용량으로 보완
+        const currentDose = extractDoseFromName(row.productName);
+        const newProductName = (!currentDose && info.apiDose)
+          ? `${row.productName.trim()} ${info.apiDose}`
+          : null;
+
         await withDbRetry(() => prisma.medication.update({
           where: { id: row.id },
           data: {
             ingredientCode: info.ingredientCode,
             ...(newIngredientName ? { ingredientName: newIngredientName } : {}),
+            ...(newProductName ? { productName: newProductName } : {}),
             updatedAt: new Date(),
           },
         }));
         updated++;
         if (newIngredientName) ingredientChanged++;
+        if (newProductName) productNameUpdated++;
       }
     }
 
@@ -248,6 +268,7 @@ export async function POST() {
       mapped: infoMap.size,
       updated,
       ingredientUpdated: ingredientChanged,
+      productNameUpdated,
       filled,
       lastSync: now,
       totalInDb: total,
