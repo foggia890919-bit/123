@@ -484,6 +484,20 @@ export default function StatsPage() {
   const [lookupBusy, setLookupBusy] = useState<Record<number, boolean>>({});
   const [manualInitMode, setManualInitMode] = useState<"ocr" | "lastMonth" | "empty">("ocr");
 
+  // 제품명 자동완성 — 요율표(Medication) 검색
+  interface AutocompleteOption {
+    id: string;
+    insuranceCode: string | null;
+    productName: string;
+    companyName: string;
+    price: number | null;
+    commissionRate: number | null;
+    additionalRate: number | null;
+  }
+  const [autocompleteIdx, setAutocompleteIdx] = useState<number | null>(null);
+  const [autocompleteOptions, setAutocompleteOptions] = useState<AutocompleteOption[]>([]);
+  const [autocompleteFocus, setAutocompleteFocus] = useState(0);
+
   // 저번달 처방 (가운데 패널 — 거래처+년월 변경 시 자동 로드)
   const [lastMonth, setLastMonth] = useState<{ drugs: ManualDrug[]; year: number; month: number } | null>(null);
   const [lastMonthLoading, setLastMonthLoading] = useState(false);
@@ -508,6 +522,45 @@ export default function StatsPage() {
       .then((data) => setClients(Array.isArray(data) ? data : []))
       .catch(() => setClients([]));
   }, [session]);
+
+  // 제품명 자동완성 — 입력 중인 행의 productName 으로 마스터 검색 (200ms 디바운스)
+  const autocompleteQuery = autocompleteIdx != null ? (manualDrugs[autocompleteIdx]?.productName ?? "") : "";
+  useEffect(() => {
+    if (autocompleteIdx == null) { setAutocompleteOptions([]); return; }
+    const q = autocompleteQuery.trim();
+    if (q.length < 2) { setAutocompleteOptions([]); return; }
+    const userId = session?.user?.id;
+    const t = setTimeout(async () => {
+      try {
+        const url = `/api/medications/search?q=${encodeURIComponent(q)}&limit=8${userId ? `&userId=${userId}` : ""}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        setAutocompleteOptions(Array.isArray(data.medications) ? data.medications.slice(0, 8) : []);
+        setAutocompleteFocus(0);
+      } catch { setAutocompleteOptions([]); }
+    }, 200);
+    return () => clearTimeout(t);
+  }, [autocompleteIdx, autocompleteQuery, session?.user?.id]);
+
+  // 자동완성 옵션 선택 → 관련 필드 일괄 채우기
+  function applyAutocomplete(rowIdx: number, opt: AutocompleteOption) {
+    setManualDrugs((prev) => {
+      const next = [...prev];
+      next[rowIdx] = {
+        ...next[rowIdx],
+        insuranceCode: opt.insuranceCode ?? next[rowIdx].insuranceCode,
+        companyName: opt.companyName ?? "",
+        productName: opt.productName,
+        unitPrice: opt.price ?? null,
+        commissionRate: opt.commissionRate ?? null,
+        additionalRate: opt.additionalRate ?? null,
+        matchedMedicationId: opt.id,
+      };
+      return next;
+    });
+    setAutocompleteIdx(null);
+    setAutocompleteOptions([]);
+  }
 
   // 저번달 처방 자료 자동 로드 (거래처/년월 변경 시)
   useEffect(() => {
@@ -800,16 +853,43 @@ export default function StatsPage() {
   // 제품명·긴 필드에선 select() 시 커서가 끝으로 가서 검수 시 처음부터 읽기 어려움.
   // 항상 맨 앞(0,0)으로 고정 — 검수자가 텍스트 처음부터 빠르게 훑을 수 있게.
   function handleManualKey(e: React.KeyboardEvent<HTMLInputElement>, idx: number, field: keyof ManualDrug) {
+    // 자동완성이 productName 행에 열려있으면 ↑↓/Enter/Esc 를 dropdown 에 우선 위임
+    const acOpen = field === "productName" && autocompleteIdx === idx && autocompleteOptions.length > 0;
+    if (acOpen) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setAutocompleteFocus((f) => Math.min(f + 1, autocompleteOptions.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setAutocompleteFocus((f) => Math.max(f - 1, 0));
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        applyAutocomplete(idx, autocompleteOptions[autocompleteFocus]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setAutocompleteIdx(null);
+        return;
+      }
+    }
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Enter") return;
     e.preventDefault();
+    setAutocompleteIdx(null);
     const dir = e.key === "ArrowUp" ? -1 : 1;
     const nextIdx = idx + dir;
     if (nextIdx < 0 || nextIdx >= manualDrugs.length) return;
     const target = manualInputRefs.current[`${nextIdx}:${field}`];
     target?.focus();
     target?.setSelectionRange(0, 0);
-    // 입력란이 길어서 가로로 잘려 보이면 맨 앞으로 스크롤
-    if (target) target.scrollLeft = 0;
+    if (target) {
+      target.scrollLeft = 0;
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
   }
   // 보험코드 입력 후 마스터에서 제품명/제약사/단가 자동 채움
   async function lookupByInsuranceCode(idx: number) {
@@ -1441,13 +1521,30 @@ export default function StatsPage() {
                             className="w-full h-7 border border-gray-300 rounded px-1.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
                         </td>
                         <td className="px-1 align-middle">
-                          <input value={d.productName}
-                            ref={(el) => { manualInputRefs.current[`${i}:productName`] = el; }}
-                            onFocus={() => handleManualFocus(i)}
-                            onKeyDown={(e) => handleManualKey(e, i, "productName")}
-                            onChange={(e) => updateManualField(i, "productName", e.target.value)}
-                            placeholder="제품명"
-                            className="w-full h-7 border border-gray-300 rounded px-1.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                          <div className="relative">
+                            <input value={d.productName}
+                              ref={(el) => { manualInputRefs.current[`${i}:productName`] = el; }}
+                              onFocus={() => { handleManualFocus(i); setAutocompleteIdx(i); }}
+                              onBlur={() => { window.setTimeout(() => { setAutocompleteIdx((cur) => (cur === i ? null : cur)); }, 150); }}
+                              onKeyDown={(e) => handleManualKey(e, i, "productName")}
+                              onChange={(e) => { updateManualField(i, "productName", e.target.value); setAutocompleteIdx(i); }}
+                              placeholder="제품명"
+                              className="w-full h-7 border border-gray-300 rounded px-1.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                            {autocompleteIdx === i && autocompleteOptions.length > 0 && (
+                              <div className="absolute z-40 left-0 right-0 top-full mt-0.5 bg-white border border-gray-300 rounded shadow-lg max-h-56 overflow-y-auto">
+                                {autocompleteOptions.map((opt, j) => (
+                                  <button key={opt.id} type="button"
+                                    onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(i, opt); }}
+                                    className={`block w-full text-left px-2 py-1 text-[11px] border-b border-gray-100 last:border-b-0 ${j === autocompleteFocus ? "bg-blue-100" : "hover:bg-blue-50"}`}>
+                                    <div className="font-medium text-gray-900 truncate">{opt.productName}</div>
+                                    <div className="text-gray-500 text-[10px] truncate">
+                                      {opt.companyName || "-"} · {opt.price ? `${opt.price.toLocaleString()}원` : "단가-"} · {opt.insuranceCode || "코드없음"}
+                                    </div>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </td>
                         <td className="px-1 align-middle">
                           <input value={d.quantity}
