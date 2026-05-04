@@ -61,6 +61,7 @@ interface PipelineDiagnostics {
     accepted: boolean;
     droppedReason: string | null;
   }>;
+  masterUnmatchedSamples?: Array<{ productName: string; unitPriceHint: number | null }>;
 }
 interface OcrResult {
   source: string;
@@ -1240,6 +1241,25 @@ export default function StatsPage() {
                                 {c.droppedReason && <span className="text-gray-500"> — {c.droppedReason}</span>}
                               </div>
                             ))}
+                        </div>
+                      </div>
+                    )}
+                    {editOcr.pipeline.masterUnmatchedSamples && editOcr.pipeline.masterUnmatchedSamples.length > 0 && (
+                      <div className="mt-2">
+                        <p className="text-[10px] font-semibold text-gray-500 mb-1">
+                          마스터 매칭 실패 샘플 ({editOcr.pipeline.masterUnmatchedCount}건 중 처음 {editOcr.pipeline.masterUnmatchedSamples.length}건)
+                        </p>
+                        <div className="text-[11px] bg-red-50 border border-red-200 rounded p-2 font-mono space-y-0.5">
+                          {editOcr.pipeline.masterUnmatchedSamples.map((s, i) => (
+                            <div key={i}>
+                              &quot;{s.productName}&quot;
+                              {s.unitPriceHint != null && <span className="text-gray-500"> (단가 {s.unitPriceHint})</span>}
+                            </div>
+                          ))}
+                          <div className="pt-1 text-gray-500 text-[10px]">
+                            ⚠️ 이 약품들이 마스터 DB에 없으면 = DB 누락 (sync 필요).
+                            마스터에 있는데 못 찾으면 = 매칭 로직 버그.
+                          </div>
                         </div>
                       </div>
                     )}

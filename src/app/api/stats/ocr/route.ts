@@ -74,6 +74,9 @@ export interface PipelineDiagnostics {
     accepted: boolean;
     droppedReason: string | null;  // 탈락한 경우 이유
   }>;
+  // 마스터 매칭 실패한 drug 들의 (이름, 단가) 샘플 — 마스터 DB 에 약품이 없는지 vs
+  // 매칭 로직 버그인지 사용자가 빨리 판단할 수 있게.
+  masterUnmatchedSamples: Array<{ productName: string; unitPriceHint: number | null }>;
 }
 
 export interface FusionResult {
@@ -180,6 +183,7 @@ export async function POST(req: NextRequest) {
       filteredByIsLikelyDrug: 0,
       masterMatchedCount: 0,
       masterUnmatchedCount: 0,
+      masterUnmatchedSamples: [],
       dedupedCount: 0,
       finalCount: 0,
       drugCandidates: [],
@@ -214,6 +218,7 @@ export async function POST(req: NextRequest) {
           quantity: p.quantity,
           confidence: 80,
           priceHint: parseInt(p.unitPrice.replace(/[^\d]/g, ""), 10) || undefined,
+          anchorYRaw: p.anchorY,
         }));
     } else {
       // positional 부실 시 기존 LLM 경로
@@ -333,8 +338,17 @@ export async function POST(req: NextRequest) {
       const baselineConf = Math.max(llmConf, completeness);
       const finalConfidence = matched.matchedMedicationId ? matched.matchConfidence : baselineConf;
       const manualCheck = finalConfidence < 95;
-      if (matched.matchedMedicationId) pipeline.masterMatchedCount++;
-      else pipeline.masterUnmatchedCount++;
+      if (matched.matchedMedicationId) {
+        pipeline.masterMatchedCount++;
+      } else {
+        pipeline.masterUnmatchedCount++;
+        if (pipeline.masterUnmatchedSamples.length < 10) {
+          pipeline.masterUnmatchedSamples.push({
+            productName: item.productName,
+            unitPriceHint: item.priceHint ?? null,
+          });
+        }
+      }
 
       const itemWithExtract = item as MergedDrug & { _extract?: ExtractResult | null };
       pendingDrugs.push({
@@ -347,7 +361,11 @@ export async function POST(req: NextRequest) {
         matchedMedicationId: matched.matchedMedicationId,
         finalConfidence,
         manualCheck,
-        anchorY: locateRowInClova(item, clovaRows, clovaImageHeight),
+        // positional path 가 알고 있는 정확한 anchor Y 우선 사용 — 텍스트 검색 기반
+        // locateRowInClova 는 같은 한글명 다른 dose 변형이 여러 개 있으면 잘못된 행 픽.
+        anchorY: item.anchorYRaw != null && clovaImageHeight > 0
+          ? Math.max(0, Math.min(100, Math.round((item.anchorYRaw / clovaImageHeight) * 1000) / 10))
+          : locateRowInClova(item, clovaRows, clovaImageHeight),
         productNameRaw: item.productName,         // ← 마스터 덮어쓰기 전 LLM/Vision 원본
         insuranceCodeRaw: (matched.insuranceCode || item.insuranceCode).replace(/\D/g, ""),
         rawDose: parseDrugName(item.productName).dose,
@@ -642,6 +660,7 @@ interface PositionalDrug {
   unitPrice: string;        // OCR 에서 본 단가 (숫자 문자열)
   quantity: string;
   insuranceCode: string;    // 9자리가 같은 행에 있으면 즉시
+  anchorY: number;          // 약품명 anchor field 의 raw Y 좌표 (px) — 정확한 위치 추적용
 }
 interface PositionalResult {
   drugs: PositionalDrug[];
@@ -765,7 +784,7 @@ function extractDrugsPositionalWithDebug(rows: ClovaRow[], colMap: ColumnMap | n
     // 같은 클러스터의 다른 row 정보도 사용했을 수 있으니 row 변수 자체는 더 사용 안 함
     void row;
 
-    drugs.push({ productName, unitPrice, quantity, insuranceCode });
+    drugs.push({ productName, unitPrice, quantity, insuranceCode, anchorY });
     candidates.push({ text: cand.field.inferText, y: anchorY, x: fieldXCenter(cand.field), accepted: true, reason: null });
   }
   return { drugs, candidates };
@@ -1328,6 +1347,7 @@ interface MergedDrug {
   quantity: string;
   confidence: number;
   priceHint?: number;   // OCR 에서 본 단가 — matchMasterByNameAndPrice 가 dose 변형 구분하는 키
+  anchorYRaw?: number;  // positional 추출 시 약품명 field 의 raw Y 좌표 (px). 노란 띠 정확한 위치용.
 }
 
 async function callGeminiMerge(args: {
