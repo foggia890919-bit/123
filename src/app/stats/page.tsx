@@ -6,6 +6,7 @@ import { Upload, ZoomIn, ZoomOut, Maximize2, Minimize2, AlertTriangle, CheckCirc
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import RequireRole from "@/components/RequireRole";
+import DocumentScanner from "@/components/DocumentScanner";
 
 interface OcrField { value: string; confidence: number }
 interface DrugDebug {
@@ -461,7 +462,9 @@ export default function StatsPage() {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
+  const [pendingScanFile, setPendingScanFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const imageScrollRef = useRef<HTMLDivElement>(null);
   const imageElRef = useRef<HTMLImageElement>(null);
   const manualInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
@@ -1121,6 +1124,9 @@ export default function StatsPage() {
         {/* 이미지 — 상단 sticky strip (높이 조절 + pan/zoom + 커서 따라감) */}
         <div className="sticky top-0 z-30 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
           <div className="border-b border-gray-100 px-3 py-2 flex items-center gap-2 bg-gray-50 flex-wrap">
+            <Button type="button" variant="outline" size="sm" onClick={() => cameraInputRef.current?.click()} className="text-xs">
+              카메라
+            </Button>
             <Button type="button" variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} className="text-xs">
               <Upload className="w-3.5 h-3.5 mr-1" />파일 선택
             </Button>
@@ -1236,17 +1242,27 @@ export default function StatsPage() {
               </div>
             ) : (
               <div onDrop={onDrop} onDragOver={(e) => e.preventDefault()}
-                onClick={() => fileInputRef.current?.click()}
-                className="h-full min-h-64 flex flex-col items-center justify-center gap-3 cursor-pointer hover:bg-blue-50 transition-colors m-4 border-2 border-dashed border-gray-300 hover:border-blue-400 rounded-lg">
+                className="h-full min-h-64 flex flex-col items-center justify-center gap-3 transition-colors m-4 border-2 border-dashed border-gray-300 rounded-lg p-4">
                 <Upload className="w-10 h-10 text-gray-300" />
                 <div className="text-center">
                   <p className="text-sm font-medium text-gray-600">처방전 이미지 업로드</p>
-                  <p className="text-xs text-gray-400 mt-1">클릭하거나 드래그하여 파일 선택</p>
+                  <p className="text-xs text-gray-400 mt-1">파일 선택 후 4 모서리 보정 (캠스캐너 방식)</p>
+                </div>
+                <div className="flex gap-2 mt-2">
+                  <Button type="button" size="sm" onClick={() => cameraInputRef.current?.click()}
+                          className="bg-blue-600 hover:bg-blue-700 text-white">
+                    카메라 촬영
+                  </Button>
+                  <Button type="button" size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}>
+                    앨범에서 선택
+                  </Button>
                 </div>
               </div>
             )}
             <input ref={fileInputRef} type="file" accept="image/*" className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) setPendingScanFile(f); e.target.value = ""; }} />
+            <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) setPendingScanFile(f); e.target.value = ""; }} />
           </div>
           {/* 높이 조절 핸들 — 아래로 드래그 */}
           <div onMouseDown={handleResizeMouseDown}
@@ -1635,6 +1651,14 @@ export default function StatsPage() {
             </div>
           </div>
         </div>
+      )}
+      {pendingScanFile && (
+        <DocumentScanner
+          file={pendingScanFile}
+          onConfirm={(corrected) => { setPendingScanFile(null); handleFile(corrected); }}
+          onSkip={() => { const f = pendingScanFile; setPendingScanFile(null); if (f) handleFile(f); }}
+          onCancel={() => setPendingScanFile(null)}
+        />
       )}
     </RequireRole>
   );
