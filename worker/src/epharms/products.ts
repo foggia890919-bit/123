@@ -294,41 +294,94 @@ export async function syncProductMaster(opts: { triggeredBy?: string } = {}): Pr
     }
     console.log("[products] real data rows detected — starting scrape");
 
-    // 첫 페이지(1)는 이미 로드된 상태 — 바로 파싱부터 시작
-    for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
-      // 페이지 1은 이동 불필요 (이미 로드됨), 2 이상은 클릭 이동 + 데이터 대기
-      if (pageNum > 1) {
-        const ok = await goToPage(page, pageNum);
-        if (!ok) {
-          console.log(`[products] page ${pageNum} not reachable — done`);
-          break;
-        }
-        // 새 페이지 데이터 로드 대기
-        await waitForRealRows(page, 15_000);
-      }
+    // 그룹 단위 순회: 한 화면에 페이지 N~N+9 가 보이고, ">" 클릭 시 N+10~N+19 그룹 로드.
+    // 그룹 안의 모든 visible 페이지를 처리한 후 ">" 클릭으로 다음 그룹.
+    let groupCount = 0;
+    let lastFirstPageNum = 0;
+    while (groupCount < 100) { // 안전상한 100그룹 (1000페이지)
+      groupCount++;
 
-      const rows = await parseCurrentPage(page);
-      if (rows.length === 0 && pageNum === 1) {
-        throw new Error("첫 페이지에서 상품 0건 — 셀렉터 또는 로그인 상태 확인 필요");
-      }
-      if (rows.length === 0) {
-        console.log(`[products] page ${pageNum} empty — assuming end`);
+      // 현재 그룹에서 visible한 페이지 번호 추출 (icon 없는 a 만)
+      const visibleNumbers: number[] = await page.$$eval(
+        'a[href^="#pager-item"]',
+        (els) =>
+          (els as HTMLAnchorElement[])
+            .filter((a) => !a.querySelector("i") && /^\d+$/.test((a.textContent ?? "").trim()))
+            .map((a) => parseInt((a.textContent ?? "").trim(), 10))
+            .filter((n) => !isNaN(n))
+      );
+      const sortedNums = Array.from(new Set(visibleNumbers)).sort((a, b) => a - b);
+      if (sortedNums.length === 0) {
+        console.log(`[products] group ${groupCount}: no page numbers visible — done`);
         break;
       }
-
-      const { inserted, updated } = await upsertProducts(rows);
-      totalRows += rows.length;
-      totalInserted += inserted;
-      totalUpdated += updated;
-      pagesScraped = pageNum;
-
-      console.log(
-        `[products] page ${pageNum}: ${rows.length} rows (ins=${inserted}/upd=${updated}) — total ${totalRows}`
-      );
-
-      if (pageNum % 5 === 0) {
-        await updateProductSyncLogProgress(logId, totalRows, totalInserted, totalUpdated);
+      // 같은 그룹이 또 나오면 (페이지 안 바뀜) 종료
+      if (sortedNums[0] === lastFirstPageNum) {
+        console.log(`[products] group ${groupCount}: same group as before (page ${sortedNums[0]}) — done`);
+        break;
       }
+      lastFirstPageNum = sortedNums[0];
+      console.log(`[products] group ${groupCount}: pages ${sortedNums[0]}~${sortedNums[sortedNums.length - 1]}`);
+
+      let groupHadAnyRow = false;
+      for (const num of sortedNums) {
+        // 첫 그룹의 첫 페이지(1)는 이미 active — 클릭 안 해도 됨
+        const isAlreadyActive =
+          (await page.locator(`a[href="#pager-item${num}"].on`).count()) > 0;
+        if (!isAlreadyActive) {
+          await page
+            .locator(`a[href="#pager-item${num}"]:not(:has(i))`)
+            .first()
+            .click()
+            .catch(() => {});
+          await page.waitForTimeout(800);
+          await waitForRealRows(page, 8_000);
+        }
+        const rows = await parseCurrentPage(page);
+        if (rows.length === 0) {
+          // 빈 페이지 — 그룹 끝 placeholder. 그냥 넘어감.
+          console.log(`[products] page ${num}: empty (placeholder)`);
+          continue;
+        }
+        const { inserted, updated } = await upsertProducts(rows);
+        totalRows += rows.length;
+        totalInserted += inserted;
+        totalUpdated += updated;
+        pagesScraped = num;
+        groupHadAnyRow = true;
+        console.log(
+          `[products] page ${num}: ${rows.length} rows (ins=${inserted}/upd=${updated}) — total ${totalRows}`
+        );
+        if (num % 5 === 0) {
+          await updateProductSyncLogProgress(logId, totalRows, totalInserted, totalUpdated);
+        }
+      }
+
+      // 첫 그룹부터 데이터 0이면 셀렉터 문제
+      if (groupCount === 1 && !groupHadAnyRow) {
+        throw new Error("첫 그룹에서 데이터 0건 — 셀렉터 또는 로그인 상태 확인 필요");
+      }
+
+      // 다음 그룹으로 이동 — ">" 화살표 클릭
+      const nextArrow = page.locator('a:has(i.fa-angle-right)').first();
+      const arrowExists = (await nextArrow.count()) > 0;
+      if (!arrowExists) {
+        console.log(`[products] no next-arrow — assuming last group`);
+        break;
+      }
+      const arrowDisabled = await nextArrow
+        .evaluate((el) => {
+          const a = el as HTMLAnchorElement;
+          return a.classList.contains("disabled") || a.classList.contains("off");
+        })
+        .catch(() => false);
+      if (arrowDisabled) {
+        console.log(`[products] next-arrow disabled — done`);
+        break;
+      }
+      await nextArrow.click().catch(() => {});
+      await page.waitForTimeout(1500);
+      await waitForRealRows(page, 15_000);
     }
 
     await finishProductSyncLog(logId, {
