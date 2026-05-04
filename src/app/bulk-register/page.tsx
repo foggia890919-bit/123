@@ -290,7 +290,12 @@ function BulkRegisterInner() {
       const matrix: (string | number)[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
       // A열(index 0) 만 사용, 빈 값·숫자 아닌 것 필터 완화 (문자코드도 허용)
       const codes = matrix
-        .map((r) => String(r?.[0] ?? "").trim())
+        .map((r) => {
+          const s = String(r?.[0] ?? "").trim();
+          // 보험코드는 9자리. 엑셀이 leading 0을 떼서 숫자로 만들면 8자리 이하로 들어옴 → 9자리로 zero-pad
+          if (/^\d{1,8}$/.test(s)) return s.padStart(9, "0");
+          return s;
+        })
         .filter(Boolean)
         // 헤더 행 추정: "보험코드", "코드" 등 문자열만 있는 첫 행 스킵
         .filter((c, i, arr) => !(i === 0 && /^(보험코드|급여코드|코드|edi|edi code)$/i.test(arr[0])));
@@ -592,7 +597,7 @@ function BulkRegisterInner() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="max-w-7xl mx-auto p-4 md:p-6 space-y-4">
+      <div className="max-w-[1600px] mx-auto p-4 md:p-6 space-y-4">
         {/* 헤더 */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
           <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -788,7 +793,7 @@ function BulkRegisterInner() {
                           {o ? (
                             <span className="text-xs font-medium text-gray-900">{o.productName}</span>
                           ) : (
-                            <span className="text-xs text-red-600 font-medium">미매칭</span>
+                            <span className="text-xs text-red-600 font-medium font-mono">{r.originalCode}</span>
                           )}
                         </td>
                         <td className="px-3 py-2.5 text-xs text-gray-600 whitespace-nowrap">{o?.companyName ?? "-"}</td>

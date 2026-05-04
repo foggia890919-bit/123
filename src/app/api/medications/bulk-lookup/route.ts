@@ -3,7 +3,10 @@ import { prisma } from "@/lib/prisma";
 import { normalizeCompanyKey } from "@/lib/utils";
 
 function normalizeCode(code: string): string {
-  return code.replace(/[\s\-]/g, "").toUpperCase();
+  const cleaned = code.replace(/[\s\-]/g, "").toUpperCase();
+  // 보험코드는 9자리. 엑셀에서 leading 0이 사라져 8자리 이하 숫자로 들어오면 9자리로 zero-pad
+  if (/^\d{1,8}$/.test(cleaned)) return cleaned.padStart(9, "0");
+  return cleaned;
 }
 
 // 엑셀 A열 보험코드 목록 → 매칭된 약품 정보 반환
