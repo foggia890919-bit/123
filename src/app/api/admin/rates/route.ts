@@ -140,7 +140,7 @@ export async function PUT(req: NextRequest) {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "추가수수료");
   const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
-  const body = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+  const body = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
 
   return new NextResponse(body, {
     headers: {
