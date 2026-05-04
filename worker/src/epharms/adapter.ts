@@ -27,20 +27,18 @@ export interface LedgerRow {
 const BASE = "https://yk.ep45.co.kr";
 
 const SEL = {
-  // ----- 로그인 (실제 사이트에서 확정 필요) -----
-  // 흔한 패턴 4종을 OR로 묶어둠 — 그중 하나는 잡힐 가능성이 높음.
-  idInput:
-    'input[name="userId"], input[name="user_id"], input[name="id"], input[name="loginId"], input[type="text"]:not([readonly])',
-  pwInput:
-    'input[name="userPw"], input[name="user_pw"], input[name="pw"], input[name="password"], input[type="password"]',
-  loginBtn:
-    'button:has-text("로그인"), input[type="submit"][value*="로그인"], a:has-text("로그인"), button[type="submit"]',
+  // ----- 로그인 (확정: 2026-05 사장님 outerHTML 검증) -----
+  idInput:    '#userId',
+  pwInput:    '#userPwd',
+  loginBtn:   '#loginBtn',
   // ----- 원장집계 -----
-  // URL 직접 이동: /account/account_list
-  // 검색 form (날짜 인풋 2개 + 검색 버튼)
-  dateFromInput: 'input[name="fromDate"], input[name="from_dt"], input[name="startDate"], input[type="date"]:nth-of-type(1)',
-  dateToInput:   'input[name="toDate"],   input[name="to_dt"],   input[name="endDate"],   input[type="date"]:nth-of-type(2)',
-  searchBtn:     'button:has-text("검색"), input[type="button"][value*="검색"], button:has-text("조회")',
+  // 종료일은 확정 (#search_pd_end). 시작일은 명명규칙 추정값(#search_pd_start) +
+  // 흔한 패턴을 OR로 묶음 — 사장님 시작일 outerHTML 회신 시 단일 셀렉터로 정리.
+  dateFromInput:
+    '#search_pd_start, #search_pd_st, input[name="search_pd_start"], input[name="search_pd_st"], input[name="search_pd_from"]',
+  dateToInput:   '#search_pd_end',
+  searchBtn:     '#btnSrch',
+  // 결과 테이블: 명세일자 헤더가 있는 테이블의 tbody tr.
   resultRows:    'table:has(th:has-text("명세일자")) tbody tr',
 };
 
@@ -110,20 +108,35 @@ export async function fetchLedger(
   await page.goto(LEDGER_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
   await page.waitForTimeout(800);
 
-  // 날짜 입력 — 사이트가 readonly일 수도 있으므로 evaluate로 직접 set 도 시도
+  // 날짜 입력칸은 readonly + jQuery UI datepicker (.hasDatepicker).
+  // 일반 fill()이 안 먹으므로 evaluate로 직접 value set + jQuery datepicker
+  // 메소드 호출 + native change 이벤트 dispatch까지 함께 트리거한다.
   const setDate = async (selector: string, value: string) => {
     const el = page.locator(selector).first();
     if (!(await el.count())) return;
-    await el.fill(value).catch(async () => {
-      await el.evaluate((node, v) => {
-        (node as HTMLInputElement).value = v;
-        node.dispatchEvent(new Event("input", { bubbles: true }));
-        node.dispatchEvent(new Event("change", { bubbles: true }));
-      }, value);
-    });
+    await el.evaluate((node, v) => {
+      const input = node as HTMLInputElement;
+      input.removeAttribute("readonly"); // 안전하게 readonly 일시 해제
+      input.value = v;
+      // jQuery UI datepicker가 있으면 setDate 호출로 내부 상태 동기화
+      const w = window as unknown as {
+        jQuery?: (el: HTMLElement) => {
+          datepicker?: (cmd: string, val: string) => unknown;
+          trigger?: (ev: string) => unknown;
+        };
+      };
+      try {
+        const $el = w.jQuery?.(input);
+        $el?.datepicker?.("setDate", v);
+        $el?.trigger?.("change");
+      } catch { /* jQuery 없으면 무시 */ }
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }, value);
   };
   await setDate(SEL.dateFromInput, from);
   await setDate(SEL.dateToInput, to);
+  await page.waitForTimeout(300);
 
   const sBtn = page.locator(SEL.searchBtn).first();
   if (await sBtn.isVisible().catch(() => false)) {
