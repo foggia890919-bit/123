@@ -737,6 +737,7 @@ model EpharmsAccount {
   // "<ivBase64>:<authTagBase64>:<cipherBase64>"
   loginPwEnc      String
   active          Boolean         @default(true)
+  isMaster        Boolean         @default(false) // 마스터 계정 — 상품 카탈로그 자동 동기화 시 사용
   lastSyncedAt    DateTime?
   lastSyncStatus  String?         // "ok" | "error"
   lastSyncError   String?
@@ -781,5 +782,67 @@ model LedgerSyncLog {
   errorMsg     String?
 
   @@index([accountId, startedAt])
+  @@index([status])
+}
+
+// =====================================================================
+// 자동주문 시스템 — 상품 마스터 + 거래처별 단가
+// =====================================================================
+
+// 이팜스 상품 마스터. 사장님 master 계정으로 워커가 자동 동기화하거나
+// 사장님이 엑셀 업로드해서 임포트.
+model EpharmsProduct {
+  id              String                @id @default(cuid())
+  priceCode       String                @unique  // 기준단가코드 (이팜스 고유 식별자, 예: "645100741")
+  productName     String                // 상품명
+  manufacturer    String                // 제약사
+  spec            String?               // 규격 (예: "200기타/1개", "625mg/100정")
+  productGroup    String?               // 상품그룹 (대분류)
+  ingredient      String?               // 성분명
+  basePrice       Decimal               @default(0) @db.Decimal(18, 2) // 이팜스 마스터 단가 (모든 거래처 공통 기본값)
+  active          Boolean               @default(true)
+  fetchedAt       DateTime              @default(now())
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  clientPrices    ClientProductPrice[]
+
+  @@index([productName])
+  @@index([manufacturer])
+  @@index([ingredient])
+  @@index([active])
+}
+
+// 거래처별 상품 단가 (L2 캐시).
+// L1(매출원장 학습)은 LedgerEntry에서 동적 조회, L2는 이 테이블에 영구 저장.
+// 영업사원이 주문 작성 시 단가를 수정하면 자동으로 여기 upsert.
+model ClientProductPrice {
+  id           String          @id @default(cuid())
+  bizNumber    String          // 거래처 사업자번호
+  priceCode    String          // EpharmsProduct.priceCode
+  product      EpharmsProduct  @relation(fields: [priceCode], references: [priceCode], onDelete: Cascade)
+  unitPrice    Decimal         @db.Decimal(18, 2)
+  source       String          // "manual" | "ledger" | "import" — 어디서 들어왔는지
+  setByUserId  String?         // 영업사원 id (manual 일 때)
+  setAt        DateTime        @default(now())
+
+  @@unique([bizNumber, priceCode])
+  @@index([priceCode])
+  @@index([bizNumber])
+}
+
+// 상품 마스터 동기화 로그 (워커 실행 기록)
+model ProductSyncLog {
+  id            String   @id @default(cuid())
+  triggeredBy   String?  // user.id — 수동 트리거인 경우
+  startedAt     DateTime @default(now())
+  finishedAt    DateTime?
+  status        String   // "running" | "ok" | "error"
+  source        String   // "worker-scrape" | "excel-upload"
+  rowsTotal     Int      @default(0)
+  rowsInserted  Int      @default(0)
+  rowsUpdated   Int      @default(0)
+  errorMsg      String?
+
+  @@index([startedAt])
   @@index([status])
 }

@@ -7,6 +7,7 @@ import { startScheduler, triggerJobNow, isJobRunning } from "./scheduler.ts";
 import { hasDb } from "./db.ts";
 import { startEpharmsScheduler } from "./epharms/cron.ts";
 import { isEpharmsSyncRunning, runEpharmsSync } from "./epharms/sync.ts";
+import { isProductSyncRunning, syncProductMaster } from "./epharms/products.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const TOKEN = process.env.WORKER_TOKEN ?? "";
@@ -164,6 +165,29 @@ app.post("/epharms/sync", async (req, res) => {
     console.error("[epharms] manual sync failed:", err)
   );
   res.json({ ok: true, started: true, onlyAccountId: onlyAccountId ?? null });
+});
+
+// 이팜스 상품 마스터 자동 동기화.
+// body: { uploadUrl: string, uploadToken: string, triggeredBy?: string }
+//   uploadUrl   = Vercel의 multipart 업로드 엔드포인트 (예: https://kmd.app/api/products/upload)
+//   uploadToken = WORKER_TOKEN (Vercel→Worker 공통)
+// fire-and-forget: 다운로드는 5~10분 걸릴 수 있음.
+app.post("/epharms/sync-products", async (req, res) => {
+  if (isProductSyncRunning()) {
+    res.status(409).json({ error: "product sync already running" });
+    return;
+  }
+  const { uploadUrl, uploadToken, triggeredBy } = req.body as {
+    uploadUrl?: string; uploadToken?: string; triggeredBy?: string;
+  };
+  if (!uploadUrl || !uploadToken) {
+    res.status(400).json({ error: "uploadUrl, uploadToken 필수" });
+    return;
+  }
+  syncProductMaster({ uploadUrl, uploadToken, triggeredBy }).catch(err =>
+    console.error("[products] sync failed:", err)
+  );
+  res.json({ ok: true, started: true });
 });
 
 // Manually trigger a scheduled batch run. Useful for testing and for the
