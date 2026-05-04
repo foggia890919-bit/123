@@ -106,35 +106,62 @@ export async function fetchLedger(
   await page.goto(LEDGER_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
   await page.waitForTimeout(800);
 
-  // 날짜 입력칸은 readonly + jQuery UI datepicker (.hasDatepicker).
-  // 일반 fill()이 안 먹으므로 evaluate로 직접 value set + jQuery datepicker
-  // 메소드 호출 + native change 이벤트 dispatch까지 함께 트리거한다.
-  const setDate = async (selector: string, value: string) => {
+  // 날짜 입력칸: readonly + jQuery UI datepicker (.hasDatepicker).
+  // 단순 input.value 설정으로는 datepicker 내부 Date 상태가 안 바뀌어서
+  // 폼 제출 시 디폴트 값이 그대로 들어감 → "Date 객체"로 datepicker.setDate 호출이 핵심.
+  // 표시 포맷("yy. mm. dd." 등)은 datepicker가 자동 포맷팅해 줌.
+  const setDate = async (selector: string, isoDate: string): Promise<string> => {
     const el = page.locator(selector).first();
-    if (!(await el.count())) return;
-    await el.evaluate((node, v) => {
+    if (!(await el.count())) return "";
+    return await el.evaluate((node, v): string => {
       const input = node as HTMLInputElement;
-      input.removeAttribute("readonly"); // 안전하게 readonly 일시 해제
-      input.value = v;
-      // jQuery UI datepicker가 있으면 setDate 호출로 내부 상태 동기화
+      input.removeAttribute("readonly");
+
       const w = window as unknown as {
         jQuery?: (el: HTMLElement) => {
-          datepicker?: (cmd: string, val: string) => unknown;
+          datepicker?: (cmd: string, val?: unknown) => unknown;
+          val?: (v: string) => unknown;
+          trigger?: (ev: string) => unknown;
+        };
+        $?: (el: HTMLElement) => {
+          datepicker?: (cmd: string, val?: unknown) => unknown;
+          val?: (v: string) => unknown;
           trigger?: (ev: string) => unknown;
         };
       };
+      const jq = w.jQuery ?? w.$;
+
+      // ISO "2025-05-04" → Date 객체. datepicker가 페이지 설정 포맷에 맞게 알아서 포맷팅.
+      const dateObj = new Date(v + "T00:00:00");
+
       try {
-        const $el = w.jQuery?.(input);
-        $el?.datepicker?.("setDate", v);
-        $el?.trigger?.("change");
-      } catch { /* jQuery 없으면 무시 */ }
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-    }, value);
+        if (jq) {
+          const $el = jq(input);
+          // setDate가 핵심 — input.value + datepicker 내부 상태 모두 동기화
+          $el.datepicker?.("setDate", dateObj);
+          $el.trigger?.("change");
+        }
+      } catch { /* jQuery 없거나 datepicker 메소드 다름 — fallback로 진행 */ }
+
+      // 그래도 빈 값이면 native value setter로 강제 설정
+      if (!input.value) {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+        if (setter) setter.call(input, v);
+        else input.value = v;
+      }
+
+      // 일반 이벤트 dispatch (페이지가 input/change 리스너 달아둔 경우 대비)
+      ["input", "change", "blur"].forEach(ev => {
+        input.dispatchEvent(new Event(ev, { bubbles: true }));
+      });
+
+      return input.value;
+    }, isoDate);
   };
-  await setDate(SEL.dateFromInput, from);
-  await setDate(SEL.dateToInput, to);
-  await page.waitForTimeout(300);
+  const fromVal = await setDate(SEL.dateFromInput, from);
+  const toVal = await setDate(SEL.dateToInput, to);
+  console.log(`[ePharms] dates set: from="${fromVal}" to="${toVal}" (requested ${from} ~ ${to})`);
+  await page.waitForTimeout(500);
 
   const sBtn = page.locator(SEL.searchBtn).first();
   if (await sBtn.isVisible().catch(() => false)) {
