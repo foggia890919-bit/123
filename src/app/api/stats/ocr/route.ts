@@ -58,7 +58,7 @@ export interface PipelineDiagnostics {
   visionOk: boolean;
   visionDrugCount: number;
   visionError: string | null;
-  mergeUsed: "skipped (vision-only)" | "vision+clova" | "clova-only" | "clova-deterministic-fallback";
+  mergeUsed: "skipped (vision-only)" | "vision+clova" | "clova-only" | "clova-deterministic-fallback" | "clova-positional";
   mergeDrugCount: number;
   mergeError: string | null;
   filteredByIsLikelyDrug: number;        // isLikelyDrug 에서 제거된 수
@@ -176,32 +176,53 @@ export async function POST(req: NextRequest) {
       finalCount: 0,
     };
 
-    // ── 3단계: LLM 병합/검증 — Vision 결과의 모든 코드가 마스터와 일치하면 스킵 ─
+    // ── 3단계: 추출 우선순위
+    //   (a) Clova positional — 행 단위 위→아래 순서, 각 행에서 컬럼 X 위치의 값 직접 픽.
+    //       LLM 환각/순서 뒤집힘 없이 가장 단순. 반드시 colMap 가 있어야 함.
+    //   (b) LLM 병합 — positional 이 충분히 못 뽑으면 fallback
     const visionDrugs = geminiDraft?.drugs ?? [];
-    const visionAllMatched = visionDrugs.length > 0 && visionDrugs.every((d) => {
-      const c = d.insuranceCode.replace(/\D/g, "");
-      return c.length === 9 && masterByCode.has(c);
-    });
     let merged: MergedDrug[];
-    if (visionAllMatched) {
-      pipeline.mergeUsed = "skipped (vision-only)";
-      merged = visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 95) }));
+
+    const positionalDrugs = colMap ? extractDrugsPositional(clovaRows, colMap) : [];
+    if (positionalDrugs.length >= 3) {
+      // positional 추출이 충분하면 LLM 호출 자체 생략 — 단가/순서 보장됨
+      pipeline.mergeUsed = "clova-positional";
+      merged = positionalDrugs
+        .filter((p) => p.productName && (p.quantity || p.insuranceCode))
+        .map((p) => ({
+          insuranceCode: p.insuranceCode,
+          productName: p.productName,
+          companyName: "",
+          quantity: p.quantity,
+          confidence: 80,
+          priceHint: parseInt(p.unitPrice.replace(/[^\d]/g, ""), 10) || undefined,
+        }));
     } else {
-      pipeline.mergeUsed = visionDrugs.length === 0 ? "clova-only" : "vision+clova";
-      try {
-        merged = await callGeminiMerge({
-          clovaText,
-          geminiDraft,
-          masterCandidates: Array.from(masterByCode.values()).map((m) => ({
-            insuranceCode: m.insuranceCode,
-            productName: m.productName,
-            companyName: m.companyName,
-          })),
-          clientContext,
-        });
-      } catch (e) {
-        pipeline.mergeError = String(e).slice(0, 200);
-        merged = visionDrugs;
+      // positional 부실 시 기존 LLM 경로
+      const visionAllMatched = visionDrugs.length > 0 && visionDrugs.every((d) => {
+        const c = d.insuranceCode.replace(/\D/g, "");
+        return c.length === 9 && masterByCode.has(c);
+      });
+      if (visionAllMatched) {
+        pipeline.mergeUsed = "skipped (vision-only)";
+        merged = visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 95) }));
+      } else {
+        pipeline.mergeUsed = visionDrugs.length === 0 ? "clova-only" : "vision+clova";
+        try {
+          merged = await callGeminiMerge({
+            clovaText,
+            geminiDraft,
+            masterCandidates: Array.from(masterByCode.values()).map((m) => ({
+              insuranceCode: m.insuranceCode,
+              productName: m.productName,
+              companyName: m.companyName,
+            })),
+            clientContext,
+          });
+        } catch (e) {
+          pipeline.mergeError = String(e).slice(0, 200);
+          merged = visionDrugs;
+        }
       }
     }
     pipeline.mergeDrugCount = merged.length;
@@ -573,6 +594,81 @@ function clusterFieldsToRows(fields: ClovaField[], tolerance: number): ClovaRow[
 // 어미가 들어간다. 영어 INN 만 적힌 경우(예: rosuvastatin)도 약품명으로 인정.
 // LLM 없이 Clova rows + ColumnMap 만으로 약품 추출하는 결정론적 파서.
 // LLM 이 quota / outage 로 실패할 때 안전망. 약품명/수량/보험코드(있을 때) 만 뽑는다.
+// 단순 위치 기반 추출: Clova 행을 위→아래로 훑으면서 같은 행 안에서 컬럼 X 에 가장
+// 가까운 값을 잡는다. slope/band 없음. 행 안의 fields 는 이미 같은 cluster (Clova 의
+// Y-cluster) 라 같은 행으로 봐도 안전. unit price 까지 같이 뽑아서 마스터 매칭 시
+// 이름 + 가격으로 정확한 row 픽 가능 (예: 로수듀오 10/10 vs 10/20 — 가격이 다름).
+interface PositionalDrug {
+  productName: string;
+  unitPrice: string;        // OCR 에서 본 단가 (숫자 문자열)
+  quantity: string;
+  insuranceCode: string;    // 9자리가 같은 행에 있으면 즉시
+}
+function extractDrugsPositional(rows: ClovaRow[], colMap: ColumnMap | null): PositionalDrug[] {
+  if (!colMap || colMap.productName == null || colMap.quantity == null) return [];
+  const drugs: PositionalDrug[] = [];
+  for (const row of rows) {
+    if (row.avgY <= colMap.headerY) continue;
+
+    // 약품명 — productName X 근처 + isLikelyDrug 통과 fields, 같은 Y 라인 인접 fields 까지 합쳐 풀네임
+    let anchorField: ClovaField | null = null;
+    let anchorDist = Infinity;
+    for (const f of row.fields) {
+      if (!isLikelyDrug(f.inferText)) continue;
+      const dist = Math.abs(fieldXCenter(f) - colMap.productName);
+      if (dist > 250) continue;
+      if (dist < anchorDist) { anchorField = f; anchorDist = dist; }
+    }
+    if (!anchorField) continue;
+    const anchorY = fieldYCenter(anchorField);
+    // productName 영역 (insuranceCode X 이후 ~ unitPrice/quantity X 이전) 안의 fields 결합
+    const leftBound = (colMap.insuranceCode ?? 0) + 30;
+    const rightBound = Math.min(
+      colMap.unitPrice ?? colMap.quantity,
+      colMap.quantity
+    ) - 30;
+    const productFields = row.fields
+      .filter((f) => {
+        const fx = fieldXCenter(f);
+        const fy = fieldYCenter(f);
+        return fx >= leftBound && fx <= rightBound && Math.abs(fy - anchorY) < 25;
+      })
+      .sort((a, b) => fieldXCenter(a) - fieldXCenter(b));
+    const productName = (productFields.length ? productFields : [anchorField])
+      .map((f) => f.inferText).join(" ").trim();
+
+    // 같은 행 fields 중 X 가까운 숫자 선택
+    function nearestNumberAt(colX: number | null, exclude?: ClovaField | null): { value: string; field: ClovaField | null } {
+      if (colX == null) return { value: "", field: null };
+      let best: ClovaField | null = null;
+      let bestDist = Infinity;
+      for (const f of row.fields) {
+        if (f === exclude) continue;
+        if (!/\d/.test(f.inferText)) continue;
+        const dist = Math.abs(fieldXCenter(f) - colX);
+        if (dist > 100) continue;
+        if (dist < bestDist) { best = f; bestDist = dist; }
+      }
+      return {
+        value: best ? best.inferText.replace(/[^\d.]/g, "") : "",
+        field: best,
+      };
+    }
+    const unitPrice = nearestNumberAt(colMap.unitPrice).value;
+    const quantity = nearestNumberAt(colMap.quantity).value;
+
+    // 9자리 보험코드 (같은 행 어디든)
+    let insuranceCode = "";
+    for (const f of row.fields) {
+      const m = f.inferText.match(/\b(\d{9})\b/);
+      if (m) { insuranceCode = m[1]; break; }
+    }
+
+    drugs.push({ productName, unitPrice, quantity, insuranceCode });
+  }
+  return drugs;
+}
+
 function parseDrugsFromClova(rows: ClovaRow[], colMap: ColumnMap | null): MergedDrug[] {
   if (!colMap || colMap.productName == null || colMap.quantity == null) return [];
   const drugs: MergedDrug[] = [];
@@ -1124,6 +1220,7 @@ interface MergedDrug {
   companyName: string;
   quantity: string;
   confidence: number;
+  priceHint?: number;   // OCR 에서 본 단가 — matchMasterByNameAndPrice 가 dose 변형 구분하는 키
 }
 
 async function callGeminiMerge(args: {
@@ -1222,6 +1319,56 @@ async function fetchMasterByCodes(codes: string[]): Promise<Map<string, MasterRo
   return map;
 }
 
+// 사용자 제안 매칭 — 이름 + OCR 에서 본 단가 로 마스터에서 정확한 row 픽.
+// 같은 약품의 dose 변형(10/10 vs 10/20) 은 단가가 달라서 단가 일치로 단번에 구분.
+async function matchMasterByNameAndPrice(
+  productName: string,
+  unitPriceRaw: string
+): Promise<MasterRow | null> {
+  const parsed = parseDrugName(productName);
+  if (parsed.korean.length < 2) return null;
+  const price = parseInt(unitPriceRaw.replace(/[^\d]/g, ""), 10);
+  if (!Number.isFinite(price) || price <= 0) return null;
+
+  // 1차: 한글 이름 포함 + 가격 정확 일치
+  const exactPrice = await prisma.medication.findMany({
+    where: {
+      productName: { contains: parsed.korean, mode: "insensitive" },
+      price,
+    },
+    select: { id: true, insuranceCode: true, productName: true, companyName: true, price: true, commissionRate: true },
+    take: 5,
+  });
+  if (exactPrice.length === 1) return exactPrice[0];
+  if (exactPrice.length > 1) {
+    // dose 토큰까지 일치하는 것 우선
+    const withDose = parsed.dose
+      ? exactPrice.find((r: MasterRow) => normalizeForDose(r.productName).includes(normalizeForDose(parsed.dose)))
+      : null;
+    return withDose ?? exactPrice[0];
+  }
+
+  // 2차: 가격 ±5% 이내 (소폭 변동 흡수)
+  const priceLow = Math.floor(price * 0.95);
+  const priceHigh = Math.ceil(price * 1.05);
+  const nearPrice = await prisma.medication.findMany({
+    where: {
+      productName: { contains: parsed.korean, mode: "insensitive" },
+      price: { gte: priceLow, lte: priceHigh },
+    },
+    select: { id: true, insuranceCode: true, productName: true, companyName: true, price: true, commissionRate: true },
+    take: 5,
+  });
+  if (nearPrice.length > 0) {
+    const withDose = parsed.dose
+      ? nearPrice.find((r: MasterRow) => normalizeForDose(r.productName).includes(normalizeForDose(parsed.dose)))
+      : null;
+    return withDose ?? nearPrice[0];
+  }
+
+  return null;
+}
+
 async function matchMedication(
   item: MergedDrug,
   masterByCode: Map<string, MasterRow>
@@ -1234,6 +1381,23 @@ async function matchMedication(
   matchedMedicationId: string | null;
   matchConfidence: number;
 }> {
+  // 0차: priceHint (OCR 에서 본 단가) 가 있으면 이름 + 가격으로 정확한 마스터 row 찾기
+  // 같은 약품의 dose 변형(로수듀오 10/10 vs 10/20) 은 가격이 달라 한 번에 정확히 구분.
+  if (item.priceHint && item.productName) {
+    const m = await matchMasterByNameAndPrice(item.productName, String(item.priceHint));
+    if (m) {
+      return {
+        insuranceCode: m.insuranceCode ?? item.insuranceCode,
+        productName: m.productName,
+        companyName: m.companyName,
+        unitPrice: m.price,
+        commissionRate: m.commissionRate,
+        matchedMedicationId: m.id,
+        matchConfidence: 99,
+      };
+    }
+  }
+
   const code = item.insuranceCode.replace(/\D/g, "");
   if (code.length === 9 && masterByCode.has(code)) {
     const m = masterByCode.get(code)!;
