@@ -42,31 +42,35 @@ export async function POST() {
   const guard = await requireAdmin();
   if (isNextResponse(guard)) return guard;
 
-  // 중복 그룹에서 MIN(id) (가장 먼저 생성된 것)만 남기고 나머지 삭제
-  // ProposalItem FK 참조가 없는 것만 삭제 (참조 있는 건 보존)
-  const result = await prisma.$executeRaw`
-    DELETE FROM "Medication"
-    WHERE id IN (
-      SELECT id FROM (
-        SELECT id,
-               ROW_NUMBER() OVER (
-                 PARTITION BY "productName", "companyName"
-                 ORDER BY "createdAt" ASC
-               ) AS rn
-        FROM "Medication"
-        WHERE "insuranceCode" IS NULL
-      ) ranked
-      WHERE rn > 1
-    )
-    AND id NOT IN (
-      SELECT DISTINCT "originalMedicationId" FROM "ProposalItem" WHERE "originalMedicationId" IS NOT NULL
-      UNION
-      SELECT DISTINCT "alternativeMedicationId" FROM "ProposalItem" WHERE "alternativeMedicationId" IS NOT NULL
-    )
-  `;
+  try {
+    // 중복 그룹에서 MIN(id) (가장 먼저 생성된 것)만 남기고 나머지 삭제
+    // ProposalItem FK 참조가 없는 것만 삭제 (참조 있는 건 보존)
+    const result = await prisma.$executeRaw`
+      DELETE FROM "Medication"
+      WHERE id IN (
+        SELECT id FROM (
+          SELECT id,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY "productName", "companyName"
+                   ORDER BY "createdAt" ASC
+                 ) AS rn
+          FROM "Medication"
+          WHERE "insuranceCode" IS NULL
+        ) ranked
+        WHERE rn > 1
+      )
+      AND id NOT IN (
+        SELECT DISTINCT "originalMedicationId" FROM "ProposalItem" WHERE "originalMedicationId" IS NOT NULL
+        UNION
+        SELECT DISTINCT "altMedicationId" FROM "ProposalItem" WHERE "altMedicationId" IS NOT NULL
+      )
+    `;
 
-  const deleted = Number(result);
-  const [total] = await Promise.all([prisma.medication.count()]);
+    const deleted = Number(result);
+    const total = await prisma.medication.count();
 
-  return NextResponse.json({ success: true, deleted, totalAfter: total });
+    return NextResponse.json({ success: true, deleted, totalAfter: total });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+  }
 }
