@@ -792,6 +792,8 @@ function BulkRegisterInner() {
           )}
         </div>
 
+        {/* 자동선택 + 제안서 목록 + 제약사 현황 (3등분) */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* 자동 선택 */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
             <p className="text-xs font-semibold text-gray-500 mb-3">자동 대체 선택 기준 (여러 기준 조합 가능, 우선순위 순)</p>
@@ -847,6 +849,127 @@ function BulkRegisterInner() {
                 </p>
               )}
             </div>
+        </div>
+
+        {/* 제안서 목록 */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">
+              <FileText className="w-4 h-4 text-gray-500" />
+              제안서 목록 <span className="text-xs text-gray-400">({savedProposals.length})</span>
+            </h3>
+          </div>
+          <div className="space-y-1.5 max-h-72 overflow-y-auto">
+            {savedProposals.length === 0 ? (
+              <p className="text-xs text-gray-400 py-3 text-center">저장된 제안서가 없습니다.</p>
+            ) : (
+              savedProposals.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => loadProposal(p.id)}
+                  disabled={loadingProposal !== null}
+                  className="w-full text-left p-2.5 rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50/40 transition-colors group disabled:opacity-50"
+                >
+                  <div className="flex items-start gap-2">
+                    {loadingProposal === p.id
+                      ? <Loader2 className="w-3.5 h-3.5 text-blue-500 mt-0.5 shrink-0 animate-spin" />
+                      : <FileText className="w-3.5 h-3.5 text-gray-400 mt-0.5 shrink-0 group-hover:text-blue-500" />
+                    }
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-gray-900 truncate">{p.title}</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5">
+                        {p._count?.items ?? 0}개 품목 · {p.client?.clientName ?? "미지정"}
+                      </p>
+                    </div>
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* 제약사 현황 */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3">
+          <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+            <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">
+              <Building2 className="w-4 h-4 text-gray-500" />
+              제약사 현황
+              <span className="text-xs text-gray-400 font-normal">({companySummary.length}개사)</span>
+            </h3>
+            {companySummary.length > 0 && (
+              <button
+                onClick={requestAllFilters}
+                disabled={!selectedClient || requestingAll || pendingCompanies.length === 0}
+                title={!selectedClient ? "거래처를 먼저 지정해야 필터링 요청이 가능합니다" : pendingCompanies.length === 0 ? "미요청 제약사가 없습니다" : `미요청 ${pendingCompanies.length}개사에 한번에 요청`}
+                className="inline-flex items-center gap-1 text-[11px] rounded px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {requestingAll
+                  ? <Loader2 className="w-3 h-3 animate-spin" />
+                  : <Filter className="w-3 h-3" />}
+                전체요청 {pendingCompanies.length > 0 && <span className="font-normal">({pendingCompanies.length})</span>}
+              </button>
+            )}
+          </div>
+          {!selectedClient && companySummary.length > 0 && (
+            <div className="flex items-center gap-1.5 bg-orange-50 border border-orange-200 rounded-lg px-2.5 py-1.5 text-[11px] text-orange-700 mb-2">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              거래처를 지정해야 필터링 요청이 가능합니다
+            </div>
+          )}
+          <div className="space-y-1.5 max-h-96 overflow-y-auto">
+            {companySummary.length === 0 ? (
+              <p className="text-xs text-gray-400 py-3 text-center">대체 품목을 선택하면 제약사가 집계됩니다.</p>
+            ) : (
+              companySummary.map((c) => {
+                const isExpanded = expandedCompanies.has(c.name);
+                const status = companyStatuses[c.name] || "";
+                const isApproved = status === "APPROVED";
+                const requested = status === "PENDING" || status === "REVIEWING" || isApproved;
+                return (
+                  <div key={c.name} className="rounded-lg border border-gray-200">
+                    <button
+                      onClick={() => toggleCompanyExpand(c.name)}
+                      className="w-full flex items-center justify-between p-2 hover:bg-gray-50 transition-colors"
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-xs font-medium text-gray-900 truncate">{c.name}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className="text-xs text-gray-500">{c.count}개</span>
+                        {isExpanded ? <ChevronUp className="w-3.5 h-3.5 text-gray-400" /> : <ChevronDown className="w-3.5 h-3.5 text-gray-400" />}
+                      </div>
+                    </button>
+                    <div className="px-2 pb-2 flex items-center gap-1 flex-wrap">
+                      {status ? <StatusBadge status={status} /> : <span className="text-[10px] text-gray-400 px-1.5 py-0.5">미요청</span>}
+                      <button
+                        onClick={() => requestFilter(c.name)}
+                        disabled={!selectedClient || requestingFilter.has(c.name) || requested}
+                        title={!selectedClient ? "거래처를 먼저 지정해야 필터링 요청이 가능합니다" : undefined}
+                        className={`inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5 whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed ${
+                          isApproved
+                            ? "text-gray-500 bg-gray-50 border border-gray-200 hover:bg-gray-100"
+                            : "text-blue-600 bg-blue-50 border border-blue-200 hover:bg-blue-100"
+                        }`}
+                      >
+                        {requestingFilter.has(c.name)
+                          ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                          : <Filter className="w-2.5 h-2.5" />}
+                        {status === "PENDING" ? "요청됨" : status === "REVIEWING" ? "검토중" : status === "APPROVED" ? "거래가능" : "필터링 요청"}
+                      </button>
+                    </div>
+                    {isExpanded && c.products.length > 0 && (
+                      <ul className="px-2 pb-2 space-y-0.5 border-t border-gray-100 pt-1.5">
+                        {c.products.map((prod) => (
+                          <li key={prod} className="text-[11px] text-gray-600 truncate">· {prod}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
         </div>
 
         {/* 표 */}
@@ -968,130 +1091,6 @@ function BulkRegisterInner() {
           </div>
         )}
 
-        {/* 제안서 목록 + 제약사 현황 */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* 제안서 목록 */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">
-                  <FileText className="w-4 h-4 text-gray-500" />
-                  제안서 목록 <span className="text-xs text-gray-400">({savedProposals.length})</span>
-                </h3>
-              </div>
-              <div className="space-y-1.5 max-h-72 overflow-y-auto">
-                {savedProposals.length === 0 ? (
-                  <p className="text-xs text-gray-400 py-3 text-center">저장된 제안서가 없습니다.</p>
-                ) : (
-                  savedProposals.map((p) => (
-                    <button
-                      key={p.id}
-                      onClick={() => loadProposal(p.id)}
-                      disabled={loadingProposal !== null}
-                      className="w-full text-left p-2.5 rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50/40 transition-colors group disabled:opacity-50"
-                    >
-                      <div className="flex items-start gap-2">
-                        {loadingProposal === p.id
-                          ? <Loader2 className="w-3.5 h-3.5 text-blue-500 mt-0.5 shrink-0 animate-spin" />
-                          : <FileText className="w-3.5 h-3.5 text-gray-400 mt-0.5 shrink-0 group-hover:text-blue-500" />
-                        }
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium text-gray-900 truncate">{p.title}</p>
-                          <p className="text-[11px] text-gray-500 mt-0.5">
-                            {p._count?.items ?? 0}개 품목 · {p.client?.clientName ?? "미지정"}
-                          </p>
-                        </div>
-                      </div>
-                    </button>
-                  ))
-                )}
-              </div>
-            </div>
-
-            {/* 제약사 현황 */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3">
-              <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
-                <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">
-                  <Building2 className="w-4 h-4 text-gray-500" />
-                  제약사 현황
-                  <span className="text-xs text-gray-400 font-normal">({companySummary.length}개사)</span>
-                </h3>
-                {companySummary.length > 0 && (
-                  <button
-                    onClick={requestAllFilters}
-                    disabled={!selectedClient || requestingAll || pendingCompanies.length === 0}
-                    title={!selectedClient ? "거래처를 먼저 지정해야 필터링 요청이 가능합니다" : pendingCompanies.length === 0 ? "미요청 제약사가 없습니다" : `미요청 ${pendingCompanies.length}개사에 한번에 요청`}
-                    className="inline-flex items-center gap-1 text-[11px] rounded px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    {requestingAll
-                      ? <Loader2 className="w-3 h-3 animate-spin" />
-                      : <Filter className="w-3 h-3" />}
-                    전체요청 {pendingCompanies.length > 0 && <span className="font-normal">({pendingCompanies.length})</span>}
-                  </button>
-                )}
-              </div>
-              {!selectedClient && companySummary.length > 0 && (
-                <div className="flex items-center gap-1.5 bg-orange-50 border border-orange-200 rounded-lg px-2.5 py-1.5 text-[11px] text-orange-700 mb-2">
-                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                  거래처를 지정해야 필터링 요청이 가능합니다
-                </div>
-              )}
-              <div className="space-y-1.5 max-h-96 overflow-y-auto">
-                {companySummary.length === 0 ? (
-                  <p className="text-xs text-gray-400 py-3 text-center">대체 품목을 선택하면 제약사가 집계됩니다.</p>
-                ) : (
-                  companySummary.map((c) => {
-                    const isExpanded = expandedCompanies.has(c.name);
-                    const status = companyStatuses[c.name] || "";
-                    const isApproved = status === "APPROVED";
-                    const requested = status === "PENDING" || status === "REVIEWING" || isApproved;
-                    return (
-                      <div key={c.name} className="rounded-lg border border-gray-200">
-                        <button
-                          onClick={() => toggleCompanyExpand(c.name)}
-                          className="w-full flex items-center justify-between p-2 hover:bg-gray-50 transition-colors"
-                        >
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="text-xs font-medium text-gray-900 truncate">{c.name}</span>
-                          </div>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <span className="text-xs text-gray-500">{c.count}개</span>
-                            {isExpanded ? <ChevronUp className="w-3.5 h-3.5 text-gray-400" /> : <ChevronDown className="w-3.5 h-3.5 text-gray-400" />}
-                          </div>
-                        </button>
-                        <div className="px-2 pb-2 flex items-center gap-1 flex-wrap">
-                          {status ? <StatusBadge status={status} /> : <span className="text-[10px] text-gray-400 px-1.5 py-0.5">미요청</span>}
-                          {(
-                            <button
-                              onClick={() => requestFilter(c.name)}
-                              disabled={!selectedClient || requestingFilter.has(c.name) || requested}
-                              title={!selectedClient ? "거래처를 먼저 지정해야 필터링 요청이 가능합니다" : undefined}
-                              className={`inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5 whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed ${
-                                isApproved
-                                  ? "text-gray-500 bg-gray-50 border border-gray-200 hover:bg-gray-100"
-                                  : "text-blue-600 bg-blue-50 border border-blue-200 hover:bg-blue-100"
-                              }`}
-                            >
-                              {requestingFilter.has(c.name)
-                                ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                                : <Filter className="w-2.5 h-2.5" />}
-                              {status === "PENDING" ? "요청됨" : status === "REVIEWING" ? "검토중" : status === "APPROVED" ? "거래가능" : "필터링 요청"}
-                            </button>
-                          )}
-                        </div>
-                        {isExpanded && c.products.length > 0 && (
-                          <ul className="px-2 pb-2 space-y-0.5 border-t border-gray-100 pt-1.5">
-                            {c.products.map((prod) => (
-                              <li key={prod} className="text-[11px] text-gray-600 truncate">· {prod}</li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-        </div>
       </div>
 
       {altModal && altModal.row.original && (
