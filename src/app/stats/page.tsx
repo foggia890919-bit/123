@@ -789,6 +789,8 @@ export default function StatsPage() {
   }
 
   // 키보드 위/아래로 행 이동 (Enter / ArrowDown / ArrowUp)
+  // 제품명·긴 필드에선 select() 시 커서가 끝으로 가서 검수 시 처음부터 읽기 어려움.
+  // 항상 맨 앞(0,0)으로 고정 — 검수자가 텍스트 처음부터 빠르게 훑을 수 있게.
   function handleManualKey(e: React.KeyboardEvent<HTMLInputElement>, idx: number, field: keyof ManualDrug) {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Enter") return;
     e.preventDefault();
@@ -797,7 +799,9 @@ export default function StatsPage() {
     if (nextIdx < 0 || nextIdx >= manualDrugs.length) return;
     const target = manualInputRefs.current[`${nextIdx}:${field}`];
     target?.focus();
-    target?.select();
+    target?.setSelectionRange(0, 0);
+    // 입력란이 길어서 가로로 잘려 보이면 맨 앞으로 스크롤
+    if (target) target.scrollLeft = 0;
   }
   // 보험코드 입력 후 마스터에서 제품명/제약사/단가 자동 채움
   async function lookupByInsuranceCode(idx: number) {
