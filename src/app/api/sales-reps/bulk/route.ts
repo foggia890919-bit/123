@@ -32,6 +32,7 @@ interface RowResult {
   mappedClients?: number;
   unmappedBizNumbers?: string[];
   error?: string;
+  createdNew?: boolean; // true=신규생성 / false=기존유저에 매핑만 추가
 }
 
 function nextSalesCode(maxCode: string | null, prefix: string): string {
@@ -101,29 +102,42 @@ export async function POST(req: NextRequest) {
       results.push({ row: i, status: "error", email, error: "유효하지 않은 이메일" });
       continue;
     }
-    if (password.length < 4) {
-      results.push({ row: i, status: "error", email, error: "비밀번호 4자 이상 필요" });
+    // 비밀번호: 신규 유저면 필수(4자↑), 기존 유저는 비워둬도 OK (PW 갱신 안 함)
+    const existing = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true, salesCode: true, role: true },
+    });
+    if (!existing && password.length < 4) {
+      results.push({ row: i, status: "error", email, error: "신규 가입은 비밀번호 4자 이상 필요" });
       continue;
     }
-
-    const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
-    if (existing) {
-      results.push({ row: i, status: "error", email, error: "이미 가입된 이메일" });
-      continue;
-    }
-
-    const salesCode = nextSalesCode(lastCode, prefix);
-    lastCode = salesCode;
 
     try {
-      const hashed = await bcrypt.hash(password, 12);
-      const created = await prisma.user.create({
-        data: {
-          email, name, phone, password: hashed,
-          role: "SALES_REP", approved: true, salesCode,
-        },
-        select: { id: true, salesCode: true },
-      });
+      let userId: string;
+      let salesCode: string;
+      let createdNew: boolean;
+
+      if (existing) {
+        // 이미 가입된 이메일 — 거래처 매핑만 추가/갱신, 비밀번호·이름 그대로
+        userId = existing.id;
+        salesCode = existing.salesCode ?? "";
+        createdNew = false;
+      } else {
+        // 신규 — User + 코드 자동 발급
+        const newCode = nextSalesCode(lastCode, prefix);
+        lastCode = newCode;
+        const hashed = await bcrypt.hash(password, 12);
+        const created = await prisma.user.create({
+          data: {
+            email, name, phone, password: hashed,
+            role: "SALES_REP", approved: true, salesCode: newCode,
+          },
+          select: { id: true, salesCode: true },
+        });
+        userId = created.id;
+        salesCode = created.salesCode!;
+        createdNew = true;
+      }
 
       // 거래처 매핑 — 등록된 EpharmsAccount에서 clientName 끌어옴 (없으면 placeholder)
       const accounts = bizNumbers.length > 0
@@ -140,9 +154,9 @@ export async function POST(req: NextRequest) {
         const clientName = accountMap.get(bn) ?? `(미등록 ${bn})`;
         if (!accountMap.has(bn)) unmapped.push(bn);
         await prisma.userClient.upsert({
-          where: { userId_bizNumber: { userId: created.id, bizNumber: bn } },
+          where: { userId_bizNumber: { userId, bizNumber: bn } },
           create: {
-            userId: created.id,
+            userId,
             clientName,
             bizNumber: bn,
             approved: true,
@@ -156,10 +170,11 @@ export async function POST(req: NextRequest) {
         row: i,
         status: "ok",
         email,
-        userId: created.id,
-        salesCode: created.salesCode!,
+        userId,
+        salesCode,
         mappedClients: mappedCount,
         unmappedBizNumbers: unmapped.length > 0 ? unmapped : undefined,
+        createdNew,
       });
     } catch (err) {
       results.push({
@@ -171,10 +186,12 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const ok = results.filter((r) => r.status === "ok").length;
-  const error = results.length - ok;
+  const okResults = results.filter((r) => r.status === "ok");
+  const created = okResults.filter((r) => r.createdNew).length;
+  const updated = okResults.filter((r) => !r.createdNew).length;
+  const error = results.length - okResults.length;
   return NextResponse.json({
-    summary: { total: results.length, ok, error },
+    summary: { total: results.length, ok: okResults.length, created, updated, error },
     results,
   });
 }
