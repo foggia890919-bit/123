@@ -811,8 +811,10 @@ export default function StatsPage() {
     if (target) {
       // 입력란이 길어서 가로로 잘려 보이면 맨 앞으로 스크롤
       target.scrollLeft = 0;
-      // 행이 화면 밖이면 부모 스크롤 컨테이너를 움직여 보이게 — 키보드 검수 시 시야 따라감
-      target.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      // 행이 화면 밖이면 부모 스크롤 컨테이너를 움직여 보이게.
+      // block: "center" — 위·아래 어느 쪽 이동이든 행을 viewport 가운데로. "nearest" 는
+      // 위로 이동 시 sticky 이미지 패널 뒤에 가려져도 viewport 안이라 판정해 안 움직였음.
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
     }
   }
   // 보험코드 입력 후 마스터에서 제품명/제약사/단가 자동 채움
