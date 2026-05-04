@@ -32,7 +32,10 @@ const SEL = {
   pwInput:    '#userPwd',
   loginBtn:   '#loginBtn',
   // ----- 원장집계 (확정) -----
-  // 둘 다 readonly + jQuery UI datepicker(.hasDatepicker) — setDate()에서 별도 처리.
+  // 페이지에 1개월/3개월/6개월/1년 빠른 선택 버튼이 있어서 이걸 쓰는 게 가장 안정적.
+  // (datepicker 직접 조작은 페이지의 dateFormat·내부 상태 동기화 문제로 깨지기 쉬움)
+  periodYearBtn: 'button.PeriodBtn[data-periodtyp="Y"][data-periodnum="1"]',
+  // 백업: 직접 날짜 인풋 조작 (위 버튼이 없을 때만)
   dateFromInput: '#search_pd_start',
   dateToInput:   '#search_pd_end',
   searchBtn:     '#btnSrch',
@@ -92,83 +95,28 @@ export async function isLoggedIn(page: Page): Promise<boolean> {
 }
 
 /** 지정 기간의 원장집계를 긁는다. (default: 최근 1년) */
-export async function fetchLedger(
-  page: Page,
-  opts: { from?: string; to?: string } = {}
-): Promise<LedgerRow[]> {
-  const today = new Date();
-  const oneYearAgo = new Date(today.getTime() - 365 * 24 * 60 * 60 * 1000);
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-
-  const from = opts.from ?? fmt(oneYearAgo);
-  const to   = opts.to   ?? fmt(today);
-
+export async function fetchLedger(page: Page): Promise<LedgerRow[]> {
   await page.goto(LEDGER_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
   await page.waitForTimeout(800);
 
-  // 날짜 입력칸: readonly + jQuery UI datepicker (.hasDatepicker).
-  // 단순 input.value 설정으로는 datepicker 내부 Date 상태가 안 바뀌어서
-  // 폼 제출 시 디폴트 값이 그대로 들어감 → "Date 객체"로 datepicker.setDate 호출이 핵심.
-  // 표시 포맷("yy. mm. dd." 등)은 datepicker가 자동 포맷팅해 줌.
-  const setDate = async (selector: string, isoDate: string): Promise<string> => {
-    const el = page.locator(selector).first();
-    if (!(await el.count())) return "";
-    return await el.evaluate((node, v): string => {
-      const input = node as HTMLInputElement;
-      input.removeAttribute("readonly");
+  // 페이지의 "1년" 빠른선택 버튼 클릭 — datepicker 내부 상태까지 정확히 세팅됨.
+  // (readonly + jQuery UI datepicker 직접 조작은 dateFormat·내부 상태 동기화 문제로 깨지기 쉬움)
+  const yearBtn = page.locator(SEL.periodYearBtn).first();
+  if (await yearBtn.count() > 0) {
+    await yearBtn.click();
+    console.log('[ePharms] clicked "1년" period button');
+    await page.waitForTimeout(500);
+  } else {
+    console.warn('[ePharms] "1년" period button not found — falling back to default page state');
+  }
 
-      const w = window as unknown as {
-        jQuery?: (el: HTMLElement) => {
-          datepicker?: (cmd: string, val?: unknown) => unknown;
-          val?: (v: string) => unknown;
-          trigger?: (ev: string) => unknown;
-        };
-        $?: (el: HTMLElement) => {
-          datepicker?: (cmd: string, val?: unknown) => unknown;
-          val?: (v: string) => unknown;
-          trigger?: (ev: string) => unknown;
-        };
-      };
-      const jq = w.jQuery ?? w.$;
-
-      // ISO "2025-05-04" → Date 객체. datepicker가 페이지 설정 포맷에 맞게 알아서 포맷팅.
-      const dateObj = new Date(v + "T00:00:00");
-
-      try {
-        if (jq) {
-          const $el = jq(input);
-          // setDate가 핵심 — input.value + datepicker 내부 상태 모두 동기화
-          $el.datepicker?.("setDate", dateObj);
-          $el.trigger?.("change");
-        }
-      } catch { /* jQuery 없거나 datepicker 메소드 다름 — fallback로 진행 */ }
-
-      // 그래도 빈 값이면 native value setter로 강제 설정
-      if (!input.value) {
-        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-        if (setter) setter.call(input, v);
-        else input.value = v;
-      }
-
-      // 일반 이벤트 dispatch (페이지가 input/change 리스너 달아둔 경우 대비)
-      ["input", "change", "blur"].forEach(ev => {
-        input.dispatchEvent(new Event(ev, { bubbles: true }));
-      });
-
-      return input.value;
-    }, isoDate);
-  };
-  const fromVal = await setDate(SEL.dateFromInput, from);
-  const toVal = await setDate(SEL.dateToInput, to);
-  console.log(`[ePharms] dates set: from="${fromVal}" to="${toVal}" (requested ${from} ~ ${to})`);
-  await page.waitForTimeout(500);
-
+  // 검색 버튼 클릭 (페이지가 자동으로 검색 안 한 경우 대비)
   const sBtn = page.locator(SEL.searchBtn).first();
   if (await sBtn.isVisible().catch(() => false)) {
     await sBtn.click();
-    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {});
   }
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(1500); // 결과 테이블 렌더링 대기
 
   // 결과 테이블 파싱
   const rows = await page.locator(SEL.resultRows).all();
