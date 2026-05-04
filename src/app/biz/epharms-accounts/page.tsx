@@ -80,10 +80,26 @@ function StatusBadge({ status, error }: { status: string | null; error: string |
   );
 }
 
+// 계정 정보 누락 — 마이페이지 노출/sync에 필요한 항목 중 하나라도 비어있으면 누락
+function isAccountIncomplete(a: EpharmsAccount): boolean {
+  if (!a.kmdUserId) return true;          // KMD 아이디 미연결 → 마이페이지 노출 안 됨
+  if (!a.lastSyncedAt) return true;       // sync 한 번도 안 됨 → 매출원장 데이터 없음
+  if (a.lastSyncStatus === "error") return true; // 마지막 sync 실패
+  return false;
+}
+function accountMissingFields(a: EpharmsAccount): string[] {
+  const m: string[] = [];
+  if (!a.kmdUserId) m.push("KMD 아이디");
+  if (!a.lastSyncedAt) m.push("최근 sync");
+  if (a.lastSyncStatus === "error") m.push("sync 실패");
+  return m;
+}
+
 function EpharmsAccountsContent() {
   const [items, setItems] = useState<EpharmsAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [filterMode, setFilterMode] = useState<"all" | "incomplete">("all");
   const [modal, setModal] = useState<"add" | "edit" | null>(null);
   const [edit, setEdit] = useState<EpharmsAccount | null>(null);
   const [form, setForm] = useState(EMPTY);
@@ -398,7 +414,7 @@ function EpharmsAccountsContent() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 mb-4">
+        <div className="flex items-center gap-2 mb-3">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
@@ -413,6 +429,33 @@ function EpharmsAccountsContent() {
             className="px-3 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50"
           >
             새로고침
+          </button>
+        </div>
+
+        {/* 정보 누락 필터 */}
+        <div className="flex items-center gap-1 mb-4 flex-wrap">
+          <button
+            onClick={() => setFilterMode("all")}
+            className={`text-xs px-2.5 py-1 rounded-full font-medium transition-colors ${
+              filterMode === "all"
+                ? "bg-gray-900 text-white"
+                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+            }`}
+          >
+            전체 ({items.length})
+          </button>
+          <button
+            onClick={() => setFilterMode("incomplete")}
+            className={`text-xs px-2.5 py-1 rounded-full font-medium transition-colors ${
+              filterMode === "incomplete"
+                ? "bg-red-600 text-white"
+                : items.filter(isAccountIncomplete).length > 0
+                  ? "bg-red-50 text-red-700 hover:bg-red-100"
+                  : "bg-gray-100 text-gray-400"
+            }`}
+            title="KMD 아이디 미연결 / sync 미실행 / sync 실패 중 하나라도 있는 계정"
+          >
+            정보 누락 ({items.filter(isAccountIncomplete).length})
           </button>
         </div>
 
@@ -441,9 +484,24 @@ function EpharmsAccountsContent() {
                   등록된 계정이 없습니다. "계정 추가" 버튼으로 시작하세요.
                 </td></tr>
               )}
-              {items.map((a) => (
+              {!loading && items.length > 0 && (filterMode === "incomplete"
+                ? items.filter(isAccountIncomplete)
+                : items
+              ).length === 0 && (
+                <tr><td colSpan={8} className="px-4 py-12 text-center text-gray-400">
+                  필터에 해당하는 계정이 없습니다.
+                </td></tr>
+              )}
+              {(filterMode === "incomplete" ? items.filter(isAccountIncomplete) : items).map((a) => {
+                const missing = accountMissingFields(a);
+                return (
                 <tr key={a.id} className={a.active ? "" : "bg-gray-50 opacity-60"}>
-                  <td className="px-4 py-3 text-sm font-medium text-gray-900">{a.clientName}</td>
+                  <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                    <div>{a.clientName}</div>
+                    {missing.length > 0 && (
+                      <div className="text-[11px] text-red-500 mt-0.5">누락: {missing.join(", ")}</div>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-sm text-gray-600 font-mono">{a.bizNumber}</td>
                   <td className="px-4 py-3 text-sm text-gray-600 font-mono">{a.loginId}</td>
                   <td className="px-4 py-3 text-xs">
@@ -484,7 +542,8 @@ function EpharmsAccountsContent() {
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
