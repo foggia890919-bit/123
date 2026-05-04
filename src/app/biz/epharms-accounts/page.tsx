@@ -7,6 +7,13 @@ import {
   ToggleLeft, ToggleRight, KeyRound, AlertCircle, CheckCircle2, Upload,
 } from "lucide-react";
 
+interface KmdUser {
+  id: string;
+  email: string;
+  name: string | null;
+  role?: string;
+}
+
 interface EpharmsAccount {
   id: string;
   bizNumber: string;
@@ -17,6 +24,8 @@ interface EpharmsAccount {
   lastSyncStatus: string | null;
   lastSyncError: string | null;
   memo: string | null;
+  kmdUserId: string | null;
+  kmdUser: KmdUser | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -47,6 +56,7 @@ const EMPTY = {
   loginId: "",
   loginPw: "",
   memo: "",
+  kmdUserId: "" as string | "",
 };
 
 function fmtDate(s: string | null): string {
@@ -87,6 +97,13 @@ function EpharmsAccountsContent() {
   const [kmdOpen, setKmdOpen] = useState(false);
   const kmdRef = useRef<HTMLDivElement>(null);
 
+  // KMD user (account holder) dropdown — add/edit 양쪽
+  const [kmdUsers, setKmdUsers] = useState<KmdUser[]>([]);
+  const [kmdUserSearch, setKmdUserSearch] = useState("");
+  const [kmdUserOpen, setKmdUserOpen] = useState(false);
+  const [selectedKmdUser, setSelectedKmdUser] = useState<KmdUser | null>(null);
+  const kmdUserRef = useRef<HTMLDivElement>(null);
+
   // Bulk modal state
   const [bulkModal, setBulkModal] = useState(false);
   const [bulkFile, setBulkFile] = useState<File | null>(null);
@@ -108,11 +125,14 @@ function EpharmsAccountsContent() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Close KMD dropdown when clicking outside
+  // Close KMD dropdowns when clicking outside
   useEffect(() => {
     function handleOutside(e: MouseEvent) {
       if (kmdRef.current && !kmdRef.current.contains(e.target as Node)) {
         setKmdOpen(false);
+      }
+      if (kmdUserRef.current && !kmdUserRef.current.contains(e.target as Node)) {
+        setKmdUserOpen(false);
       }
     }
     document.addEventListener("mousedown", handleOutside);
@@ -131,11 +151,49 @@ function EpharmsAccountsContent() {
     }
   }
 
+  // KMD users는 입력에 따라 서버사이드 검색 (모든 유저 풀이 클 수 있음)
+  const kmdUserSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!kmdUserOpen) return;
+    if (kmdUserSearchTimer.current) clearTimeout(kmdUserSearchTimer.current);
+    kmdUserSearchTimer.current = setTimeout(async () => {
+      try {
+        const url = `/api/epharms-accounts/users${kmdUserSearch ? `?q=${encodeURIComponent(kmdUserSearch)}` : ""}`;
+        const r = await fetch(url);
+        if (r.ok) {
+          const data = await r.json();
+          setKmdUsers(data.items ?? []);
+        }
+      } catch {
+        setKmdUsers([]);
+      }
+    }, 200);
+    return () => {
+      if (kmdUserSearchTimer.current) clearTimeout(kmdUserSearchTimer.current);
+    };
+  }, [kmdUserSearch, kmdUserOpen]);
+
+  function selectKmdUser(u: KmdUser) {
+    setSelectedKmdUser(u);
+    setForm((prev) => ({ ...prev, kmdUserId: u.id }));
+    setKmdUserSearch(u.email);
+    setKmdUserOpen(false);
+  }
+
+  function clearKmdUser() {
+    setSelectedKmdUser(null);
+    setForm((prev) => ({ ...prev, kmdUserId: "" }));
+    setKmdUserSearch("");
+  }
+
   function openAdd() {
     setForm(EMPTY);
     setEdit(null);
     setKmdSearch("");
     setKmdOpen(false);
+    setKmdUserSearch("");
+    setKmdUserOpen(false);
+    setSelectedKmdUser(null);
     setModal("add");
     fetchKmdClients();
   }
@@ -148,7 +206,11 @@ function EpharmsAccountsContent() {
       loginId: a.loginId,
       loginPw: "",
       memo: a.memo ?? "",
+      kmdUserId: a.kmdUserId ?? "",
     });
+    setSelectedKmdUser(a.kmdUser ?? null);
+    setKmdUserSearch(a.kmdUser?.email ?? "");
+    setKmdUserOpen(false);
     setModal("edit");
   }
 
@@ -179,6 +241,7 @@ function EpharmsAccountsContent() {
                 loginId: form.loginId,
                 ...(form.loginPw ? { loginPw: form.loginPw } : {}),
                 memo: form.memo,
+                kmdUserId: form.kmdUserId || null,
               }
             : {
                 bizNumber: form.bizNumber.replace(/[^0-9]/g, ""),
@@ -186,6 +249,7 @@ function EpharmsAccountsContent() {
                 loginId: form.loginId,
                 loginPw: form.loginPw,
                 memo: form.memo,
+                kmdUserId: form.kmdUserId || null,
               }
         ),
       });
@@ -359,6 +423,7 @@ function EpharmsAccountsContent() {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">거래처</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">사업자번호</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">ePharms ID</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">KMD 아이디</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">최근 sync</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">상태</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">활성</th>
@@ -367,12 +432,12 @@ function EpharmsAccountsContent() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {loading && (
-                <tr><td colSpan={7} className="px-4 py-12 text-center text-gray-400">
+                <tr><td colSpan={8} className="px-4 py-12 text-center text-gray-400">
                   <Loader2 className="w-5 h-5 animate-spin inline mr-2" /> 불러오는 중…
                 </td></tr>
               )}
               {!loading && items.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-12 text-center text-gray-400">
+                <tr><td colSpan={8} className="px-4 py-12 text-center text-gray-400">
                   등록된 계정이 없습니다. "계정 추가" 버튼으로 시작하세요.
                 </td></tr>
               )}
@@ -381,6 +446,16 @@ function EpharmsAccountsContent() {
                   <td className="px-4 py-3 text-sm font-medium text-gray-900">{a.clientName}</td>
                   <td className="px-4 py-3 text-sm text-gray-600 font-mono">{a.bizNumber}</td>
                   <td className="px-4 py-3 text-sm text-gray-600 font-mono">{a.loginId}</td>
+                  <td className="px-4 py-3 text-xs">
+                    {a.kmdUser ? (
+                      <div className="flex flex-col">
+                        <span className="font-mono text-gray-700">{a.kmdUser.email}</span>
+                        {a.kmdUser.name && <span className="text-[11px] text-gray-400">{a.kmdUser.name}</span>}
+                      </div>
+                    ) : (
+                      <span className="text-gray-300">미연결</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-xs text-gray-500">{fmtDate(a.lastSyncedAt)}</td>
                   <td className="px-4 py-3"><StatusBadge status={a.lastSyncStatus} error={a.lastSyncError} /></td>
                   <td className="px-4 py-3">
@@ -503,6 +578,57 @@ function EpharmsAccountsContent() {
                   서버에 AES-256-GCM 암호화하여 저장되며, 화면이나 API 응답에 절대 노출되지 않습니다.
                 </p>
               </div>
+              {/* KMD 사용자 매핑 — 약국/거래처가 마이페이지에서 본인 매출원장 보려면 필요 */}
+              <div ref={kmdUserRef} className="relative">
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  KMD 아이디 매핑 <span className="text-gray-400 font-normal">(선택 — 마이페이지 노출용)</span>
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    value={kmdUserSearch}
+                    onChange={(e) => { setKmdUserSearch(e.target.value); setKmdUserOpen(true); }}
+                    onFocus={() => setKmdUserOpen(true)}
+                    placeholder="이메일 / 이름 / 전화 검색…"
+                    className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  {selectedKmdUser && (
+                    <button
+                      type="button"
+                      onClick={clearKmdUser}
+                      className="px-2 py-2 text-xs text-red-500 hover:bg-red-50 rounded"
+                      title="매핑 해제"
+                    >
+                      해제
+                    </button>
+                  )}
+                </div>
+                {selectedKmdUser && (
+                  <p className="text-[11px] text-blue-600 mt-1">
+                    선택됨: <span className="font-mono">{selectedKmdUser.email}</span>
+                    {selectedKmdUser.name ? ` (${selectedKmdUser.name})` : ""}
+                  </p>
+                )}
+                {kmdUserOpen && kmdUsers.length > 0 && (
+                  <ul className="absolute z-10 left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg">
+                    {kmdUsers.map((u) => (
+                      <li
+                        key={u.id}
+                        onMouseDown={() => selectKmdUser(u)}
+                        className="px-3 py-2 text-sm cursor-pointer hover:bg-blue-50 flex items-center justify-between"
+                      >
+                        <span className="font-mono text-gray-800">{u.email}</span>
+                        <span className="text-xs text-gray-400">{u.name ?? ""}{u.role ? ` · ${u.role}` : ""}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {kmdUserOpen && kmdUserSearch.length > 0 && kmdUsers.length === 0 && (
+                  <div className="absolute z-10 left-0 right-0 mt-1 px-3 py-2 bg-white border border-gray-200 rounded-lg shadow-lg text-sm text-gray-400">
+                    검색 결과 없음
+                  </div>
+                )}
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1">메모</label>
                 <textarea

@@ -33,6 +33,7 @@ model User {
   corpRateFilesUploaded      CorpRateFile[]        @relation("CorpRateFileUploader")
   corpRateHistoriesPerformed CorpRateFileHistory[] @relation("CorpRateFileHistoryPerformer")
   processedEmails            IncomingEmail[]       @relation("EmailProcessor")
+  epharmsAccounts            EpharmsAccount[]      @relation("KmdUserEpharms")
 }
 
 
@@ -744,12 +745,17 @@ model EpharmsAccount {
   lastSyncStatus  String?         // "ok" | "error"
   lastSyncError   String?
   memo            String?
+  // KMD 플랫폼 계정 매핑 — 약국/거래처 사용자가 마이페이지에서 본인 매출원장을 보려면 필요.
+  // bizNumber 기반 매칭(UserClient.bizNumber)에 더해 kmdUserId 직접 링크도 허용한다.
+  kmdUserId       String?
+  kmdUser         User?           @relation("KmdUserEpharms", fields: [kmdUserId], references: [id], onDelete: SetNull)
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
   ledgerEntries   LedgerEntry[]
   syncLogs        LedgerSyncLog[]
 
   @@index([active])
+  @@index([kmdUserId])
 }
 
 // 매출원장 한 줄 (원장집계 화면 컬럼 그대로).

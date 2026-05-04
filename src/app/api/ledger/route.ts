@@ -4,13 +4,17 @@
 //     → 현재 로그인 사용자가 볼 수 있는 거래처 목록 + 각 거래처의 최근 매출원장 메타
 //
 //   GET /api/ledger?bizNumber=2110948285&from=2025-01-01&to=2025-12-31
-//     → 특정 거래처의 명세 줄들 (권한 체크: UserClient에 등록된 거래처만)
+//     → 특정 거래처의 명세 줄들 (권한 체크: 아래 권한 규칙)
 //
 // 권한:
 //   - ADMIN/BIZ        : 모든 거래처 조회 가능
-//   - SALES_REP        : 본인의 UserClient(approved=true)에 등록된 거래처만
+//   - 그 외 (SALES_REP / PHARMACIST / BASIC ...):
+//       (a) 본인의 UserClient(approved=true) bizNumber 매칭, 또는
+//       (b) EpharmsAccount.kmdUserId === 본인 User.id (KMD 계정 직접 매핑)
+//     둘 중 하나라도 만족하면 조회 가능.
 
 import { NextRequest, NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 
@@ -26,31 +30,49 @@ export async function GET(req: NextRequest) {
   const from = req.nextUrl.searchParams.get("from");
   const to = req.nextUrl.searchParams.get("to");
 
-  // 1) 사용자가 접근 가능한 사업자번호 화이트리스트 만들기
-  let allowedBizNumbers: string[] | null = null; // null = 전체 허용
+  // 1) 비-관리자: 접근 가능한 EpharmsAccount where 절 만들기
+  //    bizNumber in [내 거래처들] OR kmdUserId === user.id
+  let scopedWhere: Prisma.EpharmsAccountWhereInput | null = null; // null = 전체 허용
   if (!isAdminLike(user.role)) {
     const myClients = await prisma.userClient.findMany({
       where: { userId: user.id, approved: true },
       select: { bizNumber: true },
     });
-    allowedBizNumbers = myClients.map((c) => c.bizNumber);
+    const allowedBizNumbers = myClients.map((c) => c.bizNumber);
+    scopedWhere = {
+      OR: [
+        ...(allowedBizNumbers.length > 0 ? [{ bizNumber: { in: allowedBizNumbers } }] : []),
+        { kmdUserId: user.id },
+      ],
+    };
   }
 
   // ===== 단일 거래처 상세 조회 =====
   if (bizNumber) {
-    if (allowedBizNumbers !== null && !allowedBizNumbers.includes(bizNumber)) {
-      return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
-    }
     const acc = await prisma.epharmsAccount.findUnique({
       where: { bizNumber },
       select: {
         id: true, bizNumber: true, clientName: true,
         active: true, lastSyncedAt: true, lastSyncStatus: true,
+        kmdUserId: true,
       },
     });
     if (!acc) {
       return NextResponse.json({ account: null, entries: [] });
     }
+
+    // 권한: ADMIN/BIZ는 무조건 통과, 그 외는 (UserClient bizNumber 매칭) OR (kmdUserId 일치)
+    if (!isAdminLike(user.role)) {
+      const myClient = await prisma.userClient.findFirst({
+        where: { userId: user.id, approved: true, bizNumber },
+        select: { id: true },
+      });
+      const ok = !!myClient || acc.kmdUserId === user.id;
+      if (!ok) {
+        return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+      }
+    }
+
     const entries = await prisma.ledgerEntry.findMany({
       where: {
         accountId: acc.id,
@@ -73,9 +95,7 @@ export async function GET(req: NextRequest) {
   }
 
   // ===== 거래처 목록 + 최근 매출원장 메타 =====
-  const where = allowedBizNumbers === null
-    ? {}
-    : { bizNumber: { in: allowedBizNumbers } };
+  const where: Prisma.EpharmsAccountWhereInput = scopedWhere ?? {};
 
   const accounts = await prisma.epharmsAccount.findMany({
     where,
