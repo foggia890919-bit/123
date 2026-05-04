@@ -114,9 +114,6 @@ export async function upsertProducts(rows: ProductRow[]): Promise<{ inserted: nu
 // 매출원장 (기존)
 // =====================================================================
 
-  return pool;
-}
-
 export interface AccountRow {
   id: string;
   bizNumber: string;
