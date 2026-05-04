@@ -8,7 +8,9 @@ const API_KEY = process.env.PUBLIC_DATA_API_KEY!;
 // 건강보험심사평가원_약가마스터_의약품주성분
 const BASE_URL = "https://apis.data.go.kr/B551182/msupplyIngdDtlService/getMsupplyIngdDtlService";
 
-interface HiraDrug { [key: string]: string | undefined; }
+interface HiraDrug { [key: string]: string | number | undefined; }
+
+const DOSE_UNIT_RE = /\d[\d.,/]*\s*(?:mg|mcg|μg|ug|g|ml|mL|IU|iu|%|mEq|밀리그[람램]|마이크로그[람램]|그[람램]|밀리리터|리터)/i;
 
 async function fetchPage(pageNo: number): Promise<{ items: HiraDrug[]; totalCount: number }> {
   const url = new URL(BASE_URL);
@@ -46,7 +48,7 @@ async function fetchPageWithRetry(pageNo: number, retries = 3): Promise<{ items:
 function mapDrug(item: HiraDrug) {
   // HIRA 약가마스터_의약품주성분 필드명 (실제 응답 확인 후 조정)
   // 공통 필드명 후보들을 순서대로 시도
-  const productName = (
+  const productNameRaw = (
     item["품목명"] ?? item["제품명"] ?? item["ITEM_NAME"] ?? item["itemName"] ?? ""
   ).trim();
   const companyName = (
@@ -58,10 +60,17 @@ function mapDrug(item: HiraDrug) {
   const insuranceCode = (
     item["급여코드"] ?? item["보험코드"] ?? item["EDI_CODE"] ?? item["ediCode"] ?? item["품목기준코드"] ?? ""
   ).trim() || null;
-  const priceRaw = parseInt(
+  const priceRaw = parseInt(String(
     item["상한금액"] ?? item["약가"] ?? item["MAX_PRICE"] ?? item["maxPrice"] ?? ""
-  );
+  ));
   const price = isNaN(priceRaw) ? null : priceRaw;
+  // 규격(용량) 별도 필드 — productName에 용량이 없으면 보완
+  const spec = (
+    item["규격"] ?? item["함량"] ?? item["용량"] ?? item["SPEC"] ?? item["spec"] ?? ""
+  ).trim();
+  const productName = (spec && !DOSE_UNIT_RE.test(productNameRaw))
+    ? `${productNameRaw} ${spec}`
+    : productNameRaw;
 
   return {
     categoryA: null as string | null,
