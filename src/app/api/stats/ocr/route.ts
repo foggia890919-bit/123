@@ -18,7 +18,9 @@ export interface FusionDrug {
   companyName: Field;
   productName: Field;
   quantity: Field;
-  unitPrice: number | null;          // 마스터 DB 단가 (합계 계산용, UI 비표시)
+  unitPrice: number | null;          // 마스터 DB 단가
+  commissionRate: number | null;     // 마스터 수수료율 (%)
+  additionalRate: number | null;     // 사용자 추가 수수료율 (%) — MemberCompanyRate
   matchedMedicationId: string | null;
   finalConfidence: number;            // 최종 신뢰도 0-100
   manualCheck: boolean;               // < 95 이면 true
@@ -86,6 +88,8 @@ export async function POST(req: NextRequest) {
     const clovaText = clovaResult?.text ?? "";
     const clovaRows = clovaResult?.rows ?? [];
     const clovaImageHeight = clovaResult?.imageHeight ?? 0;
+    // 표 헤더에서 컬럼 X 좌표 추출 (사용량/단가 자동 구분용)
+    const colMap = findColumnMap(clovaRows);
     const geminiDraft = geminiOut.status === "fulfilled" ? geminiOut.value : null;
     const geminiText = geminiDraft ? JSON.stringify(geminiDraft, null, 2) : "";
 
@@ -124,11 +128,24 @@ export async function POST(req: NextRequest) {
     const contextKeys = new Set(
       clientContext.map((c) => (c.insuranceCode || c.productName).toLowerCase())
     );
-    const boostedMerged = merged.map((m) => {
-      const key = (m.insuranceCode || m.productName).toLowerCase();
-      const inContext = contextKeys.has(key);
-      return inContext ? { ...m, confidence: Math.min(100, m.confidence + 5) } : m;
-    });
+    const boostedMerged = merged
+      // 1) 그룹/섹션 라벨 제거 — 진짜 약품명이 아닌 것 (제형 키워드 없음 + 짧은 코드만)
+      .filter((m) => isLikelyDrug(m.productName))
+      // 2) 거래처 컨텍스트 매칭 시 +5 보너스
+      .map((m) => {
+        const key = (m.insuranceCode || m.productName).toLowerCase();
+        const inContext = contextKeys.has(key);
+        return inContext ? { ...m, confidence: Math.min(100, m.confidence + 5) } : m;
+      })
+      // 3) Clova 컬럼 X 좌표로 사용량 보정 — LLM 이 단가/사용량 헷갈리면 여기서 정정
+      .map((m) => {
+        if (!colMap) return m;
+        const colQty = quantityFromColumnMap(m.productName, clovaRows, colMap);
+        if (colQty && colQty !== m.quantity.replace(/[^\d.]/g, "")) {
+          return { ...m, quantity: colQty };
+        }
+        return m;
+      });
 
     // ── 4단계: 약품마다 마스터 매칭 + 신뢰도 계산 ──────────────────────────
     interface PendingDrug {
@@ -137,6 +154,7 @@ export async function POST(req: NextRequest) {
       productName: Field;
       quantity: Field;
       unitPrice: number | null;
+      commissionRate: number | null;
       matchedMedicationId: string | null;
       finalConfidence: number;
       manualCheck: boolean;
@@ -164,6 +182,7 @@ export async function POST(req: NextRequest) {
         productName:   { value: matched.productName,   confidence: matched.matchedMedicationId ? 100 : baselineConf },
         quantity:      { value: item.quantity,         confidence: baselineConf },
         unitPrice: matched.unitPrice,
+        commissionRate: matched.commissionRate,
         matchedMedicationId: matched.matchedMedicationId,
         finalConfidence,
         manualCheck,
@@ -171,6 +190,23 @@ export async function POST(req: NextRequest) {
         productNameRaw: matched.productName || item.productName,
         insuranceCodeRaw: (matched.insuranceCode || item.insuranceCode).replace(/\D/g, ""),
       });
+    }
+
+    // ── 4-1단계: 사용자 추가 수수료 (MemberCompanyRate) 일괄 조회 ───────────
+    // 매칭된 약품들의 제약사명을 모아 한 쿼리로 가져온다. 제약사명은 normalize 후 비교.
+    const matchedCompanies = Array.from(new Set(
+      pendingDrugs.map((d) => d.companyName.value).filter((n) => n)
+    ));
+    const additionalRateByCompany = new Map<string, number>();
+    if (matchedCompanies.length > 0) {
+      const memberRates = await prisma.memberCompanyRate.findMany({
+        where: { userId: user.id },
+        select: { companyName: true, additionalRate: true },
+      });
+      const norm = (s: string) => s.replace(/\(주\)|\(유\)|주식회사|㈜|\s+/g, "").toLowerCase();
+      for (const r of memberRates) {
+        additionalRateByCompany.set(norm(r.companyName), r.additionalRate);
+      }
     }
 
     // ── 4-2단계: bboxYPercent 계산 — 견고한 위치 정렬 ──────────────────────
@@ -223,12 +259,16 @@ export async function POST(req: NextRequest) {
         }
       }
       bboxYPercent = Math.max(0, Math.min(100, Math.round(bboxYPercent * 10) / 10));
+      const norm = (s: string) => s.replace(/\(주\)|\(유\)|주식회사|㈜|\s+/g, "").toLowerCase();
+      const additionalRate = additionalRateByCompany.get(norm(d.companyName.value)) ?? null;
       return {
         insuranceCode: d.insuranceCode,
         companyName: d.companyName,
         productName: d.productName,
         quantity: d.quantity,
         unitPrice: d.unitPrice,
+        commissionRate: d.commissionRate,
+        additionalRate,
         matchedMedicationId: d.matchedMedicationId,
         finalConfidence: d.finalConfidence,
         manualCheck: d.manualCheck,
@@ -360,6 +400,97 @@ function clusterFieldsToRows(fields: ClovaField[], tolerance: number): ClovaRow[
     r.text = r.fields.map((f) => f.inferText).join(" ");
   }
   return rows;
+}
+
+// 진짜 약품명인지 휴리스틱 판정 — 그룹/섹션 라벨(NH팜, 합계, 등) 제외용.
+// 한국 처방통계는 거의 모두 "정/캡슐/시럽/주사/연고/크림/액/포/패취/산제/환제" 같은 제형
+// 어미가 들어간다. 영어 INN 만 적힌 경우(예: rosuvastatin)도 약품명으로 인정.
+function isLikelyDrug(name: string): boolean {
+  if (!name) return false;
+  const n = name.trim();
+  if (n.length < 2) return false;
+  // 한글 제형 어미
+  if (/[정캡셀시럽주사연고크림겔패취산제환제액포]/.test(n) && /[가-힣]/.test(n)) return true;
+  // 영문 INN 명 (5자 이상 영문)
+  if (/[A-Za-z]{5,}/.test(n)) return true;
+  // 그 외 (NH팜, 합계 등 짧은 한글) 는 제외
+  return false;
+}
+
+// 표 헤더 행에서 각 컬럼의 X 중심 좌표 추출 — 이후 데이터 행에서 같은 X 영역의 값을
+// 읽어 컬럼 의미별로 매핑한다. LLM 이 단가/사용량 헷갈리는 문제를 X 좌표 기반으로 우회.
+export interface ColumnMap {
+  insuranceCode: number | null;  // 약품코드/처방코드/보험코드 컬럼 X
+  productName:   number | null;  // 약품명/처방명칭 컬럼 X
+  patientCount:  number | null;  // 환자수 컬럼 X
+  unitPrice:     number | null;  // 단가 컬럼 X
+  quantity:      number | null;  // 사용량/총사용량/총량 컬럼 X
+  total:         number | null;  // 총액/금액/송금액 컬럼 X
+  headerY:       number;         // 헤더 행의 Y (이 아래 행만 데이터 행으로 간주)
+}
+
+function findColumnMap(rows: ClovaRow[]): ColumnMap | null {
+  // 헤더 키워드 세트 — 한 행에 3개 이상 등장하면 헤더로 본다
+  const HEADER_KEYWORDS = ["처방코드", "약품코드", "보험코드", "청구코드", "약품명", "처방명칭", "제품명", "환자수", "단가", "사용량", "총사용량", "총량", "투여량", "수량", "금액", "총액", "송금액"];
+  for (let i = 0; i < Math.min(15, rows.length); i++) {
+    const row = rows[i];
+    const hits = row.fields.filter((f) =>
+      HEADER_KEYWORDS.some((k) => f.inferText.includes(k))
+    ).length;
+    if (hits < 3) continue;
+    const map: ColumnMap = {
+      insuranceCode: null, productName: null, patientCount: null,
+      unitPrice: null, quantity: null, total: null,
+      headerY: row.avgY,
+    };
+    for (const f of row.fields) {
+      const x = fieldXCenter(f);
+      const t = f.inferText;
+      if (/처방코드|약품코드|보험코드|청구코드/.test(t)) map.insuranceCode = x;
+      else if (/처방명칭|약품명|제품명|품명/.test(t)) map.productName = x;
+      else if (/환자수|환자/.test(t)) map.patientCount = x;
+      else if (/^단가$|단가$/.test(t)) map.unitPrice = x;
+      else if (/사용량|총사용량|총량|투여량/.test(t)) map.quantity = x;
+      else if (/송금액|총액|금액/.test(t)) map.total = x;
+    }
+    // 약품명 + 사용량 (또는 수량) X 가 둘 다 있어야 의미 있음
+    if (map.productName != null && map.quantity != null) return map;
+  }
+  return null;
+}
+
+// 행에서 columnX 에 가장 가까운 텍스트 필드의 값을 반환. tolerance 안에 없으면 ""
+function valueAtColumn(row: ClovaRow, columnX: number, tolerance = 120): string {
+  let nearest: ClovaField | null = null;
+  let bestDist = Infinity;
+  for (const f of row.fields) {
+    const dist = Math.abs(fieldXCenter(f) - columnX);
+    if (dist < tolerance && dist < bestDist) {
+      nearest = f;
+      bestDist = dist;
+    }
+  }
+  return nearest?.inferText ?? "";
+}
+
+// productName 으로 데이터 행을 찾고 column map 으로 사용량 추출
+function quantityFromColumnMap(
+  productName: string,
+  rows: ClovaRow[],
+  colMap: ColumnMap
+): string | null {
+  if (!productName || !colMap.quantity) return null;
+  const key = productName.replace(/\s+/g, "").slice(0, 5).toLowerCase();
+  if (key.length < 3) return null;
+  for (const row of rows) {
+    if (row.avgY <= colMap.headerY) continue; // 헤더 행 위는 제외
+    const rowText = row.text.replace(/\s+/g, "").toLowerCase();
+    if (!rowText.includes(key)) continue;
+    const raw = valueAtColumn(row, colMap.quantity);
+    const cleaned = raw.replace(/[^\d.]/g, "");
+    if (cleaned) return cleaned;
+  }
+  return null;
 }
 
 // 약품을 행 클러스터에 매칭해 Y% 반환 — 행 단위 텍스트로 검색하므로 OCR 분할에 견고
@@ -606,6 +737,7 @@ type MasterRow = {
   productName: string;
   companyName: string;
   price: number | null;
+  commissionRate: number | null;
 };
 
 function extractInsuranceCodes(clovaText: string, gemini: GeminiVisionResult | null): string[] {
@@ -623,7 +755,7 @@ async function fetchMasterByCodes(codes: string[]): Promise<Map<string, MasterRo
   if (codes.length === 0) return map;
   const rows = await prisma.medication.findMany({
     where: { insuranceCode: { in: codes } },
-    select: { id: true, insuranceCode: true, productName: true, companyName: true, price: true },
+    select: { id: true, insuranceCode: true, productName: true, companyName: true, price: true, commissionRate: true },
   });
   for (const r of rows) {
     if (r.insuranceCode) map.set(r.insuranceCode, r);
@@ -639,6 +771,7 @@ async function matchMedication(
   productName: string;
   companyName: string;
   unitPrice: number | null;
+  commissionRate: number | null;
   matchedMedicationId: string | null;
   matchConfidence: number;
 }> {
@@ -650,6 +783,7 @@ async function matchMedication(
       productName: m.productName,
       companyName: m.companyName,
       unitPrice: m.price,
+      commissionRate: m.commissionRate,
       matchedMedicationId: m.id,
       matchConfidence: 100,
     };
@@ -669,7 +803,7 @@ async function matchMedication(
   ): Promise<{ row: MasterRow; exact: boolean } | null> {
     const rows = await prisma.medication.findMany({
       where,
-      select: { id: true, insuranceCode: true, productName: true, companyName: true, price: true },
+      select: { id: true, insuranceCode: true, productName: true, companyName: true, price: true, commissionRate: true },
       take: 20,
     });
     if (rows.length === 0) return null;
@@ -698,6 +832,7 @@ async function matchMedication(
       productName: r.row.productName,
       companyName: r.row.companyName,
       unitPrice: r.row.price,
+      commissionRate: r.row.commissionRate,
       matchedMedicationId: r.row.id,
       matchConfidence: r.exact ? 98 : 92,
     };
@@ -714,6 +849,7 @@ async function matchMedication(
       productName: r.row.productName,
       companyName: r.row.companyName,
       unitPrice: r.row.price,
+      commissionRate: r.row.commissionRate,
       matchedMedicationId: r.row.id,
       matchConfidence: r.exact ? 95 : 85,
     };
@@ -724,6 +860,7 @@ async function matchMedication(
     productName: item.productName,
     companyName: item.companyName,
     unitPrice: null,
+    commissionRate: null,
     matchedMedicationId: null,
     matchConfidence: 0,
   };

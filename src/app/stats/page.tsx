@@ -14,6 +14,8 @@ interface FusionDrug {
   productName: OcrField;
   quantity: OcrField;
   unitPrice: number | null;
+  commissionRate: number | null;
+  additionalRate: number | null;
   matchedMedicationId: string | null;
   finalConfidence: number;
   manualCheck: boolean;
@@ -34,6 +36,8 @@ interface ManualDrug {
   productName: string;
   quantity: string;
   unitPrice: number | null;
+  commissionRate: number | null;
+  additionalRate: number | null;
   matchedMedicationId: string | null;
 }
 interface UserClient {
@@ -41,7 +45,7 @@ interface UserClient {
 }
 
 function emptyManualDrug(): ManualDrug {
-  return { insuranceCode: "", companyName: "", productName: "", quantity: "", unitPrice: null, matchedMedicationId: null };
+  return { insuranceCode: "", companyName: "", productName: "", quantity: "", unitPrice: null, commissionRate: null, additionalRate: null, matchedMedicationId: null };
 }
 
 // ─── 거래처별 일괄 업로드 패널 ──────────────────────────────────────────────
@@ -138,11 +142,16 @@ function BatchUploadPanel({ clients }: { clients: UserClient[] }) {
         productName: d.productName.value,
         quantity: d.quantity.value,
         unitPrice: d.unitPrice,
+        commissionRate: d.commissionRate,
+        additionalRate: d.additionalRate,
         matchedMedicationId: d.matchedMedicationId,
       }));
+      // 행별 수수료 = 수량 × 단가 × (수수료율 + 추가율) / 100
       const totalFee = finalDrugs.reduce((s, d) => {
         const qty = parseFloat(d.quantity) || 0;
-        return s + qty * (d.unitPrice ?? 0);
+        const price = d.unitPrice ?? 0;
+        const ratePct = (d.commissionRate ?? 0) + (d.additionalRate ?? 0);
+        return s + qty * price * ratePct / 100;
       }, 0);
 
       const [yearStr, monthStr] = yearMonth.split("-");
@@ -620,6 +629,8 @@ export default function StatsPage() {
           productName: d.productName.value,
           quantity: d.quantity.value,
           unitPrice: d.unitPrice,
+          commissionRate: d.commissionRate,
+          additionalRate: d.additionalRate,
           matchedMedicationId: d.matchedMedicationId,
         }));
         setManualDrugs(paired.length ? paired : [emptyManualDrug()]);
@@ -765,6 +776,8 @@ export default function StatsPage() {
             companyName: med.companyName ?? "",
             productName: med.productName ?? "",
             unitPrice: med.price ?? null,
+            commissionRate: med.commissionRate ?? null,
+            additionalRate: med.additionalRate ?? null,
             matchedMedicationId: med.id ?? null,
           };
           return next;
@@ -776,11 +789,14 @@ export default function StatsPage() {
   }
 
   const filledManualDrugs = manualDrugs.filter((d) => d.insuranceCode || d.productName || d.quantity);
-  const totalFee = filledManualDrugs.reduce((sum, d) => {
+  // 행별 수수료 = 수량 × 단가 × (수수료율 + 추가율) / 100
+  function rowCommission(d: ManualDrug): number {
     const qty = parseFloat(d.quantity) || 0;
     const price = d.unitPrice ?? 0;
-    return sum + qty * price;
-  }, 0);
+    const ratePct = (d.commissionRate ?? 0) + (d.additionalRate ?? 0);
+    return qty * price * ratePct / 100;
+  }
+  const totalFee = filledManualDrugs.reduce((sum, d) => sum + rowCommission(d), 0);
 
   const isClientUnnapproved = selectedClient !== null && !selectedClient.approved;
 
