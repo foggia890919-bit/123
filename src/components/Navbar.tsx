@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
-import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Download, Menu, X, Filter, BarChart3, Upload, LayoutDashboard } from "lucide-react";
+import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Download, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck } from "lucide-react";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
 interface NavLeaf {
@@ -33,7 +33,7 @@ const navItems: NavItem[] = [
   { kind: "link",  href: "/filter-list",       label: "리스트 다운",     icon: Download,  minRole: "SALES_REP" },
   {
     kind: "group",
-    label: "제안서 목록",
+    label: "제안서",
     icon: FileText,
     minRole: "SALES_REP",
     matchPrefixes: ["/proposals", "/bulk-register"],
@@ -42,7 +42,17 @@ const navItems: NavItem[] = [
       { href: "/bulk-register", label: "제안서(대량)", icon: Upload   },
     ],
   },
-  { kind: "link",  href: "/stats",             label: "처방통계",        icon: BarChart3, minRole: "BIZ"       },
+  { kind: "link",  href: "/stats",             label: "통계자동입력",    icon: BarChart3, minRole: "BIZ"       },
+  {
+    kind: "group",
+    label: "원내거래",
+    icon: Truck,
+    minRole: "BIZ",
+    matchPrefixes: ["/mypage/ledger"],
+    children: [
+      { href: "/mypage/ledger", label: "거래처 매출원장", icon: Building2 },
+    ],
+  },
 ];
 
 export default function Navbar() {

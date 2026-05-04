@@ -3,7 +3,7 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { Upload, Trash2, FileSpreadsheet, FileDown, X, AlertCircle, Loader2, Search, Save, Building2, FileText, ChevronDown, ChevronUp } from "lucide-react";
+import { Upload, Trash2, FileSpreadsheet, FileDown, X, AlertCircle, Loader2, Search, Save, Building2, FileText, ChevronDown, ChevronUp, Filter } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatPrice } from "@/lib/utils";
@@ -35,10 +35,12 @@ interface ProposalItem {
   client?: { clientName: string } | null;
 }
 
-interface FilterRequestItem {
-  id: string;
-  companyName: string;
-  status: string;
+function StatusBadge({ status }: { status: string }) {
+  if (status === "APPROVED") return <span className="text-[10px] text-green-700 bg-green-50 border border-green-200 px-1.5 py-0.5 rounded">거래가능</span>;
+  if (status === "REVIEWING") return <span className="text-[10px] text-yellow-700 bg-yellow-50 border border-yellow-200 px-1.5 py-0.5 rounded">검토중</span>;
+  if (status === "PENDING") return <span className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded">요청됨</span>;
+  if (status === "REJECTED") return <span className="text-[10px] text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded">거부됨</span>;
+  return null;
 }
 
 const CRITERIA_PAIRS = [
@@ -129,7 +131,9 @@ function BulkRegisterInner() {
   const [autoSwitchResult, setAutoSwitchResult] = useState<{ applied: number; skipped: number } | null>(null);
   const [savedProposals, setSavedProposals] = useState<ProposalItem[]>([]);
   const [loadingProposal, setLoadingProposal] = useState<string | null>(null);
-  const [filterRequests, setFilterRequests] = useState<FilterRequestItem[]>([]);
+  const [companyStatuses, setCompanyStatuses] = useState<Record<string, string>>({});
+  const [requestingFilter, setRequestingFilter] = useState<Set<string>>(new Set());
+  const [requestingAll, setRequestingAll] = useState(false);
   const [expandedCompanies, setExpandedCompanies] = useState<Set<string>>(new Set());
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -260,11 +264,16 @@ function BulkRegisterInner() {
       .then((r) => r.json())
       .then((d) => { if (Array.isArray(d)) setSavedProposals(d); })
       .catch(() => {});
-    fetch(`/api/filter-request`)
+    fetch(`/api/filter-request/company-status?userId=${userId}`)
       .then((r) => r.json())
-      .then((d) => { if (Array.isArray(d)) setFilterRequests(d); })
+      .then((d) => { if (d && typeof d === "object") setCompanyStatuses(d); })
       .catch(() => {});
   }, [userId]);
+
+  const selectedClient = useMemo(
+    () => clients.find((c) => c.id === selectedClientId) ?? null,
+    [clients, selectedClientId],
+  );
 
   const companySummary = useMemo(() => {
     const map = new Map<string, { count: number; products: Set<string> }>();
@@ -276,19 +285,80 @@ function BulkRegisterInner() {
       e.count++;
       if (r.alternative?.productName) e.products.add(r.alternative.productName);
     }
-    const statusMap = new Map<string, string>();
-    for (const fr of filterRequests) {
-      if (!statusMap.has(fr.companyName)) statusMap.set(fr.companyName, fr.status);
-    }
     return Array.from(map.entries())
       .map(([name, d]) => ({
         name,
         count: d.count,
         products: Array.from(d.products),
-        status: statusMap.get(name) ?? null,
       }))
       .sort((a, b) => b.count - a.count);
-  }, [rows, filterRequests]);
+  }, [rows]);
+
+  // 미요청(거절 포함) 제약사 — 전체요청 대상
+  const pendingCompanies = useMemo(
+    () => companySummary
+      .map((c) => c.name)
+      .filter((name) => {
+        const s = companyStatuses[name];
+        return !s || s === "REJECTED";
+      }),
+    [companySummary, companyStatuses],
+  );
+
+  async function refreshCompanyStatuses() {
+    if (!userId) return;
+    try {
+      const res = await fetch(`/api/filter-request/company-status?userId=${userId}`);
+      const d = await res.json();
+      if (d && typeof d === "object") setCompanyStatuses(d);
+    } catch { /* ignore */ }
+  }
+
+  async function requestFilter(companyName: string) {
+    if (!selectedClient) return;
+    const existing = companyStatuses[companyName];
+    if (existing === "PENDING" || existing === "REVIEWING" || existing === "APPROVED") return;
+    setRequestingFilter((prev) => new Set(prev).add(companyName));
+    try {
+      await fetch("/api/filter-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          userName: session?.user?.name || "",
+          clientName: selectedClient.clientName,
+          bizNumber: selectedClient.bizNumber,
+          companies: [companyName],
+        }),
+      });
+      await refreshCompanyStatuses();
+    } finally {
+      setRequestingFilter((prev) => { const n = new Set(prev); n.delete(companyName); return n; });
+    }
+  }
+
+  async function requestAllFilters() {
+    if (!selectedClient) return;
+    if (pendingCompanies.length === 0) return;
+    if (!confirm(`미요청 제약사 ${pendingCompanies.length}개사에 한번에 필터링 요청을 보낼까요?`)) return;
+    setRequestingAll(true);
+    try {
+      await fetch("/api/filter-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          userName: session?.user?.name || "",
+          clientName: selectedClient.clientName,
+          bizNumber: selectedClient.bizNumber,
+          companies: pendingCompanies,
+        }),
+      });
+      await refreshCompanyStatuses();
+    } finally {
+      setRequestingAll(false);
+    }
+  }
 
   function toggleCompanyExpand(name: string) {
     setExpandedCompanies((prev) => {
@@ -936,28 +1006,41 @@ function BulkRegisterInner() {
 
             {/* 제약사 현황 */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-3">
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
                 <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">
                   <Building2 className="w-4 h-4 text-gray-500" />
                   제약사 현황
+                  <span className="text-xs text-gray-400 font-normal">({companySummary.length}개사)</span>
                 </h3>
-                <span className="text-xs text-gray-400">{companySummary.length}개사</span>
+                {companySummary.length > 0 && (
+                  <button
+                    onClick={requestAllFilters}
+                    disabled={!selectedClient || requestingAll || pendingCompanies.length === 0}
+                    title={!selectedClient ? "거래처를 먼저 지정해야 필터링 요청이 가능합니다" : pendingCompanies.length === 0 ? "미요청 제약사가 없습니다" : `미요청 ${pendingCompanies.length}개사에 한번에 요청`}
+                    className="inline-flex items-center gap-1 text-[11px] rounded px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {requestingAll
+                      ? <Loader2 className="w-3 h-3 animate-spin" />
+                      : <Filter className="w-3 h-3" />}
+                    전체요청 {pendingCompanies.length > 0 && <span className="font-normal">({pendingCompanies.length})</span>}
+                  </button>
+                )}
               </div>
+              {!selectedClient && companySummary.length > 0 && (
+                <div className="flex items-center gap-1.5 bg-orange-50 border border-orange-200 rounded-lg px-2.5 py-1.5 text-[11px] text-orange-700 mb-2">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  거래처를 지정해야 필터링 요청이 가능합니다
+                </div>
+              )}
               <div className="space-y-1.5 max-h-96 overflow-y-auto">
                 {companySummary.length === 0 ? (
                   <p className="text-xs text-gray-400 py-3 text-center">대체 품목을 선택하면 제약사가 집계됩니다.</p>
                 ) : (
                   companySummary.map((c) => {
                     const isExpanded = expandedCompanies.has(c.name);
-                    const statusColor =
-                      c.status === "REVIEWING" || c.status === "검토중"
-                        ? "bg-amber-100 text-amber-700"
-                        : c.status
-                        ? "bg-blue-100 text-blue-700"
-                        : "bg-gray-100 text-gray-500";
-                    const statusLabel = c.status
-                      ? (c.status === "REVIEWING" ? "검토중" : "요청됨")
-                      : "미요청";
+                    const status = companyStatuses[c.name] || "";
+                    const isApproved = status === "APPROVED";
+                    const requested = status === "PENDING" || status === "REVIEWING" || isApproved;
                     return (
                       <div key={c.name} className="rounded-lg border border-gray-200">
                         <button
@@ -973,13 +1056,23 @@ function BulkRegisterInner() {
                           </div>
                         </button>
                         <div className="px-2 pb-2 flex items-center gap-1 flex-wrap">
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${statusColor}`}>{statusLabel}</span>
-                          {!c.status && (
+                          {status ? <StatusBadge status={status} /> : <span className="text-[10px] text-gray-400 px-1.5 py-0.5">미요청</span>}
+                          {(
                             <button
-                              onClick={() => router.push(`/filter`)}
-                              className="text-[10px] px-1.5 py-0.5 rounded bg-rose-50 text-rose-600 hover:bg-rose-100"
-                              title={`${c.name} 필터링 요청`}
-                            >♡ 필터링 요청</button>
+                              onClick={() => requestFilter(c.name)}
+                              disabled={!selectedClient || requestingFilter.has(c.name) || requested}
+                              title={!selectedClient ? "거래처를 먼저 지정해야 필터링 요청이 가능합니다" : undefined}
+                              className={`inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5 whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed ${
+                                isApproved
+                                  ? "text-gray-500 bg-gray-50 border border-gray-200 hover:bg-gray-100"
+                                  : "text-blue-600 bg-blue-50 border border-blue-200 hover:bg-blue-100"
+                              }`}
+                            >
+                              {requestingFilter.has(c.name)
+                                ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                : <Filter className="w-2.5 h-2.5" />}
+                              {status === "PENDING" ? "요청됨" : status === "REVIEWING" ? "검토중" : status === "APPROVED" ? "거래가능" : "필터링 요청"}
+                            </button>
                           )}
                         </div>
                         {isExpanded && c.products.length > 0 && (

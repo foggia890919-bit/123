@@ -113,18 +113,6 @@ export default function MyPage() {
             </div>
             <ChevronRight className="w-4 h-4 text-gray-400" />
           </Link>
-          <Link href="/mypage/ledger" className="flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-amber-50 rounded-lg">
-                <Building2 className="w-4 h-4 text-amber-600" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-gray-800">거래처 매출원장</p>
-                <p className="text-xs text-gray-400">담당 거래처 매출/수금/잔액 (매일 자동 수집)</p>
-              </div>
-            </div>
-            <ChevronRight className="w-4 h-4 text-gray-400" />
-          </Link>
         </div>
       )}
 
