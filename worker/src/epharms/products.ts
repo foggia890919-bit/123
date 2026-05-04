@@ -106,7 +106,12 @@ async function parseCurrentPage(page: Page): Promise<ProductRow[]> {
     if (!headerRow) return out;
     const headers = Array.from(headerRow.querySelectorAll("th, td"))
       .map((c) => (c.textContent ?? "").trim());
-    const idx = (label: string) => headers.findIndex((h) => h === label || h.includes(label));
+    // 정확 일치 우선 — "단가" 가 "기준단가코드"에 먼저 매칭되는 것 방지
+    const idx = (label: string): number => {
+      const exact = headers.findIndex((h) => h === label);
+      if (exact >= 0) return exact;
+      return headers.findIndex((h) => h.includes(label));
+    };
 
     const cManu = idx("제약사");
     const cName = idx("상품명");
@@ -141,45 +146,66 @@ async function parseCurrentPage(page: Page): Promise<ProductRow[]> {
 }
 
 /**
- * 페이지 N으로 이동. 페이지네이션 구조:
- *   <a class=" on " href="#pager-item1">1</a>      ← 현재
+ * 페이지 N으로 이동. 페이지네이션:
+ *   <a class=" on " href="#pager-item1">1</a>
  *   <a href="#pager-item2">2</a> ... <a href="#pager-item10">10</a>
  *   <a href="#pager-item11"><i class="fa fa-angle-right"></i></a>  ← ">" (다음 그룹)
  *
- * 페이지 N 링크가 화면에 안 보이면 ">"(다음그룹) 클릭 후 재시도. 그래도 없으면 끝.
+ * 전략:
+ *   1. href 또는 텍스트로 직접 N 링크 찾기 → 있으면 클릭
+ *   2. 없으면 ">" 클릭으로 다음 그룹 이동 → 재시도
+ *   3. ">" 도 없거나 disabled면 종료
  */
 async function goToPage(page: Page, n: number): Promise<boolean> {
-  const direct = page.locator(`a[href="#pager-item${n}"]:not(:has(i))`).first();
-  let visible = await direct.isVisible().catch(() => false);
+  const findPageLink = () =>
+    page.locator(`a[href="#pager-item${n}"]:not(:has(i))`).first();
 
-  if (!visible) {
-    // 다음 그룹으로 advance
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const link = findPageLink();
+    const visible = await link.isVisible().catch(() => false);
+
+    if (visible) {
+      // 이미 active면 클릭 불필요
+      const isActive = await page
+        .locator(`a[href="#pager-item${n}"].on`)
+        .count().then((c) => c > 0).catch(() => false);
+      if (isActive) return true;
+
+      const firstRowBefore = await page
+        .locator("tbody tr td").first().textContent().catch(() => "");
+      await link.click();
+      // 테이블 갱신 대기 — 첫 행 텍스트가 바뀌거나, 해당 페이지 링크가 .on 으로
+      await page.waitForFunction(
+        (args) => {
+          const onLink = document.querySelector(`a[href="${args.href}"].on`);
+          if (onLink) return true;
+          const td = document.querySelector("tbody tr td");
+          return td && (td.textContent ?? "").trim() !== args.prev;
+        },
+        { href: `#pager-item${n}`, prev: firstRowBefore ?? "" },
+        { timeout: 20_000 }
+      ).catch(() => {});
+      await page.waitForTimeout(PER_PAGE_DELAY_MS);
+      return true;
+    }
+
+    // 보이지 않음 → 다음 그룹으로 advance
     const nextArrow = page.locator('a:has(i.fa-angle-right)').first();
-    const arrowExists = await nextArrow.isVisible().catch(() => false);
+    const arrowExists = await nextArrow.count().then((c) => c > 0);
     if (!arrowExists) return false;
-    await nextArrow.click();
-    await page.waitForTimeout(800);
-    visible = await direct.isVisible().catch(() => false);
-    if (!visible) return false;
-  }
 
-  // 이미 active면 클릭 불필요
-  const isActive = await page.locator(`a[href="#pager-item${n}"].on`).count() > 0;
-  if (!isActive) {
-    const firstRowTextBefore = await page.locator('tbody tr td').first().textContent().catch(() => "");
-    await direct.click();
-    // 테이블 갱신 대기 — 첫 행 텍스트가 바뀔 때까지
-    await page.waitForFunction(
-      (prev) => {
-        const td = document.querySelector("tbody tr td");
-        return td && (td.textContent ?? "").trim() !== prev;
-      },
-      firstRowTextBefore ?? "",
-      { timeout: 15_000 }
-    ).catch(() => {});
+    const arrowDisabled = await nextArrow
+      .evaluate((el) => {
+        const a = el as HTMLAnchorElement;
+        return a.classList.contains("disabled") || a.classList.contains("off");
+      })
+      .catch(() => false);
+    if (arrowDisabled) return false;
+
+    await nextArrow.click().catch(() => {});
+    await page.waitForTimeout(1200);
   }
-  await page.waitForTimeout(PER_PAGE_DELAY_MS);
-  return true;
+  return false;
 }
 
 export interface ProductSyncResult {
