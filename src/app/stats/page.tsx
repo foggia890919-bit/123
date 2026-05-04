@@ -39,6 +39,22 @@ interface ColumnTemplate {
   detectedAt: string;
   source: "auto" | "manual" | "cached";
 }
+interface PipelineDiagnostics {
+  clovaOk: boolean;
+  clovaChars: number;
+  clovaError: string | null;
+  visionOk: boolean;
+  visionDrugCount: number;
+  visionError: string | null;
+  mergeUsed: string;
+  mergeDrugCount: number;
+  mergeError: string | null;
+  filteredByIsLikelyDrug: number;
+  masterMatchedCount: number;
+  masterUnmatchedCount: number;
+  dedupedCount: number;
+  finalCount: number;
+}
 interface OcrResult {
   source: string;
   drugs: FusionDrug[];
@@ -48,6 +64,7 @@ interface OcrResult {
   rawGeminiText?: string;
   hospitalName: OcrField;
   columnTemplate: ColumnTemplate | null;
+  pipeline?: PipelineDiagnostics;
 }
 interface ManualDrug {
   insuranceCode: string;
@@ -1156,6 +1173,21 @@ export default function StatsPage() {
                       검토 {editOcr.manualCheckCount}건
                     </span>
                   )}
+                  {editOcr.pipeline && (
+                    <span
+                      className="text-xs bg-purple-50 text-purple-700 border border-purple-200 px-1.5 py-0.5 rounded font-mono cursor-help"
+                      title={[
+                        `Clova: ${editOcr.pipeline.clovaOk ? "OK" : "FAIL"} (${editOcr.pipeline.clovaChars}자)${editOcr.pipeline.clovaError ? " — " + editOcr.pipeline.clovaError : ""}`,
+                        `Gemini Vision: ${editOcr.pipeline.visionOk ? "OK" : "FAIL"} (${editOcr.pipeline.visionDrugCount}건)${editOcr.pipeline.visionError ? " — " + editOcr.pipeline.visionError : ""}`,
+                        `병합 LLM: ${editOcr.pipeline.mergeUsed} → ${editOcr.pipeline.mergeDrugCount}건${editOcr.pipeline.mergeError ? " — " + editOcr.pipeline.mergeError : ""}`,
+                        `isLikelyDrug 필터: -${editOcr.pipeline.filteredByIsLikelyDrug}건`,
+                        `마스터 매칭: 성공 ${editOcr.pipeline.masterMatchedCount} / 실패 ${editOcr.pipeline.masterUnmatchedCount}`,
+                        `중복 제거: -${editOcr.pipeline.dedupedCount}건`,
+                        `최종: ${editOcr.pipeline.finalCount}건`,
+                      ].join("\n")}>
+                      진단
+                    </span>
+                  )}
                 </>
               ) : (
                 <span className="text-xs text-gray-400">대기 중</span>
@@ -1170,6 +1202,20 @@ export default function StatsPage() {
 
             {editOcr && middleTab === "raw" ? (
               <div className="flex-1 overflow-y-auto p-3 space-y-3">
+                {editOcr.pipeline && (
+                  <div>
+                    <p className="text-[10px] font-semibold text-gray-500 mb-1">파이프라인 진단</p>
+                    <div className="text-[11px] bg-purple-50 border border-purple-200 rounded p-2 font-mono space-y-0.5">
+                      <div>Clova OCR: {editOcr.pipeline.clovaOk ? "✓" : "✗"} ({editOcr.pipeline.clovaChars}자){editOcr.pipeline.clovaError ? ` — ${editOcr.pipeline.clovaError}` : ""}</div>
+                      <div>Gemini Vision: {editOcr.pipeline.visionOk ? "✓" : "✗"} ({editOcr.pipeline.visionDrugCount}건){editOcr.pipeline.visionError ? ` — ${editOcr.pipeline.visionError}` : ""}</div>
+                      <div>병합 LLM: {editOcr.pipeline.mergeUsed} → {editOcr.pipeline.mergeDrugCount}건{editOcr.pipeline.mergeError ? ` — ${editOcr.pipeline.mergeError}` : ""}</div>
+                      <div>isLikelyDrug 필터: -{editOcr.pipeline.filteredByIsLikelyDrug}건</div>
+                      <div>마스터 매칭: 성공 {editOcr.pipeline.masterMatchedCount} / 실패 {editOcr.pipeline.masterUnmatchedCount}</div>
+                      <div>중복 제거: -{editOcr.pipeline.dedupedCount}건</div>
+                      <div className="font-bold pt-1">최종: {editOcr.pipeline.finalCount}건</div>
+                    </div>
+                  </div>
+                )}
                 <div>
                   <p className="text-[10px] font-semibold text-gray-500 mb-1">CLOVA OCR</p>
                   <pre className="text-[11px] text-gray-700 bg-gray-50 border border-gray-200 rounded p-2 whitespace-pre-wrap font-mono leading-relaxed">
