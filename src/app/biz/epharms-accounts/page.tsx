@@ -100,6 +100,9 @@ function EpharmsAccountsContent() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filterMode, setFilterMode] = useState<"all" | "incomplete">("all");
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(50);
+  const [total, setTotal] = useState(0);
   const [modal, setModal] = useState<"add" | "edit" | null>(null);
   const [edit, setEdit] = useState<EpharmsAccount | null>(null);
   const [form, setForm] = useState(EMPTY);
@@ -131,15 +134,33 @@ function EpharmsAccountsContent() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const url = `/api/epharms-accounts${search ? `?q=${encodeURIComponent(search)}` : ""}`;
-      const r = await fetch(url);
-      if (r.ok) setItems(await r.json());
+      const params = new URLSearchParams();
+      if (search) params.set("q", search);
+      params.set("page", String(page));
+      params.set("limit", String(limit));
+      const r = await fetch(`/api/epharms-accounts?${params.toString()}`);
+      if (r.ok) {
+        const body = await r.json();
+        // 구버전(배열) / 신버전({items,total,page,limit}) 양쪽 호환
+        if (Array.isArray(body)) {
+          setItems(body);
+          setTotal(body.length);
+        } else {
+          setItems(body.items ?? []);
+          setTotal(body.total ?? 0);
+        }
+      }
     } finally {
       setLoading(false);
     }
-  }, [search]);
+  }, [search, page, limit]);
 
   useEffect(() => { load(); }, [load]);
+
+  // 검색어/페이지당 갯수가 바뀌면 1페이지로 리셋
+  useEffect(() => { setPage(1); }, [search, limit]);
+
+  const totalPages = Math.max(1, Math.ceil(total / limit));
 
   // Close KMD dropdowns when clicking outside
   useEffect(() => {
@@ -384,7 +405,7 @@ function EpharmsAccountsContent() {
       <div className="p-6">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">ePharms 매출원장 자동수집</h1>
+            <h1 className="text-2xl font-bold text-gray-900">ePharms 상품 자동수집</h1>
             <p className="text-sm text-gray-500 mt-1">
               거래처별 yk.ep45.co.kr 로그인 계정 등록 → 매일 00:00(KST) 자동 sync.
               KMD 포털 "매출원장" 메뉴에서 영업사원/거래처가 본인 분만 조회.
@@ -547,6 +568,60 @@ function EpharmsAccountsContent() {
             </tbody>
           </table>
         </div>
+
+        {/* ── 페이지네이션 ─────────────────────────────────────────────────────── */}
+        {!loading && total > 0 && (
+          <div className="flex items-center justify-between mt-3 text-sm">
+            <div className="text-xs text-gray-500">
+              총 <span className="font-semibold text-gray-700">{total.toLocaleString()}</span>개 중{" "}
+              <span className="font-semibold text-gray-700">{(page - 1) * limit + 1}</span>–
+              <span className="font-semibold text-gray-700">{Math.min(page * limit, total)}</span> 표시
+            </div>
+            <div className="flex items-center gap-1.5">
+              <select
+                value={limit}
+                onChange={(e) => setLimit(Number(e.target.value))}
+                className="text-xs border border-gray-200 rounded px-2 py-1.5"
+                title="페이지당 갯수"
+              >
+                {[20, 50, 100, 200].map((n) => (
+                  <option key={n} value={n}>{n}개씩</option>
+                ))}
+              </select>
+              <button
+                onClick={() => setPage(1)}
+                disabled={page <= 1}
+                className="px-2 py-1 text-xs border border-gray-200 rounded disabled:opacity-30 hover:bg-gray-50"
+              >
+                «
+              </button>
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                className="px-2 py-1 text-xs border border-gray-200 rounded disabled:opacity-30 hover:bg-gray-50"
+              >
+                이전
+              </button>
+              <span className="text-xs text-gray-600 px-2">
+                <span className="font-semibold text-gray-900">{page}</span> / {totalPages}
+              </span>
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+                className="px-2 py-1 text-xs border border-gray-200 rounded disabled:opacity-30 hover:bg-gray-50"
+              >
+                다음
+              </button>
+              <button
+                onClick={() => setPage(totalPages)}
+                disabled={page >= totalPages}
+                className="px-2 py-1 text-xs border border-gray-200 rounded disabled:opacity-30 hover:bg-gray-50"
+              >
+                »
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Add / Edit Modal ─────────────────────────────────────────────────── */}

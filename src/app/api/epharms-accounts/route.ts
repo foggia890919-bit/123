@@ -3,7 +3,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { requireSession, isNextResponse, safeParseInt } from "@/lib/auth-guard";
 import { encryptSecret } from "@/lib/crypto-secret";
 
 function bizOrAdmin(role: string) {
@@ -33,22 +33,34 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
   const q = req.nextUrl.searchParams.get("q") ?? "";
-  const rows = await prisma.epharmsAccount.findMany({
-    where: q
-      ? {
-          OR: [
-            { clientName: { contains: q, mode: "insensitive" } },
-            { bizNumber: { contains: q } },
-            { loginId: { contains: q, mode: "insensitive" } },
-            { kmdUser: { email: { contains: q, mode: "insensitive" } } },
-            { kmdUser: { name: { contains: q, mode: "insensitive" } } },
-          ],
-        }
-      : {},
-    select: ROW_SELECT,
-    orderBy: [{ active: "desc" }, { clientName: "asc" }],
-  });
-  return NextResponse.json(rows);
+  const page = safeParseInt(req.nextUrl.searchParams.get("page"), 1, 1, 10000);
+  const limit = safeParseInt(req.nextUrl.searchParams.get("limit"), 50, 1, 200);
+  const skip = (page - 1) * limit;
+
+  const where = q
+    ? {
+        OR: [
+          { clientName: { contains: q, mode: "insensitive" as const } },
+          { bizNumber: { contains: q } },
+          { loginId: { contains: q, mode: "insensitive" as const } },
+          { kmdUser: { email: { contains: q, mode: "insensitive" as const } } },
+          { kmdUser: { name: { contains: q, mode: "insensitive" as const } } },
+        ],
+      }
+    : {};
+
+  const [rows, total] = await Promise.all([
+    prisma.epharmsAccount.findMany({
+      where,
+      select: ROW_SELECT,
+      orderBy: [{ active: "desc" }, { clientName: "asc" }],
+      skip,
+      take: limit,
+    }),
+    prisma.epharmsAccount.count({ where }),
+  ]);
+
+  return NextResponse.json({ items: rows, total, page, limit });
 }
 
 export async function POST(req: NextRequest) {

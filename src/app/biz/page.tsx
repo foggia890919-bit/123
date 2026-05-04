@@ -141,7 +141,7 @@ const BIZ_MENU_GROUPS = [
       },
       {
         href: "/biz/epharms-accounts",
-        label: "ePharms 매출원장 자동수집",
+        label: "ePharms 상품 자동수집",
         desc: "거래처별 yk.ep45.co.kr 계정 등록 → 매일 자정 자동 sync → 영업사원 포털에 표시",
         icon: KeyRound,
         color: "bg-amber-50 text-amber-600",
