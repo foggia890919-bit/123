@@ -494,7 +494,19 @@ export default function StatsPage() {
     commissionRate: number | null;
     additionalRate: number | null;
   }
-  const [autocompleteIdx, setAutocompleteIdx] = useState<number | null>(null);
+  const [autocompleteIdx, _setAutocompleteIdx] = useState<number | null>(null);
+  const setAutocompleteIdx: typeof _setAutocompleteIdx = (v) => {
+    if (typeof v === "function") {
+      _setAutocompleteIdx((cur) => {
+        const next = (v as (c: number | null) => number | null)(cur);
+        console.log("[AC] setIdx", { from: cur, to: next, stack: new Error().stack?.split("\n").slice(2, 5).join(" | ") });
+        return next;
+      });
+    } else {
+      console.log("[AC] setIdx", { to: v, stack: new Error().stack?.split("\n").slice(2, 5).join(" | ") });
+      _setAutocompleteIdx(v);
+    }
+  };
   const [autocompleteOptions, setAutocompleteOptions] = useState<AutocompleteOption[]>([]);
   const [autocompleteFocus, setAutocompleteFocus] = useState(0);
 
@@ -1528,7 +1540,7 @@ export default function StatsPage() {
                             <input value={d.productName}
                               ref={(el) => { manualInputRefs.current[`${i}:productName`] = el; }}
                               onFocus={() => { handleManualFocus(i); setAutocompleteIdx(i); }}
-                              onBlur={() => { window.setTimeout(() => { setAutocompleteIdx((cur) => (cur === i ? null : cur)); }, 150); }}
+                              onBlur={(e) => { console.log("[AC] blur", { i, relatedTarget: (e.relatedTarget as HTMLElement | null)?.tagName }); }}
                               onKeyDown={(e) => handleManualKey(e, i, "productName")}
                               onChange={(e) => { updateManualField(i, "productName", e.target.value); setAutocompleteIdx(i); }}
                               placeholder="제품명"
