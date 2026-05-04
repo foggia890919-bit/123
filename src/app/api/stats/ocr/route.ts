@@ -58,7 +58,7 @@ export interface PipelineDiagnostics {
   visionOk: boolean;
   visionDrugCount: number;
   visionError: string | null;
-  mergeUsed: "skipped (vision-only)" | "vision+clova" | "clova-only";
+  mergeUsed: "skipped (vision-only)" | "vision+clova" | "clova-only" | "clova-deterministic-fallback";
   mergeDrugCount: number;
   mergeError: string | null;
   filteredByIsLikelyDrug: number;        // isLikelyDrug 에서 제거된 수
@@ -205,6 +205,17 @@ export async function POST(req: NextRequest) {
       }
     }
     pipeline.mergeDrugCount = merged.length;
+
+    // LLM 둘 다 약품을 못 뽑았으면 결정론적 Clova-only 파서로 fallback.
+    // (Gemini quota 초과 / 일시 outage 시에도 시스템이 동작하도록 보장)
+    if (merged.length === 0 && colMap) {
+      const fallback = parseDrugsFromClova(clovaRows, colMap);
+      if (fallback.length > 0) {
+        merged = fallback;
+        pipeline.mergeUsed = "clova-deterministic-fallback";
+        pipeline.mergeDrugCount = fallback.length;
+      }
+    }
 
     // 거래처 컨텍스트와 매칭되면 confidence +5 보너스 (anchoring 방지를 위해 cap)
     const contextKeys = new Set(
@@ -556,6 +567,88 @@ function clusterFieldsToRows(fields: ClovaField[], tolerance: number): ClovaRow[
 // 진짜 약품명인지 휴리스틱 판정 — 그룹/섹션 라벨(NH팜, 합계, 등) 제외용.
 // 한국 처방통계는 거의 모두 "정/캡슐/시럽/주사/연고/크림/액/포/패취/산제/환제" 같은 제형
 // 어미가 들어간다. 영어 INN 만 적힌 경우(예: rosuvastatin)도 약품명으로 인정.
+// LLM 없이 Clova rows + ColumnMap 만으로 약품 추출하는 결정론적 파서.
+// LLM 이 quota / outage 로 실패할 때 안전망. 약품명/수량/보험코드(있을 때) 만 뽑는다.
+function parseDrugsFromClova(rows: ClovaRow[], colMap: ColumnMap | null): MergedDrug[] {
+  if (!colMap || colMap.productName == null || colMap.quantity == null) return [];
+  const drugs: MergedDrug[] = [];
+  for (const row of rows) {
+    if (row.avgY <= colMap.headerY) continue;
+
+    // 1) 약품명 후보 — 행 내 fields 중 colMap.productName X 와 가까우면서
+    //    한글 + 제형 어미 또는 5자 이상 영문 INN 인 텍스트
+    let productField: ClovaField | null = null;
+    let productDist = Infinity;
+    for (const f of row.fields) {
+      const fx = fieldXCenter(f);
+      const dist = Math.abs(fx - colMap.productName);
+      if (dist > 200) continue;
+      if (!isLikelyDrug(f.inferText)) continue;
+      if (dist < productDist) {
+        productField = f;
+        productDist = dist;
+      }
+    }
+    if (!productField) continue;
+
+    // 약품명 인접 fields 도 합쳐서 풀네임 만들기 (Clova 가 약품명 + 영문 + 용량 분할 했을 때)
+    const productY = fieldYCenter(productField);
+    const sameRowFields = row.fields
+      .filter((f) => Math.abs(fieldYCenter(f) - productY) < 25)
+      .sort((a, b) => fieldXCenter(a) - fieldXCenter(b));
+    // 약품명 컬럼 영역에 있는 fields (X < quantity 시작)
+    const productAreaFields = sameRowFields.filter((f) => {
+      const fx = fieldXCenter(f);
+      return fx < colMap.quantity! - 50 && fx > (colMap.insuranceCode ?? 0) + 50;
+    });
+    const fullProductName = productAreaFields.length > 0
+      ? productAreaFields.map((f) => f.inferText).join(" ").trim()
+      : productField.inferText.trim();
+
+    // 2) 사용량 — colMap.quantity X 와 가까운 숫자 field
+    const band = bandFromField(productField, colMap.slope || 0);
+    if (!band) continue;
+    let qty: string = "";
+    let qtyDist = Infinity;
+    for (const f of row.fields) {
+      const fx = fieldXCenter(f);
+      const fy = fieldYCenter(f);
+      const xDist = Math.abs(fx - colMap.quantity);
+      if (xDist > 100) continue;
+      const dx = fx - band.anchorX;
+      const expectedTop = band.top + band.slope * dx;
+      const expectedBot = band.bot + band.slope * dx;
+      if (fy < expectedTop - 6 || fy > expectedBot + 6) continue;
+      if (!/\d/.test(f.inferText)) continue;
+      if (xDist < qtyDist) {
+        qty = f.inferText.replace(/[^\d.]/g, "");
+        qtyDist = xDist;
+      }
+    }
+
+    // 3) 보험코드 — 행 내 어디든 9자리 숫자가 있으면 사용
+    let insuranceCode = "";
+    for (const f of row.fields) {
+      const m = f.inferText.match(/\b(\d{9})\b/);
+      if (m) { insuranceCode = m[1]; break; }
+    }
+
+    // 4) 제약사 — 약품명 끝 또는 인접 field 에서 한글 회사명 패턴
+    let companyName = "";
+    const companyMatch = fullProductName.match(/([가-힣A-Z]+(?:제약|바이오|파마|약품|메디카|마더스|동구|오스틴|셀트리온|HLB|알리코))/);
+    if (companyMatch) companyName = companyMatch[1];
+
+    drugs.push({
+      insuranceCode,
+      productName: fullProductName,
+      companyName,
+      quantity: qty,
+      confidence: 70, // LLM 없이 추출했으니 보수적
+    });
+  }
+  return drugs;
+}
+
 function isLikelyDrug(name: string): boolean {
   if (!name) return false;
   const n = name.trim();
