@@ -7,8 +7,8 @@ export const maxDuration = 300;
 const API_KEY = process.env.PUBLIC_DATA_API_KEY!;
 // 두 UDDI 순서대로 시도 (1d0f74ec = 새버전, 6753c7f1 = 구버전 fallback)
 const UDDI_CANDIDATES = [
-  "1d0f74ec-fc9e-4386-9f67-9b1295b4c149",
   "6753c7f1-65ed-4bbe-9e98-cd6b7b156a92",
+  "1d0f74ec-fc9e-4386-9f67-9b1295b4c149",
 ];
 const BASE = "https://api.odcloud.kr/api/15118958/v1/uddi:";
 
