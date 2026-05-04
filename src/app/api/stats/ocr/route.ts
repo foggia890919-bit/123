@@ -27,6 +27,19 @@ export interface FusionDrug {
   bboxYPercent: number | null;        // 이미지 내 행의 Y 중심 (0~100), 없으면 null
 }
 
+// 거래처별 EMR 표 양식 — 컬럼 X 좌표를 이미지 너비 비율로 저장. 다음 사진 OCR 시 그대로
+// 재사용해 LLM 컬럼 추측을 우회한다. PrescriptionReport.ocrData 안에 같이 보관.
+export interface ColumnTemplate {
+  insuranceCode: number | null;   // 0~1, X / imageWidth
+  productName: number | null;
+  patientCount: number | null;
+  unitPrice: number | null;
+  quantity: number | null;
+  total: number | null;
+  detectedAt: string;
+  source: "auto" | "manual" | "cached";
+}
+
 export interface FusionResult {
   source: "fusion";
   drugs: FusionDrug[];
@@ -35,6 +48,7 @@ export interface FusionResult {
   rawClovaText: string;
   rawGeminiText: string;
   hospitalName: Field;
+  columnTemplate: ColumnTemplate | null;   // 다음 업로드용 — 프론트가 저장 시 같이 보내야 함
   // legacy placeholders (UI/DB 호환)
   institutionCode: Field;
   prescriptionDate: Field;
@@ -88,8 +102,18 @@ export async function POST(req: NextRequest) {
     const clovaText = clovaResult?.text ?? "";
     const clovaRows = clovaResult?.rows ?? [];
     const clovaImageHeight = clovaResult?.imageHeight ?? 0;
-    // 표 헤더에서 컬럼 X 좌표 추출 (사용량/단가 자동 구분용)
-    const colMap = findColumnMap(clovaRows);
+    const clovaImageWidth = clovaResult?.imageWidth ?? 0;
+
+    // 컬럼 맵: 1) 거래처 캐시 → 2) 헤더 자동 감지. 캐시 우선 (사용자가 한 번 검수해
+    // 저장한 결과이므로 자동 감지보다 신뢰도 높음).
+    const cachedTemplate = clientId ? await fetchCachedColumnTemplate(clientId) : null;
+    const autoColMap = findColumnMap(clovaRows);
+    const colMap: ColumnMap | null = cachedTemplate
+      ? columnMapFromTemplate(cachedTemplate, clovaImageWidth, clovaRows)
+      : autoColMap;
+    const templateUsed: ColumnTemplate | null = colMap
+      ? buildColumnTemplate(colMap, clovaImageWidth, cachedTemplate ? "cached" : "auto")
+      : null;
     const geminiDraft = geminiOut.status === "fulfilled" ? geminiOut.value : null;
     const geminiText = geminiDraft ? JSON.stringify(geminiDraft, null, 2) : "";
 
@@ -289,6 +313,7 @@ export async function POST(req: NextRequest) {
       rawClovaText: clovaText,
       rawGeminiText: geminiText,
       hospitalName: { value: "", confidence: 0 },
+      columnTemplate: templateUsed,
       institutionCode: { value: "", confidence: 0 },
       prescriptionDate: { value: "", confidence: 0 },
       patientName: { value: "", confidence: 0 },
@@ -312,7 +337,7 @@ interface ClovaField {
 async function callClovaOcr(
   base64: string,
   ext: string
-): Promise<{ text: string; fields: ClovaField[]; imageHeight: number; rows: ClovaRow[] }> {
+): Promise<{ text: string; fields: ClovaField[]; imageWidth: number; imageHeight: number; rows: ClovaRow[] }> {
   const rawUrl = process.env.CLOVA_OCR_INVOKE_URL?.trim();
   const clovaUrl = rawUrl?.replace(/^http:\/\//, "https://");
   const clovaSecret = process.env.CLOVA_OCR_SECRET_KEY?.trim();
@@ -337,18 +362,24 @@ async function callClovaOcr(
 
   const fields: ClovaField[] = image.fields || [];
 
-  // 이미지 실제 높이 먼저 계산 (행 클러스터 tolerance 산정에 사용)
+  // 이미지 실제 높이/너비 — Clova 의 convertedImageInfo 우선, 없으면 vertex max 로 근사
+  let imageWidth = 0;
   let imageHeight = 0;
   const cii = image.convertedImageInfo;
   if (cii && typeof cii.height === "number" && cii.height > 0) {
     imageHeight = cii.height;
-  } else {
+    if (typeof cii.width === "number" && cii.width > 0) imageWidth = cii.width;
+  }
+  if (!imageHeight || !imageWidth) {
+    let maxX = 0;
     for (const f of fields) {
       for (const v of f.boundingPoly?.vertices ?? []) {
         if (v.y > imageHeight) imageHeight = v.y;
+        if (v.x > maxX) maxX = v.x;
       }
     }
-    imageHeight = Math.round(imageHeight * 1.05);
+    if (!cii?.height) imageHeight = Math.round(imageHeight * 1.05);
+    if (!imageWidth) imageWidth = Math.round(maxX * 1.05);
   }
 
   // ── Y 클러스터링으로 행 재구성 (Clova 의 lineBreak 가 비뚤어진 사진에서 신뢰 어려움) ─
@@ -357,7 +388,7 @@ async function callClovaOcr(
   const rowTolerance = Math.max(12, Math.round(imageHeight * 0.012));
   const rows = clusterFieldsToRows(fields, rowTolerance);
   const lines = rows.map((r) => r.fields.map((f) => f.inferText).join(" ").trim());
-  return { text: lines.join("\n"), fields, imageHeight, rows };
+  return { text: lines.join("\n"), fields, imageWidth, imageHeight, rows };
 }
 
 // Y 좌표 기준으로 필드를 행으로 묶음. skew 허용.
@@ -491,6 +522,76 @@ function quantityFromColumnMap(
     if (cleaned) return cleaned;
   }
   return null;
+}
+
+// 거래처 직전 PrescriptionReport 의 ocrData.columnTemplate 가져오기
+async function fetchCachedColumnTemplate(clientId: string): Promise<ColumnTemplate | null> {
+  const recent = await prisma.prescriptionReport.findFirst({
+    where: { clientId },
+    orderBy: { createdAt: "desc" },
+    select: { ocrData: true },
+  });
+  if (!recent?.ocrData || typeof recent.ocrData !== "object") return null;
+  const t = (recent.ocrData as Record<string, unknown>).columnTemplate;
+  if (!t || typeof t !== "object") return null;
+  const tt = t as Record<string, unknown>;
+  // 핵심 필드 검증
+  if (typeof tt.productName !== "number" || typeof tt.quantity !== "number") return null;
+  return {
+    insuranceCode: typeof tt.insuranceCode === "number" ? tt.insuranceCode : null,
+    productName: tt.productName,
+    patientCount: typeof tt.patientCount === "number" ? tt.patientCount : null,
+    unitPrice: typeof tt.unitPrice === "number" ? tt.unitPrice : null,
+    quantity: tt.quantity,
+    total: typeof tt.total === "number" ? tt.total : null,
+    detectedAt: String(tt.detectedAt ?? ""),
+    source: "cached",
+  };
+}
+
+// 캐시된 비율 템플릿 → 현재 이미지의 ColumnMap (절대 X 좌표) 로 환산
+function columnMapFromTemplate(
+  tmpl: ColumnTemplate,
+  imageWidth: number,
+  rows: ClovaRow[]
+): ColumnMap | null {
+  if (!imageWidth) return null;
+  const scale = (ratio: number | null) =>
+    ratio == null ? null : Math.round(ratio * imageWidth);
+  // 헤더 Y는 캐시에 없지만, 데이터 행을 자르기 위한 기준은 필요. 첫 약품 같은 행을
+  // 데이터 시작점으로 보고, 그 위는 헤더 영역으로 간주.
+  const firstDrugRow = rows.find((r) => r.fields.some((f) => isLikelyDrug(f.inferText)));
+  const headerY = firstDrugRow ? firstDrugRow.avgY - 1 : 0;
+  return {
+    insuranceCode: scale(tmpl.insuranceCode),
+    productName: scale(tmpl.productName),
+    patientCount: scale(tmpl.patientCount),
+    unitPrice: scale(tmpl.unitPrice),
+    quantity: scale(tmpl.quantity),
+    total: scale(tmpl.total),
+    headerY,
+  };
+}
+
+// ColumnMap → ColumnTemplate (X / imageWidth 비율 로 정규화)
+function buildColumnTemplate(
+  map: ColumnMap,
+  imageWidth: number,
+  source: "auto" | "cached"
+): ColumnTemplate | null {
+  if (!imageWidth) return null;
+  const ratio = (x: number | null) => (x == null ? null : Math.round((x / imageWidth) * 10000) / 10000);
+  if (map.productName == null || map.quantity == null) return null;
+  return {
+    insuranceCode: ratio(map.insuranceCode),
+    productName: ratio(map.productName),
+    patientCount: ratio(map.patientCount),
+    unitPrice: ratio(map.unitPrice),
+    quantity: ratio(map.quantity),
+    total: ratio(map.total),
+    detectedAt: new Date().toISOString(),
+    source,
+  };
 }
 
 // 약품을 행 클러스터에 매칭해 Y% 반환 — 행 단위 텍스트로 검색하므로 OCR 분할에 견고

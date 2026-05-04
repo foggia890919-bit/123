@@ -21,6 +21,16 @@ interface FusionDrug {
   manualCheck: boolean;
   bboxYPercent: number | null;
 }
+interface ColumnTemplate {
+  insuranceCode: number | null;
+  productName: number | null;
+  patientCount: number | null;
+  unitPrice: number | null;
+  quantity: number | null;
+  total: number | null;
+  detectedAt: string;
+  source: "auto" | "manual" | "cached";
+}
 interface OcrResult {
   source: string;
   drugs: FusionDrug[];
@@ -29,6 +39,7 @@ interface OcrResult {
   rawClovaText?: string;
   rawGeminiText?: string;
   hospitalName: OcrField;
+  columnTemplate: ColumnTemplate | null;
 }
 interface ManualDrug {
   insuranceCode: string;
@@ -823,6 +834,8 @@ export default function StatsPage() {
             manualCheckCount: editOcr?.manualCheckCount ?? 0,
             rawClovaText: editOcr?.rawClovaText,
             rawGeminiText: editOcr?.rawGeminiText,
+            // 다음 업로드부터 같은 거래처 EMR 양식을 자동 재사용하기 위해 같이 저장
+            columnTemplate: editOcr?.columnTemplate ?? null,
           },
           totalFee,
         }),
