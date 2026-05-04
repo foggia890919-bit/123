@@ -64,7 +64,7 @@ function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
 
-// "제품명(성분명)" 형식에서 "(" 앞에 줄바꿈 — 긴 제품명이 셀에서 잘리지 않도록
+// "제품명(성분명)" 형식에서 "(" 앞에 줄바꿈 — 성분명은 작게 회색 처리해 시각 무게 줄임
 function ProductName({ name }: { name: string }) {
   const idx = name.indexOf("(");
   if (idx === -1) return <>{name}</>;
@@ -72,7 +72,7 @@ function ProductName({ name }: { name: string }) {
     <>
       {name.slice(0, idx)}
       <br />
-      {name.slice(idx)}
+      <span className="text-[10px] text-gray-500 font-normal">{name.slice(idx)}</span>
     </>
   );
 }
@@ -802,25 +802,25 @@ function BulkRegisterInner() {
                     return (
                       <tr key={r.id} className="hover:bg-gray-50">
                         <td className="px-3 py-2.5 text-center text-xs text-gray-500">{i + 1}</td>
-                        <td className="px-3 py-2.5">
+                        <td className="px-3 py-2.5 max-w-[220px]">
                           {o ? (
-                            <span className="text-xs font-medium text-gray-900 leading-tight"><ProductName name={o.productName} /></span>
+                            <span className="text-xs font-medium text-gray-900 leading-tight block"><ProductName name={o.productName} /></span>
                           ) : (
                             <span className="text-xs text-red-600 font-medium font-mono">{r.originalCode}</span>
                           )}
                         </td>
-                        <td className="px-3 py-2.5 text-xs text-gray-600 whitespace-nowrap">{o?.companyName ?? "-"}</td>
+                        <td className="px-3 py-2.5 text-xs text-gray-600 max-w-[110px] leading-tight">{o?.companyName ?? "-"}</td>
                         <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{r.originalCode}</td>
                         <td className="px-3 py-2.5 text-right text-xs text-gray-700 whitespace-nowrap">{formatPrice(o?.price ?? null)}</td>
                         <td className="px-3 py-2.5 text-center text-gray-400">→</td>
-                        <td className="px-3 py-2.5 bg-blue-50/30">
+                        <td className="px-3 py-2.5 bg-blue-50/30 max-w-[220px]">
                           {a ? (
-                            <span className="text-xs font-medium text-gray-900 leading-tight"><ProductName name={a.productName} /></span>
+                            <span className="text-xs font-medium text-gray-900 leading-tight block"><ProductName name={a.productName} /></span>
                           ) : (
                             <span className="text-xs text-gray-400">미선택</span>
                           )}
                         </td>
-                        <td className="px-3 py-2.5 text-xs text-gray-600 whitespace-nowrap bg-blue-50/30">{a?.companyName ?? "-"}</td>
+                        <td className="px-3 py-2.5 text-xs text-gray-600 max-w-[110px] leading-tight bg-blue-50/30">{a?.companyName ?? "-"}</td>
                         <td className="px-3 py-2.5 text-right text-xs text-gray-700 whitespace-nowrap bg-blue-50/30">{formatPrice(a?.price ?? null)}</td>
                         {showRate && (
                           <td className="px-3 py-2.5 text-right text-xs font-semibold text-blue-700 bg-emerald-50/30 whitespace-nowrap">
