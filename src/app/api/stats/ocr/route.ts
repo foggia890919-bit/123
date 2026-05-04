@@ -50,6 +50,24 @@ export interface ColumnTemplate {
   source: "auto" | "manual" | "cached";
 }
 
+// 파이프라인 단계별 진단 정보 — 어느 단계에서 약품이 사라졌는지 추적용
+export interface PipelineDiagnostics {
+  clovaOk: boolean;
+  clovaChars: number;
+  clovaError: string | null;
+  visionOk: boolean;
+  visionDrugCount: number;
+  visionError: string | null;
+  mergeUsed: "skipped (vision-only)" | "vision+clova" | "clova-only";
+  mergeDrugCount: number;
+  mergeError: string | null;
+  filteredByIsLikelyDrug: number;        // isLikelyDrug 에서 제거된 수
+  masterMatchedCount: number;            // 마스터 매칭 성공 수
+  masterUnmatchedCount: number;          // 매칭 실패 수
+  dedupedCount: number;                  // dedupe 에서 제거된 중복 수
+  finalCount: number;                    // 최종 응답 약품 수
+}
+
 export interface FusionResult {
   source: "fusion";
   drugs: FusionDrug[];
@@ -59,6 +77,7 @@ export interface FusionResult {
   rawGeminiText: string;
   hospitalName: Field;
   columnTemplate: ColumnTemplate | null;   // 다음 업로드용 — 프론트가 저장 시 같이 보내야 함
+  pipeline: PipelineDiagnostics;           // 어느 단계에서 약품이 사라졌는지 추적
   // legacy placeholders (UI/DB 호환)
   institutionCode: Field;
   prescriptionDate: Field;
@@ -139,15 +158,38 @@ export async function POST(req: NextRequest) {
     const candidateCodes = extractInsuranceCodes(clovaText, geminiDraft);
     const masterByCode = await fetchMasterByCodes(candidateCodes);
 
+    // 파이프라인 진단 누적
+    const pipeline: PipelineDiagnostics = {
+      clovaOk: clovaOut.status === "fulfilled",
+      clovaChars: clovaText.length,
+      clovaError: clovaOut.status === "rejected" ? String(clovaOut.reason).slice(0, 200) : null,
+      visionOk: geminiOut.status === "fulfilled",
+      visionDrugCount: geminiDraft?.drugs.length ?? 0,
+      visionError: geminiOut.status === "rejected" ? String(geminiOut.reason).slice(0, 200) : null,
+      mergeUsed: "vision+clova",
+      mergeDrugCount: 0,
+      mergeError: null,
+      filteredByIsLikelyDrug: 0,
+      masterMatchedCount: 0,
+      masterUnmatchedCount: 0,
+      dedupedCount: 0,
+      finalCount: 0,
+    };
+
     // ── 3단계: LLM 병합/검증 — Vision 결과의 모든 코드가 마스터와 일치하면 스킵 ─
     const visionDrugs = geminiDraft?.drugs ?? [];
     const visionAllMatched = visionDrugs.length > 0 && visionDrugs.every((d) => {
       const c = d.insuranceCode.replace(/\D/g, "");
       return c.length === 9 && masterByCode.has(c);
     });
-    const merged: MergedDrug[] = visionAllMatched
-      ? visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 95) }))
-      : await callGeminiMerge({
+    let merged: MergedDrug[];
+    if (visionAllMatched) {
+      pipeline.mergeUsed = "skipped (vision-only)";
+      merged = visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 95) }));
+    } else {
+      pipeline.mergeUsed = visionDrugs.length === 0 ? "clova-only" : "vision+clova";
+      try {
+        merged = await callGeminiMerge({
           clovaText,
           geminiDraft,
           masterCandidates: Array.from(masterByCode.values()).map((m) => ({
@@ -157,11 +199,18 @@ export async function POST(req: NextRequest) {
           })),
           clientContext,
         });
+      } catch (e) {
+        pipeline.mergeError = String(e).slice(0, 200);
+        merged = visionDrugs;
+      }
+    }
+    pipeline.mergeDrugCount = merged.length;
 
     // 거래처 컨텍스트와 매칭되면 confidence +5 보너스 (anchoring 방지를 위해 cap)
     const contextKeys = new Set(
       clientContext.map((c) => (c.insuranceCode || c.productName).toLowerCase())
     );
+    const beforeFilter = merged.length;
     const boostedMerged = merged
       // 1) 그룹/섹션 라벨 제거 — 진짜 약품명이 아닌 것 (제형 키워드 없음 + 짧은 코드만)
       .filter((m) => isLikelyDrug(m.productName))
@@ -181,6 +230,7 @@ export async function POST(req: NextRequest) {
         }
         return next;
       });
+    pipeline.filteredByIsLikelyDrug = beforeFilter - boostedMerged.length;
 
     // ── 4단계: 약품마다 마스터 매칭 + 신뢰도 계산 ──────────────────────────
     interface PendingDrug {
@@ -211,6 +261,8 @@ export async function POST(req: NextRequest) {
       const baselineConf = Math.max(llmConf, completeness);
       const finalConfidence = matched.matchedMedicationId ? matched.matchConfidence : baselineConf;
       const manualCheck = finalConfidence < 95;
+      if (matched.matchedMedicationId) pipeline.masterMatchedCount++;
+      else pipeline.masterUnmatchedCount++;
 
       const itemWithExtract = item as MergedDrug & { _extract?: ExtractResult | null };
       pendingDrugs.push({
@@ -361,6 +413,8 @@ export async function POST(req: NextRequest) {
       seen.add(key);
       return true;
     });
+    pipeline.dedupedCount = drugs.length - dedupedDrugs.length;
+    pipeline.finalCount = dedupedDrugs.length;
     const finalDrugsList = dedupedDrugs;
 
     const avgConfidence = finalDrugsList.length
@@ -377,6 +431,7 @@ export async function POST(req: NextRequest) {
       rawGeminiText: geminiText,
       hospitalName: { value: "", confidence: 0 },
       columnTemplate: templateUsed,
+      pipeline,
       institutionCode: { value: "", confidence: 0 },
       prescriptionDate: { value: "", confidence: 0 },
       patientName: { value: "", confidence: 0 },
