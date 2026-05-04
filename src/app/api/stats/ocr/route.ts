@@ -216,6 +216,17 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // ── 4-0단계: anchorY 기준으로 약품 순서 재정렬 ──────────────────────────
+    // LLM 출력 순서가 이미지 순서와 다른 경우(가바로닌/프레리카 뒤바뀜 등) 있어서
+    // 이미지의 위→아래 순서로 재정렬한다. anchorY null 인 항목은 마지막에 모으되 원래
+    // 순서 유지.
+    pendingDrugs.sort((a, b) => {
+      if (a.anchorY == null && b.anchorY == null) return 0;
+      if (a.anchorY == null) return 1;
+      if (b.anchorY == null) return -1;
+      return a.anchorY - b.anchorY;
+    });
+
     // ── 4-1단계: 사용자 추가 수수료 (MemberCompanyRate) 일괄 조회 ───────────
     // 매칭된 약품들의 제약사명을 모아 한 쿼리로 가져온다. 제약사명은 normalize 후 비교.
     const matchedCompanies = Array.from(new Set(
@@ -385,7 +396,9 @@ async function callClovaOcr(
   // ── Y 클러스터링으로 행 재구성 (Clova 의 lineBreak 가 비뚤어진 사진에서 신뢰 어려움) ─
   // 같은 행으로 묶을 Y 허용 오차: 이미지 높이의 1.5% (즉 처방전 약 60~80개 행 가정의
   // 대략 절반). skew 가 있어도 같은 줄의 시작/끝이 이 안에 들어옴.
-  const rowTolerance = Math.max(12, Math.round(imageHeight * 0.012));
+  // 같은 행으로 묶을 Y 허용 오차: 처방통계 표는 행 간격이 좁아서 (보통 28~38px)
+  // 너무 크면 인접 두 행이 한 클러스터로 합쳐져 값이 섞인다. 0.6% 로 보수적 설정.
+  const rowTolerance = Math.max(8, Math.round(imageHeight * 0.006));
   const rows = clusterFieldsToRows(fields, rowTolerance);
   const lines = rows.map((r) => r.fields.map((f) => f.inferText).join(" ").trim());
   return { text: lines.join("\n"), fields, imageWidth, imageHeight, rows };
@@ -504,24 +517,69 @@ function valueAtColumn(row: ClovaRow, columnX: number, tolerance = 120): string 
   return nearest?.inferText ?? "";
 }
 
-// productName 으로 데이터 행을 찾고 column map 으로 사용량 추출
+// productName 텍스트가 들어있는 Clova field 의 Y 좌표를 기준선으로 잡고, 같은 Y 라인의
+// quantity 컬럼 X 위치에 있는 숫자 필드를 반환. 행 클러스터링이 어긋나도 영향받지 않음.
+// 반환: { quantity, rowY } 또는 null
+function extractByColumnMap(
+  productName: string,
+  rows: ClovaRow[],
+  colMap: ColumnMap
+): { quantity: string | null; rowY: number } | null {
+  if (!productName || !colMap.quantity) return null;
+  const key = productName.replace(/\s+/g, "").slice(0, 5).toLowerCase();
+  if (key.length < 3) return null;
+
+  // 1) productName 의 첫 5글자가 들어있는 필드 중 colMap.productName X 와 가장 가까운 것
+  let productField: ClovaField | null = null;
+  let productFieldDist = Infinity;
+  for (const row of rows) {
+    if (row.avgY <= colMap.headerY) continue;
+    for (const f of row.fields) {
+      const t = f.inferText.replace(/\s+/g, "").toLowerCase();
+      if (!t.includes(key)) continue;
+      const dist = colMap.productName != null ? Math.abs(fieldXCenter(f) - colMap.productName) : 0;
+      if (dist < productFieldDist) {
+        productField = f;
+        productFieldDist = dist;
+      }
+    }
+  }
+  if (!productField) return null;
+
+  const productY = fieldYCenter(productField);
+
+  // 2) 같은 Y 라인 (±15px) + colMap.quantity X 근처 (±100px) 의 숫자 필드 찾기
+  let qtyField: ClovaField | null = null;
+  let qtyDist = Infinity;
+  for (const row of rows) {
+    for (const f of row.fields) {
+      const fy = fieldYCenter(f);
+      if (Math.abs(fy - productY) > 15) continue;
+      const fx = fieldXCenter(f);
+      const xDist = Math.abs(fx - colMap.quantity);
+      if (xDist > 100) continue;
+      // 숫자만 (사용량 컬럼은 항상 숫자)
+      if (!/\d/.test(f.inferText)) continue;
+      if (xDist < qtyDist) {
+        qtyField = f;
+        qtyDist = xDist;
+      }
+    }
+  }
+  if (!qtyField) return { quantity: null, rowY: productY };
+
+  const cleaned = qtyField.inferText.replace(/[^\d.]/g, "");
+  return { quantity: cleaned || null, rowY: productY };
+}
+
+// 호환용 wrapper — 기존 호출처에서 사용
 function quantityFromColumnMap(
   productName: string,
   rows: ClovaRow[],
   colMap: ColumnMap
 ): string | null {
-  if (!productName || !colMap.quantity) return null;
-  const key = productName.replace(/\s+/g, "").slice(0, 5).toLowerCase();
-  if (key.length < 3) return null;
-  for (const row of rows) {
-    if (row.avgY <= colMap.headerY) continue; // 헤더 행 위는 제외
-    const rowText = row.text.replace(/\s+/g, "").toLowerCase();
-    if (!rowText.includes(key)) continue;
-    const raw = valueAtColumn(row, colMap.quantity);
-    const cleaned = raw.replace(/[^\d.]/g, "");
-    if (cleaned) return cleaned;
-  }
-  return null;
+  const r = extractByColumnMap(productName, rows, colMap);
+  return r?.quantity ?? null;
 }
 
 // 거래처 직전 PrescriptionReport 의 ocrData.columnTemplate 가져오기
