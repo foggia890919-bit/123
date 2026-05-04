@@ -3,9 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import * as XLSX from "xlsx";
 import {
   Building2, ChevronRight, ChevronLeft, Loader2, Calendar,
-  TrendingUp, Wallet, AlertCircle, Download, RefreshCw,
+  TrendingUp, Wallet, AlertCircle, FileSpreadsheet, FileText,
+  RefreshCw, X, Printer,
 } from "lucide-react";
 
 interface AccountSummary {
@@ -37,6 +39,17 @@ const fmtDate = (s: string) => new Date(s).toISOString().slice(0, 10);
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const daysAgoStr = (days: number) =>
   new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function formatMoneyInput(raw: string): string {
+  const digits = raw.replace(/[^\d]/g, "");
+  if (!digits) return "";
+  return Number(digits).toLocaleString("ko-KR");
+}
 
 export default function LedgerPage() {
   const { status } = useSession();
@@ -96,25 +109,129 @@ export default function LedgerPage() {
     return { sales, payment, balance: lastBalance };
   }, [entries]);
 
-  function downloadCsv() {
+  function downloadExcel() {
     if (!selected) return;
-    const header = "명세일자,항목,매출,수금,잔액\n";
-    const body = entries
-      .map((e) =>
-        [
-          fmtDate(e.entryDate),
-          `"${e.itemName.replace(/"/g, '""')}"`,
-          e.sales, e.payment, e.balance,
-        ].join(",")
-      )
-      .join("\n");
-    const blob = new Blob(["﻿" + header + body], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${selected.clientName}_매출원장_${from}_${to}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const wsData = [
+      ["명세일자", "항목", "매출", "수금", "잔액"],
+      ...entries.map((e) => [
+        fmtDate(e.entryDate),
+        e.itemName,
+        Number(e.sales),
+        Number(e.payment),
+        Number(e.balance),
+      ]),
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    ws["!cols"] = [{ wch: 12 }, { wch: 60 }, { wch: 14 }, { wch: 14 }, { wch: 16 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "매출원장");
+    XLSX.writeFile(wb, `${selected.clientName}_매출원장_${from}_${to}.xlsx`);
+  }
+
+  // ===== 수금요청서 =====
+  const [collectionModal, setCollectionModal] = useState(false);
+  const [groupMode, setGroupMode] = useState<"date" | "item">("date");
+  const [requestAmountInput, setRequestAmountInput] = useState("");
+
+  // 날짜별 묶음 (같은 날짜끼리 합계)
+  const dateGrouped = useMemo(() => {
+    const map = new Map<string, { date: string; sales: number; payment: number; items: string[] }>();
+    for (const e of entries) {
+      const key = fmtDate(e.entryDate);
+      const cur = map.get(key) ?? { date: key, sales: 0, payment: 0, items: [] };
+      cur.sales += Number(e.sales);
+      cur.payment += Number(e.payment);
+      if (e.itemName) cur.items.push(e.itemName);
+      map.set(key, cur);
+    }
+    return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+  }, [entries]);
+
+  // 수금요청 금액 — 입력값 우선, 비어있으면 전체잔액
+  const requestAmount = useMemo(() => {
+    const parsed = Number(requestAmountInput.replace(/,/g, ""));
+    if (requestAmountInput.trim() && isFinite(parsed) && parsed > 0) return parsed;
+    return totals.balance;
+  }, [requestAmountInput, totals.balance]);
+  const isAutoAmount = !(requestAmountInput.trim() && Number(requestAmountInput.replace(/,/g, "")) > 0);
+
+  function openCollectionModal() {
+    setRequestAmountInput("");
+    setGroupMode("date");
+    setCollectionModal(true);
+  }
+
+  function printCollectionRequest() {
+    if (!selected) return;
+    const today = todayStr();
+    const rowsHtml = groupMode === "date"
+      ? dateGrouped.map(g => `
+          <tr>
+            <td>${g.date}</td>
+            <td class="r">${fmtMoney(g.sales)}</td>
+            <td class="r">${fmtMoney(g.payment)}</td>
+            <td class="memo">${g.items.length}건</td>
+          </tr>`).join("")
+      : entries.map(e => `
+          <tr>
+            <td>${fmtDate(e.entryDate)}</td>
+            <td class="memo">${escapeHtml(e.itemName)}</td>
+            <td class="r">${Number(e.sales) ? fmtMoney(e.sales) : ""}</td>
+            <td class="r">${Number(e.payment) ? fmtMoney(e.payment) : ""}</td>
+          </tr>`).join("");
+
+    const headerRow = groupMode === "date"
+      ? `<tr><th>일자</th><th>매출</th><th>수금</th><th>비고</th></tr>`
+      : `<tr><th>일자</th><th>품목</th><th>매출</th><th>수금</th></tr>`;
+
+    const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>수금요청서 - ${escapeHtml(selected.clientName)}</title>
+      <style>
+        @page { size: A4; margin: 18mm; }
+        body { font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; color:#111; font-size:13px; }
+        h1 { font-size:24px; text-align:center; letter-spacing:8px; margin:0 0 24px; }
+        .meta { display:grid; grid-template-columns:1fr 1fr; gap:6px 16px; margin-bottom:18px; padding:12px 16px; border:1px solid #ddd; border-radius:6px; }
+        .meta dt { color:#666; font-weight:500; }
+        .meta dd { margin:0; }
+        .amount-box { text-align:center; padding:18px; border:2px solid #1d4ed8; border-radius:6px; margin:12px 0 22px; }
+        .amount-box .label { color:#1d4ed8; font-size:12px; letter-spacing:2px; }
+        .amount-box .value { font-size:30px; font-weight:bold; color:#1d4ed8; margin-top:6px; }
+        .amount-box .note { color:#888; font-size:11px; margin-top:4px; }
+        table { width:100%; border-collapse:collapse; margin-top:8px; }
+        th, td { border:1px solid #ccc; padding:6px 8px; }
+        th { background:#f5f5f5; font-weight:600; }
+        td.r { text-align:right; font-variant-numeric:tabular-nums; }
+        td.memo { color:#444; }
+        .footer { margin-top:36px; padding-top:14px; border-top:2px solid #333; text-align:center; color:#444; font-size:12px; line-height:1.7; }
+        .print-btn { position:fixed; top:12px; right:12px; padding:8px 18px; background:#16a34a; color:#fff; border:0; border-radius:6px; cursor:pointer; font-size:14px; }
+        @media print { .print-btn { display:none; } }
+      </style></head><body>
+      <button class="print-btn" onclick="window.print()">🖨️ 인쇄 / PDF 저장</button>
+      <h1>수 금 요 청 서</h1>
+      <dl class="meta">
+        <div><dt>거래처명</dt><dd>${escapeHtml(selected.clientName)}</dd></div>
+        <div><dt>사업자번호</dt><dd>${escapeHtml(selected.bizNumber)}</dd></div>
+        <div><dt>발행일</dt><dd>${today}</dd></div>
+        <div><dt>조회기간</dt><dd>${from} ~ ${to}</dd></div>
+      </dl>
+      <div class="amount-box">
+        <div class="label">수 금 요 청 금 액</div>
+        <div class="value">${fmtMoney(requestAmount)} 원</div>
+        ${isAutoAmount ? '<div class="note">※ 미입력 — 최종 잔액 기준 자동 산정</div>' : ""}
+      </div>
+      <table>
+        <thead>${headerRow}</thead>
+        <tbody>${rowsHtml || `<tr><td colspan="4" style="text-align:center;color:#888;padding:20px">명세 없음</td></tr>`}</tbody>
+      </table>
+      <div class="footer">
+        상기 금액의 송금을 요청드립니다.<br/>
+        문의는 담당 영업사원 또는 본사로 부탁드립니다.
+      </div>
+      <script>setTimeout(()=>window.focus(),100);</script>
+    </body></html>`;
+
+    const w = window.open("", "_blank", "width=900,height=1200");
+    if (!w) { alert("팝업이 차단되어 있습니다. 팝업 허용 후 다시 시도해주세요."); return; }
+    w.document.open(); w.document.write(html); w.document.close();
   }
 
   if (status === "loading") {
@@ -219,11 +336,18 @@ export default function LedgerPage() {
             조회
           </button>
           <button
-            onClick={downloadCsv}
+            onClick={downloadExcel}
             disabled={entries.length === 0}
-            className="flex items-center gap-1 px-3 py-1.5 border border-gray-200 rounded-md hover:bg-gray-50 text-sm disabled:opacity-40"
+            className="flex items-center gap-1 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-md text-sm font-medium disabled:opacity-40"
           >
-            <Download className="w-4 h-4" /> CSV
+            <FileSpreadsheet className="w-4 h-4" /> 엑셀다운
+          </button>
+          <button
+            onClick={openCollectionModal}
+            disabled={entries.length === 0}
+            className="flex items-center gap-1 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-md text-sm font-medium disabled:opacity-40"
+          >
+            <FileText className="w-4 h-4" /> 수금요청서 생성
           </button>
         </div>
       </div>
@@ -285,6 +409,161 @@ export default function LedgerPage() {
           </tbody>
         </table>
       </div>
+
+      {/* ===== 수금요청서 모달 ===== */}
+      {collectionModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setCollectionModal(false)}>
+          <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-6 py-4 border-b sticky top-0 bg-white z-10">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <FileText className="w-5 h-5 text-amber-600" /> 수금요청서 생성
+              </h2>
+              <button onClick={() => setCollectionModal(false)}><X className="w-5 h-5 text-gray-400" /></button>
+            </div>
+
+            <div className="p-6 space-y-5">
+              {/* 묶음 방식 */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-2">묶음 방식</label>
+                <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden">
+                  <button
+                    onClick={() => setGroupMode("date")}
+                    className={`px-4 py-2 text-sm font-medium transition-colors ${groupMode === "date" ? "bg-amber-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
+                  >
+                    날짜별 (같은 일자 묶음)
+                  </button>
+                  <button
+                    onClick={() => setGroupMode("item")}
+                    className={`px-4 py-2 text-sm font-medium transition-colors ${groupMode === "item" ? "bg-amber-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
+                  >
+                    품목별 (개별 명세)
+                  </button>
+                </div>
+              </div>
+
+              {/* 수금요청 금액 */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  수금요청 금액
+                  <span className="ml-2 text-[11px] font-normal text-gray-400">
+                    비워두면 최종 잔액({fmtMoney(totals.balance)}원)으로 자동 설정
+                  </span>
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={requestAmountInput}
+                    onChange={(e) => setRequestAmountInput(formatMoneyInput(e.target.value))}
+                    placeholder={fmtMoney(totals.balance)}
+                    className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono text-right"
+                  />
+                  <span className="text-sm text-gray-500">원</span>
+                </div>
+                <div className="mt-1 text-xs">
+                  {isAutoAmount
+                    ? <span className="text-gray-400">→ 자동: <b>{fmtMoney(totals.balance)}원</b> (전체 잔액)</span>
+                    : <span className="text-amber-700">→ 입력값: <b>{fmtMoney(requestAmount)}원</b></span>}
+                </div>
+              </div>
+
+              {/* 미리보기 */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-semibold text-gray-700">미리보기</label>
+                  <span className="text-[11px] text-gray-400">
+                    {groupMode === "date"
+                      ? `${dateGrouped.length}개 일자`
+                      : `${entries.length}개 명세`}
+                  </span>
+                </div>
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                  {/* 헤더: 거래처/금액 */}
+                  <div className="bg-gray-50 px-4 py-3 border-b flex items-center justify-between text-xs">
+                    <div>
+                      <div className="text-gray-500">거래처</div>
+                      <div className="font-semibold text-gray-900 text-sm">{selected.clientName}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-gray-500">수금요청금액</div>
+                      <div className="font-bold text-amber-700 text-base">{fmtMoney(requestAmount)}원</div>
+                    </div>
+                  </div>
+                  {/* 명세 */}
+                  <div className="max-h-72 overflow-y-auto">
+                    <table className="min-w-full text-xs">
+                      {groupMode === "date" ? (
+                        <>
+                          <thead className="bg-gray-50 sticky top-0">
+                            <tr>
+                              <th className="px-3 py-2 text-left text-gray-500">일자</th>
+                              <th className="px-3 py-2 text-right text-gray-500">매출</th>
+                              <th className="px-3 py-2 text-right text-gray-500">수금</th>
+                              <th className="px-3 py-2 text-left text-gray-500">비고</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {dateGrouped.map((g) => (
+                              <tr key={g.date}>
+                                <td className="px-3 py-1.5 whitespace-nowrap">{g.date}</td>
+                                <td className="px-3 py-1.5 text-right font-mono">{g.sales ? fmtMoney(g.sales) : ""}</td>
+                                <td className="px-3 py-1.5 text-right font-mono text-green-700">{g.payment ? fmtMoney(g.payment) : ""}</td>
+                                <td className="px-3 py-1.5 text-gray-500">{g.items.length}건</td>
+                              </tr>
+                            ))}
+                            {dateGrouped.length === 0 && (
+                              <tr><td colSpan={4} className="px-3 py-6 text-center text-gray-400">명세 없음</td></tr>
+                            )}
+                          </tbody>
+                        </>
+                      ) : (
+                        <>
+                          <thead className="bg-gray-50 sticky top-0">
+                            <tr>
+                              <th className="px-3 py-2 text-left text-gray-500">일자</th>
+                              <th className="px-3 py-2 text-left text-gray-500">품목</th>
+                              <th className="px-3 py-2 text-right text-gray-500">매출</th>
+                              <th className="px-3 py-2 text-right text-gray-500">수금</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {entries.map((e) => (
+                              <tr key={e.id}>
+                                <td className="px-3 py-1.5 whitespace-nowrap">{fmtDate(e.entryDate)}</td>
+                                <td className="px-3 py-1.5">{e.itemName}</td>
+                                <td className="px-3 py-1.5 text-right font-mono">{Number(e.sales) ? fmtMoney(e.sales) : ""}</td>
+                                <td className="px-3 py-1.5 text-right font-mono text-green-700">{Number(e.payment) ? fmtMoney(e.payment) : ""}</td>
+                              </tr>
+                            ))}
+                            {entries.length === 0 && (
+                              <tr><td colSpan={4} className="px-3 py-6 text-center text-gray-400">명세 없음</td></tr>
+                            )}
+                          </tbody>
+                        </>
+                      )}
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 px-6 pb-5 sticky bottom-0 bg-white border-t pt-4">
+              <button
+                onClick={() => setCollectionModal(false)}
+                className="px-4 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50"
+              >
+                취소
+              </button>
+              <button
+                onClick={printCollectionRequest}
+                disabled={entries.length === 0}
+                className="flex items-center gap-1.5 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-lg disabled:opacity-40"
+              >
+                <Printer className="w-4 h-4" /> 출력 / PDF
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
