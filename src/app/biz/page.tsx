@@ -146,6 +146,13 @@ const BIZ_MENU_GROUPS = [
         icon: KeyRound,
         color: "bg-amber-50 text-amber-600",
       },
+      {
+        href: "/biz/products",
+        label: "이팜스 상품 마스터",
+        desc: "자동주문용 상품 카탈로그. 워커 자동 동기화 또는 엑셀 직접 업로드",
+        icon: PackageSearch,
+        color: "bg-blue-50 text-blue-600",
+      },
     ],
   },
 ];
