@@ -64,6 +64,19 @@ function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
 
+// "제품명(성분명)" 형식에서 "(" 앞에 줄바꿈 — 긴 제품명이 셀에서 잘리지 않도록
+function ProductName({ name }: { name: string }) {
+  const idx = name.indexOf("(");
+  if (idx === -1) return <>{name}</>;
+  return (
+    <>
+      {name.slice(0, idx)}
+      <br />
+      {name.slice(idx)}
+    </>
+  );
+}
+
 export default function BulkRegisterPage() {
   return (
     <RequireAuth>
@@ -791,7 +804,7 @@ function BulkRegisterInner() {
                         <td className="px-3 py-2.5 text-center text-xs text-gray-500">{i + 1}</td>
                         <td className="px-3 py-2.5">
                           {o ? (
-                            <span className="text-xs font-medium text-gray-900">{o.productName}</span>
+                            <span className="text-xs font-medium text-gray-900 leading-tight"><ProductName name={o.productName} /></span>
                           ) : (
                             <span className="text-xs text-red-600 font-medium font-mono">{r.originalCode}</span>
                           )}
@@ -802,7 +815,7 @@ function BulkRegisterInner() {
                         <td className="px-3 py-2.5 text-center text-gray-400">→</td>
                         <td className="px-3 py-2.5 bg-blue-50/30">
                           {a ? (
-                            <span className="text-xs font-medium text-gray-900">{a.productName}</span>
+                            <span className="text-xs font-medium text-gray-900 leading-tight"><ProductName name={a.productName} /></span>
                           ) : (
                             <span className="text-xs text-gray-400">미선택</span>
                           )}

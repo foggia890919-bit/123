@@ -61,16 +61,11 @@ export async function POST(req: NextRequest) {
     for (const r of rates) rateMap[normalizeCompanyKey(r.companyName)] = r.additionalRate;
   }
 
-  // 입력 순서 유지, 중복 보험코드도 동일 품목으로 매칭
-  const seen = new Set<string>();
+  // 입력 순서 유지. 중복 보험코드도 합치지 않고 각각 행으로 반환
+  // (사용자 후가공 시 매출·수수료 변화를 행 단위로 비교하기 위함)
   const rows = (codes as unknown[])
     .map((c) => String(c ?? "").trim())
     .filter(Boolean)
-    .filter((c) => {
-      if (seen.has(c)) return false;
-      seen.add(c);
-      return true;
-    })
     .map((code) => {
       const nk = normalizeCode(code);
       const id = idByNormalized.get(nk);
