@@ -23,6 +23,7 @@ model User {
   documents             UserDocument[]
   filterRequests        FilterRequest[]
   userClients           UserClient[]
+  epharmsAccounts EpharmsAccount[] @relation("EpharmsAccountSalesRep")
   prescriptionReports   PrescriptionReport[]
   loginLogs             LoginLog[]
   posts                 Post[]
@@ -747,6 +748,10 @@ model EpharmsAccount {
   ledgerEntries   LedgerEntry[]
   syncLogs        LedgerSyncLog[]
 
+  assignedSalesRepUserId String?
+  assignedSalesRep       User?    @relation("EpharmsAccountSalesRep", fields: [assignedSalesRepUserId], references: [id], onDelete: SetNull)
+
+  @@index([assignedSalesRepUserId])
   @@index([active])
 }
 
