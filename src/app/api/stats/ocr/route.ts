@@ -18,7 +18,9 @@ export interface FusionDrug {
   companyName: Field;
   productName: Field;
   quantity: Field;
-  unitPrice: number | null;          // 마스터 DB 단가 (합계 계산용, UI 비표시)
+  unitPrice: number | null;          // 마스터 DB 단가
+  commissionRate: number | null;     // 마스터 수수료율 (%)
+  additionalRate: number | null;     // 사용자 추가 수수료율 (%) — MemberCompanyRate
   matchedMedicationId: string | null;
   finalConfidence: number;            // 최종 신뢰도 0-100
   manualCheck: boolean;               // < 95 이면 true
@@ -137,6 +139,7 @@ export async function POST(req: NextRequest) {
       productName: Field;
       quantity: Field;
       unitPrice: number | null;
+      commissionRate: number | null;
       matchedMedicationId: string | null;
       finalConfidence: number;
       manualCheck: boolean;
@@ -164,6 +167,7 @@ export async function POST(req: NextRequest) {
         productName:   { value: matched.productName,   confidence: matched.matchedMedicationId ? 100 : baselineConf },
         quantity:      { value: item.quantity,         confidence: baselineConf },
         unitPrice: matched.unitPrice,
+        commissionRate: matched.commissionRate,
         matchedMedicationId: matched.matchedMedicationId,
         finalConfidence,
         manualCheck,
@@ -171,6 +175,23 @@ export async function POST(req: NextRequest) {
         productNameRaw: matched.productName || item.productName,
         insuranceCodeRaw: (matched.insuranceCode || item.insuranceCode).replace(/\D/g, ""),
       });
+    }
+
+    // ── 4-1단계: 사용자 추가 수수료 (MemberCompanyRate) 일괄 조회 ───────────
+    // 매칭된 약품들의 제약사명을 모아 한 쿼리로 가져온다. 제약사명은 normalize 후 비교.
+    const matchedCompanies = Array.from(new Set(
+      pendingDrugs.map((d) => d.companyName.value).filter((n) => n)
+    ));
+    const additionalRateByCompany = new Map<string, number>();
+    if (matchedCompanies.length > 0) {
+      const memberRates = await prisma.memberCompanyRate.findMany({
+        where: { userId: user.id },
+        select: { companyName: true, additionalRate: true },
+      });
+      const norm = (s: string) => s.replace(/\(주\)|\(유\)|주식회사|㈜|\s+/g, "").toLowerCase();
+      for (const r of memberRates) {
+        additionalRateByCompany.set(norm(r.companyName), r.additionalRate);
+      }
     }
 
     // ── 4-2단계: bboxYPercent 계산 — 견고한 위치 정렬 ──────────────────────
@@ -223,12 +244,16 @@ export async function POST(req: NextRequest) {
         }
       }
       bboxYPercent = Math.max(0, Math.min(100, Math.round(bboxYPercent * 10) / 10));
+      const norm = (s: string) => s.replace(/\(주\)|\(유\)|주식회사|㈜|\s+/g, "").toLowerCase();
+      const additionalRate = additionalRateByCompany.get(norm(d.companyName.value)) ?? null;
       return {
         insuranceCode: d.insuranceCode,
         companyName: d.companyName,
         productName: d.productName,
         quantity: d.quantity,
         unitPrice: d.unitPrice,
+        commissionRate: d.commissionRate,
+        additionalRate,
         matchedMedicationId: d.matchedMedicationId,
         finalConfidence: d.finalConfidence,
         manualCheck: d.manualCheck,
@@ -606,6 +631,7 @@ type MasterRow = {
   productName: string;
   companyName: string;
   price: number | null;
+  commissionRate: number | null;
 };
 
 function extractInsuranceCodes(clovaText: string, gemini: GeminiVisionResult | null): string[] {
@@ -623,7 +649,7 @@ async function fetchMasterByCodes(codes: string[]): Promise<Map<string, MasterRo
   if (codes.length === 0) return map;
   const rows = await prisma.medication.findMany({
     where: { insuranceCode: { in: codes } },
-    select: { id: true, insuranceCode: true, productName: true, companyName: true, price: true },
+    select: { id: true, insuranceCode: true, productName: true, companyName: true, price: true, commissionRate: true },
   });
   for (const r of rows) {
     if (r.insuranceCode) map.set(r.insuranceCode, r);
@@ -639,6 +665,7 @@ async function matchMedication(
   productName: string;
   companyName: string;
   unitPrice: number | null;
+  commissionRate: number | null;
   matchedMedicationId: string | null;
   matchConfidence: number;
 }> {
@@ -650,6 +677,7 @@ async function matchMedication(
       productName: m.productName,
       companyName: m.companyName,
       unitPrice: m.price,
+      commissionRate: m.commissionRate,
       matchedMedicationId: m.id,
       matchConfidence: 100,
     };
@@ -669,7 +697,7 @@ async function matchMedication(
   ): Promise<{ row: MasterRow; exact: boolean } | null> {
     const rows = await prisma.medication.findMany({
       where,
-      select: { id: true, insuranceCode: true, productName: true, companyName: true, price: true },
+      select: { id: true, insuranceCode: true, productName: true, companyName: true, price: true, commissionRate: true },
       take: 20,
     });
     if (rows.length === 0) return null;
@@ -698,6 +726,7 @@ async function matchMedication(
       productName: r.row.productName,
       companyName: r.row.companyName,
       unitPrice: r.row.price,
+      commissionRate: r.row.commissionRate,
       matchedMedicationId: r.row.id,
       matchConfidence: r.exact ? 98 : 92,
     };
@@ -714,6 +743,7 @@ async function matchMedication(
       productName: r.row.productName,
       companyName: r.row.companyName,
       unitPrice: r.row.price,
+      commissionRate: r.row.commissionRate,
       matchedMedicationId: r.row.id,
       matchConfidence: r.exact ? 95 : 85,
     };
@@ -724,6 +754,7 @@ async function matchMedication(
     productName: item.productName,
     companyName: item.companyName,
     unitPrice: null,
+    commissionRate: null,
     matchedMedicationId: null,
     matchConfidence: 0,
   };
