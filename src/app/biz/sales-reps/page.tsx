@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, Fragment } from "react";
 import { BizLayout } from "@/app/biz/page";
 import {
   Search, Loader2, CheckCircle, XCircle, Hash, Users,
   Upload, FileSpreadsheet, X, AlertTriangle, Plus,
+  ChevronDown, ChevronUp,
 } from "lucide-react";
 
 interface SalesRep {
@@ -15,6 +16,7 @@ interface SalesRep {
   approved: boolean;
   salesCode: string | null;
   createdAt: string;
+  userClients?: { id: string; clientName: string; bizNumber: string }[];
 }
 
 interface BulkRow {
@@ -29,6 +31,7 @@ interface BulkResult {
   row: number;
   status: "ok" | "error";
   createdNew?: boolean;
+  generatedPassword?: string;
   email?: string;
   salesCode?: string;
   mappedClients?: number;
@@ -74,6 +77,7 @@ export default function SalesRepsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [generating, setGenerating] = useState<string | null>(null);
+  const [expandedRepId, setExpandedRepId] = useState<string | null>(null);
 
   // 대량등록 모달 상태
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -139,8 +143,8 @@ export default function SalesRepsPage() {
       else if (!isValidEmail(r.email)) issues.push("이메일 형식");
       else if (seenEmails.has(r.email.toLowerCase())) issues.push("입력 내 이메일 중복");
       if (r.email) seenEmails.add(r.email.toLowerCase());
-      if (!r.password) issues.push("비밀번호");
-      else if (r.password.length < 4) issues.push("비밀번호 4자↑");
+      // 비밀번호: 비워두면 자동생성 (issue X), 적었으면 4자 이상
+      if (r.password && r.password.length < 4) issues.push("비밀번호 4자↑");
       const biz = parseBizNumbers(r.bizNumbersText);
       return { row: r, issues, bizNumbers: biz };
     });
@@ -238,13 +242,18 @@ export default function SalesRepsPage() {
                     <Th>이메일</Th>
                     <Th>연락처</Th>
                     <Th>영업사원 코드</Th>
+                    <Th>담당 거래처</Th>
                     <Th>승인</Th>
                     <Th>가입일</Th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {reps.map((rep) => (
-                    <tr key={rep.id} className="hover:bg-gray-50 transition-colors">
+                  {reps.map((rep) => {
+                    const isExpanded = expandedRepId === rep.id;
+                    const clientCount = rep.userClients?.length ?? 0;
+                    return (
+                    <Fragment key={rep.id}>
+                    <tr className="hover:bg-gray-50 transition-colors">
                       <td className="px-4 py-3 font-medium text-gray-900">{rep.name ?? "-"}</td>
                       <td className="px-4 py-3 text-gray-600 text-xs">{rep.email}</td>
                       <td className="px-4 py-3 text-gray-600">{rep.phone ?? "-"}</td>
@@ -268,6 +277,20 @@ export default function SalesRepsPage() {
                       </td>
                       <td className="px-4 py-3">
                         <button
+                          onClick={() => setExpandedRepId(isExpanded ? null : rep.id)}
+                          disabled={clientCount === 0}
+                          className={`inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg transition-colors ${
+                            clientCount > 0
+                              ? "bg-amber-50 text-amber-700 hover:bg-amber-100"
+                              : "bg-gray-50 text-gray-400 cursor-default"
+                          }`}
+                        >
+                          {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                          {clientCount}곳
+                        </button>
+                      </td>
+                      <td className="px-4 py-3">
+                        <button
                           onClick={() => toggleApproved(rep)}
                           className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium transition-colors ${
                             rep.approved
@@ -284,7 +307,26 @@ export default function SalesRepsPage() {
                         {new Date(rep.createdAt).toLocaleDateString("ko-KR")}
                       </td>
                     </tr>
-                  ))}
+                    {isExpanded && clientCount > 0 && (
+                      <tr className="bg-amber-50/40">
+                        <td colSpan={7} className="px-4 py-3">
+                          <div className="text-xs font-semibold text-amber-800 mb-1.5">
+                            담당 거래처 ({clientCount}곳)
+                          </div>
+                          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-1.5">
+                            {rep.userClients!.map((c) => (
+                              <div key={c.id} className="bg-white border border-amber-200 rounded px-2 py-1 text-xs">
+                                <div className="font-medium text-gray-900 truncate">{c.clientName}</div>
+                                <div className="text-gray-400 font-mono text-[11px]">{c.bizNumber}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -345,14 +387,22 @@ export default function SalesRepsPage() {
                           </td>
                           <td className="px-3 py-2 text-gray-600">
                             {r.status === "ok" && (
-                              <>
-                                {r.salesCode} · 거래처 {r.mappedClients}개 매핑
-                                {r.unmappedBizNumbers && r.unmappedBizNumbers.length > 0 && (
-                                  <span className="ml-2 text-amber-600">
-                                    ⚠ 미등록 거래처: {r.unmappedBizNumbers.join(", ")}
-                                  </span>
+                              <div className="space-y-0.5">
+                                <div>
+                                  {r.salesCode} · 거래처 {r.mappedClients}개 매핑
+                                </div>
+                                {r.generatedPassword && (
+                                  <div className="text-amber-700 font-medium">
+                                    🔑 자동생성 PW: <code className="bg-amber-50 px-1.5 py-0.5 rounded font-mono">{r.generatedPassword}</code>
+                                    <span className="text-gray-400 ml-1 text-[10px]">(영업사원에게 전달)</span>
+                                  </div>
                                 )}
-                              </>
+                                {r.unmappedBizNumbers && r.unmappedBizNumbers.length > 0 && (
+                                  <div className="text-amber-600">
+                                    ⚠ 미등록 거래처: {r.unmappedBizNumbers.join(", ")}
+                                  </div>
+                                )}
+                              </div>
                             )}
                           </td>
                         </tr>
@@ -376,7 +426,7 @@ export default function SalesRepsPage() {
               <div className="p-6 space-y-5">
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900 space-y-1">
                   <div className="font-semibold">📋 양식 (탭 또는 콤마 구분)</div>
-                  <div>이름 / 이메일 / 휴대폰 / 임시비밀번호 / 사업자번호(콤마 구분으로 여러 개)</div>
+                  <div>이름 / 이메일 / 휴대폰 / <b>임시비밀번호 (비워두면 자동생성)</b> / 사업자번호(콤마 구분)</div>
                   <button onClick={copyTemplate} className="mt-1 inline-flex items-center gap-1 px-2 py-1 bg-white border border-blue-300 rounded text-blue-700 hover:bg-blue-50">
                     <FileSpreadsheet className="w-3.5 h-3.5" /> 양식 클립보드 복사
                   </button>

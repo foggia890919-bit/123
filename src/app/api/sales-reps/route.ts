@@ -23,6 +23,11 @@ export async function GET(req: NextRequest) {
     select: {
       id: true, name: true, email: true, phone: true,
       approved: true, salesCode: true, createdAt: true,
+      userClients: {
+        where: { approved: true },
+        select: { id: true, clientName: true, bizNumber: true },
+        orderBy: { clientName: "asc" },
+      },
     },
     orderBy: { createdAt: "desc" },
   });

@@ -32,7 +32,18 @@ interface RowResult {
   mappedClients?: number;
   unmappedBizNumbers?: string[];
   error?: string;
-  createdNew?: boolean; // true=신규생성 / false=기존유저에 매핑만 추가
+  createdNew?: boolean;       // true=신규생성 / false=기존유저에 매핑만 추가
+  generatedPassword?: string; // 사장님이 비워둬서 자동 생성된 PW (신규일 때만)
+}
+
+function generateRandomPassword(): string {
+  // 헷갈리는 문자(0/O, 1/l/I) 제외한 8자리
+  const alphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let out = "";
+  for (let i = 0; i < 8; i++) {
+    out += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return out;
 }
 
 function nextSalesCode(maxCode: string | null, prefix: string): string {
@@ -102,14 +113,24 @@ export async function POST(req: NextRequest) {
       results.push({ row: i, status: "error", email, error: "유효하지 않은 이메일" });
       continue;
     }
-    // 비밀번호: 신규 유저면 필수(4자↑), 기존 유저는 비워둬도 OK (PW 갱신 안 함)
+    // 비밀번호:
+    //  - 기존 유저면 무시 (PW 갱신 안 함)
+    //  - 신규 유저인데 비어있으면 자동 생성
+    //  - 신규 유저인데 적었으면 4자 이상 검증
     const existing = await prisma.user.findUnique({
       where: { email },
       select: { id: true, salesCode: true, role: true },
     });
-    if (!existing && password.length < 4) {
-      results.push({ row: i, status: "error", email, error: "신규 가입은 비밀번호 4자 이상 필요" });
-      continue;
+    let effectivePassword = password;
+    let generatedPassword: string | undefined;
+    if (!existing) {
+      if (!password || password.length === 0) {
+        generatedPassword = generateRandomPassword();
+        effectivePassword = generatedPassword;
+      } else if (password.length < 4) {
+        results.push({ row: i, status: "error", email, error: "비밀번호는 비워두거나 4자 이상" });
+        continue;
+      }
     }
 
     try {
@@ -126,7 +147,7 @@ export async function POST(req: NextRequest) {
         // 신규 — User + 코드 자동 발급
         const newCode = nextSalesCode(lastCode, prefix);
         lastCode = newCode;
-        const hashed = await bcrypt.hash(password, 12);
+        const hashed = await bcrypt.hash(effectivePassword, 12);
         const created = await prisma.user.create({
           data: {
             email, name, phone, password: hashed,
@@ -175,6 +196,7 @@ export async function POST(req: NextRequest) {
         mappedClients: mappedCount,
         unmappedBizNumbers: unmapped.length > 0 ? unmapped : undefined,
         createdNew,
+        generatedPassword,
       });
     } catch (err) {
       results.push({
