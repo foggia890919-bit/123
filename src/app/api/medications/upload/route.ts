@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import * as XLSX from "xlsx";
 import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
+import { normalizeCompanyKey, normalizeProductKey } from "@/lib/utils";
 
 function normalizeCode(code: string): string {
   return code.replace(/[\s\-]/g, "").toUpperCase();
@@ -95,7 +96,30 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // 2차 매칭 후보: 1차에서 못 잡은 행들의 productName 으로 기존 레코드 검색.
+    // PUBLIC_API source 의 비급여 약(insuranceCode=NULL) 과 요율표 행을 (productName + companyName)
+    // 정규화 키로 머지 — 중복 EXCEL 레코드 양산 방지.
+    const orphanRows = rateRows.filter((r) => {
+      if (!r.productName || !r.companyName) return false;
+      const ck = r.insuranceCode ? normalizeCode(r.insuranceCode) : null;
+      return !ck || !existingByCode.has(ck);
+    });
+    const orphanProductNames = Array.from(new Set(orphanRows.map((r) => r.productName).filter(Boolean)));
+    const productCandidates = orphanProductNames.length > 0
+      ? await prisma.medication.findMany({
+          where: { productName: { in: orphanProductNames } },
+          select: { id: true, productName: true, companyName: true, insuranceCode: true, price: true },
+        })
+      : [];
+    const nameKeyMap = new Map<string, { id: string; insuranceCode: string | null; price: number | null }>();
+    for (const c of productCandidates) {
+      const key = `${normalizeProductKey(c.productName)}|${normalizeCompanyKey(c.companyName)}`;
+      if (key === "|") continue;
+      if (!nameKeyMap.has(key)) nameKeyMap.set(key, { id: c.id, insuranceCode: c.insuranceCode, price: c.price });
+    }
+
     let updated = 0;
+    let mergedByName = 0;
     const toCreate: typeof rateRows = [];
     const skippedItems: { code: string; productName: string; companyName: string }[] = [];
 
@@ -103,8 +127,27 @@ export async function POST(req: NextRequest) {
       const codeKey = row.insuranceCode ? normalizeCode(row.insuranceCode) : null;
       const idByCode = codeKey ? existingByCode.get(codeKey) : undefined;
 
-      if (idByCode) {
-        // 보험코드 매칭된 기존 레코드에 수수료율 업데이트
+      // 매칭 결정: 1순위 insuranceCode, 2순위 productName+companyName
+      let matchedId: string | undefined = idByCode;
+      let matchedExistingPrice: number | null = null;
+      let matchedExistingInsuranceCode: string | null = null;
+      let viaNameFallback = false;
+      if (matchedId) {
+        matchedExistingPrice = existingPriceByCode.get(codeKey!) ?? null;
+      } else if (row.productName && row.companyName) {
+        const compositeKey = `${normalizeProductKey(row.productName)}|${normalizeCompanyKey(row.companyName)}`;
+        if (compositeKey !== "|") {
+          const cand = nameKeyMap.get(compositeKey);
+          if (cand) {
+            matchedId = cand.id;
+            matchedExistingPrice = cand.price;
+            matchedExistingInsuranceCode = cand.insuranceCode;
+            viaNameFallback = true;
+          }
+        }
+      }
+
+      if (matchedId) {
         const updateData: Record<string, unknown> = {
           commissionRate: row.commissionRate,
           isSettlement,
@@ -115,22 +158,24 @@ export async function POST(req: NextRequest) {
         if (row.originalDrug) updateData.originalDrug = row.originalDrug;
         if (row.notes) updateData.notes = row.notes;
         if (row.categoryA) updateData.categoryA = row.categoryA;
-        // 공공데이터 약가가 없는(null) 경우에만 요율표 약가로 채움 (비급여 품목)
-        if (row.price != null && (existingPriceByCode.get(codeKey!) ?? null) === null) {
+        // 약가: 기존 NULL 일 때만 요율표 약가 채움 (공공데이터 약가 우선)
+        if (row.price != null && matchedExistingPrice === null) {
           updateData.price = row.price;
         }
-        // categoryB: 요율표 분류B 무시
-        await prisma.medication.update({ where: { id: idByCode }, data: updateData });
+        // 이름 fallback 으로 매칭됐고 기존 레코드의 insuranceCode 가 NULL 이면 backfill
+        if (viaNameFallback && !matchedExistingInsuranceCode && row.insuranceCode) {
+          updateData.insuranceCode = row.insuranceCode;
+        }
+        await prisma.medication.update({ where: { id: matchedId }, data: updateData });
         updated++;
+        if (viaNameFallback) mergedByName++;
         continue;
       }
 
-      // 보험코드 미매칭
+      // 둘 다 미매칭
       if (row.productName && row.ingredientName) {
-        // 품목명/성분명 있으면 EXCEL 레코드로 신규 생성
         toCreate.push(row);
       } else {
-        // 보험코드만 있고 공공데이터 미매칭 → 스킵 (공공데이터 sync 후 재업로드 필요)
         skippedItems.push({
           code: row.insuranceCode ?? "",
           productName: row.productName,
@@ -201,6 +246,7 @@ export async function POST(req: NextRequest) {
       success: true,
       count: rateRows.length,
       updated,
+      mergedByName, // 이름+제약사 fallback 으로 머지된 건수 (보험코드 NULL 비급여 약 흡수)
       created,
       merged,
       skipped: skippedItems.length,

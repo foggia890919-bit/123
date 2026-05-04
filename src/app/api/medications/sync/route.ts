@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin, requireAdminOrService, isNextResponse } from "@/lib/auth-guard";
+import { normalizeCompanyKey, normalizeProductKey } from "@/lib/utils";
 
 export const maxDuration = 300;
 
@@ -90,31 +91,74 @@ async function processPage(pageItems: PublicDrug[]): Promise<number> {
     .filter((d) => d.productName && d.ingredientName);
   if (drugs.length === 0) return 0;
 
+  // 1차 매칭: insuranceCode 기준 (기존 동작)
   const codes = drugs.map((d) => d.insuranceCode).filter(Boolean) as string[];
-
-  const existing = codes.length > 0
+  const existingByCode = codes.length > 0
     ? await withDbRetry(() => prisma.medication.findMany({
         where: { insuranceCode: { in: codes } },
         select: { id: true, insuranceCode: true },
       }))
     : [];
-  const existingMap = new Map(existing.map((e) => [e.insuranceCode, e]));
+  const codeMap = new Map<string, string>();
+  for (const e of existingByCode) {
+    if (e.insuranceCode) codeMap.set(e.insuranceCode, e.id);
+  }
+
+  // 2차 매칭: 1차에서 못 잡은 약품(특히 비급여라 EDI_CODE 비어 있는 케이스) 을
+  // (productName + companyName) 정규화 키로 기존 레코드와 머지 — 중복 레코드 양산 방지.
+  // productName 인덱스 활용: 정확 일치만 후보로 끌어오고 in-memory 에서 정규화 비교.
+  const orphanProductNames = Array.from(new Set(
+    drugs
+      .filter((d) => !d.insuranceCode || !codeMap.has(d.insuranceCode))
+      .map((d) => d.productName)
+      .filter(Boolean)
+  ));
+  const productCandidates = orphanProductNames.length > 0
+    ? await withDbRetry(() => prisma.medication.findMany({
+        where: { productName: { in: orphanProductNames } },
+        select: { id: true, productName: true, companyName: true, insuranceCode: true },
+      }))
+    : [];
+  const nameKeyMap = new Map<string, { id: string; insuranceCode: string | null }>();
+  for (const c of productCandidates) {
+    const key = `${normalizeProductKey(c.productName)}|${normalizeCompanyKey(c.companyName)}`;
+    if (key === "|") continue;
+    if (!nameKeyMap.has(key)) nameKeyMap.set(key, { id: c.id, insuranceCode: c.insuranceCode });
+  }
 
   const toCreate: typeof drugs = [];
-  const toUpdate: { id: string; data: Partial<ReturnType<typeof mapDrug>> }[] = [];
+  const toUpdate: {
+    id: string;
+    productName: string;
+    ingredientName: string;
+    companyName: string;
+    categoryA: string | null;
+    newInsuranceCode: string | null; // 기존이 NULL 일 때만 채울 후보
+  }[] = [];
 
   for (const drug of drugs) {
-    const found = drug.insuranceCode ? existingMap.get(drug.insuranceCode) : null;
-    if (found) {
+    let foundId: string | null = null;
+    let needsBackfillCode = false;
+    if (drug.insuranceCode && codeMap.has(drug.insuranceCode)) {
+      foundId = codeMap.get(drug.insuranceCode)!;
+    } else {
+      const compositeKey = `${normalizeProductKey(drug.productName)}|${normalizeCompanyKey(drug.companyName)}`;
+      const candidate = compositeKey === "|" ? undefined : nameKeyMap.get(compositeKey);
+      if (candidate) {
+        foundId = candidate.id;
+        // 기존 레코드 insuranceCode 가 NULL 이고 이번 드러그에 코드가 있으면 backfill
+        if (!candidate.insuranceCode && drug.insuranceCode) needsBackfillCode = true;
+      }
+    }
+
+    if (foundId) {
       toUpdate.push({
-        id: found.id,
-        data: {
-          productName: drug.productName,
-          ingredientName: drug.ingredientName,
-          companyName: drug.companyName,
-          categoryA: drug.categoryA,
-          updatedAt: new Date(),
-        },
+        id: foundId,
+        productName: drug.productName,
+        ingredientName: drug.ingredientName,
+        companyName: drug.companyName,
+        categoryA: drug.categoryA,
+        newInsuranceCode: needsBackfillCode ? drug.insuranceCode : null,
       });
     } else {
       toCreate.push(drug);
@@ -125,7 +169,7 @@ async function processPage(pageItems: PublicDrug[]): Promise<number> {
     await withDbRetry(() => prisma.medication.createMany({ data: toCreate, skipDuplicates: true }));
   }
 
-  // Bulk UPDATE via VALUES 조인: 100개 쿼리 → 1개로 (커넥션 점유시간 극단 단축)
+  // Bulk UPDATE: insuranceCode 는 COALESCE 로 NULL 인 경우에만 채움 (덮어쓰지 않음)
   if (toUpdate.length > 0) {
     const CHUNK = 200;
     for (let i = 0; i < toUpdate.length; i += CHUNK) {
@@ -133,18 +177,19 @@ async function processPage(pageItems: PublicDrug[]): Promise<number> {
       const tuples: string[] = [];
       const params: (string | null)[] = [];
       let p = 1;
-      for (const { id, data } of slice) {
-        tuples.push(`($${p++}::text, $${p++}::text, $${p++}::text, $${p++}::text, $${p++})`);
-        params.push(id, data.productName ?? "", data.ingredientName ?? "", data.companyName ?? "", data.categoryA ?? null);
+      for (const u of slice) {
+        tuples.push(`($${p++}::text, $${p++}::text, $${p++}::text, $${p++}::text, $${p++}, $${p++}::text)`);
+        params.push(u.id, u.productName, u.ingredientName, u.companyName, u.categoryA, u.newInsuranceCode);
       }
       const sql = `
         UPDATE "Medication" AS m
-        SET "productName" = v.pn,
+        SET "productName"    = v.pn,
             "ingredientName" = v.ing,
-            "companyName" = v.cn,
-            "categoryA" = v.ca,
-            "updatedAt" = NOW()
-        FROM (VALUES ${tuples.join(", ")}) AS v(id, pn, ing, cn, ca)
+            "companyName"    = v.cn,
+            "categoryA"      = v.ca,
+            "insuranceCode"  = COALESCE(m."insuranceCode", v.ic),
+            "updatedAt"      = NOW()
+        FROM (VALUES ${tuples.join(", ")}) AS v(id, pn, ing, cn, ca, ic)
         WHERE m.id = v.id
       `;
       await withDbRetry(() => prisma.$executeRawUnsafe(sql, ...params));
