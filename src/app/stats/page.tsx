@@ -526,6 +526,7 @@ export default function StatsPage() {
   // 제품명 자동완성 — 입력 중인 행의 productName 으로 마스터 검색 (200ms 디바운스)
   const autocompleteQuery = autocompleteIdx != null ? (manualDrugs[autocompleteIdx]?.productName ?? "") : "";
   useEffect(() => {
+    console.log("[AC] effect run", { autocompleteIdx, autocompleteQuery });
     if (autocompleteIdx == null) { setAutocompleteOptions([]); return; }
     const q = autocompleteQuery.trim();
     if (q.length < 2) { setAutocompleteOptions([]); return; }
@@ -533,11 +534,13 @@ export default function StatsPage() {
     const t = setTimeout(async () => {
       try {
         const url = `/api/medications/search?q=${encodeURIComponent(q)}&limit=8${userId ? `&userId=${userId}` : ""}`;
+        console.log("[AC] fetching", url);
         const res = await fetch(url);
         const data = await res.json();
+        console.log("[AC] response", { count: data.medications?.length, sample: data.medications?.[0] });
         setAutocompleteOptions(Array.isArray(data.medications) ? data.medications.slice(0, 8) : []);
         setAutocompleteFocus(0);
-      } catch { setAutocompleteOptions([]); }
+      } catch (err) { console.error("[AC] fetch error", err); setAutocompleteOptions([]); }
     }, 200);
     return () => clearTimeout(t);
   }, [autocompleteIdx, autocompleteQuery, session?.user?.id]);
