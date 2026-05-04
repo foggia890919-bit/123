@@ -1620,14 +1620,26 @@ async function matchMedication(
 
 // ── 유틸 ──────────────────────────────────────────────────────────────────────
 
-// "로수듀오정(rosuva/ezt10/20)HLB제약" 같은 OCR 결과에서 한글 약품명과 용량을 분리.
+// "로수듀오정(rosuva/ezt10/20)HLB제약" 또는 "103 아라펜정tramadol/AAP:..." 같은
+// OCR 결과에서 한글 약품명과 용량을 분리. positional 추출 시 productName 영역에
+// 처방코드 (103 / 103+ / 205.. 등) 가 같이 들어올 수 있으므로, 한글 prefix 는 문자열
+// 어디서든 (시작이 아니라도) 찾는다.
 function parseDrugName(s: string): { korean: string; dose: string } {
   if (!s) return { korean: "", dose: "" };
-  // 한글 + 한글 사이 공백/숫자 허용 (정/캡슐/시럽 등 제형 포함). 영문 또는 ( 가 나오면 종료.
-  const koreanMatch = s.match(/^[\s]*([가-힣][가-힣\s]*(?:정|캡슐|캅셀|시럽|주사액|주사|연고|크림|겔|패취|포|산제|환제|액|주|에스|서방정|장용정)?)/);
-  const korean = (koreanMatch?.[1] ?? "").replace(/\s+$/, "").trim();
-  // 용량: 숫자/숫자 또는 단일 숫자 + mg/g/밀리그램 허용
-  const doseMatch = s.match(/(\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?)/);
+  // 한글 + 한글 사이 공백 허용 + 제형 어미 우선. 처방코드 ("103 ", "205.. " 등) 는 무시
+  // 하고 첫 한글 시퀀스부터 매칭. 제형으로 끝나면 우선 채택, 아니면 한글-only fallback.
+  const withSuffix = s.match(/([가-힣][가-힣\s]*(?:정|캡슐|캅셀|시럽|주사액|주사|연고|크림|겔|패취|포|산제|환제|액|주|에스|서방정|장용정))/);
+  const fallback = !withSuffix ? s.match(/([가-힣][가-힣\s]+)/) : null;
+  const korean = (withSuffix?.[1] ?? fallback?.[1] ?? "").replace(/\s+/g, "").trim();
+  // 용량: 처방코드의 숫자가 아니라 약품명 뒤의 dose 패턴 우선. 한글 끝난 위치부터 검색.
+  let doseSearchFrom = 0;
+  if (withSuffix?.[1]) {
+    const idx = s.indexOf(withSuffix[1]);
+    if (idx >= 0) doseSearchFrom = idx + withSuffix[1].length;
+  }
+  const tail = s.slice(doseSearchFrom);
+  const doseMatch = tail.match(/(\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?)/)
+    ?? s.match(/(\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?)/);
   const dose = doseMatch?.[1]?.replace(/\s+/g, "") ?? "";
   return { korean, dose };
 }
