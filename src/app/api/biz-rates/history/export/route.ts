@@ -69,7 +69,7 @@ export async function GET(req: NextRequest) {
   const body = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
 
   const encoded = encodeURIComponent("요율표_변경이력.xlsx");
-  return new NextResponse(body, {
+  return new NextResponse(body as BodyInit, {
     status: 200,
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

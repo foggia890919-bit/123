@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
   const encodedName = encodeURIComponent(doc.fileName ?? "settlement.xlsx");
   const body = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
 
-  return new NextResponse(body, {
+  return new NextResponse(body as BodyInit, {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       "Content-Disposition": `attachment; filename*=UTF-8''${encodedName}`,

@@ -120,7 +120,7 @@ export async function GET(req: NextRequest) {
 
   const buf = await wb.xlsx.writeBuffer();
   const body = new Uint8Array(buf as ArrayBuffer);
-  return new NextResponse(body, {
+  return new NextResponse(body as BodyInit, {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(`매핑템플릿_${corp}.xlsx`)}`,

@@ -142,7 +142,7 @@ export async function PUT(req: NextRequest) {
   const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
   const body = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
 
-  return new NextResponse(body, {
+  return new NextResponse(body as BodyInit, {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       "Content-Disposition": `attachment; filename="additional_rates.xlsx"`,
