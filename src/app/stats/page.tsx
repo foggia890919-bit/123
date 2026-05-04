@@ -50,13 +50,14 @@ interface ManualDrug {
   commissionRate: number | null;
   additionalRate: number | null;
   matchedMedicationId: string | null;
+  bboxYPercent: number | null;   // 이미지 내 행 Y 위치 (%) — 셀 포커스 시 이미지 자동 추적용
 }
 interface UserClient {
   id: string; clientName: string; bizNumber: string; approved: boolean;
 }
 
 function emptyManualDrug(): ManualDrug {
-  return { insuranceCode: "", companyName: "", productName: "", quantity: "", unitPrice: null, commissionRate: null, additionalRate: null, matchedMedicationId: null };
+  return { insuranceCode: "", companyName: "", productName: "", quantity: "", unitPrice: null, commissionRate: null, additionalRate: null, matchedMedicationId: null, bboxYPercent: null };
 }
 
 // ─── 거래처별 일괄 업로드 패널 ──────────────────────────────────────────────
@@ -156,6 +157,7 @@ function BatchUploadPanel({ clients }: { clients: UserClient[] }) {
         commissionRate: d.commissionRate,
         additionalRate: d.additionalRate,
         matchedMedicationId: d.matchedMedicationId,
+        bboxYPercent: d.bboxYPercent,
       }));
       // 행별 수수료 = 수량 × 단가 × (수수료율 + 추가율) / 100
       const totalFee = finalDrugs.reduce((s, d) => {
@@ -643,6 +645,7 @@ export default function StatsPage() {
           commissionRate: d.commissionRate,
           additionalRate: d.additionalRate,
           matchedMedicationId: d.matchedMedicationId,
+          bboxYPercent: d.bboxYPercent,
         }));
         setManualDrugs(paired.length ? paired : [emptyManualDrug()]);
       } else if (manualInitMode === "lastMonth" && lastMonth?.drugs.length) {
@@ -741,19 +744,20 @@ export default function StatsPage() {
   // 행/필드에 포커스 들어오면 이미지를 해당 약품의 Y 위치로 스크롤
   function handleManualFocus(idx: number) {
     setFocusedIdx(idx);
-    const yPercent = editOcr?.drugs[idx]?.bboxYPercent ?? null;
+    // bboxYPercent 는 manualDrug 자체에 보관 — editOcr.drugs[idx] 와 idx 가 어긋나는
+    // 경우(행 추가/삭제, 중복 제거 등) 에도 정확한 bbox 사용 가능
+    const yPercent = manualDrugs[idx]?.bboxYPercent ?? null;
     const scrollEl = imageScrollRef.current;
     const imgEl = imageElRef.current;
     if (!scrollEl || !imgEl) return;
-    // 이미지가 scrollEl 안에서 어디에 있는지 정확히 계산 (패딩/wrapper 보정)
     const imgRect = imgEl.getBoundingClientRect();
     const scrollRect = scrollEl.getBoundingClientRect();
     const imgTopInScroll = imgRect.top - scrollRect.top + scrollEl.scrollTop;
     if (yPercent != null) {
       const targetY = imgTopInScroll + (imgEl.clientHeight * yPercent) / 100;
       scrollEl.scrollTo({ top: Math.max(0, targetY - scrollEl.clientHeight / 2), behavior: "smooth" });
-    } else if (editOcr?.drugs.length) {
-      const targetY = imgTopInScroll + (idx / editOcr.drugs.length) * imgEl.clientHeight;
+    } else if (manualDrugs.length) {
+      const targetY = imgTopInScroll + (idx / manualDrugs.length) * imgEl.clientHeight;
       scrollEl.scrollTo({ top: Math.max(0, targetY - scrollEl.clientHeight / 2), behavior: "smooth" });
     }
   }
@@ -1049,11 +1053,11 @@ export default function StatsPage() {
                   <img ref={imageElRef} src={imageUrl} alt="처방전"
                     style={{ width: "100%", display: "block" }}
                     className="rounded" draggable={false} />
-                  {focusedIdx != null && editOcr?.drugs[focusedIdx]?.bboxYPercent != null && (
+                  {focusedIdx != null && manualDrugs[focusedIdx]?.bboxYPercent != null && (
                     <div
                       className="absolute left-0 right-0 pointer-events-none border-y-2 border-yellow-400 bg-yellow-300/20 transition-all"
                       style={{
-                        top: `${editOcr.drugs[focusedIdx]!.bboxYPercent}%`,
+                        top: `${manualDrugs[focusedIdx]!.bboxYPercent}%`,
                         height: "32px",
                         transform: "translateY(-50%)",
                       }}

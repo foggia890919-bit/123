@@ -311,14 +311,25 @@ export async function POST(req: NextRequest) {
       };
     });
 
-    const avgConfidence = drugs.length
-      ? Math.round(drugs.reduce((s, d) => s + d.finalConfidence, 0) / drugs.length)
+    // 안전망 — 같은 마스터 ID + 같은 수량 + 같은 보험코드면 명백한 중복 (LLM 이 같은 행을
+    // 여러 번 뽑았거나 다른 dose 가 같은 master 로 잘못 매칭된 경우). 첫 번째만 유지.
+    const seen = new Set<string>();
+    const dedupedDrugs = drugs.filter((d) => {
+      const key = `${d.matchedMedicationId ?? "_"}|${d.insuranceCode.value}|${d.quantity.value}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const finalDrugsList = dedupedDrugs;
+
+    const avgConfidence = finalDrugsList.length
+      ? Math.round(finalDrugsList.reduce((s, d) => s + d.finalConfidence, 0) / finalDrugsList.length)
       : 0;
-    const manualCheckCount = drugs.filter((d) => d.manualCheck).length;
+    const manualCheckCount = finalDrugsList.filter((d) => d.manualCheck).length;
 
     const result: FusionResult = {
       source: "fusion",
-      drugs,
+      drugs: finalDrugsList,
       avgConfidence,
       manualCheckCount,
       rawClovaText: clovaText,
@@ -526,29 +537,28 @@ function extractByColumnMap(
   colMap: ColumnMap
 ): { quantity: string | null; rowY: number } | null {
   if (!productName || !colMap.quantity) return null;
-  const key = productName.replace(/\s+/g, "").slice(0, 5).toLowerCase();
-  if (key.length < 3) return null;
+  const parsed = parseDrugName(productName);
+  const koreanKey = parsed.korean.replace(/\s+/g, "").toLowerCase();
+  const doseKey = parsed.dose.replace(/\s+/g, "").toLowerCase();
+  if (koreanKey.length < 2) return null;
 
-  // 1) productName 의 첫 5글자가 들어있는 필드 중 colMap.productName X 와 가장 가까운 것
-  let productField: ClovaField | null = null;
-  let productFieldDist = Infinity;
+  // 1) 같은 한글 약품명을 가진 행이 여러 개일 수 있음(다른 용량 변형). 한글 prefix +
+  //    dose 가 모두 들어있는 행만 선택해 용량 변형을 구분.
+  let targetRow: ClovaRow | null = null;
   for (const row of rows) {
     if (row.avgY <= colMap.headerY) continue;
-    for (const f of row.fields) {
-      const t = f.inferText.replace(/\s+/g, "").toLowerCase();
-      if (!t.includes(key)) continue;
-      const dist = colMap.productName != null ? Math.abs(fieldXCenter(f) - colMap.productName) : 0;
-      if (dist < productFieldDist) {
-        productField = f;
-        productFieldDist = dist;
-      }
-    }
+    const rowText = row.text.replace(/\s+/g, "").toLowerCase();
+    if (!rowText.includes(koreanKey)) continue;
+    if (doseKey && !rowText.includes(doseKey)) continue;
+    targetRow = row;
+    break;
   }
-  if (!productField) return null;
+  if (!targetRow) return null;
 
-  const productY = fieldYCenter(productField);
+  const productY = targetRow.avgY;
 
-  // 2) 같은 Y 라인 (±15px) + colMap.quantity X 근처 (±100px) 의 숫자 필드 찾기
+  // 2) 같은 Y 라인 (±15px) + colMap.quantity X 근처 (±100px) 의 숫자 필드 찾기.
+  //    raw 필드를 직접 본다 — 클러스터링이 두 행을 합쳐버려도 Y 거리로 막아줌.
   let qtyField: ClovaField | null = null;
   let qtyDist = Infinity;
   for (const row of rows) {
@@ -558,7 +568,6 @@ function extractByColumnMap(
       const fx = fieldXCenter(f);
       const xDist = Math.abs(fx - colMap.quantity);
       if (xDist > 100) continue;
-      // 숫자만 (사용량 컬럼은 항상 숫자)
       if (!/\d/.test(f.inferText)) continue;
       if (xDist < qtyDist) {
         qtyField = f;
@@ -660,10 +669,18 @@ function locateRowInClova(
 ): number | null {
   if (!rows.length || !imageHeight) return null;
   const code = item.insuranceCode.replace(/\D/g, "");
-  const productKey = item.productName.replace(/\s+/g, "").slice(0, 5).toLowerCase();
+  const parsed = parseDrugName(item.productName);
+  const koreanKey = parsed.korean.replace(/\s+/g, "").toLowerCase();
+  const doseKey = parsed.dose.replace(/\s+/g, "").toLowerCase();
   for (const r of rows) {
     const t = r.text.replace(/\s+/g, "").toLowerCase();
-    const matched = (code.length === 9 && t.includes(code)) || (productKey.length >= 3 && t.includes(productKey));
+    let matched = false;
+    if (code.length === 9 && t.includes(code)) {
+      matched = true;
+    } else if (koreanKey.length >= 2 && t.includes(koreanKey)) {
+      // dose 가 있으면 dose 도 일치해야 같은 row 로 판정 (10/10 vs 10/20 구분)
+      matched = !doseKey || t.includes(doseKey);
+    }
     if (!matched) continue;
     return Math.max(0, Math.min(100, Math.round((r.avgY / imageHeight) * 1000) / 10));
   }
@@ -966,14 +983,16 @@ async function matchMedication(
       take: 20,
     });
     if (rows.length === 0) return null;
-    // 용량 필터 — 마스터 productName에 dose token이 포함되는 row 우선
-    let pool = rows;
+    // 용량 필터 — dose 가 있으면 반드시 매칭. 없으면 빈 결과 반환 (다른 용량 변형으로
+    // 잘못 떨어지는 것 방지: 로수듀오 10/20 이 마스터에 없을 때 10/10 으로 가짜 매칭 X)
     if (requireDose && doseToken) {
       const filtered = rows.filter((r: MasterRow) => normalizeForDose(r.productName).includes(normalizeForDose(doseToken)));
-      if (filtered.length) pool = filtered;
+      if (filtered.length === 0) return null;
+      const exact = filtered.find((r: MasterRow) => r.productName === item.productName);
+      return { row: exact ?? filtered[0], exact: !!exact };
     }
-    const exact = pool.find((r: MasterRow) => r.productName === item.productName);
-    return { row: exact ?? pool[0], exact: !!exact };
+    const exact = rows.find((r: MasterRow) => r.productName === item.productName);
+    return { row: exact ?? rows[0], exact: !!exact };
   }
 
   // 1차: 한글 약품명 + 제약사 + dose
