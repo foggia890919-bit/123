@@ -96,26 +96,28 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
           </button>
         </div>
 
-        <div ref={overlayRef} className="relative w-full bg-gray-900 rounded-lg overflow-hidden select-none touch-none"
-             style={{ maxHeight: "70vh" }}>
-          {imgUrl && (
-            <img ref={imgRef} src={imgUrl} onLoad={onImgLoad} alt="원본"
-                 className="block w-full h-auto max-h-[70vh] object-contain pointer-events-none" />
-          )}
-          <svg className="absolute inset-0 w-full h-full pointer-events-none"
-               viewBox="0 0 100 100" preserveAspectRatio="none">
-            <path d={polyPath} fill="rgba(59,130,246,0.15)" stroke="rgb(59,130,246)" strokeWidth="0.4"
-                  vectorEffect="non-scaling-stroke" />
-          </svg>
-          {corners.map((c, i) => (
-            <button key={i}
-              onPointerDown={(e) => { e.preventDefault(); (e.target as HTMLElement).setPointerCapture?.(e.pointerId); setDragging(i); }}
-              className="absolute -translate-x-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-white border-2 border-blue-500 shadow-lg flex items-center justify-center cursor-grab active:cursor-grabbing touch-none"
-              style={{ left: `${c.x * 100}%`, top: `${c.y * 100}%` }}
-              aria-label={`코너 ${i + 1}`}>
-              <span className="block w-2 h-2 rounded-full bg-blue-500" />
-            </button>
-          ))}
+        <div className="w-full bg-gray-900 rounded-lg overflow-auto flex items-center justify-center" style={{ maxHeight: "70vh" }}>
+          <div ref={overlayRef} className="relative inline-block select-none touch-none">
+            {imgUrl && (
+              <img ref={imgRef} src={imgUrl} onLoad={onImgLoad} alt="원본"
+                   className="block max-w-full max-h-[70vh] pointer-events-none"
+                   draggable={false} />
+            )}
+            <svg className="absolute inset-0 w-full h-full pointer-events-none"
+                 viewBox="0 0 100 100" preserveAspectRatio="none">
+              <path d={polyPath} fill="rgba(59,130,246,0.15)" stroke="rgb(59,130,246)" strokeWidth="0.4"
+                    vectorEffect="non-scaling-stroke" />
+            </svg>
+            {corners.map((c, i) => (
+              <button key={i}
+                onPointerDown={(e) => { e.preventDefault(); (e.target as HTMLElement).setPointerCapture?.(e.pointerId); setDragging(i); }}
+                className="absolute -translate-x-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-white border-2 border-blue-500 shadow-lg flex items-center justify-center cursor-grab active:cursor-grabbing touch-none"
+                style={{ left: `${c.x * 100}%`, top: `${c.y * 100}%` }}
+                aria-label={`코너 ${i + 1}`}>
+                <span className="block w-2 h-2 rounded-full bg-blue-500" />
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 mt-4">
