@@ -844,6 +844,15 @@ export default function StatsPage() {
   function addManualRow() {
     setManualDrugs((prev) => [...prev, emptyManualDrug()]);
   }
+  function moveManualRow(fromIdx: number, toIdx: number) {
+    setManualDrugs((prev) => {
+      if (fromIdx === toIdx || fromIdx < 0 || toIdx < 0 || fromIdx >= prev.length || toIdx >= prev.length) return prev;
+      const next = [...prev];
+      const [row] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, row);
+      return next;
+    });
+  }
 
   // 행/필드에 포커스 들어오면 이미지를 해당 약품의 Y 위치로 스크롤
   function handleManualFocus(idx: number) {
@@ -1058,7 +1067,7 @@ export default function StatsPage() {
                     </button>
                   )}
                   {showDropdown && (
-                    <div className="absolute z-20 top-full mt-1 left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto">
+                    <div className="absolute z-50 top-full mt-1 left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto">
                       {filteredClients.length === 0 ? (
                         <p className="text-xs text-gray-400 text-center py-4">검색 결과 없음</p>
                       ) : (
@@ -1467,8 +1476,9 @@ export default function StatsPage() {
               <table className="w-full text-xs table-fixed">
                 <thead>
                   <tr className="border-b border-gray-200 bg-gray-50">
-                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[26%]">보험코드</th>
-                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[20%]">제약사</th>
+                    <th className="text-center py-1.5 px-1 font-medium text-gray-500 w-[44px]">#</th>
+                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[24%]">보험코드</th>
+                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[18%]">제약사</th>
                     <th className="text-left py-1.5 px-1.5 font-medium text-gray-500">제품명</th>
                     <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[14%]">수량</th>
                     <th className="py-1.5 px-1 w-[34px]"></th>
@@ -1482,6 +1492,16 @@ export default function StatsPage() {
                     const lowConf = aiPair?.manualCheck;
                     return (
                       <tr key={i} className={`border-b border-gray-100 h-9 ${focusedIdx === i ? "bg-yellow-50" : lowConf ? "bg-red-50/50" : ""}`}>
+                        <td className="px-1 align-middle text-center">
+                          <select value={i}
+                            onChange={(e) => moveManualRow(i, parseInt(e.target.value, 10))}
+                            title="행 순서 변경 — 다른 위치 선택 시 이 행이 그 위치로 이동"
+                            className="w-full h-7 border border-gray-300 rounded px-1 text-[11px] bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 cursor-pointer">
+                            {manualDrugs.map((_, j) => (
+                              <option key={j} value={j}>{j + 1}{j === i ? "" : ` ↩`}</option>
+                            ))}
+                          </select>
+                        </td>
                         <td className="px-1 align-middle">
                           <input value={d.insuranceCode}
                             ref={(el) => { manualInputRefs.current[`${i}:insuranceCode`] = el; }}
