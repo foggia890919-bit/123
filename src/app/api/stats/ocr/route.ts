@@ -74,6 +74,9 @@ export interface PipelineDiagnostics {
     accepted: boolean;
     droppedReason: string | null;  // 탈락한 경우 이유
   }>;
+  // 마스터 매칭 실패한 drug 들의 (이름, 단가) 샘플 — 마스터 DB 에 약품이 없는지 vs
+  // 매칭 로직 버그인지 사용자가 빨리 판단할 수 있게.
+  masterUnmatchedSamples: Array<{ productName: string; unitPriceHint: number | null }>;
 }
 
 export interface FusionResult {
@@ -180,6 +183,7 @@ export async function POST(req: NextRequest) {
       filteredByIsLikelyDrug: 0,
       masterMatchedCount: 0,
       masterUnmatchedCount: 0,
+      masterUnmatchedSamples: [],
       dedupedCount: 0,
       finalCount: 0,
       drugCandidates: [],
@@ -214,6 +218,7 @@ export async function POST(req: NextRequest) {
           quantity: p.quantity,
           confidence: 80,
           priceHint: parseInt(p.unitPrice.replace(/[^\d]/g, ""), 10) || undefined,
+          anchorYRaw: p.anchorY,
         }));
     } else {
       // positional 부실 시 기존 LLM 경로
@@ -333,8 +338,17 @@ export async function POST(req: NextRequest) {
       const baselineConf = Math.max(llmConf, completeness);
       const finalConfidence = matched.matchedMedicationId ? matched.matchConfidence : baselineConf;
       const manualCheck = finalConfidence < 95;
-      if (matched.matchedMedicationId) pipeline.masterMatchedCount++;
-      else pipeline.masterUnmatchedCount++;
+      if (matched.matchedMedicationId) {
+        pipeline.masterMatchedCount++;
+      } else {
+        pipeline.masterUnmatchedCount++;
+        if (pipeline.masterUnmatchedSamples.length < 10) {
+          pipeline.masterUnmatchedSamples.push({
+            productName: item.productName,
+            unitPriceHint: item.priceHint ?? null,
+          });
+        }
+      }
 
       const itemWithExtract = item as MergedDrug & { _extract?: ExtractResult | null };
       pendingDrugs.push({
@@ -347,7 +361,11 @@ export async function POST(req: NextRequest) {
         matchedMedicationId: matched.matchedMedicationId,
         finalConfidence,
         manualCheck,
-        anchorY: locateRowInClova(item, clovaRows, clovaImageHeight),
+        // positional path 가 알고 있는 정확한 anchor Y 우선 사용 — 텍스트 검색 기반
+        // locateRowInClova 는 같은 한글명 다른 dose 변형이 여러 개 있으면 잘못된 행 픽.
+        anchorY: item.anchorYRaw != null && clovaImageHeight > 0
+          ? Math.max(0, Math.min(100, Math.round((item.anchorYRaw / clovaImageHeight) * 1000) / 10))
+          : locateRowInClova(item, clovaRows, clovaImageHeight),
         productNameRaw: item.productName,         // ← 마스터 덮어쓰기 전 LLM/Vision 원본
         insuranceCodeRaw: (matched.insuranceCode || item.insuranceCode).replace(/\D/g, ""),
         rawDose: parseDrugName(item.productName).dose,
@@ -642,6 +660,7 @@ interface PositionalDrug {
   unitPrice: string;        // OCR 에서 본 단가 (숫자 문자열)
   quantity: string;
   insuranceCode: string;    // 9자리가 같은 행에 있으면 즉시
+  anchorY: number;          // 약품명 anchor field 의 raw Y 좌표 (px) — 정확한 위치 추적용
 }
 interface PositionalResult {
   drugs: PositionalDrug[];
@@ -765,7 +784,7 @@ function extractDrugsPositionalWithDebug(rows: ClovaRow[], colMap: ColumnMap | n
     // 같은 클러스터의 다른 row 정보도 사용했을 수 있으니 row 변수 자체는 더 사용 안 함
     void row;
 
-    drugs.push({ productName, unitPrice, quantity, insuranceCode });
+    drugs.push({ productName, unitPrice, quantity, insuranceCode, anchorY });
     candidates.push({ text: cand.field.inferText, y: anchorY, x: fieldXCenter(cand.field), accepted: true, reason: null });
   }
   return { drugs, candidates };
@@ -1328,6 +1347,7 @@ interface MergedDrug {
   quantity: string;
   confidence: number;
   priceHint?: number;   // OCR 에서 본 단가 — matchMasterByNameAndPrice 가 dose 변형 구분하는 키
+  anchorYRaw?: number;  // positional 추출 시 약품명 field 의 raw Y 좌표 (px). 노란 띠 정확한 위치용.
 }
 
 async function callGeminiMerge(args: {
@@ -1600,14 +1620,26 @@ async function matchMedication(
 
 // ── 유틸 ──────────────────────────────────────────────────────────────────────
 
-// "로수듀오정(rosuva/ezt10/20)HLB제약" 같은 OCR 결과에서 한글 약품명과 용량을 분리.
+// "로수듀오정(rosuva/ezt10/20)HLB제약" 또는 "103 아라펜정tramadol/AAP:..." 같은
+// OCR 결과에서 한글 약품명과 용량을 분리. positional 추출 시 productName 영역에
+// 처방코드 (103 / 103+ / 205.. 등) 가 같이 들어올 수 있으므로, 한글 prefix 는 문자열
+// 어디서든 (시작이 아니라도) 찾는다.
 function parseDrugName(s: string): { korean: string; dose: string } {
   if (!s) return { korean: "", dose: "" };
-  // 한글 + 한글 사이 공백/숫자 허용 (정/캡슐/시럽 등 제형 포함). 영문 또는 ( 가 나오면 종료.
-  const koreanMatch = s.match(/^[\s]*([가-힣][가-힣\s]*(?:정|캡슐|캅셀|시럽|주사액|주사|연고|크림|겔|패취|포|산제|환제|액|주|에스|서방정|장용정)?)/);
-  const korean = (koreanMatch?.[1] ?? "").replace(/\s+$/, "").trim();
-  // 용량: 숫자/숫자 또는 단일 숫자 + mg/g/밀리그램 허용
-  const doseMatch = s.match(/(\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?)/);
+  // 한글 + 한글 사이 공백 허용 + 제형 어미 우선. 처방코드 ("103 ", "205.. " 등) 는 무시
+  // 하고 첫 한글 시퀀스부터 매칭. 제형으로 끝나면 우선 채택, 아니면 한글-only fallback.
+  const withSuffix = s.match(/([가-힣][가-힣\s]*(?:정|캡슐|캅셀|시럽|주사액|주사|연고|크림|겔|패취|포|산제|환제|액|주|에스|서방정|장용정))/);
+  const fallback = !withSuffix ? s.match(/([가-힣][가-힣\s]+)/) : null;
+  const korean = (withSuffix?.[1] ?? fallback?.[1] ?? "").replace(/\s+/g, "").trim();
+  // 용량: 처방코드의 숫자가 아니라 약품명 뒤의 dose 패턴 우선. 한글 끝난 위치부터 검색.
+  let doseSearchFrom = 0;
+  if (withSuffix?.[1]) {
+    const idx = s.indexOf(withSuffix[1]);
+    if (idx >= 0) doseSearchFrom = idx + withSuffix[1].length;
+  }
+  const tail = s.slice(doseSearchFrom);
+  const doseMatch = tail.match(/(\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?)/)
+    ?? s.match(/(\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?)/);
   const dose = doseMatch?.[1]?.replace(/\s+/g, "") ?? "";
   return { korean, dose };
 }
