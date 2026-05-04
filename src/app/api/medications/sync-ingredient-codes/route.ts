@@ -5,9 +5,9 @@ import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 export const maxDuration = 300;
 
 const API_KEY = process.env.PUBLIC_DATA_API_KEY!;
-const BASE_URL = "https://api.odcloud.kr/api/15118958/v1/uddi:6753c7f1-65ed-4bbe-9e98-cd6b7b156a92";
+const BASE_URL = "https://api.odcloud.kr/api/15118958/v1/uddi:1d0f74ec-fc9e-4386-9f67-9b1295b4c149";
 
-interface AtcItem { [key: string]: string | undefined }
+interface AtcItem { [key: string]: string | number | undefined }
 
 async function fetchPage(page: number): Promise<{ items: AtcItem[]; totalCount: number }> {
   const url = new URL(BASE_URL);
