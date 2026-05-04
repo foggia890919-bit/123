@@ -214,6 +214,13 @@ export async function syncProductMaster(opts: { triggeredBy?: string } = {}): Pr
       locale: "ko-KR",
       timezoneId: "Asia/Seoul",
     });
+    // tsx/esbuild가 page.evaluate 콜백에 __name 헬퍼 호출을 삽입하는데
+    // 브라우저 컨텍스트에는 그 함수가 없어서 ReferenceError 발생.
+    // 페이지 로드 직전에 stub을 주입해서 우회.
+    await ctx.addInitScript(() => {
+      const g = globalThis as unknown as { __name?: (fn: unknown) => unknown };
+      if (typeof g.__name === "undefined") g.__name = (fn) => fn;
+    });
     const page = await ctx.newPage();
 
     // 로그인

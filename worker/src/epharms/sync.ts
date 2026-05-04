@@ -59,6 +59,11 @@ export async function runEpharmsSync(opts: { onlyAccountId?: string } = {}): Pro
         locale: "ko-KR",
         timezoneId: "Asia/Seoul",
       });
+      // tsx/esbuild가 page.evaluate 콜백에 __name 호출을 삽입함 — 브라우저 stub 주입
+      await ctx.addInitScript(() => {
+        const g = globalThis as unknown as { __name?: (fn: unknown) => unknown };
+        if (typeof g.__name === "undefined") g.__name = (fn) => fn;
+      });
       const page = await ctx.newPage();
       try {
         const pw = decryptPw(acc.loginPwEnc);
