@@ -1066,37 +1066,52 @@ export default function StatsPage() {
                       <X className="w-3.5 h-3.5" />
                     </button>
                   )}
-                  {showDropdown && (
-                    <div className="absolute z-50 top-full mt-1 left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto">
-                      {filteredClients.length === 0 ? (
-                        <p className="text-xs text-gray-400 text-center py-4">검색 결과 없음</p>
-                      ) : (
-                        filteredClients.map((c) => (
-                          <div key={c.id} role="button" tabIndex={0}
-                            onClick={() => selectClient(c)}
-                            onKeyDown={(e) => { if (e.key === "Enter") selectClient(c); }}
-                            className="w-full text-left px-3 py-2 hover:bg-blue-50 flex items-center justify-between gap-2 cursor-pointer">
-                            <div className="min-w-0">
-                              <p className="text-sm font-medium text-gray-800 truncate">{c.clientName}</p>
-                              <p className="text-xs text-gray-400">{c.bizNumber}</p>
-                            </div>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              {c.approved
-                                ? <span className="text-[10px] bg-green-100 text-green-700 border border-green-300 rounded px-1.5 py-0.5">승인완료</span>
-                                : <span className="text-[10px] bg-yellow-100 text-yellow-700 border border-yellow-300 rounded px-1.5 py-0.5">승인전</span>
-                              }
-                              <button type="button"
-                                onClick={(e) => { e.stopPropagation(); deleteClient(c); }}
-                                className="text-gray-300 hover:text-red-600 p-0.5 rounded hover:bg-red-50"
-                                title="이 거래처 삭제">
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
+                  {showDropdown && (() => {
+                    // 매칭 결과 우선, 없으면 전체 거래처를 폴백으로 노출.
+                    const noMatch = filteredClients.length === 0 && clients.length > 0;
+                    const list = noMatch ? clients : filteredClients;
+                    return (
+                      <div className="absolute z-50 top-full mt-1 left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg max-h-72 overflow-y-auto">
+                        {clients.length === 0 ? (
+                          <div className="px-3 py-4 text-center">
+                            <p className="text-xs text-gray-500 mb-2">등록된 거래처가 없습니다</p>
+                            <p className="text-[11px] text-gray-400">오른쪽 + 버튼으로 거래처를 가등록하세요</p>
                           </div>
-                        ))
-                      )}
-                    </div>
-                  )}
+                        ) : (
+                          <>
+                            {noMatch && (
+                              <p className="px-3 py-1.5 text-[11px] text-gray-500 bg-yellow-50 border-b border-yellow-200">
+                                "{hospitalQuery}" 와 일치하는 거래처가 없어 전체 목록 ({clients.length}건) 을 표시합니다
+                              </p>
+                            )}
+                            {list.map((c) => (
+                              <div key={c.id} role="button" tabIndex={0}
+                                onClick={() => selectClient(c)}
+                                onKeyDown={(e) => { if (e.key === "Enter") selectClient(c); }}
+                                className="w-full text-left px-3 py-2 hover:bg-blue-50 flex items-center justify-between gap-2 cursor-pointer">
+                                <div className="min-w-0">
+                                  <p className="text-sm font-medium text-gray-800 truncate">{c.clientName}</p>
+                                  <p className="text-xs text-gray-400">{c.bizNumber}</p>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {c.approved
+                                    ? <span className="text-[10px] bg-green-100 text-green-700 border border-green-300 rounded px-1.5 py-0.5">승인완료</span>
+                                    : <span className="text-[10px] bg-yellow-100 text-yellow-700 border border-yellow-300 rounded px-1.5 py-0.5">승인전</span>
+                                  }
+                                  <button type="button"
+                                    onClick={(e) => { e.stopPropagation(); deleteClient(c); }}
+                                    className="text-gray-300 hover:text-red-600 p-0.5 rounded hover:bg-red-50"
+                                    title="이 거래처 삭제">
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
                 {/* 신규 거래처 등록 버튼 */}
                 <button type="button" onClick={() => { setRegOpen(true); setRegName(hospitalQuery); }}
