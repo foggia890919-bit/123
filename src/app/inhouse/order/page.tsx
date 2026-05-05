@@ -11,11 +11,10 @@ import RequireRole from "@/components/RequireRole";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface UserClient {
+interface InhouseClient {
   id: string;
   clientName: string;
   bizNumber: string;
-  dealerType?: string | null;
 }
 
 interface Product {
@@ -102,8 +101,8 @@ export default function InhouseOrderPage() {
   const { data: session } = useSession();
 
   // 거래처
-  const [clients, setClients] = useState<UserClient[]>([]);
-  const [selectedClient, setSelectedClient] = useState<UserClient | null>(null);
+  const [clients, setClients] = useState<InhouseClient[]>([]);
+  const [selectedClient, setSelectedClient] = useState<InhouseClient | null>(null);
   const [clientMenuOpen, setClientMenuOpen] = useState(false);
   const [clientQuery, setClientQuery] = useState("");
   const clientMenuRef = useRef<HTMLDivElement>(null);
@@ -158,9 +157,9 @@ export default function InhouseOrderPage() {
   // 내 거래처 로드
   useEffect(() => {
     if (!session?.user?.id) return;
-    fetch("/api/user-clients")
+    fetch("/api/epharms-accounts?own=true")
       .then((r) => r.json())
-      .then((d) => setClients(Array.isArray(d) ? d : []));
+      .then((d) => setClients(Array.isArray(d.items) ? d.items : []));
   }, [session?.user?.id]);
 
   // 주문 내역 로드
