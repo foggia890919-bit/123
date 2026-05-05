@@ -8,7 +8,7 @@ import {
   Hospital, Building2, FileUp, FileSearch,
   ChevronRight, LayoutDashboard, ClipboardList,
   BarChart3, PercentCircle, Pill, UserCheck,
-  Calculator, Network, Users, PackageSearch, Mail, Package, KeyRound,
+  Calculator, Network, Users, PackageSearch, Mail, Package, KeyRound, ShoppingCart,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -159,6 +159,13 @@ const BIZ_MENU_GROUPS = [
         desc: "자동주문용 상품 카탈로그. 워커 자동 동기화 또는 엑셀 직접 업로드",
         icon: PackageSearch,
         color: "bg-blue-50 text-blue-600",
+      },
+      {
+        href: "/biz/inhouse-orders",
+        label: "원내거래 주문관리",
+        desc: "영업사원이 요청한 원내거래 주문 확인·처리 (PENDING → CONFIRMED → ORDERED)",
+        icon: ShoppingCart,
+        color: "bg-amber-50 text-amber-600",
       },
     ],
   },

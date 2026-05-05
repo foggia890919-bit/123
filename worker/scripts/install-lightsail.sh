@@ -3,7 +3,7 @@
 #
 # Usage on a fresh Lightsail instance:
 #   ssh ubuntu@<your-ip>
-#   curl -fsSL https://raw.githubusercontent.com/foggia890919-bit/123/claude/scrape-inventory-data-XudvE/worker/scripts/install-lightsail.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/foggia890919-bit/123/claude/plan-service-project-Ea4Bn/worker/scripts/install-lightsail.sh | bash
 #
 # After the script finishes, edit /home/ubuntu/inventory/worker/.env
 # (credentials + WORKER_TOKEN) and run:
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 REPO="https://github.com/foggia890919-bit/123.git"
-BRANCH="claude/scrape-inventory-data-XudvE"
+BRANCH="claude/plan-service-project-Ea4Bn"
 INSTALL_DIR="${HOME}/inventory"
 WORKER_DIR="${INSTALL_DIR}/worker"
 
