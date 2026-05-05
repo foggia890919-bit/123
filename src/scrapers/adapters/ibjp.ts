@@ -46,6 +46,16 @@ async function waitAny(page: Page, selector: string, timeout = 15_000): Promise<
   return page.locator(selector).first();
 }
 
+async function dismissQDialogs(page: Page): Promise<void> {
+  // Quasar (Vue) dialog backdrop blocks all pointer events — dismiss with Escape
+  for (let i = 0; i < 3; i++) {
+    const backdrop = page.locator(".q-dialog__backdrop").first();
+    if (!await backdrop.isVisible({ timeout: 800 }).catch(() => false)) break;
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(500);
+  }
+}
+
 export const ibjp: WholesaleAdapter = {
   key: "ibjp",
   name: "백제약품",
@@ -69,6 +79,7 @@ export const ibjp: WholesaleAdapter = {
     ]);
 
     await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+    await dismissQDialogs(page);
 
     if (page.url().includes("/login")) {
       // Some sites post via Enter instead; retry once with keyboard
@@ -99,6 +110,9 @@ export const ibjp: WholesaleAdapter = {
       await page.waitForTimeout(1500);
       inputAlreadyVisible = await page.locator(SEL.searchInput).first().isVisible().catch(() => false);
     }
+
+    // Dismiss any dialog that may have appeared on page navigation
+    await dismissQDialogs(page);
 
     const input = await waitAny(page, SEL.searchInput, 30_000);
     await input.click();

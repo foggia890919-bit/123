@@ -13,14 +13,15 @@ import type { Credentials, InventoryItem, WholesaleAdapter } from "../core/types
 // Note: site is HTTP only — credentials travel in plaintext.
 const SEL = {
   idInput: [
+    'input[name="user_id"]',  // family-pharm.co.kr 실제 필드명
     'input[name="id"]',
     'input[name="userId"]',
-    'input[name="user_id"]',
     'input[name="memberId"]',
     'input[name="mb_id"]',
     'input[type="text"]:not([readonly]):not([disabled])',
   ].join(", "),
   pwInput: [
+    'input[name="user_pwd"]',  // family-pharm.co.kr 실제 필드명
     'input[name="pw"]',
     'input[name="passwd"]',
     'input[name="password"]',
@@ -94,13 +95,17 @@ export const family: WholesaleAdapter = {
     await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
     await page.waitForTimeout(800);
 
-    if (await page.locator(SEL.pwInput).first().isVisible().catch(() => false)) {
-      throw new Error("family login failed — password input still visible after submit");
+    // 로그인 실패 = member 폴더에 그대로 있거나 LoginProcess로 리다이렉트
+    const url = page.url();
+    const stillOnLogin = /\/member\//i.test(url) || /LoginProcess/i.test(url);
+    if (stillOnLogin) {
+      throw new Error(`family login failed — still on login page (${url})`);
     }
   },
 
   async isLoggedIn(page: Page) {
-    return !(await page.locator(SEL.pwInput).first().isVisible().catch(() => false));
+    const url = page.url();
+    return !/\/member\//i.test(url) && !/LoginProcess/i.test(url);
   },
 
   async searchByCode(page: Page, insuranceCode: string): Promise<InventoryItem[]> {
