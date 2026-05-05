@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { Building2, Plus, Trash2, FileText, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { Building2, Plus, Trash2, FileText, CheckCircle2, XCircle, Loader2, AlertCircle, Stethoscope, Briefcase } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import RequireRole from "@/components/RequireRole";
@@ -14,6 +14,17 @@ interface UserClient {
   bizFileName: string | null;
   approved: boolean | null;
   createdAt: string;
+  dealerType?: string | null;
+}
+
+interface BizVerifyResult {
+  valid: boolean | null;
+  closed?: boolean;
+  statusText?: string;
+  taxType?: string;
+  taxTypeCd?: string;
+  isMedicalLikely?: boolean;
+  error?: string;
 }
 
 function validateBizNumber(biz: string): boolean {
@@ -42,10 +53,13 @@ export default function ClientsPage() {
   const [name, setName] = useState("");
   const [biz, setBiz] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [dealerType, setDealerType] = useState<"medical" | "business" | null>(null);
   const [registering, setRegistering] = useState(false);
   const [error, setError] = useState("");
   const [bizError, setBizError] = useState("");
   const [dupChecked, setDupChecked] = useState<"none" | "checking" | "ok" | "dup">("none");
+  const [ntsResult, setNtsResult] = useState<BizVerifyResult | null>(null);
+  const [ntsLoading, setNtsLoading] = useState(false);
 
   useEffect(() => {
     if (!session?.user?.id) return;
@@ -60,6 +74,8 @@ export default function ClientsPage() {
     setBiz(formatted);
     setBizError("");
     setDupChecked("none");
+    setNtsResult(null);
+    setDealerType(null);
 
     const digits = formatted.replace(/\D/g, "");
     if (digits.length === 10) {
@@ -67,10 +83,36 @@ export default function ClientsPage() {
         setBizError("유효하지 않은 사업자등록번호예요.");
         return;
       }
+
+      // Dup check
       setDupChecked("checking");
       const res = await fetch(`/api/user-clients?bizNumber=${digits}`);
       const data = await res.json();
-      setDupChecked(data.found ? "dup" : "ok");
+      if (data.found) {
+        setDupChecked("dup");
+        return;
+      }
+      setDupChecked("ok");
+
+      // NTS verification
+      setNtsLoading(true);
+      try {
+        const ntsRes = await fetch("/api/biz-verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ bizNumber: digits }),
+        });
+        const ntsData: BizVerifyResult = await ntsRes.json();
+        setNtsResult(ntsData);
+        // Auto-suggest type based on NTS result
+        if (ntsData.valid === true) {
+          setDealerType(ntsData.isMedicalLikely ? "medical" : "business");
+        }
+      } catch {
+        setNtsResult({ valid: null, error: "국세청 조회 실패" });
+      } finally {
+        setNtsLoading(false);
+      }
     }
   }
 
@@ -98,12 +140,19 @@ export default function ClientsPage() {
     const res = await fetch("/api/user-clients", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientName: name.trim(), bizNumber: digits, bizDocument, bizFileName }),
+      body: JSON.stringify({
+        clientName: name.trim(),
+        bizNumber: digits,
+        bizDocument,
+        bizFileName,
+        dealerType: dealerType === "business" ? "BUSINESS" : null,
+      }),
     });
     if (res.ok) {
       const created: UserClient = await res.json();
       setClients((prev) => [created, ...prev]);
       setName(""); setBiz(""); setFile(null); setDupChecked("none");
+      setNtsResult(null); setDealerType(null);
     } else {
       const d = await res.json();
       setError(d.error || "등록 중 오류가 발생했어요.");
@@ -152,15 +201,87 @@ export default function ClientsPage() {
                     maxLength={12}
                     className={bizError || dupChecked === "dup" ? "border-red-400 pr-9" : dupChecked === "ok" ? "border-green-400 pr-9" : "pr-9"}
                   />
-                  {dupChecked === "checking" && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-gray-400" />}
-                  {dupChecked === "ok" && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-green-500" />}
+                  {(dupChecked === "checking" || ntsLoading) && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-gray-400" />}
+                  {dupChecked === "ok" && !ntsLoading && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-green-500" />}
                   {dupChecked === "dup" && <XCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-red-500" />}
                 </div>
                 {bizError && <p className="text-xs text-red-500">{bizError}</p>}
                 {dupChecked === "dup" && !bizError && <p className="text-xs text-red-500">이미 등록된 사업자번호예요.</p>}
-                {dupChecked === "ok" && <p className="text-xs text-green-600">사용 가능한 사업자번호예요. ✓</p>}
+                {dupChecked === "ok" && !ntsLoading && !ntsResult && <p className="text-xs text-green-600">사용 가능한 사업자번호예요. ✓</p>}
               </div>
             </div>
+
+            {/* NTS 조회 결과 */}
+            {ntsResult && dupChecked === "ok" && (
+              <div className={`rounded-lg p-3 text-sm flex items-start gap-2 ${
+                ntsResult.valid === null ? "bg-gray-50 text-gray-500 border border-gray-200" :
+                ntsResult.valid === false ? "bg-red-50 text-red-700 border border-red-200" :
+                "bg-green-50 text-green-800 border border-green-200"
+              }`}>
+                {ntsResult.valid === null && <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />}
+                {ntsResult.valid === false && <XCircle className="w-4 h-4 shrink-0 mt-0.5" />}
+                {ntsResult.valid === true && <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />}
+                <div>
+                  {ntsResult.valid === null && <p>국세청 조회 불가 — 수동으로 거래처 유형을 선택해주세요.</p>}
+                  {ntsResult.valid === false && (
+                    <p>
+                      {ntsResult.closed ? "폐업된 사업자입니다." : `사업자 상태: ${ntsResult.statusText || "확인 불가"}`}
+                    </p>
+                  )}
+                  {ntsResult.valid === true && (
+                    <div>
+                      <p className="font-medium">국세청 조회 완료 ✓</p>
+                      <p className="text-xs mt-0.5 opacity-80">
+                        상태: {ntsResult.statusText} · 과세유형: {ntsResult.taxType}
+                        {ntsResult.isMedicalLikely && " · 면세사업자 (의료기관 가능성 높음)"}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* 거래처 유형 선택 */}
+            {dupChecked === "ok" && !bizError && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-gray-600">
+                  거래처 유형 <span className="text-red-500">*</span>
+                  {ntsResult?.isMedicalLikely && <span className="ml-1 text-green-600 font-normal">(국세청 조회 기준 자동 선택됨)</span>}
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setDealerType("medical")}
+                    className={`flex items-center gap-2 p-3 rounded-lg border-2 text-left transition-colors ${
+                      dealerType === "medical"
+                        ? "border-blue-500 bg-blue-50 text-blue-700"
+                        : "border-gray-200 hover:border-gray-300 text-gray-600"
+                    }`}
+                  >
+                    <Stethoscope className="w-4 h-4 shrink-0" />
+                    <div>
+                      <p className="text-sm font-medium">의료기관</p>
+                      <p className="text-xs opacity-70">병의원·약국</p>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDealerType("business")}
+                    className={`flex items-center gap-2 p-3 rounded-lg border-2 text-left transition-colors ${
+                      dealerType === "business"
+                        ? "border-blue-500 bg-blue-50 text-blue-700"
+                        : "border-gray-200 hover:border-gray-300 text-gray-600"
+                    }`}
+                  >
+                    <Briefcase className="w-4 h-4 shrink-0" />
+                    <div>
+                      <p className="text-sm font-medium">사업자</p>
+                      <p className="text-xs opacity-70">도매·법인·기타</p>
+                    </div>
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="space-y-1">
               <label className="text-xs font-medium text-gray-600">
@@ -184,13 +305,16 @@ export default function ClientsPage() {
 
             <Button
               type="submit"
-              disabled={registering || dupChecked === "dup" || !!bizError}
+              disabled={registering || dupChecked === "dup" || !!bizError || !dealerType}
               className="w-full"
             >
               {registering
                 ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />등록 중...</>
                 : <><Plus className="w-4 h-4 mr-2" />거래처 등록</>}
             </Button>
+            {dupChecked === "ok" && !dealerType && (
+              <p className="text-xs text-center text-gray-400">거래처 유형을 선택해야 등록할 수 있어요.</p>
+            )}
           </form>
         </div>
 
@@ -215,13 +339,24 @@ export default function ClientsPage() {
             <div className="divide-y divide-gray-100">
               {clients.map((c) => (
                 <div key={c.id} className="flex items-center gap-3 px-5 py-3.5 hover:bg-gray-50">
-                  <Building2 className="w-4 h-4 text-gray-300 shrink-0" />
+                  {c.dealerType ? (
+                    <Briefcase className="w-4 h-4 text-gray-300 shrink-0" />
+                  ) : (
+                    <Stethoscope className="w-4 h-4 text-gray-300 shrink-0" />
+                  )}
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-800 truncate">{c.clientName}</p>
                     <p className="text-xs text-gray-400 font-mono mt-0.5">{c.bizNumber}</p>
                   </div>
+                  <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 border ${
+                    c.dealerType
+                      ? "text-purple-600 bg-purple-50 border-purple-100"
+                      : "text-blue-600 bg-blue-50 border-blue-100"
+                  }`}>
+                    {c.dealerType ? "사업자" : "의료기관"}
+                  </span>
                   {c.bizFileName && (
-                    <span className="text-xs text-blue-600 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded shrink-0">
+                    <span className="text-xs text-gray-500 bg-gray-50 border border-gray-100 px-1.5 py-0.5 rounded shrink-0">
                       서류첨부
                     </span>
                   )}

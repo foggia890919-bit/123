@@ -72,7 +72,7 @@ export async function GET(req: NextRequest) {
       orderBy: { createdAt: "desc" },
       select: {
         id: true, clientName: true, bizNumber: true,
-        bizFileName: true, approved: true, createdAt: true, code: true,
+        bizFileName: true, approved: true, createdAt: true, code: true, dealerType: true,
       },
     });
   } catch {
@@ -91,25 +91,27 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
-  const { clientName, bizNumber, bizDocument, bizFileName } = await req.json();
+  const { clientName, bizNumber, bizDocument, bizFileName, dealerType } = await req.json();
   if (!clientName || !bizNumber) {
     return NextResponse.json({ error: "필수 항목 누락" }, { status: 400 });
   }
   const { fileKey: bizFileKey, fileData: bizDocumentFallback } =
     await persistDataUri(BUCKETS.userClientBiz, user.id, bizDocument);
   try {
+    const createData: Record<string, unknown> = {
+      userId: user.id,
+      clientName: String(clientName).trim(),
+      bizNumber: String(bizNumber).replace(/\D/g, ""),
+      bizDocument: bizDocumentFallback,
+      bizFileKey,
+      bizFileName: bizFileName || null,
+    };
+    if (dealerType !== undefined) createData.dealerType = dealerType ?? null;
     const row = await prisma.userClient.create({
-      data: {
-        userId: user.id,
-        clientName: String(clientName).trim(),
-        bizNumber: String(bizNumber).replace(/\D/g, ""),
-        bizDocument: bizDocumentFallback,
-        bizFileKey,
-        bizFileName: bizFileName || null,
-      },
+      data: createData as Parameters<typeof prisma.userClient.create>[0]["data"],
       select: {
         id: true, clientName: true, bizNumber: true,
-        bizFileName: true, approved: true, createdAt: true,
+        bizFileName: true, approved: true, createdAt: true, dealerType: true,
       },
     });
     return NextResponse.json(row);
