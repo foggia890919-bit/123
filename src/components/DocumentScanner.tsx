@@ -1,14 +1,12 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { X, Check, RotateCcw, Grid3x3, Square } from "lucide-react";
+import { X, Check, RotateCcw, Pencil, Square } from "lucide-react";
 
 interface Point { x: number; y: number }
 type Corners = [Point, Point, Point, Point]; // TL, TR, BR, BL (normalized 0-1)
-type Mesh = Point[][]; // mesh[row][col], row 0..MESH_N, col 0..MESH_N
 
-const MESH_N = 3; // 4×4 격자 (3행 3열의 셀 = 9 sub-quads)
-type Mode = "corners" | "mesh";
+type Mode = "corners" | "polygon";
 
 interface Props {
   file: File;
@@ -24,34 +22,20 @@ function defaultCorners(): Corners {
   ];
 }
 
-function defaultMesh(corners: Corners): Mesh {
-  // 외곽 4점은 corners 와 동일하게, 내부 점은 bilinear 보간
-  const tl = corners[0], tr = corners[1], br = corners[2], bl = corners[3];
-  const grid: Mesh = [];
-  for (let r = 0; r <= MESH_N; r++) {
-    const tr_ = r / MESH_N;
-    const left = { x: tl.x + (bl.x - tl.x) * tr_, y: tl.y + (bl.y - tl.y) * tr_ };
-    const right = { x: tr.x + (br.x - tr.x) * tr_, y: tr.y + (br.y - tr.y) * tr_ };
-    const row: Point[] = [];
-    for (let c = 0; c <= MESH_N; c++) {
-      const tc = c / MESH_N;
-      row.push({ x: left.x + (right.x - left.x) * tc, y: left.y + (right.y - left.y) * tc });
-    }
-    grid.push(row);
-  }
-  return grid;
-}
-
 export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: Props) {
   const [imgUrl, setImgUrl] = useState<string>("");
   const [imgSize, setImgSize] = useState<{ w: number; h: number } | null>(null);
   const [mode, setMode] = useState<Mode>("corners");
   const [corners, setCorners] = useState<Corners>(defaultCorners());
-  const [mesh, setMesh] = useState<Mesh>(() => defaultMesh(defaultCorners()));
+  // 다각형 모드: 가변 길이의 점 배열. 처음엔 빈 배열로 시작 — 사용자가 클릭으로 추가
+  const [polygon, setPolygon] = useState<Point[]>([]);
   const [dragging, setDragging] = useState<{ kind: Mode; idx: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const overlayRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+  // 점 핸들 위에서 mousedown 이 일어났는지 추적 — 그러면 컨테이너 click 으로
+  // 점 추가가 일어나지 않도록 차단 (드래그 시작과 점 추가가 충돌하는 문제)
+  const justGrabbedHandle = useRef(false);
 
   useEffect(() => {
     const url = URL.createObjectURL(file);
@@ -65,20 +49,15 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
     setImgSize({ w: img.naturalWidth, h: img.naturalHeight });
   }, []);
 
-  // 모드 전환 시 mesh 를 corners 기반으로 초기화 (반대 방향은 외곽만 가져옴)
   function switchMode(next: Mode) {
-    if (next === "mesh") {
-      setMesh(defaultMesh(corners));
-    } else {
-      // mesh → corners: 외곽 4점만 가져옴
-      setCorners([
-        mesh[0][0], mesh[0][MESH_N],
-        mesh[MESH_N][MESH_N], mesh[MESH_N][0],
-      ]);
+    if (next === "polygon" && polygon.length === 0) {
+      // 빈 다각형으로 시작 — 사용자가 처음부터 점을 찍게 함
+      setPolygon([]);
     }
     setMode(next);
   }
 
+  // 드래그 처리
   useEffect(() => {
     if (!dragging) return;
     const move = (e: PointerEvent) => {
@@ -93,11 +72,9 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
           return next;
         });
       } else {
-        const r = Math.floor(dragging.idx / (MESH_N + 1));
-        const c = dragging.idx % (MESH_N + 1);
-        setMesh((prev) => {
-          const next = prev.map((row) => row.slice());
-          next[r][c] = { x, y };
+        setPolygon((prev) => {
+          const next = prev.slice();
+          next[dragging.idx] = { x, y };
           return next;
         });
       }
@@ -111,20 +88,54 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
     };
   }, [dragging]);
 
+  // 키보드 입력 — Esc 로 다각형 마무리(보정 적용), Backspace 로 마지막 점 제거
+  useEffect(() => {
+    if (mode !== "polygon") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (polygon.length >= 3 && !busy && imgSize) {
+          handleConfirm();
+        } else if (polygon.length < 3) {
+          // 점이 부족할 땐 모달 닫기 동작
+          onCancel();
+        }
+      } else if (e.key === "Backspace" || e.key === "Delete") {
+        e.preventDefault();
+        setPolygon((p) => p.slice(0, -1));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, polygon.length, busy, imgSize]);
+
+  // 다각형 모드: 빈 영역 클릭 시 점 추가
+  function onOverlayClick(e: React.MouseEvent<HTMLDivElement>) {
+    if (mode !== "polygon") return;
+    if (justGrabbedHandle.current) { justGrabbedHandle.current = false; return; }
+    const rect = overlayRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    setPolygon((p) => [...p, { x, y }]);
+  }
+
   function reset() {
     if (mode === "corners") setCorners(defaultCorners());
-    else setMesh(defaultMesh(defaultCorners()));
+    else setPolygon([]);
   }
 
   async function handleConfirm() {
     if (!imgSize) return;
+    if (mode === "polygon" && polygon.length < 3) return;
     setBusy(true);
     try {
       let corrected: File;
       if (mode === "corners") {
         corrected = await applyPerspective(imgUrl, corners, imgSize, file.type || "image/jpeg", file.name);
       } else {
-        corrected = await applyMeshPerspective(imgUrl, mesh, imgSize, file.type || "image/jpeg", file.name);
+        corrected = await applyPolygonCrop(imgUrl, polygon, imgSize, file.type || "image/jpeg", file.name);
       }
       onConfirm(corrected);
     } catch (e) {
@@ -135,34 +146,12 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
     }
   }
 
-  // 외곽 다각형 path (corners 모드 = 4점, mesh 모드 = 외곽 12점)
+  // 다각형 path (외곽선)
   const polyPath = (() => {
-    let pts: Point[];
-    if (mode === "corners") {
-      pts = corners;
-    } else {
-      pts = [
-        ...mesh[0],
-        ...Array.from({ length: MESH_N - 1 }, (_, i) => mesh[i + 1][MESH_N]),
-        ...mesh[MESH_N].slice().reverse(),
-        ...Array.from({ length: MESH_N - 1 }, (_, i) => mesh[MESH_N - 1 - i][0]),
-      ];
-    }
-    return pts.map((c, i) => `${i === 0 ? "M" : "L"} ${c.x * 100} ${c.y * 100}`).join(" ") + " Z";
+    const pts = mode === "corners" ? corners : polygon;
+    if (pts.length === 0) return "";
+    return pts.map((c, i) => `${i === 0 ? "M" : "L"} ${c.x * 100} ${c.y * 100}`).join(" ") + (pts.length >= 3 ? " Z" : "");
   })();
-
-  // mesh 모드: 격자 선
-  const meshLines: string[] = [];
-  if (mode === "mesh") {
-    for (let r = 0; r <= MESH_N; r++) {
-      const row = mesh[r];
-      meshLines.push(row.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x * 100} ${p.y * 100}`).join(" "));
-    }
-    for (let c = 0; c <= MESH_N; c++) {
-      const col = mesh.map((row) => row[c]);
-      meshLines.push(col.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x * 100} ${p.y * 100}`).join(" "));
-    }
-  }
 
   return (
     <div className="fixed inset-0 z-[100] bg-black/90 flex flex-col items-center justify-center p-4">
@@ -173,7 +162,7 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
             <p className="text-xs text-gray-300">
               {mode === "corners"
                 ? "표 영역 4 모서리를 드래그해서 맞춘 뒤 보정하세요"
-                : "꾸겨진 종이용 — 16개 점을 종이 표면 그리드에 맞춰서 끌어주세요"}
+                : "꾸겨진 종이 외곽을 따라 점을 클릭해서 찍어주세요. 다 찍으면 Esc 로 마무리 (Backspace 로 마지막 점 취소)"}
             </p>
           </div>
           <button onClick={onCancel} className="p-1 hover:bg-white/10 rounded" aria-label="닫기">
@@ -193,18 +182,19 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
             <Square className="w-3.5 h-3.5" /> 평평 (4코너)
           </button>
           <button
-            onClick={() => switchMode("mesh")}
+            onClick={() => switchMode("polygon")}
             disabled={busy}
             className={`px-3 py-1.5 text-xs rounded inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 ${
-              mode === "mesh" ? "bg-white text-gray-900 font-medium" : "text-white/80 hover:bg-white/10"
+              mode === "polygon" ? "bg-white text-gray-900 font-medium" : "text-white/80 hover:bg-white/10"
             }`}
           >
-            <Grid3x3 className="w-3.5 h-3.5" /> 꾸겨짐 ({(MESH_N + 1) * (MESH_N + 1)}점)
+            <Pencil className="w-3.5 h-3.5" /> 꾸겨짐 (다각형)
           </button>
         </div>
 
         <div className="w-full bg-gray-900 rounded-lg overflow-auto flex items-center justify-center" style={{ maxHeight: "70vh" }}>
-          <div ref={overlayRef} className="relative inline-block select-none touch-none">
+          <div ref={overlayRef} onClick={onOverlayClick}
+               className={`relative inline-block select-none touch-none ${mode === "polygon" ? "cursor-crosshair" : ""}`}>
             {imgUrl && (
               <img ref={imgRef} src={imgUrl} onLoad={onImgLoad} alt="원본"
                    className="block max-w-full max-h-[70vh] pointer-events-none"
@@ -212,46 +202,46 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
             )}
             <svg className="absolute inset-0 w-full h-full pointer-events-none"
                  viewBox="0 0 100 100" preserveAspectRatio="none">
-              <path d={polyPath} fill="rgba(59,130,246,0.15)" stroke="rgb(59,130,246)" strokeWidth="0.4"
-                    vectorEffect="non-scaling-stroke" />
-              {meshLines.map((d, i) => (
-                <path key={i} d={d} fill="none" stroke="rgba(59,130,246,0.55)" strokeWidth="0.25"
+              {polyPath && (
+                <path d={polyPath} fill="rgba(59,130,246,0.15)" stroke="rgb(59,130,246)" strokeWidth="0.4"
                       vectorEffect="non-scaling-stroke" />
-              ))}
+              )}
             </svg>
             {/* corners 모드 핸들 */}
             {mode === "corners" && corners.map((c, i) => (
               <button key={`c-${i}`}
-                onPointerDown={(e) => { e.preventDefault(); (e.target as HTMLElement).setPointerCapture?.(e.pointerId); setDragging({ kind: "corners", idx: i }); }}
+                onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); (e.target as HTMLElement).setPointerCapture?.(e.pointerId); setDragging({ kind: "corners", idx: i }); }}
                 className="absolute -translate-x-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-white border-2 border-blue-500 shadow-lg flex items-center justify-center cursor-grab active:cursor-grabbing touch-none"
                 style={{ left: `${c.x * 100}%`, top: `${c.y * 100}%` }}
                 aria-label={`코너 ${i + 1}`}>
                 <span className="block w-2 h-2 rounded-full bg-blue-500" />
               </button>
             ))}
-            {/* mesh 모드 핸들 */}
-            {mode === "mesh" && mesh.flatMap((row, r) =>
-              row.map((p, c) => {
-                const idx = r * (MESH_N + 1) + c;
-                const isCorner = (r === 0 || r === MESH_N) && (c === 0 || c === MESH_N);
-                return (
-                  <button key={`m-${idx}`}
-                    onPointerDown={(e) => { e.preventDefault(); (e.target as HTMLElement).setPointerCapture?.(e.pointerId); setDragging({ kind: "mesh", idx }); }}
-                    className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full bg-white border-2 shadow-lg flex items-center justify-center cursor-grab active:cursor-grabbing touch-none ${
-                      isCorner ? "w-7 h-7 border-blue-600" : "w-5 h-5 border-blue-400"
-                    }`}
-                    style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}
-                    aria-label={`mesh ${r},${c}`}>
-                    <span className={`block rounded-full bg-blue-500 ${isCorner ? "w-2 h-2" : "w-1.5 h-1.5"}`} />
-                  </button>
-                );
-              }),
-            )}
+            {/* polygon 모드 핸들 */}
+            {mode === "polygon" && polygon.map((p, i) => (
+              <button key={`p-${i}`}
+                onPointerDown={(e) => {
+                  e.preventDefault(); e.stopPropagation();
+                  justGrabbedHandle.current = true;
+                  (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+                  setDragging({ kind: "polygon", idx: i });
+                }}
+                onContextMenu={(e) => {
+                  // 우클릭으로 점 삭제
+                  e.preventDefault(); e.stopPropagation();
+                  setPolygon((arr) => arr.filter((_, j) => j !== i));
+                }}
+                className="absolute -translate-x-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-white border-2 border-blue-500 shadow-lg flex items-center justify-center cursor-grab active:cursor-grabbing touch-none text-[9px] font-bold text-blue-600"
+                style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}
+                aria-label={`점 ${i + 1}`}>
+                {i + 1}
+              </button>
+            ))}
           </div>
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 mt-4">
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
             <button onClick={reset} disabled={busy}
                     className="px-3 py-2 text-xs bg-white/10 hover:bg-white/20 text-white rounded inline-flex items-center gap-1 disabled:opacity-50">
               <RotateCcw className="w-3.5 h-3.5" /> 초기화
@@ -260,10 +250,16 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
                     className="px-3 py-2 text-xs bg-white/10 hover:bg-white/20 text-white rounded disabled:opacity-50">
               보정 없이 사용
             </button>
+            {mode === "polygon" && (
+              <span className="text-[11px] text-gray-300 ml-1">
+                {polygon.length === 0 ? "점을 찍어주세요" : `${polygon.length}점 — 우클릭으로 점 삭제, Backspace 로 마지막 점 취소`}
+              </span>
+            )}
           </div>
-          <button onClick={handleConfirm} disabled={busy || !imgSize}
+          <button onClick={handleConfirm}
+                  disabled={busy || !imgSize || (mode === "polygon" && polygon.length < 3)}
                   className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded inline-flex items-center gap-1.5 disabled:opacity-50 font-medium">
-            <Check className="w-4 h-4" /> {busy ? "보정 중..." : "보정 적용"}
+            <Check className="w-4 h-4" /> {busy ? "보정 중..." : (mode === "polygon" ? "보정 적용 (Esc)" : "보정 적용")}
           </button>
         </div>
       </div>
@@ -307,54 +303,60 @@ async function applyPerspective(
   return await canvasToFile(outCanvas, mimeType, fileName);
 }
 
-// ─────────── Perspective transform: 4×4 mesh (piecewise) ───────────
-
-async function applyMeshPerspective(
+// ─────────── Polygon crop (꾸겨진 종이용) ───────────
+//
+// 사용자가 찍은 점들로 다각형을 만들고, 그 다각형 안쪽만 살리고 바깥은 흰색으로 마스킹.
+// 출력 사이즈 = 다각형 bounding box. 보간/펴기는 안 함 — 꾸겨진 안쪽 글자는 그대로
+// 두지만 OCR 정확도를 떨어트리는 배경 잡음/그림자 영역은 제거.
+async function applyPolygonCrop(
   imgUrl: string,
-  meshNorm: Mesh,
+  polygonNorm: Point[],
   imgSize: { w: number; h: number },
   mimeType: string,
   fileName: string,
 ): Promise<File> {
-  // 픽셀 좌표로 변환
-  const m: Point[][] = meshNorm.map((row) => row.map((p) => ({ x: p.x * imgSize.w, y: p.y * imgSize.h })));
+  const pts = polygonNorm.map((p) => ({ x: p.x * imgSize.w, y: p.y * imgSize.h }));
+  // bounding box
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y;
+  }
+  // 캔버스 크기 캡 (큰 사진은 다운스케일)
+  const rawW = Math.max(1, Math.round(maxX - minX));
+  const rawH = Math.max(1, Math.round(maxY - minY));
+  const scale = Math.min(1, 2400 / Math.max(rawW, rawH));
+  const W = Math.max(1, Math.round(rawW * scale));
+  const H = Math.max(1, Math.round(rawH * scale));
 
-  // 출력 사이즈: 외곽 4코너 기준
-  const tl = m[0][0], tr = m[0][MESH_N], br = m[MESH_N][MESH_N], bl = m[MESH_N][0];
-  const widthTop = Math.hypot(tr.x - tl.x, tr.y - tl.y);
-  const widthBot = Math.hypot(br.x - bl.x, br.y - bl.y);
-  const heightLeft = Math.hypot(bl.x - tl.x, bl.y - tl.y);
-  const heightRight = Math.hypot(br.x - tr.x, br.y - tr.y);
-  const W = Math.min(2400, Math.round(Math.max(widthTop, widthBot)));
-  const H = Math.min(2400, Math.round(Math.max(heightLeft, heightRight)));
-
-  const { src, sw, sh } = await loadSourceImageData(imgUrl, imgSize);
+  const img = await loadImage(imgUrl);
   const outCanvas = document.createElement("canvas");
   outCanvas.width = W; outCanvas.height = H;
   const outCtx = outCanvas.getContext("2d");
   if (!outCtx) throw new Error("no out ctx");
-  const outImg = outCtx.createImageData(W, H);
 
-  // 출력을 MESH_N×MESH_N 셀로 분할, 각 셀마다 별도 perspective transform
-  for (let r = 0; r < MESH_N; r++) {
-    for (let c = 0; c < MESH_N; c++) {
-      const dstX0 = Math.round((c / MESH_N) * W);
-      const dstY0 = Math.round((r / MESH_N) * H);
-      const dstX1 = Math.round(((c + 1) / MESH_N) * W);
-      const dstY1 = Math.round(((r + 1) / MESH_N) * H);
-      const cellW = dstX1 - dstX0;
-      const cellH = dstY1 - dstY0;
+  // 흰 배경 (다각형 바깥)
+  outCtx.fillStyle = "#ffffff";
+  outCtx.fillRect(0, 0, W, H);
 
-      // 출력 셀(0,0)→(cellW,0)→(cellW,cellH)→(0,cellH) 가 source 의 mesh 사각형으로 매핑
-      const M = getPerspectiveTransform(
-        [{ x: 0, y: 0 }, { x: cellW, y: 0 }, { x: cellW, y: cellH }, { x: 0, y: cellH }],
-        [m[r][c], m[r][c + 1], m[r + 1][c + 1], m[r + 1][c]],
-      );
-      warpRegion(src.data, sw, sh, outImg.data, W, dstX0, dstY0, cellW, cellH, M);
-    }
-  }
+  // 다각형 영역만 클립
+  outCtx.save();
+  outCtx.beginPath();
+  pts.forEach((p, i) => {
+    const x = (p.x - minX) * scale;
+    const y = (p.y - minY) * scale;
+    if (i === 0) outCtx.moveTo(x, y); else outCtx.lineTo(x, y);
+  });
+  outCtx.closePath();
+  outCtx.clip();
 
-  outCtx.putImageData(outImg, 0, 0);
+  // 다운스케일 비율로 원본 그리기
+  outCtx.drawImage(img,
+    minX, minY, rawW, rawH,
+    0, 0, W, H,
+  );
+  outCtx.restore();
+
   enhanceContrast(outCtx, W, H);
   return await canvasToFile(outCanvas, mimeType, fileName);
 }
@@ -372,7 +374,6 @@ async function loadSourceImageData(imgUrl: string, imgSize: { w: number; h: numb
   return { src: ctx.getImageData(0, 0, imgSize.w, imgSize.h), sw: imgSize.w, sh: imgSize.h };
 }
 
-// 출력 데이터의 (dstX0..dstX0+regW, dstY0..dstY0+regH) 영역을 M 으로 source 에서 샘플링
 function warpRegion(
   sd: Uint8ClampedArray, sw: number, sh: number,
   od: Uint8ClampedArray, outStrideW: number,
@@ -430,7 +431,6 @@ function clamp(v: number) {
   return v < 0 ? 0 : v > 255 ? 255 : v;
 }
 
-// 4점 perspective transform: 8x8 선형 시스템 풀이
 function getPerspectiveTransform(src: Point[], dst: Point[]): number[] {
   const A: number[][] = [];
   const B: number[] = [];
