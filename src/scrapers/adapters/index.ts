@@ -14,7 +14,8 @@ export const ALL_ADAPTERS: Record<string, WholesaleAdapter> = {
 };
 
 // Sites temporarily disabled at runtime. Adapter code is preserved for future re-activation.
-export const DISABLED_SITES = new Set<string>();
+// inchun: disabled — inchunpharm.com blocks AWS Lightsail IPs at network level
+export const DISABLED_SITES = new Set<string>(["inchun"]);
 
 export function resolveAdapters(keys: string[]): WholesaleAdapter[] {
   return keys.map(k => {
