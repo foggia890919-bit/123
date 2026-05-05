@@ -40,10 +40,28 @@ export async function detectDocumentCorners(
   imgEl: HTMLImageElement,
 ): Promise<DetectedCorners | null> {
   const cv = (await loadOpenCV()) as CvNamespace;
-  const w = imgEl.naturalWidth;
-  const h = imgEl.naturalHeight;
+  const ow = imgEl.naturalWidth;
+  const oh = imgEl.naturalHeight;
 
-  const src = cv.imread(imgEl);
+  // 다운스케일 — cv.imread + Canny + findContours 가 메인 스레드 동기 실행이라
+  // 4000-6000px 스마트폰 사진은 모달이 수 초간 freeze 됨. 1000px 면 4코너
+  // 감지에 충분.
+  const MAX_DIM = 1000;
+  const scale = Math.min(1, MAX_DIM / Math.max(ow, oh));
+  let workSource: HTMLImageElement | HTMLCanvasElement = imgEl;
+  let w = ow, h = oh;
+  if (scale < 1) {
+    const small = document.createElement("canvas");
+    small.width = Math.round(ow * scale);
+    small.height = Math.round(oh * scale);
+    const ctx = small.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(imgEl, 0, 0, small.width, small.height);
+    workSource = small;
+    w = small.width; h = small.height;
+  }
+
+  const src = cv.imread(workSource as HTMLImageElement);
   const gray = new cv.Mat();
   const blurred = new cv.Mat();
   const edges = new cv.Mat();

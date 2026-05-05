@@ -11,7 +11,9 @@
 
 import { loadOpenCV } from "./opencv-loader";
 
-const TARGET_DIM = 2400;
+// 1800px 면 OCR 엔진들에 충분하면서 main-thread freeze 회피.
+// 2400px 로 가면 bilateral filter 가 5초 이상 걸려서 사용자 freeze 체감.
+const TARGET_DIM = 1800;
 
 // 타입 안전성보다 OpenCV 호출 편의를 우선 — Mat/Vector 등은 동적
 type CvAny = any;  // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -37,7 +39,7 @@ export async function enhanceImage(
     targetDim = TARGET_DIM,
     claheClipLimit = 3.0,
     claheTileSize = 8,
-    bilateralD = 9,
+    bilateralD = 5,
     sharpenAmount = 0.5,
   } = opts;
 
