@@ -57,7 +57,7 @@ const navItems: NavItem[] = [
     minRole: "BASIC",
     matchPrefixes: ["/inhouse", "/mypage/ledger"],
     children: [
-      { href: "/inhouse", label: "주문 작성", icon: ShoppingCart },
+      { href: "/inhouse/order", label: "원내주문", icon: ShoppingCart },
       { href: "/mypage/ledger", label: "거래처 매출원장", icon: Building2 },
     ],
   },
