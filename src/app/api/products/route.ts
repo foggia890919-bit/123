@@ -19,7 +19,8 @@ export async function GET(req: NextRequest) {
   const q = (params.get("q") ?? "").trim();
   const priceCode = params.get("priceCode");
   const bizNumber = params.get("bizNumber");
-  const limit = Math.min(Math.max(Number(params.get("limit") ?? 30), 1), 100);
+  const limit = Math.min(Math.max(Number(params.get("limit") ?? 50), 1), 200);
+  const offset = Math.max(Number(params.get("offset") ?? 0), 0);
 
   // 영업사원이 본인 담당 거래처 외의 가격을 보면 안 되므로 권한 체크
   if (bizNumber && user.role !== "ADMIN" && user.role !== "BIZ") {
@@ -48,14 +49,18 @@ export async function GET(req: NextRequest) {
       }
     : { active: true };
 
-  const products = await prisma.epharmsProduct.findMany({
-    where,
-    orderBy: [{ productName: "asc" }],
-    take: limit,
-  });
+  const [total, products] = await Promise.all([
+    prisma.epharmsProduct.count({ where }),
+    prisma.epharmsProduct.findMany({
+      where,
+      orderBy: [{ productName: "asc" }],
+      take: limit,
+      skip: offset,
+    }),
+  ]);
 
   const enriched = await Promise.all(products.map((p) => enrich(p, bizNumber)));
-  return NextResponse.json({ products: enriched });
+  return NextResponse.json({ products: enriched, total, limit, offset });
 }
 
 interface ProductRow {

@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, Suspense } from "rea
 import { useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  Hospital, Building2, UserCheck, Search, Plus, Trash2, Loader2, Upload,
+  Hospital, Building2, UserCheck, Search, Plus, Trash2, Loader2, Upload, Download,
   X, AlertCircle, Hash, CheckCircle, Clock, Tag, ChevronDown, Pencil,
   Users, FileSpreadsheet, AlertTriangle, XCircle,
   RefreshCw, ToggleLeft, ToggleRight, KeyRound, CheckCircle2,
@@ -1213,6 +1213,7 @@ interface InhouseBulkPreviewRow {
   loginPw: string;
   kmdEmail: string;
   memo: string;
+  kmdUserEmail: string;
 }
 
 const INHOUSE_EMPTY = {
@@ -1523,11 +1524,24 @@ function InhouseClientsTab() {
         loginPw: String(r["이팜스PW"] ?? "").trim(),
         kmdEmail: String(r["KMD아이디"] ?? "").trim(),
         memo: String(r["메모"] ?? "").trim(),
+        kmdUserEmail: String(r["KMD아이디(이메일)"] ?? r["KMD아이디"] ?? "").trim(),
       }));
       setBulkPreview(preview);
     } catch {
       setBulkPreview([]);
     }
+  }
+
+  async function handleTemplateDownload() {
+    const { utils, writeFile } = await import("xlsx");
+    const ws = utils.aoa_to_sheet([
+      ["사업자번호", "거래처명", "이팜스ID", "이팜스PW", "담당자코드", "메모", "KMD아이디(이메일)"],
+      ["1234567890", "○○의원", "epharms_id", "epharms_pw", "S-0001", "", "user@example.com"],
+    ]);
+    ws["!cols"] = [{ wch: 14 }, { wch: 20 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 18 }, { wch: 26 }];
+    const wb = utils.book_new();
+    utils.book_append_sheet(wb, ws, "계정목록");
+    writeFile(wb, "epharms_accounts_template.xlsx");
   }
 
   async function handleBulkSubmit() {
@@ -2012,6 +2026,7 @@ function InhouseClientsTab() {
                           <th className="px-3 py-2 text-left font-semibold text-gray-500">PW</th>
                           <th className="px-3 py-2 text-left font-semibold text-gray-500">KMD아이디</th>
                           <th className="px-3 py-2 text-left font-semibold text-gray-500">메모</th>
+                          <th className="px-3 py-2 text-left font-semibold text-blue-600">KMD아이디</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
@@ -2023,6 +2038,7 @@ function InhouseClientsTab() {
                             <td className="px-3 py-1.5 font-mono">{row.loginPw ? "••••••" : <span className="text-red-400">없음</span>}</td>
                             <td className="px-3 py-1.5 text-gray-500">{row.kmdEmail || <span className="text-gray-300">—</span>}</td>
                             <td className="px-3 py-1.5 text-gray-400">{row.memo || "—"}</td>
+                            <td className="px-3 py-1.5 text-blue-600 font-mono text-[11px]">{row.kmdUserEmail || <span className="text-gray-300">—</span>}</td>
                           </tr>
                         ))}
                       </tbody>

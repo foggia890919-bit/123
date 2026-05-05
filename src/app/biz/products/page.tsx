@@ -3,9 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BizLayout } from "@/app/biz/page";
 import {
-  AlertCircle, CheckCircle2, FileSpreadsheet, Loader2, Package,
+  AlertCircle, CheckCircle2, ChevronLeft, ChevronRight,
+  FileSpreadsheet, Loader2, Package,
   Plus, RefreshCw, Search, ShoppingCart, Sparkles, Trash2, X,
 } from "lucide-react";
+
+const PAGE_SIZE = 50;
 
 interface Product {
   id: string;
@@ -195,6 +198,8 @@ function CartDrawer({
 // ──────────────────────────────────────────────
 function ProductsContent() {
   const [products, setProducts] = useState<Product[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [bizNumberFilter, setBizNumberFilter] = useState("");
   const [loading, setLoading] = useState(false);
@@ -205,26 +210,31 @@ function ProductsContent() {
   const [cartOpen, setCartOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const load = useCallback(async (q: string, biz: string) => {
+  const load = useCallback(async (q: string, biz: string, p: number) => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
       if (q) params.set("q", q);
       if (biz) params.set("bizNumber", biz);
+      params.set("limit", String(PAGE_SIZE));
+      params.set("offset", String((p - 1) * PAGE_SIZE));
       const r = await fetch(`/api/products?${params}`);
       if (r.ok) {
         const body = await r.json();
         setProducts(body.products ?? []);
+        setTotal(body.total ?? 0);
       }
     } finally {
       setLoading(false);
     }
   }, []);
 
+  useEffect(() => { setPage(1); }, [search, bizNumberFilter]);
+
   useEffect(() => {
-    const t = setTimeout(() => load(search, bizNumberFilter), 300);
+    const t = setTimeout(() => load(search, bizNumberFilter, page), 300);
     return () => clearTimeout(t);
-  }, [search, bizNumberFilter, load]);
+  }, [search, bizNumberFilter, page, load]);
 
   const loadLogs = useCallback(async () => {
     const r = await fetch("/api/products/logs").catch(() => null);
@@ -258,7 +268,7 @@ function ProductsContent() {
       const body = await r.json();
       if (!r.ok) { alert(body.error || "업로드 실패"); return; }
       alert(`임포트 완료: 신규 ${body.inserted}건 / 갱신 ${body.updated}건 / 총 ${body.total}건`);
-      await load(search, bizNumberFilter);
+      await load(search, bizNumberFilter, page);
       await loadLogs();
     } finally {
       setUploading(false);
@@ -473,6 +483,35 @@ function ProductsContent() {
           </tbody>
         </table>
       </div>
+
+      {/* 페이지네이션 */}
+      {total > PAGE_SIZE && (
+        <div className="flex items-center justify-between mt-3 text-sm text-gray-600">
+          <span>총 {total.toLocaleString()}개 중 {((page - 1) * PAGE_SIZE + 1).toLocaleString()}–{Math.min(page * PAGE_SIZE, total).toLocaleString()}</span>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} className="p-1.5 rounded hover:bg-gray-100 disabled:opacity-30">
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            {Array.from({ length: Math.min(7, Math.ceil(total / PAGE_SIZE)) }, (_, i) => {
+              const totalPages = Math.ceil(total / PAGE_SIZE);
+              let pageNum: number;
+              if (totalPages <= 7) pageNum = i + 1;
+              else if (page <= 4) pageNum = i + 1;
+              else if (page >= totalPages - 3) pageNum = totalPages - 6 + i;
+              else pageNum = page - 3 + i;
+              return (
+                <button key={pageNum} onClick={() => setPage(pageNum)}
+                  className={`w-8 h-8 rounded text-sm font-medium ${page === pageNum ? "bg-blue-600 text-white" : "hover:bg-gray-100"}`}>
+                  {pageNum}
+                </button>
+              );
+            })}
+            <button onClick={() => setPage((p) => Math.min(Math.ceil(total / PAGE_SIZE), p + 1))} disabled={page >= Math.ceil(total / PAGE_SIZE)} className="p-1.5 rounded hover:bg-gray-100 disabled:opacity-30">
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 장바구니 드로어 */}
       {cartOpen && (
