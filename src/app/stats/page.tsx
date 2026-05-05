@@ -1287,6 +1287,9 @@ export default function StatsPage() {
                 <div className="text-center">
                   <p className="text-sm font-medium text-gray-600">처방전 이미지 업로드</p>
                   <p className="text-xs text-gray-400 mt-1">파일 선택 후 4 모서리 보정 (캠스캐너 방식)</p>
+                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2 max-w-md mx-auto">
+                    📷 촬영 팁: 종이를 <b>평평하게 펴서</b> 빛 잘 드는 곳에서 정면으로 찍으세요. 꾸겨짐·접힘은 OCR 정확도를 크게 떨어뜨립니다.
+                  </p>
                 </div>
                 <div className="flex gap-2 mt-2">
                   <Button type="button" size="sm" onClick={() => setCameraOpen(true)}

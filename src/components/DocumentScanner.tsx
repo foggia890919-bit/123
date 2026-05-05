@@ -1,14 +1,12 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { X, Check, RotateCcw, Pencil, Square, Grid3x3 } from "lucide-react";
+import { X, Check, RotateCcw, Pencil, Square, Info } from "lucide-react";
 
 interface Point { x: number; y: number }
 type Corners = [Point, Point, Point, Point]; // TL, TR, BR, BL (normalized 0-1)
-type Mesh = Point[][]; // mesh[row][col], size (N+1) × (N+1)
 
-type Mode = "corners" | "polygon" | "grid";
-type GridSize = 3 | 4 | 5 | 6;
+type Mode = "corners" | "polygon";
 
 interface Props {
   file: File;
@@ -24,24 +22,6 @@ function defaultCorners(): Corners {
   ];
 }
 
-// 격자 모드 — corners 외곽 4점에 맞춰 (N+1)×(N+1) 격자 점을 bilinear 보간으로 생성
-function defaultMesh(corners: Corners, n: number): Mesh {
-  const tl = corners[0], tr = corners[1], br = corners[2], bl = corners[3];
-  const grid: Mesh = [];
-  for (let r = 0; r <= n; r++) {
-    const tr_ = r / n;
-    const left = { x: tl.x + (bl.x - tl.x) * tr_, y: tl.y + (bl.y - tl.y) * tr_ };
-    const right = { x: tr.x + (br.x - tr.x) * tr_, y: tr.y + (br.y - tr.y) * tr_ };
-    const row: Point[] = [];
-    for (let c = 0; c <= n; c++) {
-      const tc = c / n;
-      row.push({ x: left.x + (right.x - left.x) * tc, y: left.y + (right.y - left.y) * tc });
-    }
-    grid.push(row);
-  }
-  return grid;
-}
-
 export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: Props) {
   const [imgUrl, setImgUrl] = useState<string>("");
   const [imgSize, setImgSize] = useState<{ w: number; h: number } | null>(null);
@@ -49,15 +29,11 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
   const [corners, setCorners] = useState<Corners>(defaultCorners());
   // 다각형 모드: 가변 길이의 점 배열. 처음엔 빈 배열로 시작 — 사용자가 클릭으로 추가
   const [polygon, setPolygon] = useState<Point[]>([]);
-  // 격자(펴기) 모드: (gridSize+1)² 개 점, perspective transform 으로 piecewise 펴기
-  const [gridSize, setGridSize] = useState<GridSize>(4);
-  const [mesh, setMesh] = useState<Mesh>(() => defaultMesh(defaultCorners(), 4));
   const [dragging, setDragging] = useState<{ kind: Mode; idx: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const overlayRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
-  // 점 핸들 위에서 mousedown 이 일어났는지 추적 — 그러면 컨테이너 click 으로
-  // 점 추가가 일어나지 않도록 차단 (드래그 시작과 점 추가가 충돌하는 문제)
+  // 점 핸들 위에서 mousedown 이 일어났는지 추적 — 그러면 컨테이너 click 으로 점 추가가 일어나지 않도록 차단
   const justGrabbedHandle = useRef(false);
 
   useEffect(() => {
@@ -73,30 +49,8 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
   }, []);
 
   function switchMode(next: Mode) {
-    if (next === "polygon" && polygon.length === 0) {
-      setPolygon([]);
-    }
-    if (next === "grid") {
-      // 격자 모드 진입 시 corners 기반으로 mesh 초기화
-      setMesh(defaultMesh(corners, gridSize));
-    } else if (mode === "grid" && next === "corners") {
-      // 격자 → 코너: 외곽 4점만 가져옴
-      setCorners([
-        mesh[0][0], mesh[0][gridSize],
-        mesh[gridSize][gridSize], mesh[gridSize][0],
-      ]);
-    }
+    if (next === "polygon" && polygon.length === 0) setPolygon([]);
     setMode(next);
-  }
-
-  function changeGridSize(n: GridSize) {
-    setGridSize(n);
-    // 외곽 4점 보존, 내부 점은 보간으로 재생성
-    const outer: Corners = [
-      mesh[0][0], mesh[0][mesh[0].length - 1],
-      mesh[mesh.length - 1][mesh[mesh.length - 1].length - 1], mesh[mesh.length - 1][0],
-    ];
-    setMesh(defaultMesh(outer, n));
   }
 
   // 드래그 처리
@@ -113,20 +67,10 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
           next[dragging.idx] = { x, y };
           return next;
         });
-      } else if (dragging.kind === "polygon") {
+      } else {
         setPolygon((prev) => {
           const next = prev.slice();
           next[dragging.idx] = { x, y };
-          return next;
-        });
-      } else {
-        // grid
-        const stride = gridSize + 1;
-        const r = Math.floor(dragging.idx / stride);
-        const c = dragging.idx % stride;
-        setMesh((prev) => {
-          const next = prev.map((row) => row.slice());
-          next[r][c] = { x, y };
           return next;
         });
       }
@@ -140,7 +84,7 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
     };
   }, [dragging]);
 
-  // 키보드 입력 — Esc 로 다각형 마무리(보정 적용), Backspace 로 마지막 점 제거
+  // 키보드 — Esc 로 다각형 마무리, Backspace 로 마지막 점 제거
   useEffect(() => {
     if (mode !== "polygon") return;
     const onKey = (e: KeyboardEvent) => {
@@ -149,7 +93,6 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
         if (polygon.length >= 3 && !busy && imgSize) {
           handleConfirm();
         } else if (polygon.length < 3) {
-          // 점이 부족할 땐 모달 닫기 동작
           onCancel();
         }
       } else if (e.key === "Backspace" || e.key === "Delete") {
@@ -175,8 +118,7 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
 
   function reset() {
     if (mode === "corners") setCorners(defaultCorners());
-    else if (mode === "polygon") setPolygon([]);
-    else setMesh(defaultMesh(defaultCorners(), gridSize));
+    else setPolygon([]);
   }
 
   async function handleConfirm() {
@@ -187,10 +129,8 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
       let corrected: File;
       if (mode === "corners") {
         corrected = await applyPerspective(imgUrl, corners, imgSize, file.type || "image/jpeg", file.name);
-      } else if (mode === "polygon") {
-        corrected = await applyPolygonCrop(imgUrl, polygon, imgSize, file.type || "image/jpeg", file.name);
       } else {
-        corrected = await applyMeshPerspective(imgUrl, mesh, gridSize, imgSize, file.type || "image/jpeg", file.name);
+        corrected = await applyPolygonCrop(imgUrl, polygon, imgSize, file.type || "image/jpeg", file.name);
       }
       onConfirm(corrected);
     } catch (e) {
@@ -203,34 +143,10 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
 
   // 외곽선 path
   const polyPath = (() => {
-    let pts: Point[];
-    if (mode === "corners") pts = corners;
-    else if (mode === "polygon") pts = polygon;
-    else {
-      // grid: 외곽 path = 위 행 → 우측 열(중간 점만) → 아래 행 reverse → 좌측 열(중간 점만) reverse
-      pts = [
-        ...mesh[0],
-        ...Array.from({ length: gridSize - 1 }, (_, i) => mesh[i + 1][gridSize]),
-        ...mesh[gridSize].slice().reverse(),
-        ...Array.from({ length: gridSize - 1 }, (_, i) => mesh[gridSize - 1 - i][0]),
-      ];
-    }
+    const pts = mode === "corners" ? corners : polygon;
     if (pts.length === 0) return "";
     return pts.map((c, i) => `${i === 0 ? "M" : "L"} ${c.x * 100} ${c.y * 100}`).join(" ") + (pts.length >= 3 ? " Z" : "");
   })();
-
-  // 격자 모드: 내부 격자 선
-  const meshLines: string[] = [];
-  if (mode === "grid") {
-    for (let r = 0; r <= gridSize; r++) {
-      const row = mesh[r];
-      meshLines.push(row.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x * 100} ${p.y * 100}`).join(" "));
-    }
-    for (let c = 0; c <= gridSize; c++) {
-      const col = mesh.map((row) => row[c]);
-      meshLines.push(col.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x * 100} ${p.y * 100}`).join(" "));
-    }
-  }
 
   return (
     <div className="fixed inset-0 z-[100] bg-black/90 flex flex-col items-center justify-center p-4">
@@ -241,9 +157,7 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
             <p className="text-xs text-gray-300">
               {mode === "corners"
                 ? "표 영역 4 모서리를 드래그해서 맞춘 뒤 보정하세요"
-                : mode === "polygon"
-                  ? "꾸겨진 종이 외곽을 따라 점을 클릭해서 찍어주세요. 다 찍으면 Esc 로 마무리 (Backspace 로 마지막 점 취소)"
-                  : `${gridSize}×${gridSize} 격자 점을 종이 표면에 맞춰 끌어주세요. 셀마다 별도로 펴짐.`}
+                : "꾸겨진 종이 외곽을 따라 점을 클릭해서 찍어주세요. 다 찍으면 Esc 로 마무리 (Backspace 로 마지막 점 취소)"}
             </p>
           </div>
           <button onClick={onCancel} className="p-1 hover:bg-white/10 rounded" aria-label="닫기">
@@ -252,51 +166,35 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
         </div>
 
         {/* 모드 토글 */}
-        <div className="flex flex-wrap gap-3 mb-3 items-center">
-          <div className="flex gap-1 bg-white/10 rounded-md p-1 w-fit">
-            <button
-              onClick={() => switchMode("corners")}
-              disabled={busy}
-              className={`px-3 py-1.5 text-xs rounded inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 ${
-                mode === "corners" ? "bg-white text-gray-900 font-medium" : "text-white/80 hover:bg-white/10"
-              }`}
-            >
-              <Square className="w-3.5 h-3.5" /> 평평 (4코너)
-            </button>
-            <button
-              onClick={() => switchMode("polygon")}
-              disabled={busy}
-              className={`px-3 py-1.5 text-xs rounded inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 ${
-                mode === "polygon" ? "bg-white text-gray-900 font-medium" : "text-white/80 hover:bg-white/10"
-              }`}
-            >
-              <Pencil className="w-3.5 h-3.5" /> 꾸겨짐 (다각형 자르기)
-            </button>
-            <button
-              onClick={() => switchMode("grid")}
-              disabled={busy}
-              className={`px-3 py-1.5 text-xs rounded inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 ${
-                mode === "grid" ? "bg-white text-gray-900 font-medium" : "text-white/80 hover:bg-white/10"
-              }`}
-            >
-              <Grid3x3 className="w-3.5 h-3.5" /> 격자 (펴기)
-            </button>
+        <div className="flex gap-1 bg-white/10 rounded-md p-1 mb-3 w-fit">
+          <button
+            onClick={() => switchMode("corners")}
+            disabled={busy}
+            className={`px-3 py-1.5 text-xs rounded inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 ${
+              mode === "corners" ? "bg-white text-gray-900 font-medium" : "text-white/80 hover:bg-white/10"
+            }`}
+          >
+            <Square className="w-3.5 h-3.5" /> 평평 (4코너 펴기)
+          </button>
+          <button
+            onClick={() => switchMode("polygon")}
+            disabled={busy}
+            className={`px-3 py-1.5 text-xs rounded inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 ${
+              mode === "polygon" ? "bg-white text-gray-900 font-medium" : "text-white/80 hover:bg-white/10"
+            }`}
+          >
+            <Pencil className="w-3.5 h-3.5" /> 외곽 자르기 (다각형)
+          </button>
+        </div>
+
+        {/* 촬영 안내 — 꾸겨짐 펴기는 기술적 한계로 제거됨, 사용자에게 미리 안내 */}
+        <div className="flex items-start gap-2 bg-amber-500/10 border border-amber-400/30 rounded-md px-3 py-2 mb-3 text-[11px] text-amber-100">
+          <Info className="w-4 h-4 shrink-0 mt-0.5" />
+          <div className="space-y-0.5">
+            <p><b>촬영 팁</b>: 종이는 평평하게 펴서 빛이 잘 드는 곳에서 정면으로 찍으세요. 꾸겨짐·접힘 부분은 OCR 정확도를 크게 떨어뜨립니다.</p>
+            <p>· <b>평평 모드</b>: 비스듬히 찍힌 평평한 종이를 정면으로 펴줍니다.</p>
+            <p>· <b>외곽 자르기</b>: 종이 외곽을 따라 점을 찍어 배경·그림자만 제거합니다 (펴지지는 않음).</p>
           </div>
-          {mode === "grid" && (
-            <div className="flex gap-1 bg-white/5 rounded-md p-1 items-center text-[11px] text-white/80">
-              <span className="px-2">격자 크기</span>
-              {([3, 4, 5, 6] as GridSize[]).map((n) => (
-                <button key={n}
-                  onClick={() => changeGridSize(n)}
-                  disabled={busy}
-                  className={`px-2.5 py-1 rounded transition-colors disabled:opacity-50 ${
-                    gridSize === n ? "bg-white text-gray-900 font-medium" : "hover:bg-white/10"
-                  }`}>
-                  {n}×{n}
-                </button>
-              ))}
-            </div>
-          )}
         </div>
 
         <div className="w-full bg-gray-900 rounded-lg overflow-auto flex items-center justify-center" style={{ maxHeight: "70vh" }}>
@@ -313,12 +211,7 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
                 <path d={polyPath} fill="rgba(59,130,246,0.15)" stroke="rgb(59,130,246)" strokeWidth="0.4"
                       vectorEffect="non-scaling-stroke" />
               )}
-              {meshLines.map((d, i) => (
-                <path key={i} d={d} fill="none" stroke="rgba(59,130,246,0.55)" strokeWidth="0.25"
-                      vectorEffect="non-scaling-stroke" />
-              ))}
             </svg>
-            {/* corners 모드 핸들 */}
             {mode === "corners" && corners.map((c, i) => (
               <button key={`c-${i}`}
                 onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); (e.target as HTMLElement).setPointerCapture?.(e.pointerId); setDragging({ kind: "corners", idx: i }); }}
@@ -328,7 +221,6 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
                 <span className="block w-2 h-2 rounded-full bg-blue-500" />
               </button>
             ))}
-            {/* polygon 모드 핸들 */}
             {mode === "polygon" && polygon.map((p, i) => (
               <button key={`p-${i}`}
                 onPointerDown={(e) => {
@@ -347,24 +239,6 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
                 {i + 1}
               </button>
             ))}
-            {/* grid 모드 핸들 */}
-            {mode === "grid" && mesh.flatMap((row, r) =>
-              row.map((p, c) => {
-                const idx = r * (gridSize + 1) + c;
-                const isCorner = (r === 0 || r === gridSize) && (c === 0 || c === gridSize);
-                return (
-                  <button key={`g-${idx}`}
-                    onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); (e.target as HTMLElement).setPointerCapture?.(e.pointerId); setDragging({ kind: "grid", idx }); }}
-                    className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full bg-white border-2 shadow-lg flex items-center justify-center cursor-grab active:cursor-grabbing touch-none ${
-                      isCorner ? "w-7 h-7 border-blue-600" : "w-5 h-5 border-blue-400"
-                    }`}
-                    style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}
-                    aria-label={`grid ${r},${c}`}>
-                    <span className={`block rounded-full bg-blue-500 ${isCorner ? "w-2 h-2" : "w-1.5 h-1.5"}`} />
-                  </button>
-                );
-              }),
-            )}
           </div>
         </div>
 
@@ -381,11 +255,6 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
             {mode === "polygon" && (
               <span className="text-[11px] text-gray-300 ml-1">
                 {polygon.length === 0 ? "점을 찍어주세요" : `${polygon.length}점 — 우클릭으로 점 삭제, Backspace 로 마지막 점 취소`}
-              </span>
-            )}
-            {mode === "grid" && (
-              <span className="text-[11px] text-gray-300 ml-1">
-                {(gridSize + 1) ** 2}개 점을 종이 표면 격자에 끌어맞추세요
               </span>
             )}
           </div>
@@ -436,11 +305,8 @@ async function applyPerspective(
   return await canvasToFile(outCanvas, mimeType, fileName);
 }
 
-// ─────────── Polygon crop (꾸겨진 종이용) ───────────
-//
-// 사용자가 찍은 점들로 다각형을 만들고, 그 다각형 안쪽만 살리고 바깥은 흰색으로 마스킹.
-// 출력 사이즈 = 다각형 bounding box. 보간/펴기는 안 함 — 꾸겨진 안쪽 글자는 그대로
-// 두지만 OCR 정확도를 떨어트리는 배경 잡음/그림자 영역은 제거.
+// ─────────── Polygon crop (외곽 자르기) ───────────
+
 async function applyPolygonCrop(
   imgUrl: string,
   polygonNorm: Point[],
@@ -449,13 +315,11 @@ async function applyPolygonCrop(
   fileName: string,
 ): Promise<File> {
   const pts = polygonNorm.map((p) => ({ x: p.x * imgSize.w, y: p.y * imgSize.h }));
-  // bounding box
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of pts) {
     if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
     if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y;
   }
-  // 캔버스 크기 캡 (큰 사진은 다운스케일)
   const rawW = Math.max(1, Math.round(maxX - minX));
   const rawH = Math.max(1, Math.round(maxY - minY));
   const scale = Math.min(1, 2400 / Math.max(rawW, rawH));
@@ -468,11 +332,9 @@ async function applyPolygonCrop(
   const outCtx = outCanvas.getContext("2d");
   if (!outCtx) throw new Error("no out ctx");
 
-  // 흰 배경 (다각형 바깥)
   outCtx.fillStyle = "#ffffff";
   outCtx.fillRect(0, 0, W, H);
 
-  // 다각형 영역만 클립
   outCtx.save();
   outCtx.beginPath();
   pts.forEach((p, i) => {
@@ -483,65 +345,9 @@ async function applyPolygonCrop(
   outCtx.closePath();
   outCtx.clip();
 
-  // 다운스케일 비율로 원본 그리기
-  outCtx.drawImage(img,
-    minX, minY, rawW, rawH,
-    0, 0, W, H,
-  );
+  outCtx.drawImage(img, minX, minY, rawW, rawH, 0, 0, W, H);
   outCtx.restore();
 
-  enhanceContrast(outCtx, W, H);
-  return await canvasToFile(outCanvas, mimeType, fileName);
-}
-
-// ─────────── Mesh perspective (펴기, 가변 크기) ───────────
-//
-// (N+1)×(N+1) 격자를 N×N = N² 셀로 나눠 셀마다 별도 perspective transform.
-// 격자가 촘촘할수록 꾸겨짐 흡수 효과 ↑.
-async function applyMeshPerspective(
-  imgUrl: string,
-  meshNorm: Mesh,
-  n: number,
-  imgSize: { w: number; h: number },
-  mimeType: string,
-  fileName: string,
-): Promise<File> {
-  const m: Point[][] = meshNorm.map((row) => row.map((p) => ({ x: p.x * imgSize.w, y: p.y * imgSize.h })));
-
-  const tl = m[0][0], tr = m[0][n], br = m[n][n], bl = m[n][0];
-  const widthTop = Math.hypot(tr.x - tl.x, tr.y - tl.y);
-  const widthBot = Math.hypot(br.x - bl.x, br.y - bl.y);
-  const heightLeft = Math.hypot(bl.x - tl.x, bl.y - tl.y);
-  const heightRight = Math.hypot(br.x - tr.x, br.y - tr.y);
-  const W = Math.min(2400, Math.round(Math.max(widthTop, widthBot)));
-  const H = Math.min(2400, Math.round(Math.max(heightLeft, heightRight)));
-
-  const { src, sw, sh } = await loadSourceImageData(imgUrl, imgSize);
-  const outCanvas = document.createElement("canvas");
-  outCanvas.width = W; outCanvas.height = H;
-  const outCtx = outCanvas.getContext("2d");
-  if (!outCtx) throw new Error("no out ctx");
-  const outImg = outCtx.createImageData(W, H);
-
-  // 출력 사각형을 N×N 셀로 분할
-  for (let r = 0; r < n; r++) {
-    for (let c = 0; c < n; c++) {
-      const dstX0 = Math.round((c / n) * W);
-      const dstY0 = Math.round((r / n) * H);
-      const dstX1 = Math.round(((c + 1) / n) * W);
-      const dstY1 = Math.round(((r + 1) / n) * H);
-      const cellW = dstX1 - dstX0;
-      const cellH = dstY1 - dstY0;
-
-      const M = getPerspectiveTransform(
-        [{ x: 0, y: 0 }, { x: cellW, y: 0 }, { x: cellW, y: cellH }, { x: 0, y: cellH }],
-        [m[r][c], m[r][c + 1], m[r + 1][c + 1], m[r + 1][c]],
-      );
-      warpRegion(src.data, sw, sh, outImg.data, W, dstX0, dstY0, cellW, cellH, M);
-    }
-  }
-
-  outCtx.putImageData(outImg, 0, 0);
   enhanceContrast(outCtx, W, H);
   return await canvasToFile(outCanvas, mimeType, fileName);
 }
