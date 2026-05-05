@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useEffect, Fragment } from "react";
-import { ShoppingCart, ChevronUp, ChevronDown, ChevronsUpDown, Plus, FileText, Loader2, RefreshCw } from "lucide-react";
+import { ShoppingCart, ChevronUp, ChevronDown, ChevronsUpDown, Plus, FileText, Loader2 } from "lucide-react";
 import type { IcdResult } from "@/app/api/medications/icd-analysis/route";
 import { formatPrice } from "@/lib/utils";
 import type { MedicationItem } from "@/types";
 import SameIngredientModal from "./SameIngredientModal";
-import StockCheckModal from "./StockCheckModal";
+import { getStock, subscribeStock, fetchStock, type StockEntry } from "@/lib/stock-cache";
 
 type SortKey = "productName" | "price" | "commissionRate" | "additionalRate" | "totalRate" | "settlement";
 type SortDir = "asc" | "desc";
@@ -176,7 +176,6 @@ function PaymentTypeBadge({ value }: { value: string | null | undefined }) {
 
 export default function MedicationTable({ medications, loading, userId, showCategoryA, showIngredientName, showCategoryB, showRate, showBioStatus, showPrice, showOriginalDrug, showInsuranceCode, showNotes, showStock }: Props) {
   const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null; productName?: string } | null>(null);
-  const [stockModal, setStockModal] = useState<{ insuranceCode: string; productName: string } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -309,6 +308,70 @@ export default function MedicationTable({ medications, loading, userId, showCate
     return sortDir === "asc" ? (va as number) - (vb as number) : (vb as number) - (va as number);
   });
 
+  const SITE_LABELS: Record<string, string> = { ibjp: "백제약", inchun: "인천", family: "훼밀리" };
+
+  function useStockEntry(code: string | null): StockEntry {
+    const [entry, setEntry] = useState<StockEntry>(() => code ? getStock(code) : { status: "idle" });
+    useEffect(() => {
+      if (!code) return;
+      setEntry(getStock(code));
+      return subscribeStock(code, () => setEntry(getStock(code)));
+    }, [code]);
+    return entry;
+  }
+
+  function StockButton({ code, productName }: { code: string; productName: string }) {
+    const entry = useStockEntry(code);
+    if (entry.status === "loading") {
+      return (
+        <span className="text-xs font-medium text-emerald-600 flex items-center gap-1 px-2.5 py-1">
+          <Loader2 className="w-3 h-3 animate-spin" />조회 중
+        </span>
+      );
+    }
+    return (
+      <button
+        type="button"
+        onClick={() => fetchStock(code, productName, true)}
+        className="text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-200 px-2.5 py-1 rounded-full whitespace-nowrap transition-colors"
+      >
+        {entry.status === "done" ? "↻ 재조회" : "재고확인"}
+      </button>
+    );
+  }
+
+  function StockColumnCell({ code, productName, fallbackStock }: { code: string; productName: string; fallbackStock: number | null }) {
+    const entry = useStockEntry(code);
+    if (entry.status === "idle") {
+      return (
+        <span className="text-gray-300">
+          {fallbackStock != null ? (fallbackStock > 0 ? fallbackStock.toLocaleString() : "품절") : "-"}
+        </span>
+      );
+    }
+    if (entry.status === "loading") return <Loader2 className="w-3 h-3 animate-spin text-gray-400" />;
+    if (entry.status === "error") {
+      return <span className="text-red-400 text-[10px]" title={entry.error}>오류</span>;
+    }
+    const siteRows = (entry.results ?? []).filter((r) => r.siteKey);
+    if (siteRows.length === 0) return <span className="text-gray-300 text-[10px]">-</span>;
+    return (
+      <div className="text-[10px] leading-tight space-y-0.5">
+        {siteRows.map((r) => {
+          const label = SITE_LABELS[r.siteKey] ?? r.siteKey;
+          if (r.error) return <div key={r.siteKey} className="text-red-400">{label}: 오류</div>;
+          const total = r.items.reduce((s, i) => s + (i.stock ?? 0), 0);
+          return (
+            <div key={r.siteKey} className={total > 0 ? "text-green-700" : "text-red-400"}>
+              {label} {total > 0 ? total.toLocaleString() : "품절"}
+            </div>
+          );
+        })}
+        {entry.source && <div className="text-gray-300 text-[9px]">{entry.source === "live" ? "실시간" : "캐시"}</div>}
+      </div>
+    );
+  }
+
   function SortIcon({ k }: { k: SortKey }) {
     if (sortKey !== k) return <ChevronsUpDown className="w-3 h-3 inline ml-0.5 text-gray-300" />;
     return sortDir === "asc" ? <ChevronUp className="w-3 h-3 inline ml-0.5 text-blue-500" /> : <ChevronDown className="w-3 h-3 inline ml-0.5 text-blue-500" />;
@@ -395,11 +458,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                               동일성분
                             </button>
                             {med.insuranceCode && (
-                              <button type="button"
-                                onClick={() => setStockModal({ insuranceCode: med.insuranceCode!, productName: med.productName })}
-                                className="text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-200 px-2.5 py-1 rounded-full whitespace-nowrap transition-colors">
-                                재고확인
-                              </button>
+                              <StockButton code={med.insuranceCode} productName={med.productName} />
                             )}
                           </div>
                         </div>
@@ -417,16 +476,9 @@ export default function MedicationTable({ medications, loading, userId, showCate
                             <div className="flex justify-between items-center">
                               <span className="text-gray-400">재고</span>
                               <span className="flex items-center gap-1">
-                                {med.stock != null
-                                  ? <span className={med.stock > 0 ? "text-green-700 font-medium" : "text-red-500"}>{med.stock > 0 ? med.stock.toLocaleString() : "품절"}</span>
+                                {med.insuranceCode
+                                  ? <StockColumnCell code={med.insuranceCode} productName={med.productName} fallbackStock={med.stock ?? null} />
                                   : <span className="text-gray-300">-</span>}
-                                {med.insuranceCode && (
-                                  <button type="button" title="재고 새로고침"
-                                    onClick={() => setStockModal({ insuranceCode: med.insuranceCode!, productName: med.productName })}
-                                    className="p-0.5 text-gray-300 hover:text-emerald-600 transition-colors">
-                                    <RefreshCw className="w-2.5 h-2.5" />
-                                  </button>
-                                )}
                               </span>
                             </div>
                           )}
@@ -461,18 +513,9 @@ export default function MedicationTable({ medications, loading, userId, showCate
                     </td>
                     {showStock && (
                       <td className="hidden sm:table-cell px-3 py-2.5 text-right whitespace-nowrap">
-                        <span className="inline-flex items-center gap-1">
-                          {med.stock != null
-                            ? <span className={med.stock > 0 ? "text-green-700 font-medium" : "text-red-500"}>{med.stock > 0 ? med.stock.toLocaleString() : "품절"}</span>
-                            : <span className="text-gray-300">-</span>}
-                          {med.insuranceCode && (
-                            <button type="button" title="재고 새로고침"
-                              onClick={() => setStockModal({ insuranceCode: med.insuranceCode!, productName: med.productName })}
-                              className="p-0.5 text-gray-300 hover:text-emerald-600 transition-colors">
-                              <RefreshCw className="w-3 h-3" />
-                            </button>
-                          )}
-                        </span>
+                        {med.insuranceCode
+                          ? <StockColumnCell code={med.insuranceCode} productName={med.productName} fallbackStock={med.stock ?? null} />
+                          : <span className="text-gray-300">-</span>}
                       </td>
                     )}
                     {showPrice && <td className="hidden sm:table-cell px-3 py-2.5 text-right text-gray-700 whitespace-nowrap">{formatPrice(med.price)}</td>}
@@ -609,12 +652,6 @@ export default function MedicationTable({ medications, loading, userId, showCate
         />
       )}
 
-      <StockCheckModal
-        open={!!stockModal}
-        onClose={() => setStockModal(null)}
-        insuranceCode={stockModal?.insuranceCode ?? null}
-        productName={stockModal?.productName ?? null}
-      />
     </>
   );
 }

@@ -1994,6 +1994,7 @@ function InhouseClientsTab() {
                             loginId: String(r["이팜스ID"] ?? "").trim(),
                             loginPw: String(r["이팜스PW"] ?? "").trim(),
                             kmdEmail: String(r["KMD아이디"] ?? "").trim(),
+                            kmdUserEmail: String(r["KMD아이디"] ?? "").trim(),
                             memo: String(r["메모"] ?? "").trim(),
                           })));
                         }).catch(() => setBulkPreview([]));
