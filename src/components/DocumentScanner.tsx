@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { X, Check, RotateCcw, Pencil, Square, Info } from "lucide-react";
+import { X, Check, RotateCcw, Pencil, Square, Info, Sparkles, Loader2 } from "lucide-react";
+import { detectDocumentCorners } from "@/lib/document-detect";
 
 interface Point { x: number; y: number }
 type Corners = [Point, Point, Point, Point]; // TL, TR, BR, BL (normalized 0-1)
 
 type Mode = "corners" | "polygon";
+type DetectStatus = "idle" | "loading" | "found" | "failed";
 
 interface Props {
   file: File;
@@ -31,6 +33,7 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
   const [polygon, setPolygon] = useState<Point[]>([]);
   const [dragging, setDragging] = useState<{ kind: Mode; idx: number } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [detectStatus, setDetectStatus] = useState<DetectStatus>("idle");
   const overlayRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   // 점 핸들 위에서 mousedown 이 일어났는지 추적 — 그러면 컨테이너 click 으로 점 추가가 일어나지 않도록 차단
@@ -42,11 +45,37 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
     return () => URL.revokeObjectURL(url);
   }, [file]);
 
-  const onImgLoad = useCallback(() => {
+  const onImgLoad = useCallback(async () => {
     const img = imgRef.current;
     if (!img) return;
     setImgSize({ w: img.naturalWidth, h: img.naturalHeight });
+
+    // 자동 4코너 감지 (OpenCV.js — lazy load).
+    // 실패해도 기본 5%/95% 코너 그대로 사용.
+    setDetectStatus("loading");
+    try {
+      const detected = await detectDocumentCorners(img);
+      if (detected) {
+        setCorners(detected);
+        setDetectStatus("found");
+      } else {
+        setDetectStatus("failed");
+      }
+    } catch (e) {
+      console.warn("[Scanner] auto-detect failed", e);
+      setDetectStatus("failed");
+    }
   }, []);
+
+  function manualRedetect() {
+    const img = imgRef.current;
+    if (!img) return;
+    setDetectStatus("loading");
+    detectDocumentCorners(img).then((d) => {
+      if (d) { setCorners(d); setDetectStatus("found"); }
+      else setDetectStatus("failed");
+    }).catch(() => setDetectStatus("failed"));
+  }
 
   function switchMode(next: Mode) {
     if (next === "polygon" && polygon.length === 0) setPolygon([]);
@@ -165,26 +194,49 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
           </button>
         </div>
 
-        {/* 모드 토글 */}
-        <div className="flex gap-1 bg-white/10 rounded-md p-1 mb-3 w-fit">
-          <button
-            onClick={() => switchMode("corners")}
-            disabled={busy}
-            className={`px-3 py-1.5 text-xs rounded inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 ${
-              mode === "corners" ? "bg-white text-gray-900 font-medium" : "text-white/80 hover:bg-white/10"
-            }`}
-          >
-            <Square className="w-3.5 h-3.5" /> 평평 (4코너 펴기)
-          </button>
-          <button
-            onClick={() => switchMode("polygon")}
-            disabled={busy}
-            className={`px-3 py-1.5 text-xs rounded inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 ${
-              mode === "polygon" ? "bg-white text-gray-900 font-medium" : "text-white/80 hover:bg-white/10"
-            }`}
-          >
-            <Pencil className="w-3.5 h-3.5" /> 외곽 자르기 (다각형)
-          </button>
+        {/* 모드 토글 + 자동 감지 상태 */}
+        <div className="flex flex-wrap items-center gap-3 mb-3">
+          <div className="flex gap-1 bg-white/10 rounded-md p-1 w-fit">
+            <button
+              onClick={() => switchMode("corners")}
+              disabled={busy}
+              className={`px-3 py-1.5 text-xs rounded inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 ${
+                mode === "corners" ? "bg-white text-gray-900 font-medium" : "text-white/80 hover:bg-white/10"
+              }`}
+            >
+              <Square className="w-3.5 h-3.5" /> 평평 (4코너 펴기)
+            </button>
+            <button
+              onClick={() => switchMode("polygon")}
+              disabled={busy}
+              className={`px-3 py-1.5 text-xs rounded inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 ${
+                mode === "polygon" ? "bg-white text-gray-900 font-medium" : "text-white/80 hover:bg-white/10"
+              }`}
+            >
+              <Pencil className="w-3.5 h-3.5" /> 외곽 자르기 (다각형)
+            </button>
+          </div>
+          {/* 자동 감지 상태 — corners 모드에서만 의미있음 */}
+          {mode === "corners" && (
+            <div className="flex items-center gap-1.5 text-[11px]">
+              {detectStatus === "loading" && (
+                <span className="inline-flex items-center gap-1 text-blue-200">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> 자동 감지 중...
+                </span>
+              )}
+              {detectStatus === "found" && (
+                <span className="inline-flex items-center gap-1 text-green-300">
+                  <Sparkles className="w-3.5 h-3.5" /> 자동 감지됨 — 필요 시 코너 미세조정
+                </span>
+              )}
+              {detectStatus === "failed" && (
+                <button onClick={manualRedetect} disabled={busy}
+                  className="inline-flex items-center gap-1 text-amber-200 hover:text-amber-100 underline">
+                  자동 감지 실패 — 다시 시도
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* 촬영 안내 — 꾸겨짐 펴기는 기술적 한계로 제거됨, 사용자에게 미리 안내 */}
