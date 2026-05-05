@@ -29,11 +29,11 @@ const SEL = {
     'input[name="mb_password"]',
     'input[type="password"]',
   ].join(", "),
+  // 네비 링크 a:has-text("로그인") 제외 — form 안의 submit 버튼만 타겟
   loginBtn: [
-    'button:has-text("로그인")',
-    'a:has-text("로그인")',
+    'form[name="signinFrm"] button[type="submit"]',
+    'button.btn--primary[type="submit"]',
     'input[type="submit"][value*="로그인"]',
-    'input[type="image"][alt*="로그인"]',
     'button[type="submit"]',
   ].join(", "),
   searchTypeSelect: [
