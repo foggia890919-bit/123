@@ -1,10 +1,10 @@
 export type UserRole = "BASIC" | "SALES_REP" | "BIZ" | "ADMIN" | "DOCTOR" | "PHARMACIST";
 
 const HIERARCHY: Record<UserRole, number> = {
-  BASIC: 0,
-  DOCTOR: 0,
-  PHARMACIST: 0,
-  SALES_REP: 1,
+  BASIC: 2,
+  DOCTOR: 2,
+  PHARMACIST: 2,
+  SALES_REP: 2,
   BIZ: 2,
   ADMIN: 99,
 };

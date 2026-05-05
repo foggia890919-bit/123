@@ -1,11 +1,11 @@
 "use client";
 
 import { useState, useEffect, useRef, Fragment } from "react";
-import { Building2, Filter, X, Send, FileText, ChevronDown, Plus, Search, CheckCircle2, Loader2 } from "lucide-react";
-import { Input } from "@/components/ui/input";
+import { Building2, Filter, X, Send, FileText, ChevronDown, Search, CheckCircle2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import RequireRole from "@/components/RequireRole";
 import { useSession } from "next-auth/react";
+import Link from "next/link";
 
 interface Company { name: string; isSettlement: boolean; count: number; }
 interface ProposalSummary { id: string; title: string; _count?: { items: number }; }
@@ -14,7 +14,7 @@ interface MyRequest {
   status: string; replyText: string | null; repliedAt: string | null; createdAt: string;
 }
 interface GlobalClient {
-  id: string; clientName: string; bizNumber: string;
+  id: string; clientName: string; bizNumber: string; bizFileName?: string | null;
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -43,14 +43,7 @@ export default function FilterPage() {
   const [clientSearching, setClientSearching] = useState(false);
   const [selectedClient, setSelectedClient] = useState<GlobalClient | null>(null);
 
-  // 새 거래처 등록 인라인 폼
-  const [showNewClientForm, setShowNewClientForm] = useState(false);
-  const [newClientName, setNewClientName] = useState("");
-  const [newBizNumber, setNewBizNumber] = useState("");
-  const [newBizFile, setNewBizFile] = useState<File | null>(null);
-  const [registering, setRegistering] = useState(false);
-  const [regError, setRegError] = useState("");
-
+  const [myClients, setMyClients] = useState<GlobalClient[]>([]);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState("");
@@ -72,6 +65,9 @@ export default function FilterPage() {
       .then((r) => r.json())
       .then(setCompanyStatuses);
     loadMyRequests(session.user.id);
+    fetch("/api/user-clients")
+      .then((r) => r.json())
+      .then((d) => setMyClients(Array.isArray(d) ? d : []));
   }, [session?.user?.id]);
 
   async function loadMyRequests(uid: string) {
@@ -99,6 +95,8 @@ export default function FilterPage() {
     }, 300);
     return () => clearTimeout(t);
   }, [clientQuery]);
+
+  const displayClients = clientQuery.trim() ? clientResults : myClients;
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -136,44 +134,6 @@ export default function FilterPage() {
         .filter(Boolean)
     );
     setSelected(names);
-  }
-
-  function formatBizNumber(v: string) {
-    const d = v.replace(/\D/g, "");
-    if (d.length <= 3) return d;
-    if (d.length <= 5) return `${d.slice(0, 3)}-${d.slice(3)}`;
-    return `${d.slice(0, 3)}-${d.slice(3, 5)}-${d.slice(5, 10)}`;
-  }
-
-  async function handleRegisterNewClient() {
-    setRegError("");
-    if (!newClientName || !newBizNumber) { setRegError("거래처명과 사업자번호를 입력해주세요."); return; }
-    setRegistering(true);
-    let bizDocument: string | null = null, bizFileName: string | null = null;
-    if (newBizFile) {
-      bizDocument = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(newBizFile);
-        reader.onload = () => resolve(reader.result as string);
-      });
-      bizFileName = newBizFile.name;
-    }
-    const res = await fetch("/api/clients", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientName: newClientName, bizNumber: newBizNumber, bizDocument, bizFileName }),
-    });
-    if (res.ok) {
-      const created: GlobalClient = await res.json();
-      setSelectedClient(created);
-      setShowNewClientForm(false);
-      setNewClientName(""); setNewBizNumber(""); setNewBizFile(null);
-      setClientQuery("");
-    } else {
-      const d = await res.json();
-      setRegError(d.error || "등록 중 오류가 발생했어요.");
-    }
-    setRegistering(false);
   }
 
   const filteredCompanies = companies.filter((c) =>
@@ -237,119 +197,88 @@ export default function FilterPage() {
           <form onSubmit={handleSubmit} className="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
             <h2 className="font-semibold text-gray-800">거래처 필터링 요청</h2>
 
-            {/* 거래처 검색 */}
+            {/* 거래처 선택 */}
             <div className="space-y-1">
-              <label className="text-xs font-medium text-gray-600">거래처 선택 <span className="text-red-500">*</span></label>
-              {selectedClient ? (
-                <div className="flex items-center gap-2 p-2.5 border border-blue-300 bg-blue-50 rounded-md">
-                  <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-800">{selectedClient.clientName}</p>
-                    <p className="text-xs text-gray-500 font-mono">{selectedClient.bizNumber}</p>
-                  </div>
-                  <button type="button"
-                    onClick={() => { setSelectedClient(null); setClientQuery(""); setShowNewClientForm(false); }}
-                    className="p-1 text-gray-400 hover:text-gray-600 rounded">
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              ) : (
-                <div className="relative" ref={clientMenuRef}>
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                    <input
-                      value={clientQuery}
-                      onChange={(e) => { setClientQuery(e.target.value); setClientMenuOpen(true); setShowNewClientForm(false); }}
-                      onFocus={() => { if (clientQuery.trim()) setClientMenuOpen(true); }}
-                      placeholder="거래처명 또는 사업자번호로 검색..."
-                      className="w-full h-10 pl-9 pr-9 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-                    />
-                    {clientSearching && (
-                      <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-gray-400" />
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-gray-600">거래처 선택 <span className="text-red-500">*</span></label>
+                <Link href="/mypage/clients" className="text-xs text-blue-600 hover:underline">
+                  + 거래처 등록하기
+                </Link>
+              </div>
+              <div className="relative" ref={clientMenuRef}>
+                <button type="button" onClick={() => setClientMenuOpen((v) => !v)}
+                  className="w-full h-10 px-3 border border-gray-300 rounded-md bg-white hover:bg-gray-50 text-left text-sm flex items-center justify-between gap-2">
+                  {selectedClient ? (
+                    <span className="flex items-center gap-2 flex-1 min-w-0">
+                      <CheckCircle2 className="w-4 h-4 text-blue-500 shrink-0" />
+                      <span className="font-medium text-gray-800 truncate">{selectedClient.clientName}</span>
+                      <span className="text-gray-400 font-mono text-xs shrink-0">{selectedClient.bizNumber}</span>
+                    </span>
+                  ) : (
+                    <span className="text-gray-400 flex items-center gap-1.5">
+                      <Search className="w-3.5 h-3.5" />거래처 검색 및 선택
+                    </span>
+                  )}
+                  <div className="flex items-center gap-1 shrink-0">
+                    {selectedClient && (
+                      <span
+                        onClick={(e) => { e.stopPropagation(); setSelectedClient(null); setClientQuery(""); }}
+                        className="p-0.5 text-gray-400 hover:text-gray-600 rounded">
+                        <X className="w-3.5 h-3.5" />
+                      </span>
                     )}
+                    <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${clientMenuOpen ? "rotate-180" : ""}`} />
                   </div>
-                  {clientMenuOpen && clientQuery.trim() && (
-                    <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg">
-                      <div className="max-h-56 overflow-y-auto">
-                        {clientResults.length === 0 && !clientSearching ? (
-                          <div className="py-4 px-3 text-center">
-                            <p className="text-xs text-gray-400 mb-2">'{clientQuery}'에 해당하는 거래처가 없어요</p>
-                            <button type="button"
-                              onClick={() => {
-                                setClientMenuOpen(false);
-                                setShowNewClientForm(true);
-                                const digitsOnly = clientQuery.replace(/\D/g, "");
-                                if (/^\d+$/.test(clientQuery.trim())) {
-                                  setNewBizNumber(clientQuery.trim());
-                                } else {
-                                  setNewClientName(clientQuery.trim());
-                                }
-                              }}
-                              className="text-xs text-blue-600 hover:text-blue-700 border border-blue-200 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-md inline-flex items-center gap-1 transition-colors">
-                              <Plus className="w-3 h-3" />새 거래처로 등록
-                            </button>
-                          </div>
-                        ) : clientResults.map((c) => (
-                          <button key={c.id} type="button"
-                            onClick={() => { setSelectedClient(c); setClientMenuOpen(false); setClientQuery(""); }}
-                            className="w-full text-left px-3 py-2.5 text-xs hover:bg-gray-50 border-b border-gray-50 last:border-0">
-                            <p className="font-medium text-gray-800">{c.clientName}</p>
-                            <p className="text-gray-400 font-mono">{c.bizNumber}</p>
-                          </button>
-                        ))}
+                </button>
+                {clientMenuOpen && (
+                  <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg">
+                    <div className="p-2 border-b border-gray-100">
+                      <div className="relative">
+                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+                        <input
+                          autoFocus
+                          value={clientQuery}
+                          onChange={(e) => setClientQuery(e.target.value)}
+                          placeholder="거래처명 또는 사업자번호 검색..."
+                          className="w-full h-8 pl-8 pr-8 border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
+                        />
+                        {clientSearching && (
+                          <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 animate-spin text-gray-400" />
+                        )}
                       </div>
                     </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* 새 거래처 등록 인라인 폼 */}
-            {showNewClientForm && (
-              <div className="border border-amber-200 bg-amber-50 rounded-lg p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-semibold text-amber-800">새 거래처 등록</p>
-                  <button type="button" onClick={() => { setShowNewClientForm(false); setRegError(""); }}
-                    className="text-amber-400 hover:text-amber-600">
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <div className="space-y-1">
-                    <label className="text-xs text-amber-700 font-medium">거래처명 <span className="text-red-500">*</span></label>
-                    <Input value={newClientName} onChange={(e) => setNewClientName(e.target.value)}
-                      placeholder="거래처 상호명" className="h-8 text-xs bg-white" />
+                    <div className="max-h-56 overflow-y-auto">
+                      {displayClients.length === 0 ? (
+                        <div className="py-5 px-3 text-center space-y-2">
+                          <p className="text-xs text-gray-400">
+                            {clientQuery.trim() ? `'${clientQuery}'에 해당하는 거래처가 없어요` : "등록된 거래처가 없어요"}
+                          </p>
+                          <Link href="/mypage/clients"
+                            onClick={() => setClientMenuOpen(false)}
+                            className="inline-flex items-center gap-1 text-xs text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-md transition-colors">
+                            <Building2 className="w-3 h-3" />거래처 관리에서 등록하기
+                          </Link>
+                        </div>
+                      ) : (
+                        <>
+                          {!clientQuery.trim() && (
+                            <p className="px-3 py-1.5 text-[11px] text-gray-400 border-b border-gray-50">내 거래처</p>
+                          )}
+                          {displayClients.map((c) => (
+                            <button key={c.id} type="button"
+                              onClick={() => { setSelectedClient(c); setClientMenuOpen(false); setClientQuery(""); }}
+                              className="w-full text-left px-3 py-2.5 text-xs hover:bg-gray-50 border-b border-gray-50 last:border-0">
+                              <p className="font-medium text-gray-800">{c.clientName}</p>
+                              <p className="text-gray-400 font-mono">{c.bizNumber}</p>
+                            </button>
+                          ))}
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-xs text-amber-700 font-medium">사업자번호 <span className="text-red-500">*</span></label>
-                    <Input value={newBizNumber} onChange={(e) => setNewBizNumber(formatBizNumber(e.target.value))}
-                      placeholder="000-00-00000" maxLength={12} className="h-8 text-xs bg-white" />
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs text-amber-700 font-medium">사업자등록증 <span className="text-gray-400 font-normal">(선택)</span></label>
-                  <label className="flex items-center gap-2 border border-dashed border-amber-300 rounded-md p-2 cursor-pointer hover:bg-amber-100/50 bg-white">
-                    <FileText className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span className="text-xs text-gray-600 truncate flex-1">
-                      {newBizFile ? newBizFile.name : "파일 첨부 (JPG, PNG, PDF)"}
-                    </span>
-                    {newBizFile && (
-                      <button type="button" onClick={(e) => { e.preventDefault(); setNewBizFile(null); }}
-                        className="text-gray-400 hover:text-red-500">
-                        <X className="w-3 h-3" />
-                      </button>
-                    )}
-                    <input type="file" accept=".jpg,.jpeg,.png,.pdf" className="hidden"
-                      onChange={(e) => setNewBizFile(e.target.files?.[0] || null)} />
-                  </label>
-                </div>
-                {regError && <p className="text-xs text-red-600 bg-red-50 px-2 py-1.5 rounded">{regError}</p>}
-                <Button type="button" size="sm" disabled={registering} onClick={handleRegisterNewClient}
-                  className="w-full h-8 text-xs">
-                  <Plus className="w-3 h-3 mr-1" />{registering ? "등록 중..." : "거래처 등록 및 선택"}
-                </Button>
+                )}
               </div>
-            )}
+            </div>
 
             {/* 제약사 선택 드롭다운 */}
             <div className="space-y-1">

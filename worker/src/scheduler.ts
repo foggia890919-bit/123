@@ -12,12 +12,18 @@ import {
   type SnapshotInsert,
 } from "./db.ts";
 
-// Per-site call budget: small wait between requests to the same site so we
-// don't trigger rate-limiting on the wholesale dashboard.
-const PER_SITE_DELAY_MS = Number(process.env.SCHEDULED_DELAY_MS ?? 2000);
+// Wait between consecutive requests within a single scraping lane.
+// Lowered default: the browser interaction itself takes 2-4s, so extra
+// delay is only needed to avoid triggering the site's rate limiter.
+const PER_SITE_DELAY_MS = Number(process.env.SCHEDULED_DELAY_MS ?? 300);
+
+// Number of parallel browser sessions per site. Each slot logs in
+// independently and processes a separate slice of the code list.
+// Default 2 = 2× throughput with acceptable memory on a small instance.
+const CONCURRENCY_PER_SITE = Math.max(1, Number(process.env.CONCURRENCY_PER_SITE ?? 2));
 
 interface RunJobDeps {
-  scrapeOne: (adapter: WholesaleAdapter, code: string) => Promise<{
+  scrapeOne: (adapter: WholesaleAdapter, code: string, slot?: number) => Promise<{
     siteKey: string;
     insuranceCode: string;
     items: { insuranceCode?: string; productName: string; spec?: string; manufacturer?: string; unitPrice?: number; stock?: number; raw?: unknown }[];
@@ -92,37 +98,46 @@ export async function runScheduledJob(
     perSiteStats.set(site.key, { done: 0, failed: 0 });
   }
 
-  // Process each site as its own concurrent loop. Within a site we serialize
-  // (one code at a time) so we honour the per-site rate budget; across sites
-  // we run in parallel because each site has its own browser context.
+  // Sites run in parallel (Promise.all over sites).
+  // Within each site, CONCURRENCY_PER_SITE lanes run concurrently — each lane
+  // owns a separate logged-in browser session and processes its own slice of codes.
   await Promise.all(
     sitesWithCreds.map(async site => {
       const stats = perSiteStats.get(site.key)!;
       try {
-        for (const { insuranceCode } of codes) {
-          const row = await deps.scrapeOne(site, insuranceCode);
-          if (row.error) {
-            stats.failed++;
-          } else if (row.items.length > 0) {
-            const inserts: SnapshotInsert[] = row.items.map(item => ({
-              siteKey: site.key,
-              insuranceCode,
-              item,
-            }));
-            try {
-              await saveSnapshots(inserts);
-            } catch (err) {
-              console.error(`[scheduler] db write failed for ${site.key}/${insuranceCode}:`, (err as Error).message);
-              stats.failed++;
-              continue;
+        // Split codes across lanes by interleaving (round-robin) so each lane
+        // gets an even mix of codes rather than a contiguous block.
+        const lanes = Array.from({ length: CONCURRENCY_PER_SITE }, (_, slot) =>
+          codes.filter((_, i) => i % CONCURRENCY_PER_SITE === slot)
+        );
+
+        await Promise.all(
+          lanes.map(async (slice, slot) => {
+            for (const { insuranceCode } of slice) {
+              const row = await deps.scrapeOne(site, insuranceCode, slot);
+              if (row.error) {
+                stats.failed++;
+              } else if (row.items.length > 0) {
+                const inserts: SnapshotInsert[] = row.items.map(item => ({
+                  siteKey: site.key,
+                  insuranceCode,
+                  item,
+                }));
+                try {
+                  await saveSnapshots(inserts);
+                } catch (err) {
+                  console.error(`[scheduler] db write failed for ${site.key}/${insuranceCode}:`, (err as Error).message);
+                  stats.failed++;
+                  continue;
+                }
+                stats.done++;
+              } else {
+                stats.done++;
+              }
+              await new Promise(r => setTimeout(r, PER_SITE_DELAY_MS));
             }
-            stats.done++;
-          } else {
-            // No results found — still counts as done (out-of-stock / unlisted)
-            stats.done++;
-          }
-          await new Promise(r => setTimeout(r, PER_SITE_DELAY_MS));
-        }
+          })
+        );
       } catch (err) {
         stats.error = (err as Error).message;
         console.error(`[scheduler] site ${site.key} aborted:`, stats.error);

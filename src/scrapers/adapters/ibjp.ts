@@ -46,6 +46,19 @@ async function waitAny(page: Page, selector: string, timeout = 15_000): Promise<
   return page.locator(selector).first();
 }
 
+async function dismissQDialogs(page: Page): Promise<void> {
+  for (let i = 0; i < 4; i++) {
+    const visible = await page.locator(".q-dialog__backdrop").first().isVisible({ timeout: 800 }).catch(() => false);
+    if (!visible) break;
+    // JS 직접 클릭 (Playwright 오버레이 감지 우회) + Escape 병행
+    await page.evaluate(() => {
+      (document.querySelector(".q-dialog__backdrop") as HTMLElement | null)?.click();
+    }).catch(() => {});
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(600);
+  }
+}
+
 export const ibjp: WholesaleAdapter = {
   key: "ibjp",
   name: "백제약품",
@@ -69,6 +82,7 @@ export const ibjp: WholesaleAdapter = {
     ]);
 
     await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+    await dismissQDialogs(page);
 
     if (page.url().includes("/login")) {
       // Some sites post via Enter instead; retry once with keyboard
@@ -99,6 +113,9 @@ export const ibjp: WholesaleAdapter = {
       await page.waitForTimeout(1500);
       inputAlreadyVisible = await page.locator(SEL.searchInput).first().isVisible().catch(() => false);
     }
+
+    // Dismiss any dialog that may have appeared on page navigation
+    await dismissQDialogs(page);
 
     const input = await waitAny(page, SEL.searchInput, 30_000);
     await input.click();

@@ -22,6 +22,11 @@ if (!TOKEN) {
 }
 
 // -------------------- Browser session manager ----------------------
+// Sessions keyed by `${siteKey}:${slot}` to support per-site concurrency.
+// CONCURRENCY_PER_SITE=N creates N independent browser contexts per site,
+// each logged in separately, processing different subsets of codes in parallel.
+const CONCURRENCY_PER_SITE = Math.max(1, Number(process.env.CONCURRENCY_PER_SITE ?? 1));
+
 let browser: Browser | undefined;
 const sessions = new Map<string, { ctx: BrowserContext; page: Page; lastLogin: number }>();
 const lastCallAt = new Map<string, number>();
@@ -35,9 +40,10 @@ async function ensureBrowser() {
   return browser;
 }
 
-async function getPage(adapter: WholesaleAdapter, creds: Credentials): Promise<Page> {
+async function getPage(adapter: WholesaleAdapter, creds: Credentials, slot = 0): Promise<Page> {
   await ensureBrowser();
-  const existing = sessions.get(adapter.key);
+  const key = `${adapter.key}:${slot}`;
+  const existing = sessions.get(key);
   if (existing) {
     const stale = Date.now() - existing.lastLogin > SESSION_TTL_MS;
     if (!stale) {
@@ -48,7 +54,7 @@ async function getPage(adapter: WholesaleAdapter, creds: Credentials): Promise<P
       }
     }
     await existing.ctx.close().catch(() => {});
-    sessions.delete(adapter.key);
+    sessions.delete(key);
   }
   const ctx = await browser!.newContext({
     viewport: { width: 1440, height: 900 },
@@ -58,7 +64,7 @@ async function getPage(adapter: WholesaleAdapter, creds: Credentials): Promise<P
   });
   const page = await ctx.newPage();
   await adapter.login(page, creds);
-  sessions.set(adapter.key, { ctx, page, lastLogin: Date.now() });
+  sessions.set(key, { ctx, page, lastLogin: Date.now() });
   return page;
 }
 
@@ -76,11 +82,12 @@ function getCreds(siteKey: string): Credentials | null {
   return id && pw ? { id, pw } : null;
 }
 
-async function rateLimit(siteKey: string) {
-  const last = lastCallAt.get(siteKey) ?? 0;
+async function rateLimit(siteKey: string, slot = 0) {
+  const key = `${siteKey}:${slot}`;
+  const last = lastCallAt.get(key) ?? 0;
   const wait = INTERVAL_MS - (Date.now() - last);
   if (wait > 0) await new Promise(r => setTimeout(r, wait));
-  lastCallAt.set(siteKey, Date.now());
+  lastCallAt.set(key, Date.now());
 }
 
 interface ScrapeRow {
@@ -91,7 +98,7 @@ interface ScrapeRow {
   durationMs: number;
 }
 
-async function scrapeOne(adapter: WholesaleAdapter, code: string): Promise<ScrapeRow> {
+async function scrapeOne(adapter: WholesaleAdapter, code: string, slot = 0): Promise<ScrapeRow> {
   const start = Date.now();
   const creds = getCreds(adapter.key);
   if (!creds) {
@@ -103,13 +110,14 @@ async function scrapeOne(adapter: WholesaleAdapter, code: string): Promise<Scrap
       durationMs: 0,
     };
   }
-  await rateLimit(adapter.key);
+  await rateLimit(adapter.key, slot);
+  const sessionKey = `${adapter.key}:${slot}`;
   try {
-    const page = await getPage(adapter, creds);
+    const page = await getPage(adapter, creds, slot);
     const items = await adapter.searchByCode(page, code);
     return { siteKey: adapter.key, insuranceCode: code, items, durationMs: Date.now() - start };
   } catch (err) {
-    await invalidate(adapter.key);
+    await invalidate(sessionKey);
     return {
       siteKey: adapter.key,
       insuranceCode: code,

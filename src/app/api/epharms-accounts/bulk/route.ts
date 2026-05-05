@@ -1,6 +1,7 @@
 // ePharms 계정 Excel 일괄등록 API.
 // multipart/form-data 로 xlsx/xls 파일을 받아 upsert 처리.
-// 컬럼: 사업자번호 | 거래처명 | 이팜스ID | 이팜스PW | 메모(optional)
+// 컬럼: 사업자번호 | 거래처명 | 이팜스ID | 이팜스PW | 담당자코드(선택) | 메모(선택)
+// 담당자코드: User.salesCode 값 (S코드)
 
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
@@ -39,6 +40,20 @@ export async function POST(req: NextRequest) {
   const sheet = workbook.Sheets[sheetName];
   const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
 
+  // 담당자코드 → userId 미리 캐싱 (DB 쿼리 최소화)
+  const salesCodeCache = new Map<string, string>();
+  async function resolveSalesCode(code: string): Promise<string | null> {
+    if (!code) return null;
+    if (salesCodeCache.has(code)) return salesCodeCache.get(code)!;
+    const rep = await prisma.user.findFirst({
+      where: { salesCode: code },
+      select: { id: true },
+    });
+    const id = rep?.id ?? null;
+    if (id) salesCodeCache.set(code, id);
+    return id;
+  }
+
   let created = 0;
   let updated = 0;
   let skipped = 0;
@@ -46,12 +61,13 @@ export async function POST(req: NextRequest) {
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const rowNum = i + 2; // header is row 1
+    const rowNum = i + 2;
 
     const rawBiz = String(row["사업자번호"] ?? "").replace(/[^0-9]/g, "");
     const clientName = String(row["거래처명"] ?? "").trim();
     const loginId = String(row["이팜스ID"] ?? "").trim();
     const loginPw = String(row["이팜스PW"] ?? "").trim();
+    const salesCodeRaw = String(row["담당자코드"] ?? "").trim();
     const memo = String(row["메모"] ?? "").trim() || null;
 
     if (!rawBiz || !clientName || !loginId || !loginPw) {
@@ -62,6 +78,11 @@ export async function POST(req: NextRequest) {
 
     try {
       const loginPwEnc = encryptSecret(loginPw);
+      const salesRepId = await resolveSalesCode(salesCodeRaw);
+      if (salesCodeRaw && !salesRepId) {
+        errors.push(`행 ${rowNum}: 담당자코드 "${salesCodeRaw}"를 찾을 수 없습니다. (빈칸으로 처리)`);
+      }
+
       const existing = await prisma.epharmsAccount.findUnique({
         where: { bizNumber: rawBiz },
         select: { id: true },
@@ -75,20 +96,19 @@ export async function POST(req: NextRequest) {
           loginId,
           loginPwEnc,
           memo,
+          salesRepId,
         },
         update: {
           clientName,
           loginId,
           loginPwEnc,
+          ...(salesRepId !== null ? { salesRepId } : {}),
           updatedAt: new Date(),
         },
       });
 
-      if (existing) {
-        updated++;
-      } else {
-        created++;
-      }
+      if (existing) updated++;
+      else created++;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       errors.push(`행 ${rowNum} (${rawBiz}): ${msg}`);

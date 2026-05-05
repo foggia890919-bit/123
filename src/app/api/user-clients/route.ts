@@ -60,11 +60,11 @@ export async function GET(req: NextRequest) {
   const userId = user.id;
 
   // FilterRequest 자동 import 는 사용자가 직접 등록하지 않은 거래처를
-  // 무음으로 추가해 dropdown 을 오염시키므로 더 이상 수행하지 않음 (2026-04-29).
-  // 이전에 자동 추가된 행은 그대로 남아있으니 관리자가 일괄 정리해야 한다.
+  // 무음으로 추가해 dropdown 을 오염시키라 더 이상 수행하지 않음 (2026-04-29).
+  // 이전에 자동 추가된 행은 그대로 남아있으니 관리자가 일당 정리해야 한다.
 
-  // 병의원 목록: dealerType IS NULL인 것만 (법인·딜러 제외)
-  // dealerType 컬럼이 아직 없으면 fallback
+  // 병의원 목록: dealerType IS NULL인 것만 (법인·딥러 제외)
+  // dealerType 컴럼이 아직 없으면 fallback
   let rows;
   try {
     rows = await prisma.userClient.findMany({
@@ -72,7 +72,7 @@ export async function GET(req: NextRequest) {
       orderBy: { createdAt: "desc" },
       select: {
         id: true, clientName: true, bizNumber: true,
-        bizFileName: true, approved: true, createdAt: true, code: true,
+        bizFileName: true, approved: true, createdAt: true, code: true, dealerType: true,
       },
     });
   } catch {
@@ -91,25 +91,27 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
-  const { clientName, bizNumber, bizDocument, bizFileName } = await req.json();
+  const { clientName, bizNumber, bizDocument, bizFileName, dealerType } = await req.json();
   if (!clientName || !bizNumber) {
     return NextResponse.json({ error: "필수 항목 누락" }, { status: 400 });
   }
   const { fileKey: bizFileKey, fileData: bizDocumentFallback } =
     await persistDataUri(BUCKETS.userClientBiz, user.id, bizDocument);
   try {
+    const createData: Record<string, unknown> = {
+      userId: user.id,
+      clientName: String(clientName).trim(),
+      bizNumber: String(bizNumber).replace(/\D/g, ""),
+      bizDocument: bizDocumentFallback,
+      bizFileKey,
+      bizFileName: bizFileName || null,
+    };
+    if (dealerType !== undefined) createData.dealerType = dealerType ?? null;
     const row = await prisma.userClient.create({
-      data: {
-        userId: user.id,
-        clientName: String(clientName).trim(),
-        bizNumber: String(bizNumber).replace(/\D/g, ""),
-        bizDocument: bizDocumentFallback,
-        bizFileKey,
-        bizFileName: bizFileName || null,
-      },
+      data: createData as Parameters<typeof prisma.userClient.create>[0]["data"],
       select: {
         id: true, clientName: true, bizNumber: true,
-        bizFileName: true, approved: true, createdAt: true,
+        bizFileName: true, approved: true, createdAt: true, dealerType: true,
       },
     });
     return NextResponse.json(row);

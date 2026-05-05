@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
-import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck } from "lucide-react";
+import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck, ShoppingCart } from "lucide-react";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
 interface NavLeaf {
@@ -54,9 +54,10 @@ const navItems: NavItem[] = [
     kind: "group",
     label: "원내거래",
     icon: Truck,
-    minRole: "BIZ",
-    matchPrefixes: ["/mypage/ledger"],
+    minRole: "BASIC",
+    matchPrefixes: ["/inhouse", "/mypage/ledger"],
     children: [
+      { href: "/inhouse/order", label: "원내주문", icon: ShoppingCart },
       { href: "/mypage/ledger", label: "거래처 매출원장", icon: Building2 },
     ],
   },
@@ -88,7 +89,7 @@ export default function Navbar() {
 
   return (
     <nav className="bg-white border-b border-gray-200 shadow-sm relative z-40">
-      <div className="max-w-7xl mx-auto px-4">
+      <div className="max-w-screen-2xl mx-auto px-4">
         <div className="flex items-center justify-between h-14">
           {/* 로고 */}
           <Link href="/" className="flex items-center gap-2 shrink-0">
@@ -99,7 +100,7 @@ export default function Navbar() {
             <span className="font-bold text-gray-900 text-lg tracking-tight">Korea Medicine Data</span>
           </Link>
 
-          {/* 데스크탑 네비 */}
+          {/* 데스크톱 네비 */}
           <div className="hidden md:flex items-center gap-1">
             {navItems.map((item) => {
               if (item.kind === "link") {
@@ -174,6 +175,10 @@ export default function Navbar() {
                     <Link href="/mypage" onClick={() => setUserOpen(false)}
                       className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
                       <User className="w-4 h-4 text-gray-400" />마이페이지
+                    </Link>
+                    <Link href="/mypage/clients" onClick={() => setUserOpen(false)}
+                      className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
+                      <Building2 className="w-4 h-4 text-gray-400" />내 거래처
                     </Link>
                     <div className="border-t border-gray-100">
                       <button onClick={() => { signOut({ callbackUrl: "/" }); setUserOpen(false); }}

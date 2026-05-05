@@ -39,6 +39,8 @@ model User {
   corpRateHistoriesPerformed CorpRateFileHistory[] @relation("CorpRateFileHistoryPerformer")
   processedEmails            IncomingEmail[]       @relation("EmailProcessor")
   epharmsAccounts            EpharmsAccount[]      @relation("KmdUserEpharms")
+  salesRepEpharmsAccounts    EpharmsAccount[]      @relation("SalesRepEpharmsAccounts")
+  inhouseOrders              InhouseOrder[]
 
   @@index([parentUserId])
 }
@@ -756,6 +758,9 @@ model EpharmsAccount {
   // bizNumber 기반 매칭(UserClient.bizNumber)에 더해 kmdUserId 직접 링크도 허용한다.
   kmdUserId       String?
   kmdUser         User?           @relation("KmdUserEpharms", fields: [kmdUserId], references: [id], onDelete: SetNull)
+  // 담당 영업사원 — 원내거래 주문/원장 조회 시 본인 담당 거래처만 보이게 하는 용도.
+  salesRepId      String?
+  salesRep        User?           @relation("SalesRepEpharmsAccounts", fields: [salesRepId], references: [id], onDelete: SetNull)
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
   ledgerEntries   LedgerEntry[]
@@ -763,6 +768,7 @@ model EpharmsAccount {
 
   @@index([active])
   @@index([kmdUserId])
+  @@index([salesRepId])
 }
 
 // 매출원장 한 줄 (원장집계 화면 컬럼 그대로).
@@ -860,4 +866,49 @@ model ProductSyncLog {
 
   @@index([startedAt])
   @@index([status])
+}
+
+// =====================================================================
+// 원내거래 주문 (장바구니 → 카톡 알람 → ePharms 주문 등록)
+// =====================================================================
+
+model InhouseOrder {
+  id           String             @id @default(cuid())
+  userId       String
+  user         User               @relation(fields: [userId], references: [id])
+  clientName   String
+  bizNumber    String?
+  status       InhouseOrderStatus @default(PENDING)
+  note         String?
+  confirmedAt  DateTime?          // BIZ 담당자 확인 시각
+  orderedAt    DateTime?          // ePharms 주문 완료 시각
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  items        InhouseOrderItem[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model InhouseOrderItem {
+  id           String       @id @default(cuid())
+  orderId      String
+  order        InhouseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  priceCode    String
+  productName  String
+  manufacturer String       @default("")
+  spec         String?
+  basePrice    Decimal?     @db.Decimal(18, 2)  // 이팜스 기본단가
+  unitPrice    Decimal?     @db.Decimal(18, 2)  // 거래처별 실제 단가
+  quantity     Int          @default(1)
+
+  @@index([orderId])
+}
+
+enum InhouseOrderStatus {
+  PENDING    // 요청 대기
+  CONFIRMED  // BIZ 담당자 확인
+  ORDERED    // ePharms 주문 완료
+  REJECTED   // 반려
 }

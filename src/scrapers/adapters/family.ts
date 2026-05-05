@@ -13,14 +13,15 @@ import type { Credentials, InventoryItem, WholesaleAdapter } from "../core/types
 // Note: site is HTTP only — credentials travel in plaintext.
 const SEL = {
   idInput: [
+    'input[name="user_id"]',  // family-pharm.co.kr 실제 필드명
     'input[name="id"]',
     'input[name="userId"]',
-    'input[name="user_id"]',
     'input[name="memberId"]',
     'input[name="mb_id"]',
     'input[type="text"]:not([readonly]):not([disabled])',
   ].join(", "),
   pwInput: [
+    'input[name="user_pwd"]',  // family-pharm.co.kr 실제 필드명
     'input[name="pw"]',
     'input[name="passwd"]',
     'input[name="password"]',
@@ -28,14 +29,15 @@ const SEL = {
     'input[name="mb_password"]',
     'input[type="password"]',
   ].join(", "),
+  // 네비 링크 a:has-text("로그인") 제외 — form 안의 submit 버튼만 타겟
   loginBtn: [
-    'button:has-text("로그인")',
-    'a:has-text("로그인")',
+    'form[name="signinFrm"] button[type="submit"]',
+    'button.btn--primary[type="submit"]',
     'input[type="submit"][value*="로그인"]',
-    'input[type="image"][alt*="로그인"]',
     'button[type="submit"]',
   ].join(", "),
   searchTypeSelect: [
+    'select[name="selkeyword"]',   // family-pharm.co.kr 실제 필드명
     'select[name="searchType"]',
     'select[name="search_type"]',
     'select[name="schType"]',
@@ -44,12 +46,13 @@ const SEL = {
     'select:has(option:has-text("보험코드"))',
   ].join(", "),
   searchInput: [
+    'input[name="keywordtext"]',   // family-pharm.co.kr 실제 필드명
     'input[name="searchKeyword"]',
     'input[name="keyword"]',
     'input[name="searchValue"]',
     'input[name="schValue"]',
-    'select[name="searchType"] ~ input[type="text"]',
-    'select[name="search_type"] ~ input[type="text"]',
+    'input[name="schWord"]',
+    'input[name="searchWord"]',
   ].join(", "),
   searchBtn: [
     'input[type="button"][value*="조회"]',
@@ -94,13 +97,17 @@ export const family: WholesaleAdapter = {
     await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
     await page.waitForTimeout(800);
 
-    if (await page.locator(SEL.pwInput).first().isVisible().catch(() => false)) {
-      throw new Error("family login failed — password input still visible after submit");
+    // 로그인 실패 = member 폴더에 그대로 있거나 LoginProcess로 리다이렉트
+    const url = page.url();
+    const stillOnLogin = /\/member\//i.test(url) || /LoginProcess/i.test(url);
+    if (stillOnLogin) {
+      throw new Error(`family login failed — still on login page (${url})`);
     }
   },
 
   async isLoggedIn(page: Page) {
-    return !(await page.locator(SEL.pwInput).first().isVisible().catch(() => false));
+    const url = page.url();
+    return !/\/member\//i.test(url) && !/LoginProcess/i.test(url);
   },
 
   async searchByCode(page: Page, insuranceCode: string): Promise<InventoryItem[]> {
@@ -114,8 +121,8 @@ export const family: WholesaleAdapter = {
     // of the underlying option value).
     const select = page.locator(SEL.searchTypeSelect).first();
     if (await select.isVisible().catch(() => false)) {
-      await select.selectOption({ label: "보험코드" }).catch(async () => {
-        await select.selectOption("보험코드").catch(() => {});
+      await select.selectOption({ value: "yakga_cd" }).catch(async () => {
+        await select.selectOption({ label: "보험코드" }).catch(() => {});
       });
       await page.waitForTimeout(200);
     }
@@ -175,7 +182,7 @@ export const family: WholesaleAdapter = {
       // can't blindly trust positions. Strategy: pick the last 2 numeric
       // cells before 수량 (price + stock).
       const stripBadges = (s: string) =>
-        s.replace(/^(전문|일반|급여|비급여|전|보)+/g, "").trim();
+        s.replace(/^\d+\.\s*/, "").replace(/^(전문|일반|급여|비급여|전|보)+/g, "").trim();
 
       const numericIndices = rest
         .map((c, i) => ({ c, i }))
