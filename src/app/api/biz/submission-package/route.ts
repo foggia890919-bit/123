@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 import { BUCKETS, parseDataUri, extensionFromMime } from "@/lib/storage";
 import { normalizeCompanyKey } from "@/lib/utils";
+import { getViewableUserIds } from "@/lib/hierarchy";
 import JSZip from "jszip";
 import ExcelJS from "exceljs";
 
@@ -90,18 +91,23 @@ async function fetchImage(report: { imageKey: string | null; imageData: string |
 export async function GET(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
-  if (user.role !== "BIZ" && user.role !== "ADMIN") {
-    return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
-  }
 
   const year = parseInt(req.nextUrl.searchParams.get("year") || "0", 10);
   const month = parseInt(req.nextUrl.searchParams.get("month") || "0", 10);
   const entityFilter = req.nextUrl.searchParams.get("entity") || "";
   if (!year || !month) return NextResponse.json({ error: "year, month 필요" }, { status: 400 });
 
-  // 1) 그 월의 모든 PrescriptionReport — 권한 정책은 Phase 1B 에서 정밀화. 여기선 전체 조회.
+  // 권한 계층 (Phase 1B):
+  // - ADMIN: 전체 조회
+  // - 그 외: User.parentUserId 트리에서 본인 + 모든 하위 사용자만
+  const where: { year: number; month: number; userId?: { in: string[] } } = { year, month };
+  if (user.role !== "ADMIN") {
+    const viewableUserIds = await getViewableUserIds(user.id);
+    where.userId = { in: viewableUserIds };
+  }
+
   const reports = await prisma.prescriptionReport.findMany({
-    where: { year, month },
+    where,
     select: {
       id: true, hospitalName: true, clientId: true, status: true, createdAt: true,
       imageKey: true, imageData: true, ocrData: true, totalFee: true,

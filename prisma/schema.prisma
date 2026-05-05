@@ -16,6 +16,11 @@ model User {
   phone        String?
   carrier      String?
   salesCode    String?              @unique
+  // 권한 계층 (Phase 1B): 본인의 직속 상위 사용자 (영업사원→법인→상위법인).
+  // 본인 + 모든 하위 사용자의 데이터를 볼 수 있는 권한 트리 형성.
+  parentUserId String?
+  parent       User?                @relation("UserHierarchy", fields: [parentUserId], references: [id], onDelete: SetNull)
+  children     User[]               @relation("UserHierarchy")
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
   proposals             Proposal[]
@@ -34,6 +39,8 @@ model User {
   corpRateHistoriesPerformed CorpRateFileHistory[] @relation("CorpRateFileHistoryPerformer")
   processedEmails            IncomingEmail[]       @relation("EmailProcessor")
   epharmsAccounts            EpharmsAccount[]      @relation("KmdUserEpharms")
+
+  @@index([parentUserId])
 }
 
 
