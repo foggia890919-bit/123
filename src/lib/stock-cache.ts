@@ -44,7 +44,7 @@ export function subscribeStock(code: string, fn: () => void): () => void {
   return () => listeners.get(code)?.delete(fn);
 }
 
-export function fetchStock(code: string, productName: string, live = false) {
+export function fetchStock(code: string, productName: string, live = false, sites?: string[]) {
   if (cache.get(code)?.status === "loading") return;
   cache.set(code, { status: "loading" });
   notify(code);
@@ -53,7 +53,7 @@ export function fetchStock(code: string, productName: string, live = false) {
   fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ codes: [code] }),
+    body: JSON.stringify({ codes: [code], ...(sites ? { sites } : {}) }),
   })
     .then((res) => res.json())
     .then((data) => {

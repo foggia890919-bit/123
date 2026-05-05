@@ -8,6 +8,63 @@ import type { MedicationItem } from "@/types";
 import SameIngredientModal from "./SameIngredientModal";
 import { getStock, subscribeStock, fetchStock, type StockEntry } from "@/lib/stock-cache";
 
+// 인천약품 제외, 백제약품+훼밀리팜만 표시
+const STOCK_SITES = ["ibjp", "family"];
+
+function useStockEntry(code: string | null): StockEntry {
+  const [entry, setEntry] = useState<StockEntry>(() => (code ? getStock(code) : { status: "idle" }));
+  useEffect(() => {
+    if (!code) return;
+    setEntry(getStock(code));
+    return subscribeStock(code, () => setEntry(getStock(code)));
+  }, [code]);
+  return entry;
+}
+
+function StockButton({ code, productName }: { code: string; productName: string }) {
+  const entry = useStockEntry(code);
+  if (entry.status === "loading") {
+    return (
+      <span className="text-xs font-medium text-emerald-600 flex items-center gap-1 px-2.5 py-1 border border-emerald-200 rounded-full bg-emerald-50">
+        <Loader2 className="w-3 h-3 animate-spin" />조회 중
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => fetchStock(code, productName, true, STOCK_SITES)}
+      className="text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-200 px-2.5 py-1 rounded-full whitespace-nowrap transition-colors"
+    >
+      {entry.status === "done" ? "↻ 재조회" : "재고확인"}
+    </button>
+  );
+}
+
+function StockColumnCell({ code, productName, fallbackStock }: { code: string; productName: string; fallbackStock: number | null }) {
+  const entry = useStockEntry(code);
+  if (entry.status === "idle") {
+    return (
+      <span className="text-gray-400">
+        {fallbackStock != null ? (fallbackStock > 0 ? fallbackStock.toLocaleString() : "품절") : "-"}
+      </span>
+    );
+  }
+  if (entry.status === "loading") return <Loader2 className="w-3 h-3 animate-spin text-gray-400" />;
+  if (entry.status === "error") {
+    return <span className="text-red-400 text-[10px]" title={entry.error}>오류</span>;
+  }
+  const rows = (entry.results ?? []).filter((r) => STOCK_SITES.includes(r.siteKey) && !r.error);
+  const total = rows.reduce((sum, r) => sum + r.items.reduce((s, i) => s + (i.stock ?? 0), 0), 0);
+  const hasData = rows.length > 0;
+  if (!hasData) return <span className="text-gray-300 text-[10px]">-</span>;
+  return (
+    <span className={total > 0 ? "text-green-700 font-medium" : "text-red-400"}>
+      {total > 0 ? total.toLocaleString() : "품절"}
+    </span>
+  );
+}
+
 type SortKey = "productName" | "price" | "commissionRate" | "additionalRate" | "totalRate" | "settlement";
 type SortDir = "asc" | "desc";
 
@@ -307,70 +364,6 @@ export default function MedicationTable({ medications, loading, userId, showCate
     if (typeof va === "string" && typeof vb === "string") return sortDir === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
     return sortDir === "asc" ? (va as number) - (vb as number) : (vb as number) - (va as number);
   });
-
-  const SITE_LABELS: Record<string, string> = { ibjp: "백제약", inchun: "인천", family: "훼밀리" };
-
-  function useStockEntry(code: string | null): StockEntry {
-    const [entry, setEntry] = useState<StockEntry>(() => code ? getStock(code) : { status: "idle" });
-    useEffect(() => {
-      if (!code) return;
-      setEntry(getStock(code));
-      return subscribeStock(code, () => setEntry(getStock(code)));
-    }, [code]);
-    return entry;
-  }
-
-  function StockButton({ code, productName }: { code: string; productName: string }) {
-    const entry = useStockEntry(code);
-    if (entry.status === "loading") {
-      return (
-        <span className="text-xs font-medium text-emerald-600 flex items-center gap-1 px-2.5 py-1">
-          <Loader2 className="w-3 h-3 animate-spin" />조회 중
-        </span>
-      );
-    }
-    return (
-      <button
-        type="button"
-        onClick={() => fetchStock(code, productName, true)}
-        className="text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-200 px-2.5 py-1 rounded-full whitespace-nowrap transition-colors"
-      >
-        {entry.status === "done" ? "↻ 재조회" : "재고확인"}
-      </button>
-    );
-  }
-
-  function StockColumnCell({ code, productName, fallbackStock }: { code: string; productName: string; fallbackStock: number | null }) {
-    const entry = useStockEntry(code);
-    if (entry.status === "idle") {
-      return (
-        <span className="text-gray-300">
-          {fallbackStock != null ? (fallbackStock > 0 ? fallbackStock.toLocaleString() : "품절") : "-"}
-        </span>
-      );
-    }
-    if (entry.status === "loading") return <Loader2 className="w-3 h-3 animate-spin text-gray-400" />;
-    if (entry.status === "error") {
-      return <span className="text-red-400 text-[10px]" title={entry.error}>오류</span>;
-    }
-    const siteRows = (entry.results ?? []).filter((r) => r.siteKey);
-    if (siteRows.length === 0) return <span className="text-gray-300 text-[10px]">-</span>;
-    return (
-      <div className="text-[10px] leading-tight space-y-0.5">
-        {siteRows.map((r) => {
-          const label = SITE_LABELS[r.siteKey] ?? r.siteKey;
-          if (r.error) return <div key={r.siteKey} className="text-red-400">{label}: 오류</div>;
-          const total = r.items.reduce((s, i) => s + (i.stock ?? 0), 0);
-          return (
-            <div key={r.siteKey} className={total > 0 ? "text-green-700" : "text-red-400"}>
-              {label} {total > 0 ? total.toLocaleString() : "품절"}
-            </div>
-          );
-        })}
-        {entry.source && <div className="text-gray-300 text-[9px]">{entry.source === "live" ? "실시간" : "캐시"}</div>}
-      </div>
-    );
-  }
 
   function SortIcon({ k }: { k: SortKey }) {
     if (sortKey !== k) return <ChevronsUpDown className="w-3 h-3 inline ml-0.5 text-gray-300" />;
