@@ -7,20 +7,15 @@
 //     → 특정 거래처의 명세 줄들 (권한 체크: 아래 권한 규칙)
 //
 // 권한:
-//   - ADMIN/BIZ        : 모든 거래처 조회 가능
-//   - 그 외 (SALES_REP / PHARMACIST / BASIC ...):
-//       (a) 본인의 UserClient(approved=true) bizNumber 매칭, 또는
-//       (b) EpharmsAccount.kmdUserId === 본인 User.id (KMD 계정 직접 매핑)
-//     둘 중 하나라도 만족하면 조회 가능.
+//   - 모든 역할 공통: kmdUserId === 본인 User.id (KMD 계정 직접 매핑) 이거나
+//     본인의 UserClient(approved=true) bizNumber 에 해당하면 조회 가능.
+//   - ADMIN/BIZ 도 동일 기준 적용. 전체조회가 필요한 관리자 뷰는 /biz 영역에서 별도 제공.
+//   - ?all=true 파라미터를 ADMIN 이 보내면 전체 조회 (관리 목적).
 
 import { NextRequest, NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
-
-function isAdminLike(role: string) {
-  return role === "ADMIN" || role === "BIZ";
-}
 
 export async function GET(req: NextRequest) {
   const user = await requireSession();
@@ -29,11 +24,15 @@ export async function GET(req: NextRequest) {
   const bizNumber = req.nextUrl.searchParams.get("bizNumber");
   const from = req.nextUrl.searchParams.get("from");
   const to = req.nextUrl.searchParams.get("to");
+  const all = req.nextUrl.searchParams.get("all") === "true";
 
-  // 1) 비-관리자: 접근 가능한 EpharmsAccount where 절 만들기
-  //    bizNumber in [내 거래처들] OR kmdUserId === user.id
-  let scopedWhere: Prisma.EpharmsAccountWhereInput | null = null; // null = 전체 허용
-  if (!isAdminLike(user.role)) {
+  // 관리자가 ?all=true 로 요청하면 전체 조회 (별도 관리 화면용)
+  const isAdmin = user.role === "ADMIN" || user.role === "BIZ";
+  const skipScope = all && isAdmin;
+
+  // 접근 가능한 EpharmsAccount 범위: kmdUserId 직접 매핑 OR 본인 담당 거래처 bizNumber
+  let scopedWhere: Prisma.EpharmsAccountWhereInput | null = null;
+  if (!skipScope) {
     const myClients = await prisma.userClient.findMany({
       where: { userId: user.id, approved: true },
       select: { bizNumber: true },
@@ -61,8 +60,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ account: null, entries: [] });
     }
 
-    // 권한: ADMIN/BIZ는 무조건 통과, 그 외는 (UserClient bizNumber 매칭) OR (kmdUserId 일치)
-    if (!isAdminLike(user.role)) {
+    // 권한: ?all=true + ADMIN/BIZ 는 통과, 그 외는 (UserClient bizNumber 매칭) OR (kmdUserId 일치)
+    if (!skipScope) {
       const myClient = await prisma.userClient.findFirst({
         where: { userId: user.id, approved: true, bizNumber },
         select: { id: true },
