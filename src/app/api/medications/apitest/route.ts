@@ -12,6 +12,9 @@ const ENDPOINTS: Record<string, { url: string; useJson: boolean }> = {
   hira_msupply_ingd: { url: "https://apis.data.go.kr/B551182/msupplyIngdDtlService/getMsupplyIngdDtlService", useJson: true },
   hira_cmpn:       { url: "https://apis.data.go.kr/B551182/msupCmpnMeftInfoService/getMajorCmpnNmCdList", useJson: true },
   hira_msupply_xml: { url: "https://apis.data.go.kr/B551182/msupplyDtlService/getMsupplyDtlService", useJson: false },
+  // odcloud ATC 주성분코드 — UDDI 두 버전 테스트용
+  odcloud_6753:    { url: "https://api.odcloud.kr/api/15118958/v1/uddi:6753c7f1-65ed-4bbe-9e98-cd6b7b156a92", useJson: true },
+  odcloud_1d0f:    { url: "https://api.odcloud.kr/api/15118958/v1/uddi:1d0f74ec-fc9e-4386-9f67-9b1295b4c149", useJson: true },
 };
 
 export async function GET(req: NextRequest) {

@@ -20,6 +20,7 @@ export interface MedicationItem {
   bioStatus: string | null;
   productName: string;
   price: number | null;
+  paymentType: string | null; // HIRA payTpNm: "급여" | "비급여" | "선별급여" | "전액본인부담" 등 | null=미확인
   originalDrug: string | null;
   insuranceCode: string | null;
   notes: string | null;

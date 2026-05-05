@@ -162,6 +162,18 @@ function SettlementBadge({ med }: { med: MedicationItem }) {
   return null;
 }
 
+function PaymentTypeBadge({ value }: { value: string | null | undefined }) {
+  const v = value?.trim();
+  if (!v) return null;
+  const cls =
+    v === "급여" ? "text-emerald-700 bg-emerald-50 border-emerald-200" :
+    v === "비급여" ? "text-orange-700 bg-orange-50 border-orange-200" :
+    v === "선별급여" ? "text-violet-700 bg-violet-50 border-violet-200" :
+    v === "전액본인부담" ? "text-rose-700 bg-rose-50 border-rose-200" :
+    "text-gray-600 bg-gray-50 border-gray-200";
+  return <span className={`inline-block text-[10px] border px-1 py-0.5 rounded ml-1 align-middle ${cls}`}>{v}</span>;
+}
+
 export default function MedicationTable({ medications, loading, userId, showCategoryA, showIngredientName, showCategoryB, showRate, showBioStatus, showPrice, showOriginalDrug, showInsuranceCode, showNotes, showStock }: Props) {
   const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null; productName?: string } | null>(null);
   const [stockModal, setStockModal] = useState<{ insuranceCode: string; productName: string } | null>(null);
@@ -329,14 +341,14 @@ export default function MedicationTable({ medications, loading, userId, showCate
               <th onClick={() => toggleSort("productName")} className="px-2 py-2 text-left cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap w-auto">
                 제품명 / 제약사 <SortIcon k="productName" />
               </th>
-              {showStock && <th className="px-2 py-2 text-right whitespace-nowrap w-16">재고</th>}
-              {showPrice && <SortTh label="약가" k="price" widthClass="w-20" />}
+              {showStock && <th className="hidden sm:table-cell px-2 py-2 text-right whitespace-nowrap w-16">재고</th>}
+              {showPrice && <SortTh label="약가" k="price" widthClass="hidden sm:table-cell w-20" />}
               {showRate && (
                 <>
-                  <SortTh label="기본수수료" k="commissionRate" widthClass="w-24" />
-                  <SortTh label="추가수수료" k="additionalRate" widthClass="w-24" />
-                  <SortTh label="합계" k="totalRate" widthClass="w-16" />
-                  <SortTh label="정산금액" k="settlement" widthClass="w-24" />
+                  <SortTh label="기본수수료" k="commissionRate" widthClass="hidden sm:table-cell w-24" />
+                  <SortTh label="추가수수료" k="additionalRate" widthClass="hidden sm:table-cell w-24" />
+                  <SortTh label="합계" k="totalRate" widthClass="hidden sm:table-cell w-16" />
+                  <SortTh label="정산금액" k="settlement" widthClass="hidden sm:table-cell w-24" />
                 </>
               )}
             </tr>
@@ -362,6 +374,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                           <p className="font-medium text-gray-900 leading-snug">
                             <ProductName name={med.productName} />
                             <SettlementBadge med={med} />
+                            <PaymentTypeBadge value={med.paymentType} />
                           </p>
                           <p className="text-[11px] text-gray-500 mt-0.5">{med.companyName}</p>
                           <div className="flex gap-1 mt-1.5 flex-wrap">
@@ -382,6 +395,44 @@ export default function MedicationTable({ medications, loading, userId, showCate
                             </button>
                           )}
                         </div>
+                        {(showStock || showPrice || showRate) && (
+                          <div className="sm:hidden mt-2 pt-1.5 border-t border-gray-100 space-y-1 text-xs">
+                            {showStock && (
+                              <div className="flex justify-between">
+                                <span className="text-gray-400">재고</span>
+                                {med.stock != null
+                                  ? <span className={med.stock > 0 ? "text-green-700 font-medium" : "text-red-500"}>{med.stock > 0 ? med.stock.toLocaleString() : "품절"}</span>
+                                  : <span className="text-gray-300">-</span>}
+                              </div>
+                            )}
+                            {showPrice && (
+                              <div className="flex justify-between">
+                                <span className="text-gray-400">약가</span>
+                                <span className="text-gray-700">{formatPrice(med.price)}</span>
+                              </div>
+                            )}
+                            {showRate && (
+                              <>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-400">기본수수료</span>
+                                  <span className="text-blue-600 font-medium">{base != null ? `${base}%` : "-"}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-400">추가수수료</span>
+                                  <span className="text-gray-500">{extra != null ? `${extra}%` : "-"}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-400">합계수수료</span>
+                                  <span className="text-blue-700 font-semibold">{total != null ? `${total}%` : "-"}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-400">수수료금액</span>
+                                  <span className="text-green-700 font-semibold">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</span>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
                         </div>
                         {hasDetailPanel && (
                           <button type="button" onClick={() => toggleRow(med.id)}
@@ -392,19 +443,19 @@ export default function MedicationTable({ medications, loading, userId, showCate
                       </div>
                     </td>
                     {showStock && (
-                      <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                      <td className="hidden sm:table-cell px-2 py-1.5 text-right whitespace-nowrap">
                         {med.stock != null
                           ? <span className={med.stock > 0 ? "text-green-700 font-medium" : "text-red-500"}>{med.stock > 0 ? med.stock.toLocaleString() : "품절"}</span>
                           : <span className="text-gray-300">-</span>}
                       </td>
                     )}
-                    {showPrice && <td className="px-1.5 py-1.5 text-right text-gray-700 whitespace-nowrap">{formatPrice(med.price)}</td>}
+                    {showPrice && <td className="hidden sm:table-cell px-1.5 py-1.5 text-right text-gray-700 whitespace-nowrap">{formatPrice(med.price)}</td>}
                     {showRate && (
                       <>
-                        <td className="px-1.5 py-1.5 text-right text-blue-600 font-medium whitespace-nowrap">{base != null ? `${base}%` : "-"}</td>
-                        <td className="px-1.5 py-1.5 text-right text-gray-500 whitespace-nowrap">{extra != null ? `${extra}%` : "-"}</td>
-                        <td className="px-1.5 py-1.5 text-right font-semibold text-blue-700 whitespace-nowrap">{total != null ? `${total}%` : "-"}</td>
-                        <td className="px-1.5 py-1.5 text-right font-semibold text-green-700 whitespace-nowrap">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</td>
+                        <td className="hidden sm:table-cell px-1.5 py-1.5 text-right text-blue-600 font-medium whitespace-nowrap">{base != null ? `${base}%` : "-"}</td>
+                        <td className="hidden sm:table-cell px-1.5 py-1.5 text-right text-gray-500 whitespace-nowrap">{extra != null ? `${extra}%` : "-"}</td>
+                        <td className="hidden sm:table-cell px-1.5 py-1.5 text-right font-semibold text-blue-700 whitespace-nowrap">{total != null ? `${total}%` : "-"}</td>
+                        <td className="hidden sm:table-cell px-1.5 py-1.5 text-right font-semibold text-green-700 whitespace-nowrap">{settlement != null ? `${settlement.toLocaleString()}원` : "-"}</td>
                       </>
                     )}
                   </tr>

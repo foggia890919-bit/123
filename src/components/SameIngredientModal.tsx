@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, Fragment } from "react";
-import { X, RefreshCw, ChevronUp, ChevronDown, ChevronsUpDown, Loader2, Plus, FileText } from "lucide-react";
+import { X, RefreshCw, ChevronUp, ChevronDown, ChevronsUpDown, Loader2, Plus, FileText, Download } from "lucide-react";
+import * as XLSX from "xlsx";
 import { formatPrice } from "@/lib/utils";
 import type { MedicationItem, IngredientMatchLevel } from "@/types";
 
@@ -44,6 +45,7 @@ type SortDir = "asc" | "desc";
 interface ColVis {
   categoryB: boolean; bioStatus: boolean; originalDrug: boolean;
   insuranceCode: boolean; notes: boolean;
+  price: boolean; rate: boolean;
 }
 
 function splitProductName(name: string): [string, string | null, string | null] {
@@ -55,18 +57,30 @@ function splitProductName(name: string): [string, string | null, string | null] 
     rest = rest.slice(0, rest.lastIndexOf("(")).trim();
   }
   // Latin 단위 + 한국어 단위(밀리그람/마이크로그람/그람/밀리리터 등) 모두 매칭
-  const UNIT = "(?:mg|mcg|μg|ug|g|ml|mL|IU|iu|%|mEq|밀리그람|마이크로그람|그람|밀리리터|리터|유닛|단위)";
-  const doseMatch = rest.match(new RegExp(`^(.+?)\\s*(\\d[\\d.,/]*\\s*${UNIT}[^\\s]*)`, "i"));
+  const UNIT = "(?:mg|mcg|μg|ug|g|ml|mL|IU|iu|%|mEq|밀리그[람램]|마이크로그[람램]|그[람램]|밀리리터|리터|유닛|단위)";
+  const doseMatch = rest.match(new RegExp(`^(.+?)\\s*(\\d[\\d.,/]*\\s*${UNIT})`, "i"));
   if (doseMatch) return [doseMatch[1].trim(), doseMatch[2].trim(), ingredient];
   return [rest, null, ingredient];
+}
+
+function PaymentTypeBadge({ value }: { value: string | null | undefined }) {
+  const v = value?.trim();
+  if (!v) return null;
+  const cls =
+    v === "급여" ? "text-emerald-700 bg-emerald-50 border-emerald-200" :
+    v === "비급여" ? "text-orange-700 bg-orange-50 border-orange-200" :
+    v === "선별급여" ? "text-violet-700 bg-violet-50 border-violet-200" :
+    v === "전액본인부담" ? "text-rose-700 bg-rose-50 border-rose-200" :
+    "text-gray-600 bg-gray-50 border-gray-200";
+  return <span className={`inline-block text-[10px] border px-1 py-0.5 rounded ml-1 align-middle ${cls}`}>{v}</span>;
 }
 
 // 한국어 단위 → Latin 정규화 후 소문자·공백 제거 (용량 비교용)
 function normalizeDose(dose: string): string {
   return dose
-    .replace(/밀리그람/gi, "mg")
-    .replace(/마이크로그람/gi, "mcg")
-    .replace(/그람/gi, "g")
+    .replace(/밀리그[람램]/gi, "mg")
+    .replace(/마이크로그[람램]/gi, "mcg")
+    .replace(/그[람램]/gi, "g")
     .replace(/밀리리터/gi, "ml")
     .replace(/리터/gi, "l")
     .replace(/유닛|단위/gi, "iu")
@@ -84,11 +98,13 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [cols, setCols] = useState<ColVis>({
-    categoryB: initialCols?.categoryB ?? false,
-    bioStatus: initialCols?.bioStatus ?? false,
-    originalDrug: initialCols?.originalDrug ?? false,
-    insuranceCode: initialCols?.insuranceCode ?? false,
-    notes: initialCols?.notes ?? false,
+    categoryB: initialCols?.categoryB ?? true,
+    bioStatus: initialCols?.bioStatus ?? true,
+    originalDrug: initialCols?.originalDrug ?? true,
+    insuranceCode: initialCols?.insuranceCode ?? true,
+    notes: initialCols?.notes ?? true,
+    price: true,
+    rate: true,
   });
   const [dropdown, setDropdown] = useState<DropdownState | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -135,10 +151,9 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
   useEffect(() => {
     if (!ingredientCode && !ingredientName) { setLoading(false); return; }
     const uid = userId ? `&userId=${userId}` : "";
-    // ingredientCode가 있을 때 ingredientName도 함께 전달 →
-    // 코드 미매핑 약품을 성분명으로 포함하여 누락 방지 (name_match 그룹)
+    // ingredientCode 있으면 ATC 주성분코드 기반 검색만 수행 (name_match 제외)
     const url = ingredientCode
-      ? `/api/medications/search?ingredientCode=${encodeURIComponent(ingredientCode)}&ingredientName=${encodeURIComponent(ingredientName)}${uid}&limit=500`
+      ? `/api/medications/search?ingredientCode=${encodeURIComponent(ingredientCode)}${uid}&limit=500`
       : `/api/medications/search?q=${encodeURIComponent(ingredientName)}${uid}&ingredientOnly=true&limit=500`;
     fetch(url)
       .then((r) => r.json())
@@ -259,8 +274,34 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
     exact:           { label: "정확히 일치 (동일 성분·제형·용량)", color: "bg-blue-50 text-blue-800 border-blue-200" },
     same_form:       { label: "동일 성분 + 동일 제형, 용량만 다름", color: "bg-amber-50 text-amber-800 border-amber-200" },
     same_ingredient: { label: "동일 성분 (제형·용량 다름)", color: "bg-gray-50 text-gray-600 border-gray-200" },
-    name_match:      { label: "성분명 일치 (보험코드 미매핑)", color: "bg-slate-50 text-slate-500 border-slate-200" },
+    name_match:      { label: "성분명 일치 (주성분코드 미매핑)", color: "bg-slate-50 text-slate-500 border-slate-200" },
   };
+
+  const MATCH_LABEL: Record<string, string> = {
+    exact: "정확일치", same_form: "동일제형(용량다름)", same_ingredient: "동일성분(제형다름)", name_match: "성분명일치",
+  };
+
+  function downloadExcel() {
+    const rows = visibleSorted.map((m) => ({
+      "제품명": m.productName,
+      "성분명": m.ingredientName,
+      "주성분코드": m.ingredientCode ?? "",
+      "제조사": m.companyName,
+      "약가(원)": m.price ?? "",
+      "급여구분": m.paymentType ?? "",
+      "보험코드": m.insuranceCode ?? "",
+      "생동/생산": m.bioStatus ?? "",
+      "오리지날": m.originalDrug ?? "",
+      "수수료율(%)": m.commissionRate != null ? m.commissionRate * 100 : "",
+      "추가수수료(%)": m.additionalRate != null ? m.additionalRate * 100 : "",
+      "매칭수준": m.matchLevel ? (MATCH_LABEL[m.matchLevel] ?? m.matchLevel) : "",
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "동일성분");
+    const safe = ingredientName.replace(/[/\\?*[\]]/g, "_").slice(0, 30);
+    XLSX.writeFile(wb, `동일성분_${safe}.xlsx`);
+  }
 
   function SortIcon({ k }: { k: SortKey }) {
     if (sortKey !== k) return <ChevronsUpDown className="w-3 h-3 inline ml-0.5 text-gray-300" />;
@@ -276,7 +317,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
   }
 
   const hasRate = visibleSorted.some((m) => m.commissionRate != null);
-  const totalCols = 1 + (hasDetailPanel ? 1 : 0) + 1 + (hasRate ? 4 : 0) + 1;
+  const totalCols = 1 + (hasDetailPanel ? 1 : 0) + (cols.price ? 1 : 0) + (cols.rate && hasRate ? 4 : 0) + 1;
 
   return (
     <>
@@ -289,7 +330,18 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
                 {ingredientCode ? `주성분코드: ${ingredientCode}` : ingredientName} · {visibleSorted.length}개 표시 (전체 {total}개)
               </p>
             </div>
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 shrink-0"><X className="w-5 h-5" /></button>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                onClick={downloadExcel}
+                disabled={visibleSorted.length === 0}
+                title="엑셀로 내려받기"
+                className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded border border-green-200 text-green-700 hover:bg-green-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Download className="w-3.5 h-3.5" />
+                엑셀
+              </button>
+              <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X className="w-5 h-5" /></button>
+            </div>
           </div>
 
           {replaceContext && (
@@ -311,8 +363,10 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
           )}
 
           <div className="px-4 py-2 border-b bg-gray-50 flex flex-wrap gap-3 text-xs shrink-0 items-center">
-            <span className="text-gray-400">펼쳐보기 항목:</span>
+            <span className="text-gray-500 font-medium">컬럼 설정:</span>
             {([
+              ["price", "약가"],
+              ["rate", "수수료"],
               ["bioStatus", "생동/생산"],
               ["originalDrug", "오리지날"],
               ["insuranceCode", "보험코드"],
@@ -327,10 +381,10 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
             ))}
             <div className="flex gap-1 ml-1">
               <button type="button"
-                onClick={() => setCols({ bioStatus: true, originalDrug: true, insuranceCode: true, categoryB: true, notes: true })}
+                onClick={() => setCols({ bioStatus: true, originalDrug: true, insuranceCode: true, categoryB: true, notes: true, price: true, rate: true })}
                 className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100">전체선택</button>
               <button type="button"
-                onClick={() => setCols({ bioStatus: false, originalDrug: false, insuranceCode: false, categoryB: false, notes: false })}
+                onClick={() => setCols({ bioStatus: false, originalDrug: false, insuranceCode: false, categoryB: false, notes: false, price: false, rate: false })}
                 className="px-2 py-0.5 rounded bg-gray-100 text-gray-600 hover:bg-gray-200">전체해제</button>
             </div>
           </div>
@@ -390,8 +444,8 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
                   <tr>
                     <SortTh label="제품명 / 제약사" k="productName" />
                     {hasDetailPanel && <th className="px-1 py-2 w-6" />}
-                    <SortTh label="약가" k="price" right />
-                    {hasRate && (
+                    {cols.price && <SortTh label="약가" k="price" right />}
+                    {cols.rate && hasRate && (
                       <>
                         <SortTh label="기본수수료" k="commissionRate" right />
                         <SortTh label="추가수수료" k="additionalRate" right />
@@ -444,6 +498,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
                                   {med.settlementType === "원외" ? "cso" : "원내"}
                                 </span>
                               )}
+                              <PaymentTypeBadge value={med.paymentType} />
                               {dose && <span className="block text-[11px] font-normal text-gray-400 mt-0.5">{dose}</span>}
                               {ingredient && <span className="block text-[10px] font-normal text-gray-400 mt-0.5">{ingredient}</span>}
                               <span className="block text-[11px] font-normal text-gray-500 mt-0.5">{med.companyName}</span>
@@ -458,8 +513,8 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
                             </td>
                           )}
 
-                          <td className="px-2 py-2 text-right whitespace-nowrap text-gray-700">{formatPrice(med.price)}</td>
-                          {hasRate && (
+                          {cols.price && <td className="px-2 py-2 text-right whitespace-nowrap text-gray-700">{formatPrice(med.price)}</td>}
+                          {cols.rate && hasRate && (
                             <>
                               <td className="px-2 py-2 text-right whitespace-nowrap text-blue-600 font-medium">{base != null ? `${base}%` : "-"}</td>
                               <td className="px-2 py-2 text-right whitespace-nowrap text-gray-500">{extra != null ? `${extra}%` : "-"}</td>

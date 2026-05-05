@@ -254,14 +254,17 @@ function UploadTab() {
     setMapLoading(true); setMapResult(null);
     try {
       const res = await fetch("/api/medications/sync-ingredient-codes", { method: "POST" });
-      const data = await res.json();
+      const text = await res.text();
+      let data: typeof mapResult;
+      try { data = JSON.parse(text); }
+      catch { data = { error: `API 응답이 JSON이 아닙니다 (HTTP ${res.status}): ${text.slice(0, 300)}` }; }
       setMapResult(data);
       // 동기화 후 공란 카운트 갱신
       fetch("/api/medications/missing-codes?format=json")
         .then((r) => r.json())
         .then((d) => { if (d.missingCount !== undefined) setMissingCodeCount(d.missingCount); })
         .catch(() => null);
-    } catch { setMapResult({ error: "동기화 중 오류가 발생했어요." }); }
+    } catch (e) { setMapResult({ error: `동기화 중 오류: ${e instanceof Error ? e.message : String(e)}` }); }
     finally { setMapLoading(false); }
   }
 
@@ -292,6 +295,68 @@ function UploadTab() {
       .then((d) => { if (d.missingCount !== undefined) setMissingCodeCount(d.missingCount); })
       .catch(() => null);
   }, []);
+
+  // ③-2: 주성분명 사전 (hira_cmpn) 기반 보완 sync — 비급여 약품 커버리지 보완
+  const [cmpnLoading, setCmpnLoading] = useState(false);
+  const [cmpnProbing, setCmpnProbing] = useState(false);
+  const [cmpnResult, setCmpnResult] = useState<{
+    success?: boolean; probe?: boolean;
+    apiTotalCount?: number; totalCount?: number;
+    extractedCmpns?: number; uniqueNames?: number;
+    candidates?: number; exactMatched?: number; containsMatched?: number;
+    multiCandidate?: number; updated?: number; lastSync?: string;
+    finalState?: { withCode: number; totalDb: number; coverage: string };
+    sampleKeys?: string[]; sampleItems?: unknown[]; sampleExtracts?: unknown[];
+    note?: string; error?: string; rawXml?: string; parsedStructure?: string; seededNames?: number;
+  } | null>(null);
+
+  async function handleCmpnProbe() {
+    setCmpnProbing(true); setCmpnResult(null);
+    try {
+      const res = await fetch("/api/medications/sync-cmpn-codes");
+      const data = await res.json();
+      setCmpnResult(data);
+    } catch { setCmpnResult({ error: "API 응답 확인 중 오류가 발생했어요." }); }
+    finally { setCmpnProbing(false); }
+  }
+
+  async function handleCmpnSync() {
+    setCmpnLoading(true); setCmpnResult(null);
+    try {
+      const res = await fetch("/api/medications/sync-cmpn-codes", { method: "POST" });
+      const data = await res.json();
+      setCmpnResult(data);
+      // 보완 sync 후 공란 카운트도 갱신
+      fetch("/api/medications/missing-codes?format=json")
+        .then((r) => r.json())
+        .then((d) => { if (d.missingCount !== undefined) setMissingCodeCount(d.missingCount); })
+        .catch(() => null);
+    } catch { setCmpnResult({ error: "동기화 중 오류가 발생했어요." }); }
+    finally { setCmpnLoading(false); }
+  }
+
+
+  const [dedupStats, setDedupStats] = useState<{ totalDupeGroups?: number; totalExtraRows?: number; samples?: { productName: string; companyName: string; count: number }[] } | null>(null);
+  const [dedupLoading, setDedupLoading] = useState(false);
+  const [dedupResult, setDedupResult] = useState<{ deleted?: number; totalAfter?: number; error?: string } | null>(null);
+
+  useEffect(() => {
+    fetch("/api/admin/dedup-medications").then((r) => r.json()).then(setDedupStats).catch(() => null);
+  }, []);
+
+  async function handleDedup() {
+    if (!confirm(`중복 약품 ${dedupStats?.totalExtraRows?.toLocaleString()}건을 삭제할까요? (제안서에 사용 중인 건은 보존됩니다)`)) return;
+    setDedupLoading(true); setDedupResult(null);
+    try {
+      const res = await fetch("/api/admin/dedup-medications", { method: "POST" });
+      const data = await res.json();
+      setDedupResult(data);
+      if (data.success) {
+        fetch("/api/admin/dedup-medications").then((r) => r.json()).then(setDedupStats).catch(() => null);
+      }
+    } catch (e) { setDedupResult({ error: String(e) }); }
+    finally { setDedupLoading(false); }
+  }
 
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncResult, setSyncResult] = useState<{ success?: boolean; synced?: number; totalPublic?: number; publicCount?: number; excelCount?: number; lastSync?: string | null; lastTestSync?: string | null; error?: string; pageErrors?: { page: number; error: string }[] } | null>(null);
@@ -580,6 +645,41 @@ function UploadTab() {
         )}
       </div>
 
+      {/* 중복 약품 정리 */}
+      <div className="bg-white rounded-lg border border-orange-200 p-4 space-y-2">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-semibold text-orange-800">① -보완: 중복 약품 정리</h2>
+            <p className="text-xs text-gray-500 mt-0.5">보험코드 없는 약품(수출용 등)이 sync 반복 시 중복 생성됩니다. 동일 제품명+제조사 기준으로 중복 제거합니다.</p>
+          </div>
+          {dedupStats && dedupStats.totalExtraRows !== undefined && (
+            <button
+              onClick={handleDedup}
+              disabled={dedupLoading || dedupStats.totalExtraRows === 0}
+              className="shrink-0 text-xs px-3 py-1.5 rounded border border-orange-300 text-orange-700 hover:bg-orange-50 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+            >
+              {dedupLoading ? "삭제 중..." : `중복 ${dedupStats.totalExtraRows.toLocaleString()}건 제거`}
+            </button>
+          )}
+        </div>
+        {dedupStats && dedupStats.totalDupeGroups !== undefined && dedupStats.totalDupeGroups > 0 && (
+          <details className="text-xs text-orange-700">
+            <summary className="cursor-pointer">▶ 중복 그룹 {dedupStats.totalDupeGroups}개 상세보기</summary>
+            <div className="mt-1 space-y-0.5 font-mono text-[10px] bg-orange-50 rounded p-2">
+              {dedupStats.samples?.map((s, i) => (
+                <div key={i}>{s.productName} / {s.companyName} → {s.count}건</div>
+              ))}
+            </div>
+          </details>
+        )}
+        {dedupStats?.totalExtraRows === 0 && <p className="text-xs text-green-600">중복 없음</p>}
+        {dedupResult && (
+          <div className={`text-xs rounded p-2 ${dedupResult.error ? "bg-red-50 text-red-700" : "bg-green-50 text-green-700"}`}>
+            {dedupResult.error ? dedupResult.error : `${dedupResult.deleted?.toLocaleString()}건 삭제 완료 · 남은 약품: ${dedupResult.totalAfter?.toLocaleString()}건`}
+          </div>
+        )}
+      </div>
+
       {/* 주성분코드 매핑 */}
       <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
         <div>
@@ -679,6 +779,88 @@ function UploadTab() {
               전체 공란 목록
             </Button>
           </div>
+        </div>
+
+        {/* ③-2: 주성분명 사전(hira_cmpn) 기반 보완 sync — 비급여 약품 커버리지 보완 */}
+        <div className="border-t border-gray-100 pt-3 space-y-2 mt-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-purple-700">③-2 보완: 주성분명 사전 매칭 (비급여 약품 커버)</span>
+          </div>
+          <p className="text-xs text-gray-500 leading-relaxed">
+            ③번 ATC 동기화는 <strong>보험코드 있는 급여약</strong>만 매칭돼요. 이 보완 sync는 HIRA 주성분명 사전 API
+            (<code className="text-[10px] bg-gray-100 px-1 rounded">getMajorCmpnNmCdList</code>)에서 전체 주성분코드 사전을 받아와
+            <strong>성분명 매칭으로 비급여·OTC 약품에도 코드를 채웁니다</strong>. 약학정보원/드럭인포 수준 커버리지를 목표로 해요.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onClick={handleCmpnProbe}
+              disabled={cmpnProbing || cmpnLoading}
+              className="text-xs border-purple-200 text-purple-700 hover:bg-purple-50"
+            >
+              {cmpnProbing ? "확인 중..." : "① API 응답 구조 확인 (probe)"}
+            </Button>
+            <Button
+              onClick={handleCmpnSync}
+              disabled={cmpnLoading || cmpnProbing}
+              className="bg-purple-600 hover:bg-purple-700 text-xs"
+            >
+              {cmpnLoading ? "동기화 중..." : "② 전체 동기화 실행"}
+            </Button>
+          </div>
+          {cmpnResult && (
+            <div className={`text-xs rounded p-3 border space-y-1 ${
+              cmpnResult.error ? "bg-red-50 text-red-700 border-red-200"
+              : "bg-green-50 text-green-700 border-green-200"
+            }`}>
+              {cmpnResult.error ? (
+                <>
+                  <div><AlertCircle className="w-3.5 h-3.5 inline mr-1" />{cmpnResult.error}</div>
+                  {cmpnResult.sampleKeys && (
+                    <div className="mt-1 font-mono text-[10px]">응답 필드: {cmpnResult.sampleKeys.join(", ")}</div>
+                  )}
+                </>
+              ) : cmpnResult.probe ? (
+                <>
+                  <div><CheckCircle className="w-3.5 h-3.5 inline mr-1" />{cmpnResult.note}</div>
+                  <div className="font-mono text-[10px]">응답 필드: {cmpnResult.sampleKeys?.join(", ") || "(없음)"}</div>
+                  <details>
+                    <summary className="cursor-pointer text-[10px] underline">▶ 실제 XML 응답 (구조 확인)</summary>
+                    <pre className="text-[10px] bg-white rounded p-2 mt-1 overflow-auto max-h-48">{cmpnResult.rawXml}</pre>
+                  </details>
+                  <details>
+                    <summary className="cursor-pointer text-[10px] underline">▶ 파싱된 JSON 구조</summary>
+                    <pre className="text-[10px] bg-white rounded p-2 mt-1 overflow-auto max-h-48">{cmpnResult.parsedStructure}</pre>
+                  </details>
+                  <details>
+                    <summary className="cursor-pointer text-[10px] underline">▶ 추출 샘플 ({cmpnResult.sampleItems?.length}건)</summary>
+                    <pre className="text-[10px] bg-white rounded p-2 mt-1 overflow-auto max-h-48">{JSON.stringify(cmpnResult.sampleItems, null, 2)}</pre>
+                  </details>
+                </>
+              ) : (
+                <>
+                  <div><CheckCircle className="w-3.5 h-3.5 inline mr-1" />
+                    DB 사전: <strong>{cmpnResult.seededNames?.toLocaleString() ?? cmpnResult.uniqueNames?.toLocaleString()}</strong>개 성분명 ·
+                    매칭 후보: <strong>{cmpnResult.candidates?.toLocaleString()}</strong>건
+                  </div>
+                  <div>
+                    정확매칭 <strong>{cmpnResult.exactMatched?.toLocaleString()}</strong>,
+                    포함매칭 <strong>{cmpnResult.containsMatched?.toLocaleString()}</strong>,
+                    복수후보 <strong>{cmpnResult.multiCandidate?.toLocaleString()}</strong>
+                  </div>
+                  <div>
+                    실제 코드 채움: <strong>{cmpnResult.updated?.toLocaleString()}</strong>건
+                    {cmpnResult.finalState && (
+                      <span className="ml-2">
+                        → 커버리지 <strong>{cmpnResult.finalState.coverage}</strong>
+                        ({cmpnResult.finalState.withCode.toLocaleString()} / {cmpnResult.finalState.totalDb.toLocaleString()})
+                      </span>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

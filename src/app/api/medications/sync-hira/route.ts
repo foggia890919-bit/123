@@ -8,7 +8,9 @@ const API_KEY = process.env.PUBLIC_DATA_API_KEY!;
 // 건강보험심사평가원_약가마스터_의약품주성분
 const BASE_URL = "https://apis.data.go.kr/B551182/msupplyIngdDtlService/getMsupplyIngdDtlService";
 
-interface HiraDrug { [key: string]: string | undefined; }
+interface HiraDrug { [key: string]: string | number | undefined; }
+
+const DOSE_UNIT_RE = /\d[\d.,/]*\s*(?:mg|mcg|μg|ug|g|ml|mL|IU|iu|%|mEq|밀리그[람램]|마이크로그[람램]|그[람램]|밀리리터|리터)/i;
 
 async function fetchPage(pageNo: number): Promise<{ items: HiraDrug[]; totalCount: number }> {
   const url = new URL(BASE_URL);
@@ -46,22 +48,29 @@ async function fetchPageWithRetry(pageNo: number, retries = 3): Promise<{ items:
 function mapDrug(item: HiraDrug) {
   // HIRA 약가마스터_의약품주성분 필드명 (실제 응답 확인 후 조정)
   // 공통 필드명 후보들을 순서대로 시도
-  const productName = (
+  const productNameRaw = String(
     item["품목명"] ?? item["제품명"] ?? item["ITEM_NAME"] ?? item["itemName"] ?? ""
   ).trim();
-  const companyName = (
+  const companyName = String(
     item["업체명"] ?? item["제조사명"] ?? item["ENTP_NAME"] ?? item["entpName"] ?? "미상"
   ).trim();
-  const ingredientName = (
+  const ingredientName = String(
     item["주성분명"] ?? item["성분명"] ?? item["INGD_NM"] ?? item["ingdNm"] ?? item["주성분"] ?? ""
   ).trim();
-  const insuranceCode = (
+  const insuranceCode = String(
     item["급여코드"] ?? item["보험코드"] ?? item["EDI_CODE"] ?? item["ediCode"] ?? item["품목기준코드"] ?? ""
   ).trim() || null;
-  const priceRaw = parseInt(
+  const priceRaw = parseInt(String(
     item["상한금액"] ?? item["약가"] ?? item["MAX_PRICE"] ?? item["maxPrice"] ?? ""
-  );
+  ));
   const price = isNaN(priceRaw) ? null : priceRaw;
+  // 규격(용량) 별도 필드 — productName에 용량이 없으면 보완
+  const spec = String(
+    item["규격"] ?? item["함량"] ?? item["용량"] ?? item["SPEC"] ?? item["spec"] ?? ""
+  ).trim();
+  const productName = (spec && !DOSE_UNIT_RE.test(productNameRaw))
+    ? `${productNameRaw} ${spec}`
+    : productNameRaw;
 
   return {
     categoryA: null as string | null,
@@ -103,25 +112,43 @@ async function processPage(pageItems: HiraDrug[]): Promise<number> {
   if (drugs.length === 0) return 0;
 
   const codes = drugs.map((d) => d.insuranceCode).filter(Boolean) as string[];
-  const existing = codes.length > 0
-    ? await withDbRetry(() => prisma.$queryRaw<{ id: string; matched: string }[]>`
-        SELECT m.id, TRIM(code) AS matched
-        FROM "Medication" m,
-             UNNEST(string_to_array(m."insuranceCode", ',')) AS code
-        WHERE m."insuranceCode" IS NOT NULL
-          AND TRIM(code) = ANY(${codes})
-      `)
-    : [];
-  const existingMap = new Map(existing.map((e) => [e.matched, e]));
+  // 보험코드 없는 약품은 (productName + companyName)으로 중복 체크
+  const noCodeKeys = drugs.filter((d) => !d.insuranceCode).map((d) => `${d.productName}||${d.companyName}`);
+
+  const [existingByCode, existingByName] = await Promise.all([
+    codes.length > 0
+      ? withDbRetry(() => prisma.$queryRaw<{ id: string; matched: string }[]>`
+          SELECT m.id, TRIM(code) AS matched
+          FROM "Medication" m,
+               UNNEST(string_to_array(m."insuranceCode", ',')) AS code
+          WHERE m."insuranceCode" IS NOT NULL
+            AND TRIM(code) = ANY(${codes})
+        `)
+      : Promise.resolve([] as { id: string; matched: string }[]),
+    noCodeKeys.length > 0
+      ? withDbRetry(() => prisma.$queryRaw<{ id: string; key: string }[]>`
+          SELECT DISTINCT ON ("productName", "companyName") id,
+                 "productName" || '||' || "companyName" AS key
+          FROM "Medication"
+          WHERE "insuranceCode" IS NULL
+            AND ("productName" || '||' || "companyName") = ANY(${noCodeKeys})
+        `)
+      : Promise.resolve([] as { id: string; key: string }[]),
+  ]);
+
+  const existingMap = new Map(existingByCode.map((e) => [e.matched, e.id]));
+  const existingByNameMap = new Map(existingByName.map((e) => [e.key, e.id]));
 
   const toCreate: typeof drugs = [];
   const toUpdate: { id: string; data: Partial<ReturnType<typeof mapDrug>> }[] = [];
 
   for (const drug of drugs) {
-    const found = drug.insuranceCode ? existingMap.get(drug.insuranceCode) : null;
-    if (found) {
+    const foundId = drug.insuranceCode
+      ? existingMap.get(drug.insuranceCode)
+      : existingByNameMap.get(`${drug.productName}||${drug.companyName}`);
+    if (foundId) {
       toUpdate.push({
-        id: found.id,
+        id: foundId,
         data: {
           productName: drug.productName,
           ingredientName: drug.ingredientName,

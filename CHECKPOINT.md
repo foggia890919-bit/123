@@ -1,6 +1,6 @@
 # CHECKPOINT — 작업 재개용 요약
-> 브랜치: `claude/plan-service-project-Ea4Bn`  
-> 최신 커밋: `a82fed3` feat: 비즈 관리 전체 기능 확장
+> 브랜치: `claude/sales-data-portal-NpLDG`
+> 최신 추가: ePharms(yk.ep45.co.kr) 매출원장 자동수집 + KMD 영업사원 포털
 
 ---
 
@@ -232,3 +232,68 @@ src/
 5. `EntityStatusTab` 컴포넌트 구현 (섹션 3-1 스펙 참고)
 6. `src/app/api/submission-routes/check/route.ts` + `download/route.ts` + 업데이트된 page.tsx 함께 커밋
 7. `git push -u origin claude/plan-service-project-Ea4Bn`
+
+---
+
+## 9. ePharms 매출원장 자동수집 (신규, 2026-05)
+
+### 9-1. 개요
+이팜스(yk.ep45.co.kr)의 거래처별 로그인 계정으로 자동 로그인하여 매출원장을 매일 자정(KST)
+자동 스크래핑 → DB 저장 → KMD 포털 영업사원/거래처가 본인 분만 조회.
+
+### 9-2. 새 파일
+
+| 영역 | 경로 | 비고 |
+|------|------|------|
+| Schema | `prisma/schema.prisma` | EpharmsAccount / LedgerEntry / LedgerSyncLog 추가 |
+| Migration | `prisma/migrations/manual/add_epharms_ledger.sql` | Supabase에서 1회 실행 |
+| Crypto | `src/lib/crypto-secret.ts` | AES-256-GCM PW 저장용 |
+| BIZ Page | `src/app/biz/epharms-accounts/page.tsx` | 거래처별 계정 등록·sync |
+| Portal | `src/app/mypage/ledger/page.tsx` | 영업사원/거래처 조회 |
+| API | `src/app/api/epharms-accounts/route.ts` | 계정 CRUD (PW 응답 X) |
+| API | `src/app/api/epharms-accounts/sync/route.ts` | 워커 sync 트리거 프록시 |
+| API | `src/app/api/ledger/route.ts` | 매출원장 조회 (UserClient 권한) |
+| Worker | `worker/src/epharms/adapter.ts` | Playwright 로그인 + 원장 스크랩 |
+| Worker | `worker/src/epharms/db.ts` | DB 헬퍼 (pg + 복호화) |
+| Worker | `worker/src/epharms/sync.ts` | 활성 계정 순회 sync 러너 |
+| Worker | `worker/src/epharms/cron.ts` | 매일 00:00 KST cron |
+| Worker | `worker/src/server.ts` | `POST /epharms/sync` 엔드포인트 추가 |
+
+### 9-3. 환경변수 (필수 추가)
+```
+# Vercel
+EPHARMS_ENC_KEY=<32바이트 hex>           # node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+WORKER_BASE_URL=http://<lightsail>:8080  # 워커 주소
+WORKER_TOKEN=<기존 토큰>                  # 인벤토리 워커와 공용
+
+# Worker (Lightsail)
+EPHARMS_ENC_KEY=<위와 동일>
+EPHARMS_SCHEDULE_CRON=0 0 * * *
+EPHARMS_DELAY_MS=5000
+```
+
+### 9-4. 셀렉터 확정 작업 (⚠️ 운영 전 필수)
+
+`worker/src/epharms/adapter.ts` 의 `SEL` 객체는 **추정값**.
+실제 사이트에 1회 들어가서 다음을 확인 후 셀렉터 확정:
+- 로그인 페이지의 ID/PW 인풋 `name` 속성
+- `/account/account_list` 의 날짜 인풋 `name`
+- 검색 버튼 텍스트/속성
+- 결과 테이블의 `<th>` 텍스트가 정말 "명세일자"인지
+
+확정 방법: Lightsail에서 `npx playwright test --headed` 또는 로컬에서
+`PW_LOGIN_DEBUG=1 npm run dev` 후 직접 한번 돌려보고 셀렉터 수정.
+
+### 9-5. 운영 흐름
+
+1. BIZ가 `/biz/epharms-accounts` 에서 거래처별 계정 등록 (PW 입력 시 즉시 암호화)
+2. 매일 00:00 KST 워커가 모든 활성 계정 순회 → 매출원장 스크랩 → `LedgerEntry` 업서트
+3. 영업사원이 `/mypage/ledger` 접속 → 본인 `UserClient` (approved=true)에 매핑된 거래처만 조회
+4. ADMIN/BIZ는 모든 거래처 조회 가능
+
+### 9-6. 보안 메모
+
+- ePharms PW는 AES-256-GCM 암호화 후 DB 저장. 키는 환경변수에만.
+- API 응답에 `loginPwEnc` 절대 포함 X (모든 select에서 명시적 제외)
+- 영업사원은 `UserClient`에 등록된 사업자번호만 조회 가능
+- 워커 → ePharms 새벽 동시 로그인 → 어뷰징 의심받지 않게 `EPHARMS_DELAY_MS=5000` 거래처 사이 5초 간격

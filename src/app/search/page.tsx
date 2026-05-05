@@ -48,11 +48,11 @@ export default function SearchPage() {
     showInsuranceCode: true,
     showPrice: true,
     showRate: true,
-    showCategoryA: false,
-    showCategoryB: false,
-    showNotes: false,
+    showCategoryA: true,
+    showCategoryB: true,
+    showNotes: true,
     showStock: true,
-    showCompanyName: false,
+    showCompanyName: true,
   });
 
   const { remaining, isBlocked, consume } = useGuestLimit(!!session);

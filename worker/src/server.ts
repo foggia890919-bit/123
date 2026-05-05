@@ -5,6 +5,9 @@ import { ALL_ADAPTERS } from "../../src/scrapers/adapters/index.ts";
 import type { Credentials, InventoryItem, WholesaleAdapter } from "../../src/scrapers/core/types.ts";
 import { startScheduler, triggerJobNow, isJobRunning } from "./scheduler.ts";
 import { hasDb } from "./db.ts";
+import { startEpharmsScheduler } from "./epharms/cron.ts";
+import { isEpharmsSyncRunning, runEpharmsSync } from "./epharms/sync.ts";
+import { isProductSyncRunning, syncProductMaster } from "./epharms/products.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const TOKEN = process.env.WORKER_TOKEN ?? "";
@@ -139,7 +142,45 @@ app.get("/health", (_req, res) => {
     activeSessions: Array.from(sessions.keys()),
     db: hasDb(),
     jobRunning: isJobRunning(),
+    epharmsSyncRunning: isEpharmsSyncRunning(),
   });
+});
+
+// ePharms 매출원장 sync 수동 트리거.
+//   POST /epharms/sync                  → 모든 활성 계정 sync
+//   POST /epharms/sync?accountId=XXX    → 단일 계정만 sync (테스트용)
+app.post("/epharms/sync", async (req, res) => {
+  if (!hasDb()) {
+    res.status(503).json({ error: "DATABASE_URL not configured" });
+    return;
+  }
+  if (isEpharmsSyncRunning()) {
+    res.status(409).json({ error: "ePharms sync already running" });
+    return;
+  }
+  const onlyAccountId =
+    typeof req.query.accountId === "string" ? req.query.accountId : undefined;
+  // fire-and-forget — 한 거래처당 수십초 걸릴 수 있음
+  runEpharmsSync({ onlyAccountId }).catch(err =>
+    console.error("[epharms] manual sync failed:", err)
+  );
+  res.json({ ok: true, started: true, onlyAccountId: onlyAccountId ?? null });
+});
+
+// 이팜스 상품 마스터 자동 동기화 — 페이지별 크롤링.
+// body: { triggeredBy?: string }
+// 워커가 직접 DB에 upsert하므로 별도 업로드 URL 불필요.
+// fire-and-forget: 전체 카탈로그 순회는 10~30분 걸림.
+app.post("/epharms/sync-products", async (req, res) => {
+  if (isProductSyncRunning()) {
+    res.status(409).json({ error: "product sync already running" });
+    return;
+  }
+  const { triggeredBy } = (req.body ?? {}) as { triggeredBy?: string };
+  syncProductMaster({ triggeredBy }).catch(err =>
+    console.error("[products] sync failed:", err)
+  );
+  res.json({ ok: true, started: true });
 });
 
 // Manually trigger a scheduled batch run. Useful for testing and for the
@@ -232,6 +273,7 @@ const server = app.listen(PORT, () => {
   console.log(`[worker] adapters: ${Object.keys(ALL_ADAPTERS).join(", ")}`);
   console.log(`[worker] db: ${hasDb() ? "configured" : "NOT configured (scheduler will skip)"}`);
   startScheduler({ scrapeOne, getCreds });
+  startEpharmsScheduler();
 });
 
 async function shutdown() {

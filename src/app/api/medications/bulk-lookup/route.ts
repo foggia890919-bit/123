@@ -3,7 +3,10 @@ import { prisma } from "@/lib/prisma";
 import { normalizeCompanyKey } from "@/lib/utils";
 
 function normalizeCode(code: string): string {
-  return code.replace(/[\s\-]/g, "").toUpperCase();
+  const cleaned = code.replace(/[\s\-]/g, "").toUpperCase();
+  // 보험코드는 9자리. 엑셀에서 leading 0이 사라져 8자리 이하 숫자로 들어오면 9자리로 zero-pad
+  if (/^\d{1,8}$/.test(cleaned)) return cleaned.padStart(9, "0");
+  return cleaned;
 }
 
 // 엑셀 A열 보험코드 목록 → 매칭된 약품 정보 반환
@@ -58,16 +61,11 @@ export async function POST(req: NextRequest) {
     for (const r of rates) rateMap[normalizeCompanyKey(r.companyName)] = r.additionalRate;
   }
 
-  // 입력 순서 유지, 중복 보험코드도 동일 품목으로 매칭
-  const seen = new Set<string>();
+  // 입력 순서 유지. 중복 보험코드도 합치지 않고 각각 행으로 반환
+  // (사용자 후가공 시 매출·수수료 변화를 행 단위로 비교하기 위함)
   const rows = (codes as unknown[])
     .map((c) => String(c ?? "").trim())
     .filter(Boolean)
-    .filter((c) => {
-      if (seen.has(c)) return false;
-      seen.add(c);
-      return true;
-    })
     .map((code) => {
       const nk = normalizeCode(code);
       const id = idByNormalized.get(nk);

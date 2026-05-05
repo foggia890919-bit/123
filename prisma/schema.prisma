@@ -33,6 +33,7 @@ model User {
   corpRateFilesUploaded      CorpRateFile[]        @relation("CorpRateFileUploader")
   corpRateHistoriesPerformed CorpRateFileHistory[] @relation("CorpRateFileHistoryPerformer")
   processedEmails            IncomingEmail[]       @relation("EmailProcessor")
+  epharmsAccounts            EpharmsAccount[]      @relation("KmdUserEpharms")
 }
 
 
@@ -148,6 +149,7 @@ model Medication {
   bioStatus      String?
   productName    String
   price          Int?
+  paymentType    String?   // HIRA payTpNm: "급여" | "비급여" | "전액본인부담" | "선별급여" 등 | null=미확인
   originalDrug   String?
   insuranceCode  String?
   notes          String?
@@ -167,6 +169,7 @@ model Medication {
   @@index([ingredientCode])
   @@index([source])
   @@index([settlementType])
+  @@index([paymentType])
 }
 
 enum MedSource {
@@ -720,4 +723,134 @@ model TelegramReply {
   receivedAt    DateTime        @default(now())
 
   @@index([digestQueueId])
+}
+
+// =====================================================================
+// ePharms 매출원장 자동수집 (yk.ep45.co.kr)
+// 거래처별 ePharms 계정 1개 등록 → 매일 자정 자동 로그인 → 원장집계 스크래핑
+// → KMD 포털에서 영업사원/거래처가 본인 분만 조회.
+// =====================================================================
+
+// 거래처별 ePharms 로그인 계정. PW는 AES-256-GCM 암호화하여 저장.
+model EpharmsAccount {
+  id              String          @id @default(cuid())
+  bizNumber       String          @unique
+  clientName      String
+  loginId         String
+  // "<ivBase64>:<authTagBase64>:<cipherBase64>"
+  loginPwEnc      String
+  active          Boolean         @default(true)
+  isMaster        Boolean         @default(false) // 마스터 계정 — 상품 카탈로그 자동 동기화 시 사용
+  lastSyncedAt    DateTime?
+  lastSyncStatus  String?         // "ok" | "error"
+  lastSyncError   String?
+  memo            String?
+  // KMD 플랫폼 계정 매핑 — 약국/거래처 사용자가 마이페이지에서 본인 매출원장을 보려면 필요.
+  // bizNumber 기반 매칭(UserClient.bizNumber)에 더해 kmdUserId 직접 링크도 허용한다.
+  kmdUserId       String?
+  kmdUser         User?           @relation("KmdUserEpharms", fields: [kmdUserId], references: [id], onDelete: SetNull)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  ledgerEntries   LedgerEntry[]
+  syncLogs        LedgerSyncLog[]
+
+  @@index([active])
+  @@index([kmdUserId])
+}
+
+// 매출원장 한 줄 (원장집계 화면 컬럼 그대로).
+model LedgerEntry {
+  id           String         @id @default(cuid())
+  accountId    String
+  account      EpharmsAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  bizNumber    String         // 빠른 필터링용 비정규화
+  entryDate    DateTime       // 명세일자
+  itemName     String         // 항목
+  sales        Decimal        @default(0) @db.Decimal(18, 2)
+  payment      Decimal        @default(0) @db.Decimal(18, 2)
+  balance      Decimal        @default(0) @db.Decimal(18, 2)
+  rowHash      String         // entryDate+itemName+sales+payment SHA-1
+  fetchedAt    DateTime       @default(now())
+
+  @@unique([accountId, rowHash])
+  @@index([bizNumber, entryDate])
+  @@index([accountId, entryDate])
+}
+
+// 동기화 시도 기록
+model LedgerSyncLog {
+  id           String         @id @default(cuid())
+  accountId    String
+  account      EpharmsAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  startedAt    DateTime       @default(now())
+  finishedAt   DateTime?
+  status       String         // "running" | "ok" | "error"
+  rowsFetched  Int            @default(0)
+  rowsInserted Int            @default(0)
+  errorMsg     String?
+
+  @@index([accountId, startedAt])
+  @@index([status])
+}
+
+// =====================================================================
+// 자동주문 시스템 — 상품 마스터 + 거래처별 단가
+// =====================================================================
+
+// 이팜스 상품 마스터. 사장님 master 계정으로 워커가 자동 동기화하거나
+// 사장님이 엑셀 업로드해서 임포트.
+model EpharmsProduct {
+  id              String                @id @default(cuid())
+  priceCode       String                @unique  // 기준단가코드 (이팜스 고유 식별자, 예: "645100741")
+  productName     String                // 상품명
+  manufacturer    String                // 제약사
+  spec            String?               // 규격 (예: "200기타/1개", "625mg/100정")
+  productGroup    String?               // 상품그룹 (대분류)
+  ingredient      String?               // 성분명
+  basePrice       Decimal               @default(0) @db.Decimal(18, 2) // 이팜스 마스터 단가 (모든 거래처 공통 기본값)
+  active          Boolean               @default(true)
+  fetchedAt       DateTime              @default(now())
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  clientPrices    ClientProductPrice[]
+
+  @@index([productName])
+  @@index([manufacturer])
+  @@index([ingredient])
+  @@index([active])
+}
+
+// 거래처별 상품 단가 (L2 캐시).
+// L1(매출원장 학습)은 LedgerEntry에서 동적 조회, L2는 이 테이블에 영구 저장.
+// 영업사원이 주문 작성 시 단가를 수정하면 자동으로 여기 upsert.
+model ClientProductPrice {
+  id           String          @id @default(cuid())
+  bizNumber    String          // 거래처 사업자번호
+  priceCode    String          // EpharmsProduct.priceCode
+  product      EpharmsProduct  @relation(fields: [priceCode], references: [priceCode], onDelete: Cascade)
+  unitPrice    Decimal         @db.Decimal(18, 2)
+  source       String          // "manual" | "ledger" | "import" — 어디서 들어왔는지
+  setByUserId  String?         // 영업사원 id (manual 일 때)
+  setAt        DateTime        @default(now())
+
+  @@unique([bizNumber, priceCode])
+  @@index([priceCode])
+  @@index([bizNumber])
+}
+
+// 상품 마스터 동기화 로그 (워커 실행 기록)
+model ProductSyncLog {
+  id            String   @id @default(cuid())
+  triggeredBy   String?  // user.id — 수동 트리거인 경우
+  startedAt     DateTime @default(now())
+  finishedAt    DateTime?
+  status        String   // "running" | "ok" | "error"
+  source        String   // "worker-scrape" | "excel-upload"
+  rowsTotal     Int      @default(0)
+  rowsInserted  Int      @default(0)
+  rowsUpdated   Int      @default(0)
+  errorMsg      String?
+
+  @@index([startedAt])
+  @@index([status])
 }

@@ -223,7 +223,7 @@ export async function POST(req: NextRequest, { params }: Params) {
         });
       });
 
-      return NextResponse.json({ ok: true, action, rateFileId: (rateFile as { id: string }).id });
+      return NextResponse.json({ ok: true, action, rateFileId: (rateFile as unknown as { id: string }).id });
     }
 
     if (action === "process_settlement") {
@@ -285,7 +285,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       return NextResponse.json({
         ok: true,
         action,
-        settlementDocId: (settlementDoc as { id: string }).id,
+        settlementDocId: (settlementDoc as unknown as { id: string }).id,
       });
     }
   } catch (err) {
