@@ -4,7 +4,7 @@ import { useState, useRef, useMemo, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import {
   Upload, Trash2, FileSpreadsheet, AlertCircle, Loader2, Search, X,
-  Building2, Filter, ChevronDown, ChevronUp,
+  Building2, Filter, ChevronDown, ChevronUp, ArrowUpDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatPrice } from "@/lib/utils";
@@ -50,6 +50,7 @@ const CRITERIA_PAIRS = [
 ] as const;
 
 type FilterMode = "all" | "settlement";
+type SortDir = "asc" | "desc";
 
 interface UserClient {
   id: string;
@@ -64,6 +65,13 @@ function StatusBadge({ status }: { status: string }) {
   if (status === "PENDING")   return <span className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded">요청됨</span>;
   if (status === "REJECTED")  return <span className="text-[10px] text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded">거부됨</span>;
   return null;
+}
+
+function SortIcon({ col, sortCol, sortDir }: { col: string; sortCol: string | null; sortDir: SortDir }) {
+  if (sortCol !== col) return <ArrowUpDown className="w-3 h-3 text-gray-300 group-hover:text-gray-500" />;
+  return sortDir === "asc"
+    ? <ChevronUp className="w-3 h-3 text-blue-600" />
+    : <ChevronDown className="w-3 h-3 text-blue-600" />;
 }
 
 function uid() {
@@ -111,17 +119,24 @@ function Inner() {
     total: number; matched: number; unmatched: number; excelRows: number;
   } | null>(null);
 
-  // 기준 선택 + 자동 적용
-  const [criteriaSet, setCriteriaSet] = useState<Record<string, boolean>>({});
+  // 기준 선택 (순서 보존 배열) + 자동 적용
+  const [activeCriteria, setActiveCriteria] = useState<string[]>([]);
   const [autoSwitching, setAutoSwitching] = useState(false);
   const [autoResult, setAutoResult] = useState<{ applied: number; skipped: number } | null>(null);
 
-  // 행별 수동 선택 모달
+  // 행별 수동 선택 모달 (매칭된 행)
   const [altModal, setAltModal] = useState<{ rowId: string; row: CheckRow } | null>(null);
+  // 미매칭 행 대체품 검색 (성분명 입력 → SameIngredientModal)
+  const [freeSearchModal, setFreeSearchModal] = useState<{ rowId: string; text: string } | null>(null);
+  const [expandedSearchRows, setExpandedSearchRows] = useState<Record<string, string>>({});
 
   // 필터
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
   const [approvedCompanies, setApprovedCompanies] = useState<Set<string>>(new Set());
+
+  // 테이블 정렬
+  const [sortCol, setSortCol] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
 
   // 거래처 + 제약사 현황
   const [clients, setClients] = useState<UserClient[]>([]);
@@ -155,19 +170,28 @@ function Inner() {
 
   useEffect(() => { refreshCompanyStatuses(); }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 선택한 순서대로 기준 관리
   function toggleCriteria(group: string, key: string) {
-    setCriteriaSet((prev) => {
+    setActiveCriteria((prev) => {
       const pair = CRITERIA_PAIRS.find((p) => p.group === group);
-      const next = { ...prev };
-      if (pair) for (const opt of pair.options) delete next[opt.key];
-      if (!prev[key]) next[key] = true;
-      return next;
+      const groupKeys: string[] = pair ? pair.options.map((o) => o.key) : [];
+      const without = prev.filter((k) => !groupKeys.includes(k));
+      if (prev.includes(key)) return without; // 이미 선택 → 해제
+      return [...without, key]; // 동 그룹 기존 키 제거 후 끝에 추가
     });
   }
 
+  function handleSort(col: string) {
+    if (sortCol === col) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortCol(col);
+      setSortDir("asc");
+    }
+  }
+
   async function handleAutoSwitch() {
-    const criteriaList = Object.entries(criteriaSet).filter(([, v]) => v).map(([k]) => k);
-    if (criteriaList.length === 0) return;
+    if (activeCriteria.length === 0) return;
     const eligible = rows.filter((r) => r.medication?.ingredientCode);
     if (eligible.length === 0) return;
 
@@ -185,7 +209,7 @@ function Inner() {
             originalProductName: r.medication!.productName,
             ingredientName: r.medication!.ingredientName,
           })),
-          criteria: criteriaList,
+          criteria: activeCriteria,   // 선택 순서 그대로 전달
           userId: userId ?? null,
         }),
       });
@@ -261,6 +285,7 @@ function Inner() {
       setLastSummary({ total: newRows.length, matched, unmatched: newRows.length - matched, excelRows });
       setRows(newRows);
       setAutoResult(null);
+      setExpandedSearchRows({});
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "업로드 오류");
     } finally {
@@ -283,18 +308,79 @@ function Inner() {
   }
   function removeRow(id: string) {
     setRows((rs) => rs.filter((r) => r.id !== id));
+    setExpandedSearchRows((prev) => { const n = { ...prev }; delete n[id]; return n; });
   }
   function clearAll() {
     if (!confirm("모든 품목을 지울까요?")) return;
     setRows([]);
     setLastSummary(null);
     setAutoResult(null);
+    setExpandedSearchRows({});
   }
 
   const displayRows = useMemo(() => {
-    if (filterMode === "all") return rows;
-    return rows.filter((r) => r.medication?.companyName && approvedCompanies.has(r.medication.companyName));
-  }, [rows, filterMode, approvedCompanies]);
+    const filtered = filterMode === "all"
+      ? rows
+      : rows.filter((r) => r.medication?.companyName && approvedCompanies.has(r.medication.companyName));
+
+    if (!sortCol) return filtered;
+
+    return [...filtered].sort((a, b) => {
+      let diff = 0;
+      switch (sortCol) {
+        case "code":
+          diff = a.originalCode.localeCompare(b.originalCode);
+          break;
+        case "origProduct":
+          diff = (a.medication?.productName ?? "").localeCompare(b.medication?.productName ?? "");
+          break;
+        case "origCompany":
+          diff = (a.medication?.companyName ?? "").localeCompare(b.medication?.companyName ?? "");
+          break;
+        case "price":
+          diff = (a.medication?.price ?? -1) - (b.medication?.price ?? -1);
+          break;
+        case "baseRate":
+          diff = (a.medication?.commissionRate ?? -1) - (b.medication?.commissionRate ?? -1);
+          break;
+        case "extraRate":
+          diff = ((a.medication?.additionalRate ?? null) ?? -1) - ((b.medication?.additionalRate ?? null) ?? -1);
+          break;
+        case "totalRate":
+          diff = totalRate(a.medication) - totalRate(b.medication);
+          break;
+        case "qty":
+          diff = (parseFloat(a.prescriptionQty) || -1) - (parseFloat(b.prescriptionQty) || -1);
+          break;
+        case "amount":
+          diff = (parseFloat(a.prescriptionAmount) || -1) - (parseFloat(b.prescriptionAmount) || -1);
+          break;
+        case "origSettlement":
+          diff = (calcSettlement(a.medication, a.prescriptionAmount) ?? -1)
+               - (calcSettlement(b.medication, b.prescriptionAmount) ?? -1);
+          break;
+        case "selProduct":
+          diff = (a.selected?.productName ?? "").localeCompare(b.selected?.productName ?? "");
+          break;
+        case "selRate":
+          diff = totalRate(a.selected) - totalRate(b.selected);
+          break;
+        case "selSettlement":
+          diff = (calcSettlement(a.selected, a.prescriptionAmount) ?? -1)
+               - (calcSettlement(b.selected, b.prescriptionAmount) ?? -1);
+          break;
+        case "gain": {
+          const ao = calcSettlement(a.medication, a.prescriptionAmount) ?? 0;
+          const as_ = calcSettlement(a.selected, a.prescriptionAmount) ?? 0;
+          const bo = calcSettlement(b.medication, b.prescriptionAmount) ?? 0;
+          const bs = calcSettlement(b.selected, b.prescriptionAmount) ?? 0;
+          diff = (as_ - ao) - (bs - bo);
+          break;
+        }
+      }
+      return sortDir === "asc" ? diff : -diff;
+    });
+  }, [rows, filterMode, approvedCompanies, sortCol, sortDir]);
 
   const totals = useMemo(() => {
     let currentSettlement = 0;
@@ -363,7 +449,6 @@ function Inner() {
     [clients, selectedClientId]
   );
 
-  // 선택품목 기준 제약사 집계
   const companySummary = useMemo(() => {
     const map = new Map<string, { count: number; products: Set<string> }>();
     for (const r of rows) {
@@ -440,6 +525,37 @@ function Inner() {
     });
   }
 
+  // SortTh: 클릭 가능한 정렬 헤더 셀
+  function SortTh({ col, label, className }: { col: string; label: string; className?: string }) {
+    const isActive = sortCol === col;
+    return (
+      <th
+        className={`px-2 py-2 text-left cursor-pointer select-none group whitespace-nowrap ${isActive ? "text-blue-600" : "text-gray-500"} ${className ?? ""}`}
+        onClick={() => handleSort(col)}
+      >
+        <span className="inline-flex items-center gap-0.5">
+          {label}
+          <SortIcon col={col} sortCol={sortCol} sortDir={sortDir} />
+        </span>
+      </th>
+    );
+  }
+
+  function SortThRight({ col, label, className }: { col: string; label: string; className?: string }) {
+    const isActive = sortCol === col;
+    return (
+      <th
+        className={`px-2 py-2 text-right cursor-pointer select-none group whitespace-nowrap ${isActive ? "text-blue-600" : "text-gray-500"} ${className ?? ""}`}
+        onClick={() => handleSort(col)}
+      >
+        <span className="inline-flex items-center justify-end gap-0.5 w-full">
+          {label}
+          <SortIcon col={col} sortCol={sortCol} sortDir={sortDir} />
+        </span>
+      </th>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-[1600px] mx-auto p-4 md:p-6 space-y-4">
@@ -493,7 +609,7 @@ function Inner() {
                 <span>엑셀 <strong className="text-gray-900">{lastSummary.excelRows}행</strong></span>
                 <span>코드 <strong className="text-gray-900">{lastSummary.total}</strong>건</span>
                 <span className="text-emerald-700">매칭 <strong>{lastSummary.matched}</strong>건</span>
-                {lastSummary.unmatched > 0 && <span className="text-orange-700">미매칭 <strong>{lastSummary.unmatched}</strong>건</span>}
+                {lastSummary.unmatched > 0 && <span className="text-orange-700">미매칭 <strong>{lastSummary.unmatched}</strong>건 <span className="text-gray-400">(대체품 직접 검색 가능)</span></span>}
               </div>
             )}
           </div>
@@ -501,14 +617,15 @@ function Inner() {
           {/* 자동 선택 기준 */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
             <p className="text-xs font-semibold text-gray-500 mb-3">
-              자동 선택 기준 <span className="font-normal text-gray-400">(여러 기준 조합 가능, 우선순위 순)</span>
+              자동 선택 기준 <span className="font-normal text-gray-400">(선택 순서대로 우선순위 적용)</span>
             </p>
             <div className="flex flex-col gap-2">
               {CRITERIA_PAIRS.map((pair) => (
                 <div key={pair.group} className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs font-medium text-gray-500 w-14 shrink-0">{pair.label}</span>
                   {pair.options.map((opt) => {
-                    const isActive = !!criteriaSet[opt.key];
+                    const orderIdx = activeCriteria.indexOf(opt.key);
+                    const isActive = orderIdx !== -1;
                     return (
                       <label
                         key={opt.key}
@@ -525,10 +642,10 @@ function Inner() {
                           onChange={() => toggleCriteria(pair.group, opt.key)}
                           disabled={autoSwitching}
                         />
-                        <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
-                          isActive ? "border-blue-500 bg-blue-500" : "border-gray-300 bg-white"
+                        <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 text-[9px] font-bold ${
+                          isActive ? "border-blue-500 bg-blue-500 text-white" : "border-gray-300 bg-white"
                         }`}>
-                          {isActive && <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>}
+                          {isActive ? orderIdx + 1 : ""}
                         </span>
                         <span className="font-medium">{opt.label}</span>
                       </label>
@@ -540,7 +657,7 @@ function Inner() {
             <div className="flex items-center gap-3 mt-3 pt-3 border-t border-gray-100 flex-wrap">
               <button
                 onClick={handleAutoSwitch}
-                disabled={Object.keys(criteriaSet).length === 0 || autoSwitching || rows.length === 0}
+                disabled={activeCriteria.length === 0 || autoSwitching || rows.length === 0}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 {autoSwitching ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
@@ -576,7 +693,6 @@ function Inner() {
                 >정산대상 ({approvedCompanies.size}개사)</button>
               </div>
             </div>
-            {/* 합계 */}
             {statsCount.total > 0 && (
               <div className="space-y-2 pt-2 border-t border-gray-100">
                 <div className="flex justify-between text-xs">
@@ -616,7 +732,6 @@ function Inner() {
                 <span className="text-xs text-gray-400 font-normal">(선택품목 기준 · {companySummary.length}개사)</span>
               </h3>
               <div className="flex items-center gap-2 flex-wrap">
-                {/* 거래처 선택 */}
                 <select
                   value={selectedClientId}
                   onChange={(e) => setSelectedClientId(e.target.value)}
@@ -629,7 +744,6 @@ function Inner() {
                     </option>
                   ))}
                 </select>
-                {/* 전체요청 */}
                 <button
                   onClick={requestAllFilters}
                   disabled={!selectedClient || requestingAll || pendingCompanies.length === 0}
@@ -709,6 +823,14 @@ function Inner() {
             <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
               <h2 className="text-sm font-semibold text-gray-800">
                 품목 목록 ({displayRows.length}건)
+                {sortCol && (
+                  <button
+                    onClick={() => { setSortCol(null); setSortDir("asc"); }}
+                    className="ml-2 text-[10px] text-gray-400 hover:text-gray-600 font-normal"
+                  >
+                    정렬 초기화
+                  </button>
+                )}
               </h2>
               <p className="text-xs text-gray-500">
                 선택 <strong className="text-emerald-700">{statsCount.selected}</strong> / {statsCount.total}
@@ -716,24 +838,24 @@ function Inner() {
             </div>
             <div className="overflow-auto">
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 text-xs text-gray-500 font-semibold">
+                <thead className="bg-gray-50 text-xs font-semibold">
                   <tr>
-                    <th className="px-3 py-2 text-center w-10">#</th>
-                    <th className="px-3 py-2 text-left">보험코드</th>
-                    <th className="px-3 py-2 text-left">원본 품목</th>
-                    <th className="px-3 py-2 text-left">원본 제약사</th>
-                    <th className="px-3 py-2 text-right">약가</th>
-                    <th className="px-2 py-2 text-right bg-emerald-50">기본%</th>
-                    <th className="px-2 py-2 text-right bg-emerald-50">추가%</th>
-                    <th className="px-2 py-2 text-right bg-emerald-50">합계%</th>
-                    <th className="px-2 py-2 text-right bg-blue-50">처방수량</th>
-                    <th className="px-2 py-2 text-right bg-blue-50">처방금액</th>
-                    <th className="px-2 py-2 text-right bg-blue-50">원본정산</th>
-                    <th className="px-2 py-2 text-left bg-amber-50">선택 품목</th>
-                    <th className="px-2 py-2 text-right bg-amber-50">선택%</th>
-                    <th className="px-2 py-2 text-right bg-amber-50">선택정산</th>
-                    <th className="px-2 py-2 text-right bg-amber-50">차액</th>
-                    <th className="px-3 py-2 text-center w-28">액션</th>
+                    <th className="px-3 py-2 text-center w-10 text-gray-500">#</th>
+                    <SortTh col="code"          label="보험코드" />
+                    <SortTh col="origProduct"   label="원본 품목" />
+                    <SortTh col="origCompany"   label="원본 제약사" />
+                    <SortThRight col="price"    label="약가" />
+                    <SortThRight col="baseRate" label="기본%" className="bg-emerald-50" />
+                    <SortThRight col="extraRate" label="추가%" className="bg-emerald-50" />
+                    <SortThRight col="totalRate" label="합계%" className="bg-emerald-50" />
+                    <SortThRight col="qty"      label="처방수량" className="bg-blue-50" />
+                    <SortThRight col="amount"   label="처방금액" className="bg-blue-50" />
+                    <SortThRight col="origSettlement" label="원본정산" className="bg-blue-50" />
+                    <SortTh col="selProduct"    label="선택 품목" className="bg-amber-50" />
+                    <SortThRight col="selRate"  label="선택%" className="bg-amber-50" />
+                    <SortThRight col="selSettlement" label="선택정산" className="bg-amber-50" />
+                    <SortThRight col="gain"     label="차액" className="bg-amber-50" />
+                    <th className="px-3 py-2 text-center w-32 text-gray-500">액션</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -747,16 +869,17 @@ function Inner() {
                     const selSettlement = calcSettlement(s, r.prescriptionAmount);
                     const gain = selSettlement != null && origSettlement != null
                       ? selSettlement - origSettlement : null;
+                    const searchText = expandedSearchRows[r.id];
 
                     return (
-                      <tr key={r.id} className="hover:bg-gray-50">
+                      <tr key={r.id} className={`hover:bg-gray-50 ${!m ? "bg-orange-50/30" : ""}`}>
                         <td className="px-3 py-2.5 text-center text-xs text-gray-500">{i + 1}</td>
                         <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{r.originalCode}</td>
                         <td className="px-3 py-2.5 max-w-[160px]">
                           {m ? (
                             <span className="text-xs font-medium text-gray-900 leading-tight block truncate">{m.productName}</span>
                           ) : (
-                            <span className="text-xs text-red-600 font-medium">(미매칭)</span>
+                            <span className="text-xs text-orange-600 font-medium">(미매칭)</span>
                           )}
                         </td>
                         <td className="px-3 py-2.5 text-xs text-gray-600 max-w-[90px] truncate">{stripCompanySuffix(m?.companyName)}</td>
@@ -791,7 +914,6 @@ function Inner() {
                         <td className="px-2 py-2.5 text-right text-xs font-semibold text-emerald-700 bg-blue-50/30 whitespace-nowrap">
                           {origSettlement != null ? origSettlement.toLocaleString() + "원" : "-"}
                         </td>
-                        {/* 선택 품목 컬럼 */}
                         <td className="px-2 py-2.5 max-w-[150px] bg-amber-50/30">
                           {s ? (
                             <span className="text-xs font-medium text-amber-900 leading-tight block truncate">{s.productName}</span>
@@ -815,8 +937,9 @@ function Inner() {
                           )}
                         </td>
                         <td className="px-3 py-2.5">
-                          <div className="flex items-center gap-1 justify-center">
+                          <div className="flex items-center gap-1 justify-center flex-wrap">
                             {m ? (
+                              /* 매칭된 행: 동일성분 대체품 선택 */
                               <button
                                 onClick={() => setAltModal({ rowId: r.id, row: r })}
                                 className="text-xs text-white bg-emerald-600 hover:bg-emerald-700 rounded px-2 py-1 flex items-center gap-1 whitespace-nowrap"
@@ -824,7 +947,51 @@ function Inner() {
                                 <Search className="w-3 h-3" /> {s ? "변경" : "선택"}
                               </button>
                             ) : (
-                              <span className="text-xs text-gray-300 px-2">검색불가</span>
+                              /* 미매칭 행: 성분명 입력 → 대체품 검색 */
+                              searchText !== undefined ? (
+                                <div className="flex items-center gap-1">
+                                  <input
+                                    autoFocus
+                                    value={searchText}
+                                    onChange={(e) =>
+                                      setExpandedSearchRows((prev) => ({ ...prev, [r.id]: e.target.value }))
+                                    }
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter" && searchText.trim()) {
+                                        setFreeSearchModal({ rowId: r.id, text: searchText.trim() });
+                                      }
+                                    }}
+                                    placeholder="성분명..."
+                                    className="w-20 text-xs px-1.5 py-1 border border-gray-300 rounded focus:outline-none focus:border-blue-400"
+                                  />
+                                  <button
+                                    onClick={() => {
+                                      if (searchText.trim()) setFreeSearchModal({ rowId: r.id, text: searchText.trim() });
+                                    }}
+                                    disabled={!searchText.trim()}
+                                    className="text-xs text-white bg-blue-600 hover:bg-blue-700 rounded px-1.5 py-1 disabled:opacity-40"
+                                  >
+                                    <Search className="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    onClick={() =>
+                                      setExpandedSearchRows((prev) => { const n = { ...prev }; delete n[r.id]; return n; })
+                                    }
+                                    className="text-gray-400 hover:text-gray-600 p-0.5"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={() =>
+                                    setExpandedSearchRows((prev) => ({ ...prev, [r.id]: s?.ingredientName ?? "" }))
+                                  }
+                                  className="text-xs text-orange-700 bg-orange-50 border border-orange-200 hover:bg-orange-100 rounded px-2 py-1 flex items-center gap-1 whitespace-nowrap"
+                                >
+                                  <Search className="w-3 h-3" /> 대체품 검색
+                                </button>
+                              )
                             )}
                             {s && (
                               <button onClick={() => clearSelected(r.id)} className="text-gray-400 hover:text-red-600 p-1" title="선택 해제">
@@ -846,7 +1013,7 @@ function Inner() {
         )}
       </div>
 
-      {/* 행별 수동 선택 모달 */}
+      {/* 매칭된 행: 동일성분 대체품 선택 모달 */}
       {altModal && altModal.row.medication && (
         <SameIngredientModal
           ingredientName={altModal.row.medication.ingredientName}
@@ -858,6 +1025,23 @@ function Inner() {
             onSelect: (med) => {
               assignSelected(altModal.rowId, med);
               setAltModal(null);
+            },
+          }}
+        />
+      )}
+
+      {/* 미매칭 행: 성분명으로 대체품 검색 모달 */}
+      {freeSearchModal && (
+        <SameIngredientModal
+          ingredientName={freeSearchModal.text}
+          userId={userId}
+          onClose={() => setFreeSearchModal(null)}
+          selectContext={{
+            originalProductName: "",
+            onSelect: (med) => {
+              assignSelected(freeSearchModal.rowId, med);
+              setExpandedSearchRows((prev) => { const n = { ...prev }; delete n[freeSearchModal.rowId]; return n; });
+              setFreeSearchModal(null);
             },
           }}
         />
