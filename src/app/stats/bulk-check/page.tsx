@@ -2,7 +2,7 @@
 
 import { useState, useRef, useMemo, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { Upload, Trash2, FileSpreadsheet, AlertCircle, Loader2 } from "lucide-react";
+import { Upload, Trash2, FileSpreadsheet, AlertCircle, Loader2, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatPrice } from "@/lib/utils";
 import RequireAuth from "@/components/RequireAuth";
@@ -13,11 +13,12 @@ interface CheckRow {
   id: string;
   originalCode: string;
   medication: MedicationItem | null;
+  bestMedication: MedicationItem | null; // 동일성분 수수료 최고 제품
   prescriptionQty: string;
   prescriptionAmount: string;
 }
 
-type SortKey = "none" | "commission_high" | "commission_low" | "price_low" | "price_high";
+type SortKey = "none" | "commission_high" | "commission_low" | "price_low" | "price_high" | "gain_high";
 type FilterMode = "all" | "settlement";
 
 function uid() {
@@ -38,6 +39,19 @@ function stripCompanySuffix(name: string | null | undefined): string {
   );
 }
 
+function calcSettlement(medication: MedicationItem | null, amount: string): number | null {
+  if (!medication) return null;
+  const totalRate = (medication.commissionRate ?? 0) + (medication.additionalRate ?? 0);
+  const amt = parseFloat(amount) || null;
+  if (amt == null) return null;
+  return Math.round(amt * totalRate / 100);
+}
+
+function totalRate(med: MedicationItem | null): number {
+  if (!med) return 0;
+  return (med.commissionRate ?? 0) + (med.additionalRate ?? 0);
+}
+
 export default function StatsExcelBulkCheckPage() {
   return (
     <RequireAuth>
@@ -52,6 +66,7 @@ function Inner() {
 
   const [rows, setRows] = useState<CheckRow[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [loadingBest, setLoadingBest] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [lastSummary, setLastSummary] = useState<{
     total: number;
@@ -81,6 +96,34 @@ function Inner() {
       .catch(() => {});
   }, [userId]);
 
+  async function fetchBestMedications(newRows: CheckRow[]) {
+    const ingredientCodes = newRows
+      .map((r) => r.medication?.ingredientCode)
+      .filter((c): c is string => Boolean(c));
+    if (ingredientCodes.length === 0) return newRows;
+
+    setLoadingBest(true);
+    try {
+      const res = await fetch("/api/medications/best-commission", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ingredientCodes, userId }),
+      });
+      if (!res.ok) return newRows;
+      const bestMap = await res.json() as Record<string, MedicationItem>;
+      return newRows.map((r) => ({
+        ...r,
+        bestMedication: r.medication?.ingredientCode
+          ? (bestMap[r.medication.ingredientCode] ?? null)
+          : null,
+      }));
+    } catch {
+      return newRows;
+    } finally {
+      setLoadingBest(false);
+    }
+  }
+
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -97,7 +140,6 @@ function Inner() {
 
       const excelRows = matrix.length;
 
-      // 헤더 행 감지: A열이 보험코드 관련 텍스트면 스킵
       const isHeader = (row: (string | number)[]) =>
         /^(보험코드|급여코드|코드|edi|edi code)$/i.test(String(row?.[0] ?? "").trim());
 
@@ -133,22 +175,25 @@ function Inner() {
         rows: { code: string; medication: MedicationItem | null }[];
       };
 
-      const newRows: CheckRow[] = data.rows.map((r, i) => ({
+      const initialRows: CheckRow[] = data.rows.map((r, i) => ({
         id: uid(),
         originalCode: r.code,
         medication: r.medication,
+        bestMedication: null,
         prescriptionQty: parsed[i]?.qty ?? "",
         prescriptionAmount: parsed[i]?.amount ?? "",
       }));
 
-      const matched = newRows.filter((r) => r.medication).length;
+      const matched = initialRows.filter((r) => r.medication).length;
       setLastSummary({
-        total: newRows.length,
+        total: initialRows.length,
         matched,
-        unmatched: newRows.length - matched,
+        unmatched: initialRows.length - matched,
         excelRows,
       });
-      setRows(newRows);
+
+      const rowsWithBest = await fetchBestMedications(initialRows);
+      setRows(rowsWithBest);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "업로드 오류");
     } finally {
@@ -180,17 +225,9 @@ function Inner() {
       );
     }
     if (sortKey === "commission_high") {
-      result.sort((a, b) => {
-        const ra = (a.medication?.commissionRate ?? 0) + (a.medication?.additionalRate ?? 0);
-        const rb = (b.medication?.commissionRate ?? 0) + (b.medication?.additionalRate ?? 0);
-        return rb - ra;
-      });
+      result.sort((a, b) => totalRate(b.medication) - totalRate(a.medication));
     } else if (sortKey === "commission_low") {
-      result.sort((a, b) => {
-        const ra = (a.medication?.commissionRate ?? 0) + (a.medication?.additionalRate ?? 0);
-        const rb = (b.medication?.commissionRate ?? 0) + (b.medication?.additionalRate ?? 0);
-        return ra - rb;
-      });
+      result.sort((a, b) => totalRate(a.medication) - totalRate(b.medication));
     } else if (sortKey === "price_low") {
       result.sort(
         (a, b) => (a.medication?.price ?? Infinity) - (b.medication?.price ?? Infinity)
@@ -199,35 +236,43 @@ function Inner() {
       result.sort(
         (a, b) => (b.medication?.price ?? -Infinity) - (a.medication?.price ?? -Infinity)
       );
+    } else if (sortKey === "gain_high") {
+      result.sort((a, b) => {
+        const gainA = (calcSettlement(a.bestMedication, a.prescriptionAmount) ?? 0)
+          - (calcSettlement(a.medication, a.prescriptionAmount) ?? 0);
+        const gainB = (calcSettlement(b.bestMedication, b.prescriptionAmount) ?? 0)
+          - (calcSettlement(b.medication, b.prescriptionAmount) ?? 0);
+        return gainB - gainA;
+      });
     }
     return result;
   }, [rows, filterMode, sortKey, approvedCompanies]);
 
   const totals = useMemo(() => {
-    let totalSettlement = 0;
+    let currentSettlement = 0;
+    let bestSettlement = 0;
     let totalPrescriptionAmount = 0;
     for (const r of filteredRows) {
-      if (!r.medication) continue;
-      const totalRate =
-        (r.medication.commissionRate ?? 0) + (r.medication.additionalRate ?? 0);
       const amt = parseFloat(r.prescriptionAmount) || 0;
       totalPrescriptionAmount += amt;
-      totalSettlement += Math.round(amt * totalRate / 100);
+      currentSettlement += calcSettlement(r.medication, r.prescriptionAmount) ?? 0;
+      bestSettlement += calcSettlement(r.bestMedication, r.prescriptionAmount)
+        ?? calcSettlement(r.medication, r.prescriptionAmount) ?? 0;
     }
-    return { totalSettlement, totalPrescriptionAmount };
+    return { currentSettlement, bestSettlement, totalPrescriptionAmount, gain: bestSettlement - currentSettlement };
   }, [filteredRows]);
 
   function exportExcel() {
     if (filteredRows.length === 0) return;
     const out = filteredRows.map((r, i) => {
       const m = r.medication;
+      const b = r.bestMedication;
       const base = m?.commissionRate ?? null;
       const extra = m?.additionalRate ?? null;
-      const totalRate = base != null ? base + (extra ?? 0) : null;
-      const qty = parseFloat(r.prescriptionQty) || null;
-      const amt = parseFloat(r.prescriptionAmount) || null;
-      const settlement =
-        amt != null && totalRate != null ? Math.round(amt * totalRate / 100) : null;
+      const tr = base != null ? base + (extra ?? 0) : null;
+      const settlement = calcSettlement(m, r.prescriptionAmount);
+      const bestSettlement = calcSettlement(b, r.prescriptionAmount);
+      const gain = bestSettlement != null && settlement != null ? bestSettlement - settlement : null;
       return {
         순번: i + 1,
         보험코드: r.originalCode,
@@ -236,10 +281,14 @@ function Inner() {
         약가: m?.price ?? "-",
         "기본수수료(%)": base ?? "-",
         "추가수수료(%)": extra ?? "-",
-        "합계수수료(%)": totalRate ?? "-",
-        처방수량: qty ?? "-",
-        처방금액: amt ?? "-",
+        "합계수수료(%)": tr ?? "-",
+        처방수량: parseFloat(r.prescriptionQty) || "-",
+        처방금액: parseFloat(r.prescriptionAmount) || "-",
         정산예상금액: settlement ?? "-",
+        "최적품목(동일성분)": b?.productName ?? "-",
+        "최적수수료(%)": b ? totalRate(b) : "-",
+        최적정산금액: bestSettlement ?? "-",
+        차액: gain ?? "-",
       };
     });
     const ws = XLSX.utils.json_to_sheet(out);
@@ -260,6 +309,11 @@ function Inner() {
   }
 
   const matchedCount = filteredRows.filter((r) => r.medication).length;
+  const hasGain = filteredRows.some((r) => {
+    const g = (calcSettlement(r.bestMedication, r.prescriptionAmount) ?? 0)
+      - (calcSettlement(r.medication, r.prescriptionAmount) ?? 0);
+    return g > 0;
+  });
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -270,8 +324,8 @@ function Inner() {
             <div>
               <h1 className="text-xl font-bold text-gray-900">통계엑셀대량확인</h1>
               <p className="text-xs text-gray-500 mt-1">
-                엑셀 A열: 보험코드 · B열: 처방수량 · C열: 처방금액 형식으로 업로드하면 수수료가 매칭되고
-                정산 예상금액이 자동으로 계산됩니다.
+                A열: 보험코드 · B열: 처방수량 · C열: 처방금액 형식으로 업로드. 동일성분 수수료 최고
+                제품으로 교체 시 정산금액을 자동 비교합니다.
               </p>
             </div>
             <Button
@@ -303,19 +357,19 @@ function Inner() {
                   </Button>
                 )}
                 <label className="inline-flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 cursor-pointer">
-                  {uploading ? (
+                  {uploading || loadingBest ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
                   ) : (
                     <Upload className="w-4 h-4" />
                   )}
-                  엑셀 선택 (.xlsx, .xls)
+                  {loadingBest ? "최적 분석 중..." : "엑셀 선택 (.xlsx, .xls)"}
                   <input
                     ref={fileRef}
                     type="file"
                     accept=".xlsx,.xls"
                     className="hidden"
                     onChange={handleFile}
-                    disabled={uploading}
+                    disabled={uploading || loadingBest}
                   />
                 </label>
               </div>
@@ -328,8 +382,7 @@ function Inner() {
             {lastSummary && (
               <div className="mt-3 text-xs text-gray-600 flex gap-4 flex-wrap">
                 <span>
-                  엑셀 행 수{" "}
-                  <strong className="text-gray-900">{lastSummary.excelRows}행</strong>
+                  엑셀 행 수 <strong className="text-gray-900">{lastSummary.excelRows}행</strong>
                 </span>
                 <span>
                   코드 <strong className="text-gray-900">{lastSummary.total}</strong>건
@@ -365,9 +418,7 @@ function Inner() {
                   onClick={() => setFilterMode("settlement")}
                   disabled={approvedCompanies.size === 0}
                   title={
-                    approvedCompanies.size === 0
-                      ? "승인된 필터링 거래처가 없습니다"
-                      : `정산 수령 중인 ${approvedCompanies.size}개사만 표시`
+                    approvedCompanies.size === 0 ? "승인된 필터링 거래처가 없습니다" : undefined
                   }
                   className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                     filterMode === "settlement"
@@ -388,7 +439,7 @@ function Inner() {
                     { key: "commission_high" as SortKey, label: "수수료 높은순" },
                     { key: "commission_low" as SortKey, label: "수수료 낮은순" },
                     { key: "price_low" as SortKey, label: "약가 낮은순" },
-                    { key: "price_high" as SortKey, label: "약가 높은순" },
+                    { key: "gain_high" as SortKey, label: "차액 높은순" },
                   ] as const
                 ).map((opt) => (
                   <button
@@ -410,30 +461,71 @@ function Inner() {
 
         {/* 합계 카드 */}
         {matchedCount > 0 && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <p className="text-xs text-gray-500 mb-1">매칭 품목 수</p>
-              <p className="text-xl font-bold text-gray-900">{matchedCount}건</p>
-            </div>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             <div className="bg-white rounded-xl border border-gray-200 p-4">
               <p className="text-xs text-gray-500 mb-1">처방금액 합계</p>
-              <p className="text-xl font-bold text-gray-900">
+              <p className="text-lg font-bold text-gray-900">
                 {totals.totalPrescriptionAmount > 0
                   ? totals.totalPrescriptionAmount.toLocaleString() + "원"
                   : "-"}
               </p>
             </div>
+            <div className="bg-white rounded-xl border border-gray-200 p-4">
+              <p className="text-xs text-gray-500 mb-1">현재 정산예상</p>
+              <p className="text-lg font-bold text-gray-900">
+                {totals.currentSettlement > 0
+                  ? totals.currentSettlement.toLocaleString() + "원"
+                  : "-"}
+              </p>
+            </div>
             <div className="bg-emerald-50 rounded-xl border border-emerald-200 p-4">
-              <p className="text-xs text-emerald-700 mb-1">정산예상금액 합계</p>
-              <p className="text-xl font-bold text-emerald-700">
-                {totals.totalSettlement > 0
-                  ? totals.totalSettlement.toLocaleString() + "원"
+              <p className="text-xs text-emerald-700 mb-1">최적 교체 시 정산</p>
+              <p className="text-lg font-bold text-emerald-700">
+                {totals.bestSettlement > 0
+                  ? totals.bestSettlement.toLocaleString() + "원"
+                  : "-"}
+              </p>
+            </div>
+            <div
+              className={`rounded-xl border p-4 ${
+                totals.gain > 0
+                  ? "bg-amber-50 border-amber-200"
+                  : "bg-white border-gray-200"
+              }`}
+            >
+              <p className={`text-xs mb-1 ${totals.gain > 0 ? "text-amber-700" : "text-gray-500"}`}>
+                추가 수익 가능액
+              </p>
+              <p
+                className={`text-lg font-bold ${
+                  totals.gain > 0 ? "text-amber-700" : "text-gray-400"
+                }`}
+              >
+                {totals.gain > 0
+                  ? "+" + totals.gain.toLocaleString() + "원"
                   : "-"}
               </p>
             </div>
             <div className="bg-white rounded-xl border border-gray-200 p-4">
               <p className="text-xs text-gray-500 mb-1">표시 건수</p>
-              <p className="text-xl font-bold text-gray-900">{filteredRows.length}건</p>
+              <p className="text-lg font-bold text-gray-900">{filteredRows.length}건</p>
+            </div>
+          </div>
+        )}
+
+        {/* 교체 유도 배너 */}
+        {hasGain && totals.gain > 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-3 flex items-center gap-3">
+            <TrendingUp className="w-5 h-5 text-amber-600 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-amber-800">
+                동일성분 최고 수수료 제품으로 교체하면{" "}
+                <span className="text-amber-900">+{totals.gain.toLocaleString()}원</span>을 추가로
+                정산받을 수 있습니다.
+              </p>
+              <p className="text-xs text-amber-600 mt-0.5">
+                아래 표의 <strong>최적품목</strong>·<strong>차액</strong> 컬럼을 확인하고 영업 활동에 활용하세요.
+              </p>
             </div>
           </div>
         )}
@@ -449,9 +541,11 @@ function Inner() {
               <h2 className="text-sm font-semibold text-gray-800">
                 품목 목록 ({filteredRows.length}건)
               </h2>
-              <p className="text-xs text-gray-500">
-                처방수량·처방금액을 입력하면 정산예상금액이 계산됩니다
-              </p>
+              {loadingBest && (
+                <div className="flex items-center gap-1.5 text-xs text-blue-600">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> 최적 제품 분석 중...
+                </div>
+              )}
             </div>
             <div className="overflow-auto">
               <table className="w-full text-sm">
@@ -462,44 +556,49 @@ function Inner() {
                     <th className="px-3 py-2 text-left">품목명</th>
                     <th className="px-3 py-2 text-left">제약사</th>
                     <th className="px-3 py-2 text-right">약가</th>
-                    <th className="px-2 py-2 text-right bg-emerald-50">기본수수료</th>
-                    <th className="px-2 py-2 text-right bg-emerald-50">추가수수료</th>
-                    <th className="px-2 py-2 text-right bg-emerald-50">합계수수료</th>
+                    <th className="px-2 py-2 text-right bg-emerald-50">기본%</th>
+                    <th className="px-2 py-2 text-right bg-emerald-50">추가%</th>
+                    <th className="px-2 py-2 text-right bg-emerald-50">합계%</th>
                     <th className="px-2 py-2 text-right bg-blue-50">처방수량</th>
                     <th className="px-2 py-2 text-right bg-blue-50">처방금액</th>
-                    <th className="px-2 py-2 text-right bg-amber-50">정산예상금액</th>
+                    <th className="px-2 py-2 text-right bg-blue-50">정산예상</th>
+                    <th className="px-2 py-2 text-left bg-amber-50">최적품목</th>
+                    <th className="px-2 py-2 text-right bg-amber-50">최적%</th>
+                    <th className="px-2 py-2 text-right bg-amber-50">최적정산</th>
+                    <th className="px-2 py-2 text-right bg-amber-50">차액</th>
                     <th className="px-3 py-2 text-center w-10"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {filteredRows.map((r, i) => {
                     const m = r.medication;
+                    const b = r.bestMedication;
                     const base = m?.commissionRate ?? null;
                     const extra = m?.additionalRate ?? null;
-                    const totalRate = base != null ? base + (extra ?? 0) : null;
-                    const prescAmt = parseFloat(r.prescriptionAmount) || null;
-                    const settlement =
-                      prescAmt != null && totalRate != null
-                        ? Math.round(prescAmt * totalRate / 100)
+                    const tr_ = base != null ? base + (extra ?? 0) : null;
+                    const settlement = calcSettlement(m, r.prescriptionAmount);
+                    const bestSettlement = calcSettlement(b, r.prescriptionAmount);
+                    const gain =
+                      bestSettlement != null && settlement != null
+                        ? bestSettlement - settlement
                         : null;
+                    const isBestSame = b?.id === m?.id;
                     return (
                       <tr key={r.id} className="hover:bg-gray-50">
-                        <td className="px-3 py-2.5 text-center text-xs text-gray-500">
-                          {i + 1}
-                        </td>
+                        <td className="px-3 py-2.5 text-center text-xs text-gray-500">{i + 1}</td>
                         <td className="px-3 py-2.5 text-xs font-mono text-gray-500">
                           {r.originalCode}
                         </td>
-                        <td className="px-3 py-2.5 max-w-[200px]">
+                        <td className="px-3 py-2.5 max-w-[180px]">
                           {m ? (
-                            <span className="text-xs font-medium text-gray-900 leading-tight block">
+                            <span className="text-xs font-medium text-gray-900 leading-tight block truncate">
                               {m.productName}
                             </span>
                           ) : (
                             <span className="text-xs text-red-600 font-medium">(미매칭)</span>
                           )}
                         </td>
-                        <td className="px-3 py-2.5 text-xs text-gray-600 max-w-[110px] leading-tight">
+                        <td className="px-3 py-2.5 text-xs text-gray-600 max-w-[90px] truncate leading-tight">
                           {stripCompanySuffix(m?.companyName)}
                         </td>
                         <td className="px-3 py-2.5 text-right text-xs text-gray-700 whitespace-nowrap">
@@ -512,7 +611,7 @@ function Inner() {
                           {extra != null ? `${extra}%` : "-"}
                         </td>
                         <td className="px-2 py-2.5 text-right text-xs font-semibold text-blue-700 bg-emerald-50/30 whitespace-nowrap">
-                          {totalRate != null ? `${totalRate}%` : "-"}
+                          {tr_ != null ? `${tr_}%` : "-"}
                         </td>
                         <td className="px-2 py-2.5 bg-blue-50/30">
                           <input
@@ -532,8 +631,35 @@ function Inner() {
                             className="w-28 text-xs text-right px-2 py-1 border border-gray-200 rounded focus:outline-none focus:border-blue-400"
                           />
                         </td>
-                        <td className="px-2 py-2.5 text-right text-xs font-semibold text-emerald-700 bg-amber-50/30 whitespace-nowrap">
+                        <td className="px-2 py-2.5 text-right text-xs font-semibold text-emerald-700 bg-blue-50/30 whitespace-nowrap">
                           {settlement != null ? settlement.toLocaleString() + "원" : "-"}
+                        </td>
+                        {/* 최적 교체 컬럼 */}
+                        <td className="px-2 py-2.5 max-w-[160px] bg-amber-50/30">
+                          {b && !isBestSame ? (
+                            <span className="text-xs font-medium text-amber-900 leading-tight block truncate">
+                              {b.productName}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-gray-400">현재 최적</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-2.5 text-right text-xs font-semibold text-amber-700 bg-amber-50/30 whitespace-nowrap">
+                          {b && !isBestSame ? `${totalRate(b)}%` : "-"}
+                        </td>
+                        <td className="px-2 py-2.5 text-right text-xs font-semibold text-amber-700 bg-amber-50/30 whitespace-nowrap">
+                          {bestSettlement != null && !isBestSame
+                            ? bestSettlement.toLocaleString() + "원"
+                            : "-"}
+                        </td>
+                        <td className="px-2 py-2.5 text-right text-xs font-bold bg-amber-50/30 whitespace-nowrap">
+                          {gain != null && gain > 0 ? (
+                            <span className="text-amber-700">+{gain.toLocaleString()}원</span>
+                          ) : gain != null && gain < 0 ? (
+                            <span className="text-red-600">{gain.toLocaleString()}원</span>
+                          ) : (
+                            <span className="text-gray-400">-</span>
+                          )}
                         </td>
                         <td className="px-3 py-2.5">
                           <button
