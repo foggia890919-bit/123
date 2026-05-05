@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { prisma } from "@/lib/prisma";
 import { requireSession, requireAdmin, isNextResponse } from "@/lib/auth-guard";
+import { callDocumentAi, isDocumentAiConfigured, type DocAiResult } from "@/lib/document-ai";
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
@@ -77,6 +78,16 @@ export interface PipelineDiagnostics {
   // 마스터 매칭 실패한 drug 들의 (이름, 단가) 샘플 — 마스터 DB 에 약품이 없는지 vs
   // 매칭 로직 버그인지 사용자가 빨리 판단할 수 있게.
   masterUnmatchedSamples: Array<{ productName: string; unitPriceHint: number | null }>;
+  // Google Document AI (Form Parser) 결과 — Clova/Gemini 와 비교용. 1단계 통합:
+  // 결과만 노출, 실제 약품 추출은 기존 Clova/Gemini 파이프라인 그대로 사용.
+  // 다음 PR 에서 Document AI 가 더 정확하면 primary 로 승격 검토.
+  docaiOk: boolean;
+  docaiConfigured: boolean;
+  docaiTableCount: number;          // 추출된 표 개수
+  docaiTotalRowCount: number;       // 모든 표의 총 행 수
+  docaiTextChars: number;
+  docaiError: string | null;
+  docaiSampleTable: string[][] | null; // 첫 번째 표의 처음 ~10 행 (디버그용)
 }
 
 export interface FusionResult {
@@ -132,10 +143,12 @@ export async function POST(req: NextRequest) {
       ext === "tiff" ? "image/tiff" :
       "image/jpeg";
 
-    // ── 1단계: Clova + Gemini Vision 병렬 OCR ─────────────────────────────
-    const [clovaOut, geminiOut] = await Promise.allSettled([
+    // ── 1단계: Clova + Gemini Vision + Document AI 병렬 OCR ───────────────
+    const docaiConfigured = isDocumentAiConfigured();
+    const [clovaOut, geminiOut, docaiOut] = await Promise.allSettled([
       callClovaOcr(base64, ext),
       callGeminiVision(base64, mimeType, clientContext),
+      docaiConfigured ? callDocumentAi(base64, mimeType) : Promise.reject(new Error("not configured")),
     ]);
 
     const clovaResult = clovaOut.status === "fulfilled" ? clovaOut.value : null;
@@ -169,6 +182,14 @@ export async function POST(req: NextRequest) {
     const candidateCodes = extractInsuranceCodes(clovaText, geminiDraft);
     const masterByCode = await fetchMasterByCodes(candidateCodes);
 
+    // Document AI 결과 정리 (현재 PR 에선 진단용으로만 사용)
+    const docai: DocAiResult | null = docaiOut.status === "fulfilled" ? docaiOut.value : null;
+    const docaiTotalRowCount = docai
+      ? docai.tables.reduce((s, t) => s + t.length, 0) : 0;
+    const docaiSampleTable = docai && docai.tables.length > 0
+      ? docai.tables[0].slice(0, 10).map((r) => r.cells.slice(0, 8))
+      : null;
+
     // 파이프라인 진단 누적
     const pipeline: PipelineDiagnostics = {
       clovaOk: clovaOut.status === "fulfilled",
@@ -187,6 +208,15 @@ export async function POST(req: NextRequest) {
       dedupedCount: 0,
       finalCount: 0,
       drugCandidates: [],
+      docaiOk: docaiOut.status === "fulfilled",
+      docaiConfigured,
+      docaiTableCount: docai?.tables.length ?? 0,
+      docaiTotalRowCount,
+      docaiTextChars: docai?.rawText.length ?? 0,
+      docaiError: docaiOut.status === "rejected"
+        ? (docaiConfigured ? String(docaiOut.reason).slice(0, 300) : "환경변수 미설정")
+        : null,
+      docaiSampleTable,
     };
 
     // ── 3단계: 추출 우선순위

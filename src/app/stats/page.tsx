@@ -64,6 +64,14 @@ interface PipelineDiagnostics {
     droppedReason: string | null;
   }>;
   masterUnmatchedSamples?: Array<{ productName: string; unitPriceHint: number | null }>;
+  // Document AI 진단 (있을 수도 없을 수도)
+  docaiOk?: boolean;
+  docaiConfigured?: boolean;
+  docaiTableCount?: number;
+  docaiTotalRowCount?: number;
+  docaiTextChars?: number;
+  docaiError?: string | null;
+  docaiSampleTable?: string[][] | null;
 }
 interface OcrResult {
   source: string;
@@ -1336,6 +1344,9 @@ export default function StatsPage() {
                       title={[
                         `Clova: ${editOcr.pipeline.clovaOk ? "OK" : "FAIL"} (${editOcr.pipeline.clovaChars}자)${editOcr.pipeline.clovaError ? " — " + editOcr.pipeline.clovaError : ""}`,
                         `Gemini Vision: ${editOcr.pipeline.visionOk ? "OK" : "FAIL"} (${editOcr.pipeline.visionDrugCount}건)${editOcr.pipeline.visionError ? " — " + editOcr.pipeline.visionError : ""}`,
+                        editOcr.pipeline.docaiConfigured
+                          ? `Document AI: ${editOcr.pipeline.docaiOk ? "OK" : "FAIL"} (표 ${editOcr.pipeline.docaiTableCount ?? 0}개, ${editOcr.pipeline.docaiTotalRowCount ?? 0}행, ${editOcr.pipeline.docaiTextChars ?? 0}자)${editOcr.pipeline.docaiError ? " — " + editOcr.pipeline.docaiError : ""}`
+                          : `Document AI: 미설정`,
                         `병합 LLM: ${editOcr.pipeline.mergeUsed} → ${editOcr.pipeline.mergeDrugCount}건${editOcr.pipeline.mergeError ? " — " + editOcr.pipeline.mergeError : ""}`,
                         `isLikelyDrug 필터: -${editOcr.pipeline.filteredByIsLikelyDrug}건`,
                         `마스터 매칭: 성공 ${editOcr.pipeline.masterMatchedCount} / 실패 ${editOcr.pipeline.masterUnmatchedCount}`,
@@ -1365,6 +1376,29 @@ export default function StatsPage() {
                     <div className="text-[11px] bg-purple-50 border border-purple-200 rounded p-2 font-mono space-y-0.5">
                       <div>Clova OCR: {editOcr.pipeline.clovaOk ? "✓" : "✗"} ({editOcr.pipeline.clovaChars}자){editOcr.pipeline.clovaError ? ` — ${editOcr.pipeline.clovaError}` : ""}</div>
                       <div>Gemini Vision: {editOcr.pipeline.visionOk ? "✓" : "✗"} ({editOcr.pipeline.visionDrugCount}건){editOcr.pipeline.visionError ? ` — ${editOcr.pipeline.visionError}` : ""}</div>
+                      <div>
+                        Document AI: {editOcr.pipeline.docaiConfigured
+                          ? <>{editOcr.pipeline.docaiOk ? "✓" : "✗"} 표 {editOcr.pipeline.docaiTableCount ?? 0}개 · {editOcr.pipeline.docaiTotalRowCount ?? 0}행 · {editOcr.pipeline.docaiTextChars ?? 0}자{editOcr.pipeline.docaiError ? ` — ${editOcr.pipeline.docaiError}` : ""}</>
+                          : <span className="text-gray-400">환경변수 미설정 (GCP_PROJECT_ID, GCP_DOCAI_PROCESSOR_ID, GCP_SA_JSON)</span>}
+                      </div>
+                      {editOcr.pipeline.docaiSampleTable && editOcr.pipeline.docaiSampleTable.length > 0 && (
+                        <details className="mt-1">
+                          <summary className="cursor-pointer text-purple-700 hover:text-purple-900 text-[10px]">Document AI 표 미리보기 (첫 표 처음 10행)</summary>
+                          <div className="mt-1 max-h-48 overflow-auto bg-white border border-purple-100 rounded p-1">
+                            <table className="text-[10px]">
+                              <tbody>
+                                {editOcr.pipeline.docaiSampleTable.map((row, i) => (
+                                  <tr key={i}>
+                                    {row.map((cell, j) => (
+                                      <td key={j} className="border border-gray-100 px-1 py-0.5">{cell || "—"}</td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </details>
+                      )}
                       <div>병합 LLM: {editOcr.pipeline.mergeUsed} → {editOcr.pipeline.mergeDrugCount}건{editOcr.pipeline.mergeError ? ` — ${editOcr.pipeline.mergeError}` : ""}</div>
                       <div>isLikelyDrug 필터: -{editOcr.pipeline.filteredByIsLikelyDrug}건</div>
                       <div>마스터 매칭: 성공 {editOcr.pipeline.masterMatchedCount} / 실패 {editOcr.pipeline.masterUnmatchedCount}</div>
