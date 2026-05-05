@@ -37,6 +37,7 @@ const SEL = {
     'button[type="submit"]',
   ].join(", "),
   searchTypeSelect: [
+    'select[name="selkeyword"]',   // family-pharm.co.kr 실제 필드명
     'select[name="searchType"]',
     'select[name="search_type"]',
     'select[name="schType"]',
@@ -45,12 +46,13 @@ const SEL = {
     'select:has(option:has-text("보험코드"))',
   ].join(", "),
   searchInput: [
+    'input[name="keywordtext"]',   // family-pharm.co.kr 실제 필드명
     'input[name="searchKeyword"]',
     'input[name="keyword"]',
     'input[name="searchValue"]',
     'input[name="schValue"]',
-    'select[name="searchType"] ~ input[type="text"]',
-    'select[name="search_type"] ~ input[type="text"]',
+    'input[name="schWord"]',
+    'input[name="searchWord"]',
   ].join(", "),
   searchBtn: [
     'input[type="button"][value*="조회"]',
@@ -119,8 +121,8 @@ export const family: WholesaleAdapter = {
     // of the underlying option value).
     const select = page.locator(SEL.searchTypeSelect).first();
     if (await select.isVisible().catch(() => false)) {
-      await select.selectOption({ label: "보험코드" }).catch(async () => {
-        await select.selectOption("보험코드").catch(() => {});
+      await select.selectOption({ value: "yakga_cd" }).catch(async () => {
+        await select.selectOption({ label: "보험코드" }).catch(() => {});
       });
       await page.waitForTimeout(200);
     }
