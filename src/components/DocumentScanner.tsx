@@ -1,15 +1,12 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { X, Check, RotateCcw, Pencil, Square, Info, Sparkles, Loader2 } from "lucide-react";
-import { detectDocumentCorners } from "@/lib/document-detect";
-import { enhanceImage } from "@/lib/image-enhance";
+import { X, Check, RotateCcw, Pencil, Square, Info } from "lucide-react";
 
 interface Point { x: number; y: number }
 type Corners = [Point, Point, Point, Point]; // TL, TR, BR, BL (normalized 0-1)
 
 type Mode = "corners" | "polygon";
-type DetectStatus = "idle" | "loading" | "found" | "failed";
 
 interface Props {
   file: File;
@@ -34,7 +31,6 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
   const [polygon, setPolygon] = useState<Point[]>([]);
   const [dragging, setDragging] = useState<{ kind: Mode; idx: number } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [detectStatus, setDetectStatus] = useState<DetectStatus>("idle");
   const overlayRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   // 점 핸들 위에서 mousedown 이 일어났는지 추적 — 그러면 컨테이너 click 으로 점 추가가 일어나지 않도록 차단
@@ -50,25 +46,7 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
     const img = imgRef.current;
     if (!img) return;
     setImgSize({ w: img.naturalWidth, h: img.naturalHeight });
-    // 자동 감지는 사용자가 버튼 누를 때만 실행. 모달 열림 즉시 무거운 OpenCV
-    // 작업 돌리면 폰/저사양 PC 에서 freeze 위험.
   }, []);
-
-  function manualRedetect() {
-    const img = imgRef.current;
-    if (!img) return;
-    setDetectStatus("loading");
-    const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 15_000));
-    Promise.race([detectDocumentCorners(img), timeoutPromise])
-      .then((d) => {
-        if (d) { setCorners(d); setDetectStatus("found"); }
-        else setDetectStatus("failed");
-      })
-      .catch((e) => {
-        console.warn("[Scanner] auto-detect failed", e);
-        setDetectStatus("failed");
-      });
-  }
 
   function switchMode(next: Mode) {
     if (next === "polygon" && polygon.length === 0) setPolygon([]);
@@ -209,37 +187,6 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
               <Pencil className="w-3.5 h-3.5" /> 외곽 자르기 (다각형)
             </button>
           </div>
-          {/* 자동 감지 — 사용자가 버튼 눌러 실행 (모달 freeze 방지) */}
-          {mode === "corners" && (
-            <div className="flex items-center gap-2 text-[11px]">
-              {detectStatus === "idle" && (
-                <button onClick={manualRedetect} disabled={busy || !imgSize}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white">
-                  <Sparkles className="w-3.5 h-3.5" /> 자동 4코너 감지
-                </button>
-              )}
-              {detectStatus === "loading" && (
-                <span className="inline-flex items-center gap-1 text-blue-200">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> 자동 감지 중... (최대 15초)
-                </span>
-              )}
-              {detectStatus === "found" && (
-                <>
-                  <span className="inline-flex items-center gap-1 text-green-300">
-                    <Sparkles className="w-3.5 h-3.5" /> 자동 감지됨
-                  </span>
-                  <button onClick={manualRedetect} disabled={busy}
-                    className="text-blue-200 hover:text-blue-100 underline">다시</button>
-                </>
-              )}
-              {detectStatus === "failed" && (
-                <button onClick={manualRedetect} disabled={busy}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white">
-                  자동 감지 실패 — 다시 시도
-                </button>
-              )}
-            </div>
-          )}
         </div>
 
         {/* 촬영 안내 — 꾸겨짐 펴기는 기술적 한계로 제거됨, 사용자에게 미리 안내 */}
@@ -355,9 +302,10 @@ async function applyPerspective(
 
   warpRegion(src.data, sw, sh, outImg.data, W, 0, 0, W, H, M);
   outCtx.putImageData(outImg, 0, 0);
-  // 후공정 (OpenCV CLAHE + bilateral + sharpen + upscale) — OCR 정확도 향상
-  const enhanced = await tryEnhance(outCanvas);
-  return await canvasToFile(enhanced, mimeType, fileName);
+  // 가벼운 Canvas-only 대비 보정 — OpenCV 의존성 제거 (freeze 회피).
+  // 본격적인 dewarping/denoise 는 서버측 Document AI 의 ML 이 담당.
+  enhanceContrast(outCtx, W, H);
+  return await canvasToFile(outCanvas, mimeType, fileName);
 }
 
 // ─────────── Polygon crop (외곽 자르기) ───────────
@@ -403,20 +351,8 @@ async function applyPolygonCrop(
   outCtx.drawImage(img, minX, minY, rawW, rawH, 0, 0, W, H);
   outCtx.restore();
 
-  const enhanced = await tryEnhance(outCanvas);
-  return await canvasToFile(enhanced, mimeType, fileName);
-}
-
-// 강화 시도 — OpenCV 가 로드 실패하거나 처리 중 에러나면 원본 canvas 그대로 반환
-async function tryEnhance(canvas: HTMLCanvasElement): Promise<HTMLCanvasElement> {
-  try {
-    return await enhanceImage(canvas);
-  } catch (e) {
-    console.warn("[Scanner] enhanceImage failed, using basic contrast", e);
-    const ctx = canvas.getContext("2d");
-    if (ctx) enhanceContrast(ctx, canvas.width, canvas.height);
-    return canvas;
-  }
+  enhanceContrast(outCtx, W, H);
+  return await canvasToFile(outCanvas, mimeType, fileName);
 }
 
 // ─────────── 공용 유틸 ───────────
