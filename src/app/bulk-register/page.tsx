@@ -117,7 +117,7 @@ function BulkRegisterInner() {
   const [batchStockOpen, setBatchStockOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
-  const [lastSummary, setLastSummary] = useState<{ total: number; matched: number; unmatched: number } | null>(null);
+  const [lastSummary, setLastSummary] = useState<{ total: number; matched: number; unmatched: number; excelRows?: number } | null>(null);
   const [altModal, setAltModal] = useState<{ rowId: string; row: SwapRow } | null>(null);
   const [exporting, setExporting] = useState(false);
   const [saveModalOpen, setSaveModalOpen] = useState(false);
@@ -387,6 +387,7 @@ function BulkRegisterInner() {
       const wb = XLSX.read(buffer, { type: "buffer" });
       const sheet = wb.Sheets[wb.SheetNames[0]];
       const matrix: (string | number)[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+      const excelRows = matrix.length;
       // A열(index 0) 만 사용, 빈 값·숫자 아닌 것 필터 완화 (문자코드도 허용)
       const codes = matrix
         .map((r) => {
@@ -428,6 +429,7 @@ function BulkRegisterInner() {
         total: newRows.length,
         matched,
         unmatched: newRows.length - matched,
+        excelRows,
       });
       // 기존 행 초기화하고 교체 (누적이 아니라 업로드 단위 관리)
       setRows(newRows);
@@ -790,6 +792,9 @@ function BulkRegisterInner() {
 
           {lastSummary && (
             <div className="mt-3 text-xs text-gray-600 flex gap-4 flex-wrap">
+              {lastSummary.excelRows != null && (
+                <span>엑셀 행 수 <strong className="text-gray-900">{lastSummary.excelRows}행</strong></span>
+              )}
               <span>총 <strong className="text-gray-900">{lastSummary.total}</strong>건</span>
               <span className="text-emerald-700">매칭 <strong>{lastSummary.matched}</strong>건</span>
               {lastSummary.unmatched > 0 && <span className="text-orange-700">미매칭 <strong>{lastSummary.unmatched}</strong>건</span>}
