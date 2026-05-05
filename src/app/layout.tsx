@@ -29,7 +29,7 @@ export default function RootLayout({
       <body className="min-h-screen bg-gray-50 antialiased">
         <Providers>
           <Navbar />
-          <main className="max-w-7xl mx-auto px-4 py-6">{children}</main>
+          <main className="max-w-screen-2xl mx-auto px-4 py-6">{children}</main>
         </Providers>
       </body>
     </html>
