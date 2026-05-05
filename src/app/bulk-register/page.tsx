@@ -3,7 +3,7 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { Upload, Trash2, FileSpreadsheet, FileDown, X, AlertCircle, Loader2, Search, Save, Building2, FileText, ChevronDown, ChevronUp, Filter, RefreshCw } from "lucide-react";
+import { Upload, Trash2, FileSpreadsheet, FileDown, X, AlertCircle, Loader2, Search, Save, Building2, FileText, ChevronDown, ChevronUp, Filter, RefreshCw, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatPrice } from "@/lib/utils";
@@ -131,6 +131,14 @@ function BulkRegisterInner() {
   const [autoSwitching, setAutoSwitching] = useState(false);
   const [criteriaSet, setCriteriaSet] = useState<Record<string, boolean>>({});
   const [autoSwitchResult, setAutoSwitchResult] = useState<{ applied: number; skipped: number } | null>(null);
+
+  // 행 직접 추가 (인라인 검색)
+  const [addRowOpen, setAddRowOpen] = useState(false);
+  const [addRowQ, setAddRowQ] = useState("");
+  const [addRowResults, setAddRowResults] = useState<MedicationItem[]>([]);
+  const [addRowLoading, setAddRowLoading] = useState(false);
+  const addRowRef = useRef<HTMLDivElement>(null);
+  const addRowTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [savedProposals, setSavedProposals] = useState<ProposalItem[]>([]);
   const [loadingProposal, setLoadingProposal] = useState<string | null>(null);
   const [companyStatuses, setCompanyStatuses] = useState<Record<string, string>>({});
@@ -439,6 +447,34 @@ function BulkRegisterInner() {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
     }
+  }
+
+  function handleAddRowSearch(q: string) {
+    setAddRowQ(q);
+    if (addRowTimer.current) clearTimeout(addRowTimer.current);
+    if (!q.trim()) { setAddRowResults([]); return; }
+    addRowTimer.current = setTimeout(async () => {
+      setAddRowLoading(true);
+      try {
+        const res = await fetch(`/api/medications/search?q=${encodeURIComponent(q.trim())}&limit=15&fast=true`);
+        const data = await res.json();
+        setAddRowResults(Array.isArray(data.medications) ? data.medications : []);
+      } finally {
+        setAddRowLoading(false);
+      }
+    }, 280);
+  }
+
+  function addRowFromProduct(med: MedicationItem) {
+    const newRow: SwapRow = {
+      id: uid(),
+      originalCode: med.insuranceCode ?? "",
+      original: med,
+      alternative: null,
+    };
+    setRows((rs) => [...rs, newRow]);
+    setAddRowQ("");
+    setAddRowResults([]);
   }
 
   function removeRow(id: string) {
@@ -982,17 +1018,79 @@ function BulkRegisterInner() {
         </div>
         </div>
 
+        {/* 행 직접 추가 검색 */}
+        {addRowOpen && (
+          <div ref={addRowRef} className="relative">
+            <div className="flex items-center gap-2 bg-white border border-blue-300 rounded-lg px-3 py-2 shadow-sm">
+              <Search className="w-4 h-4 text-gray-400 shrink-0" />
+              <input
+                autoFocus
+                value={addRowQ}
+                onChange={(e) => handleAddRowSearch(e.target.value)}
+                placeholder="기존 품목명, 성분명, 보험코드로 검색…"
+                className="flex-1 text-sm outline-none bg-transparent"
+              />
+              {addRowLoading && <Loader2 className="w-3.5 h-3.5 text-gray-400 animate-spin shrink-0" />}
+              <button onClick={() => { setAddRowOpen(false); setAddRowQ(""); setAddRowResults([]); }}>
+                <X className="w-4 h-4 text-gray-400 hover:text-gray-600" />
+              </button>
+            </div>
+            {addRowResults.length > 0 && (
+              <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-xl mt-1 max-h-72 overflow-y-auto">
+                {addRowResults.map((med) => (
+                  <button
+                    key={med.id}
+                    onClick={() => addRowFromProduct(med)}
+                    className="w-full text-left px-3 py-2.5 hover:bg-blue-50 flex items-center gap-3 border-b border-gray-100 last:border-0"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">{med.productName}</p>
+                      <p className="text-xs text-gray-500 truncate">{med.companyName} · {med.ingredientName}</p>
+                    </div>
+                    {med.insuranceCode && <span className="text-xs font-mono text-gray-400 shrink-0">{med.insuranceCode}</span>}
+                    {med.price != null && <span className="text-xs text-gray-500 shrink-0">{med.price.toLocaleString()}원</span>}
+                    <Plus className="w-4 h-4 text-blue-600 shrink-0" />
+                  </button>
+                ))}
+              </div>
+            )}
+            {!addRowLoading && addRowQ.trim() && addRowResults.length === 0 && (
+              <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-xl mt-1 px-4 py-3 text-sm text-gray-400">
+                검색 결과 없음
+              </div>
+            )}
+          </div>
+        )}
+
         {/* 표 */}
         {rows.length === 0 ? (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-16 text-center text-gray-400 text-sm">
-            엑셀을 업로드하면 품목이 여기에 나타납니다.
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center space-y-3">
+            <p className="text-gray-400 text-sm">엑셀을 업로드하거나 직접 품목을 추가하세요.</p>
+            <button
+              onClick={() => { setAddRowOpen(true); setAddRowQ(""); setAddRowResults([]); }}
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg"
+            >
+              <Plus className="w-4 h-4" />행 추가
+            </button>
           </div>
         ) : (
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
             <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
               <h2 className="text-sm font-semibold text-gray-800">품목 목록 ({stats.total}건)</h2>
-              <div className="text-xs text-gray-500">
-                대체 선택 <strong className="text-emerald-700">{stats.withAlt}</strong> / {stats.total}
+              <div className="flex items-center gap-3">
+                <div className="text-xs text-gray-500">
+                  대체 선택 <strong className="text-emerald-700">{stats.withAlt}</strong> / {stats.total}
+                </div>
+                <button
+                  onClick={() => { setAddRowOpen((v) => !v); setAddRowQ(""); setAddRowResults([]); }}
+                  className={`flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-md font-medium border transition-colors ${
+                    addRowOpen
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : "text-blue-600 border-blue-200 bg-blue-50 hover:bg-blue-100"
+                  }`}
+                >
+                  <Plus className="w-3.5 h-3.5" />행 추가
+                </button>
               </div>
             </div>
             <div className="overflow-auto">

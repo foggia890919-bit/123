@@ -104,6 +104,15 @@ function ProposalsContent() {
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ added: number; unmatched: string[] } | null>(null);
 
+  // 제품 직접 추가 (인라인 검색)
+  const [addProdOpen, setAddProdOpen] = useState(false);
+  const [addProdQ, setAddProdQ] = useState("");
+  const [addProdResults, setAddProdResults] = useState<Medication[]>([]);
+  const [addProdLoading, setAddProdLoading] = useState(false);
+  const [addProdAdding, setAddProdAdding] = useState<string | null>(null);
+  const addProdRef = useRef<HTMLDivElement>(null);
+  const addProdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // 컬럼 너비 (localStorage 저장)
   const DEFAULT_WIDTHS: Record<string, number> = {
     num: 40, productName: 200, ingredient: 140, sameIngredient: 100, company: 110,
@@ -297,6 +306,41 @@ function ProposalsContent() {
       n.has(name) ? n.delete(name) : n.add(name);
       return n;
     });
+  }
+
+  function handleAddProdSearch(q: string) {
+    setAddProdQ(q);
+    if (addProdTimer.current) clearTimeout(addProdTimer.current);
+    if (!q.trim()) { setAddProdResults([]); return; }
+    addProdTimer.current = setTimeout(async () => {
+      setAddProdLoading(true);
+      try {
+        const res = await fetch(`/api/medications/search?q=${encodeURIComponent(q.trim())}&limit=15&fast=true`);
+        const data = await res.json();
+        setAddProdResults(Array.isArray(data.medications) ? data.medications : []);
+      } finally {
+        setAddProdLoading(false);
+      }
+    }, 280);
+  }
+
+  async function addProductToProposal(med: Medication) {
+    if (!selected || addProdAdding) return;
+    setAddProdAdding(med.id);
+    try {
+      const res = await fetch(`/api/proposals/${selected.id}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ medicationId: med.id }),
+      });
+      if (res.ok) {
+        await loadProposal(selected);
+        setAddProdQ("");
+        setAddProdResults([]);
+      }
+    } finally {
+      setAddProdAdding(null);
+    }
   }
 
   async function requestFilter(companyName: string) {
@@ -802,6 +846,14 @@ function ProposalsContent() {
                 )}
               </div>
               <div className="flex gap-2 shrink-0">
+                <Button
+                  variant={addProdOpen ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => { setAddProdOpen((v) => !v); setAddProdQ(""); setAddProdResults([]); }}
+                  className={addProdOpen ? "bg-blue-600 text-white hover:bg-blue-700" : ""}
+                >
+                  <Plus className="w-3.5 h-3.5 mr-1" />제품 추가
+                </Button>
                 <Button variant="outline" size="sm" onClick={() => { setBulkOpen(true); setBulkPreview([]); setBulkResult(null); }}>
                   <Upload className="w-3.5 h-3.5 mr-1" />엑셀 대량등록
                 </Button>
@@ -818,9 +870,56 @@ function ProposalsContent() {
               </div>
             </div>
 
+            {/* 제품 직접 검색 추가 */}
+            {addProdOpen && (
+              <div ref={addProdRef} className="relative">
+                <div className="flex items-center gap-2 bg-white border border-blue-300 rounded-lg px-3 py-2 shadow-sm">
+                  <Search className="w-4 h-4 text-gray-400 shrink-0" />
+                  <input
+                    autoFocus
+                    value={addProdQ}
+                    onChange={(e) => handleAddProdSearch(e.target.value)}
+                    placeholder="품목명, 성분명, 보험코드로 검색…"
+                    className="flex-1 text-sm outline-none bg-transparent"
+                  />
+                  {addProdLoading && <Loader2 className="w-3.5 h-3.5 text-gray-400 animate-spin shrink-0" />}
+                  <button onClick={() => { setAddProdOpen(false); setAddProdQ(""); setAddProdResults([]); }}>
+                    <X className="w-4 h-4 text-gray-400 hover:text-gray-600" />
+                  </button>
+                </div>
+                {addProdResults.length > 0 && (
+                  <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-xl mt-1 max-h-72 overflow-y-auto">
+                    {addProdResults.map((med) => (
+                      <button
+                        key={med.id}
+                        onClick={() => addProductToProposal(med)}
+                        disabled={!!addProdAdding}
+                        className="w-full text-left px-3 py-2.5 hover:bg-blue-50 flex items-center gap-3 border-b border-gray-100 last:border-0 disabled:opacity-60"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate">{med.productName}</p>
+                          <p className="text-xs text-gray-500 truncate">{med.companyName} · {med.ingredientName}</p>
+                        </div>
+                        {med.insuranceCode && <span className="text-xs font-mono text-gray-400 shrink-0">{med.insuranceCode}</span>}
+                        {med.price != null && <span className="text-xs text-gray-500 shrink-0">{med.price.toLocaleString()}원</span>}
+                        {addProdAdding === med.id
+                          ? <Loader2 className="w-4 h-4 text-blue-600 animate-spin shrink-0" />
+                          : <Plus className="w-4 h-4 text-blue-600 shrink-0" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {!addProdLoading && addProdQ.trim() && addProdResults.length === 0 && (
+                  <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-xl mt-1 px-4 py-3 text-sm text-gray-400">
+                    검색 결과 없음
+                  </div>
+                )}
+              </div>
+            )}
+
             {!selected.items?.length ? (
               <div className="flex items-center justify-center py-16 text-gray-400 bg-white rounded-lg border border-gray-200">
-                <p className="text-sm">검색 결과에서 품목을 추가해보세요</p>
+                <p className="text-sm">"제품 추가" 또는 "엑셀 대량등록"으로 품목을 추가하세요</p>
               </div>
             ) : (
               <>
