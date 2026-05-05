@@ -12,7 +12,10 @@ export default function SubmissionPackagePage() {
   const [entityFilter, setEntityFilter] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [lastResult, setLastResult] = useState<{ entityCount: number; unmappedCount: number; filename: string } | null>(null);
+  const [lastResult, setLastResult] = useState<{
+    entityCount: number; unmappedCount: number; noDrugsCount: number;
+    imageFailureCount: number; imageWriteCount: number; filename: string;
+  } | null>(null);
 
   async function downloadPackage() {
     setBusy(true);
@@ -26,8 +29,12 @@ export default function SubmissionPackagePage() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || `오류 (${res.status})`);
       }
-      const entityCount = parseInt(res.headers.get("X-Entity-Count") || "0", 10);
-      const unmappedCount = parseInt(res.headers.get("X-Unmapped-Count") || "0", 10);
+      const num = (k: string) => parseInt(res.headers.get(k) || "0", 10);
+      const entityCount = num("X-Entity-Count");
+      const unmappedCount = num("X-Unmapped-Count");
+      const noDrugsCount = num("X-No-Drugs-Count");
+      const imageFailureCount = num("X-Image-Failure-Count");
+      const imageWriteCount = num("X-Image-Write-Count");
       const blob = await res.blob();
       const cd = res.headers.get("Content-Disposition") || "";
       const m = cd.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
@@ -40,7 +47,7 @@ export default function SubmissionPackagePage() {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      setLastResult({ entityCount, unmappedCount, filename });
+      setLastResult({ entityCount, unmappedCount, noDrugsCount, imageFailureCount, imageWriteCount, filename });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -96,15 +103,32 @@ export default function SubmissionPackagePage() {
           )}
 
           {lastResult && !error && (
-            <div className="flex items-start gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-md p-3">
-              <Package className="w-4 h-4 mt-0.5 shrink-0" />
-              <div>
-                <p className="font-medium">{lastResult.filename} 다운로드 완료</p>
-                <p className="text-xs text-green-600 mt-0.5">
-                  제출처 {lastResult.entityCount}곳
-                  {lastResult.unmappedCount > 0 && ` · 미매핑 (제약사×거래처) ${lastResult.unmappedCount}건 (_미매핑.txt 참조)`}
-                </p>
+            <div className="space-y-2">
+              <div className="flex items-start gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-md p-3">
+                <Package className="w-4 h-4 mt-0.5 shrink-0" />
+                <div className="min-w-0">
+                  <p className="font-medium truncate">{lastResult.filename} 다운로드 완료</p>
+                  <p className="text-xs text-green-600 mt-0.5">
+                    제출처 {lastResult.entityCount}곳 · 이미지 사본 {lastResult.imageWriteCount}건
+                  </p>
+                </div>
               </div>
+              {(lastResult.unmappedCount > 0 || lastResult.noDrugsCount > 0 || lastResult.imageFailureCount > 0) && (
+                <div className="text-xs bg-yellow-50 border border-yellow-300 text-yellow-800 rounded-md p-3 space-y-1">
+                  <p className="font-semibold flex items-center gap-1">
+                    <AlertTriangle className="w-3.5 h-3.5" /> 패키지 안의 <code>_요약.txt</code> 를 꼭 확인해주세요
+                  </p>
+                  {lastResult.unmappedCount > 0 && (
+                    <p>· 제출처 미매핑 (제약사×거래처): <b>{lastResult.unmappedCount}건</b> — 통계 제출처 관리 메뉴에서 등록 필요</p>
+                  )}
+                  {lastResult.noDrugsCount > 0 && (
+                    <p>· OCR 미완료 report: <b>{lastResult.noDrugsCount}건</b> — 처방통계 등록에서 다시 인식 필요</p>
+                  )}
+                  {lastResult.imageFailureCount > 0 && (
+                    <p>· 이미지 fetch 실패: <b>{lastResult.imageFailureCount}건</b> — Storage 누락 또는 권한 확인</p>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </section>
