@@ -8,7 +8,7 @@ import {
   Hospital, Building2, FileUp, FileSearch,
   ChevronRight, LayoutDashboard, ClipboardList,
   BarChart3, PercentCircle, Pill, UserCheck,
-  Calculator, Network, Users, PackageSearch, Mail, KeyRound,
+  Calculator, Network, Users, PackageSearch, Mail, Package, KeyRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -48,6 +48,13 @@ const BIZ_MENU_GROUPS = [
         desc: "거래처×제약사 제출처 매핑·신규/이관 분류·월별 제출체크·ZIP 다운",
         icon: BarChart3,
         color: "bg-cyan-50 text-cyan-600",
+      },
+      {
+        href: "/biz/submission-package",
+        label: "제출 패키지 다운로드",
+        desc: "월별 통계를 (제출처×제약사) 단위 Excel + 이미지 ZIP 으로 일괄 다운로드",
+        icon: Package,
+        color: "bg-cyan-50 text-cyan-700",
       },
     ],
   },
