@@ -100,7 +100,7 @@ export default function Navbar() {
             <span className="font-bold text-gray-900 text-lg tracking-tight">Korea Medicine Data</span>
           </Link>
 
-          {/* 데스크탑 네비 */}
+          {/* 데스크톱 네비 */}
           <div className="hidden md:flex items-center gap-1">
             {navItems.map((item) => {
               if (item.kind === "link") {
