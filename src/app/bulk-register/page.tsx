@@ -465,7 +465,26 @@ function BulkRegisterInner() {
     }, 280);
   }
 
+  function saveSearchHistory(q: string, count: number) {
+    if (!q.trim()) return;
+    const entry = { id: Date.now().toString(), query: q.trim(), companies: [], resultCount: count, searchedAt: new Date().toISOString() };
+    if (userId) {
+      fetch("/api/search-history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: q.trim(), companies: [], resultCount: count }),
+      }).catch(() => {});
+    } else {
+      try {
+        const prev = JSON.parse(localStorage.getItem("med_search_history") || "[]");
+        const deduped = prev.filter((h: { query: string }) => h.query !== q.trim());
+        localStorage.setItem("med_search_history", JSON.stringify([entry, ...deduped].slice(0, 20)));
+      } catch {}
+    }
+  }
+
   function addRowFromProduct(med: MedicationItem) {
+    saveSearchHistory(addRowQ, addRowResults.length);
     const newRow: SwapRow = {
       id: uid(),
       originalCode: med.insuranceCode ?? "",

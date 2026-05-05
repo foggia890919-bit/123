@@ -400,7 +400,7 @@ export default function SearchPage() {
                     <button
                       type="button"
                       onClick={() => removeHistory(item.id)}
-                      className="text-gray-200 hover:text-red-400 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="text-gray-300 hover:text-red-400 shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity"
                       title="삭제"
                     >
                       <X className="w-3.5 h-3.5" />
