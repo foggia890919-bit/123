@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Suspense } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -1158,7 +1158,7 @@ const TABS: { key: Tab; label: string; icon: React.ElementType; desc: string }[]
   { key: "sales-reps", label: "영업사원",  icon: UserCheck,  desc: "영업사원 승인·S-코드 생성" },
 ];
 
-export default function UsersPage() {
+function UsersPageInner() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -1217,5 +1217,13 @@ export default function UsersPage() {
         {tab === "sales-reps" && <SalesRepsTab />}
       </div>
     </BizLayout>
+  );
+}
+
+export default function UsersPage() {
+  return (
+    <Suspense>
+      <UsersPageInner />
+    </Suspense>
   );
 }
