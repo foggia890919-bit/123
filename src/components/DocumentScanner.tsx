@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { X, Check, RotateCcw, Pencil, Square, Info, Sparkles, Loader2 } from "lucide-react";
 import { detectDocumentCorners } from "@/lib/document-detect";
+import { enhanceImage } from "@/lib/image-enhance";
 
 interface Point { x: number; y: number }
 type Corners = [Point, Point, Point, Point]; // TL, TR, BR, BL (normalized 0-1)
@@ -352,9 +353,9 @@ async function applyPerspective(
 
   warpRegion(src.data, sw, sh, outImg.data, W, 0, 0, W, H, M);
   outCtx.putImageData(outImg, 0, 0);
-  enhanceContrast(outCtx, W, H);
-
-  return await canvasToFile(outCanvas, mimeType, fileName);
+  // 후공정 (OpenCV CLAHE + bilateral + sharpen + upscale) — OCR 정확도 향상
+  const enhanced = await tryEnhance(outCanvas);
+  return await canvasToFile(enhanced, mimeType, fileName);
 }
 
 // ─────────── Polygon crop (외곽 자르기) ───────────
@@ -400,8 +401,20 @@ async function applyPolygonCrop(
   outCtx.drawImage(img, minX, minY, rawW, rawH, 0, 0, W, H);
   outCtx.restore();
 
-  enhanceContrast(outCtx, W, H);
-  return await canvasToFile(outCanvas, mimeType, fileName);
+  const enhanced = await tryEnhance(outCanvas);
+  return await canvasToFile(enhanced, mimeType, fileName);
+}
+
+// 강화 시도 — OpenCV 가 로드 실패하거나 처리 중 에러나면 원본 canvas 그대로 반환
+async function tryEnhance(canvas: HTMLCanvasElement): Promise<HTMLCanvasElement> {
+  try {
+    return await enhanceImage(canvas);
+  } catch (e) {
+    console.warn("[Scanner] enhanceImage failed, using basic contrast", e);
+    const ctx = canvas.getContext("2d");
+    if (ctx) enhanceContrast(ctx, canvas.width, canvas.height);
+    return canvas;
+  }
 }
 
 // ─────────── 공용 유틸 ───────────
