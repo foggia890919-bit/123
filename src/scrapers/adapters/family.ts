@@ -182,7 +182,7 @@ export const family: WholesaleAdapter = {
       // can't blindly trust positions. Strategy: pick the last 2 numeric
       // cells before 수량 (price + stock).
       const stripBadges = (s: string) =>
-        s.replace(/^(전문|일반|급여|비급여|전|보)+/g, "").trim();
+        s.replace(/^\d+\.\s*/, "").replace(/^(전문|일반|급여|비급여|전|보)+/g, "").trim();
 
       const numericIndices = rest
         .map((c, i) => ({ c, i }))

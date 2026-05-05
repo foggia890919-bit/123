@@ -14,8 +14,7 @@ export const ALL_ADAPTERS: Record<string, WholesaleAdapter> = {
 };
 
 // Sites temporarily disabled at runtime. Adapter code is preserved for future re-activation.
-// inchun: disabled 2026-04-29 — login popup blocks automation (dialog handler not yet implemented)
-export const DISABLED_SITES = new Set<string>(["inchun"]);
+export const DISABLED_SITES = new Set<string>();
 
 export function resolveAdapters(keys: string[]): WholesaleAdapter[] {
   return keys.map(k => {
