@@ -116,7 +116,7 @@ function Inner() {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [lastSummary, setLastSummary] = useState<{
-    total: number; matched: number; unmatched: number; excelRows: number;
+    total: number; matched: number; unmatched: number; excelRows: number; autoSelectedCount?: number;
   } | null>(null);
 
   // 기준 선택 (순서 보존 배열) + 자동 적용
@@ -270,19 +270,21 @@ function Inner() {
         setUploadError((d as { error?: string })?.error || "조회 실패");
         return;
       }
-      const data = await res.json() as { rows: { code: string; medication: MedicationItem | null }[] };
+      const data = await res.json() as { rows: { code: string; medication: MedicationItem | null; autoSelected: MedicationItem | null }[] };
 
       const newRows: CheckRow[] = data.rows.map((r, i) => ({
         id: uid(),
         originalCode: r.code,
         medication: r.medication,
-        selected: null,
+        // PUBLIC_API 매칭(수수료 없음) 시 요율표 최고 대체품 자동 선택
+        selected: r.autoSelected ?? null,
         prescriptionQty: parsed[i]?.qty ?? "",
         prescriptionAmount: parsed[i]?.amount ?? "",
       }));
 
       const matched = newRows.filter((r) => r.medication).length;
-      setLastSummary({ total: newRows.length, matched, unmatched: newRows.length - matched, excelRows });
+      const autoSelectedCount = newRows.filter((r) => r.selected !== null).length;
+      setLastSummary({ total: newRows.length, matched, unmatched: newRows.length - matched, excelRows, autoSelectedCount });
       setRows(newRows);
       setAutoResult(null);
       setExpandedSearchRows({});
@@ -609,7 +611,8 @@ function Inner() {
                 <span>엑셀 <strong className="text-gray-900">{lastSummary.excelRows}행</strong></span>
                 <span>코드 <strong className="text-gray-900">{lastSummary.total}</strong>건</span>
                 <span className="text-emerald-700">매칭 <strong>{lastSummary.matched}</strong>건</span>
-                {lastSummary.unmatched > 0 && <span className="text-orange-700">미매칭 <strong>{lastSummary.unmatched}</strong>건 <span className="text-gray-400">(대체품 직접 검색 가능)</span></span>}
+                {lastSummary.unmatched > 0 && <span className="text-orange-700">미매칭 <strong>{lastSummary.unmatched}</strong>건</span>}
+                {(lastSummary.autoSelectedCount ?? 0) > 0 && <span className="text-blue-700">공공데이터 매칭 <strong>{lastSummary.autoSelectedCount}</strong>건 <span className="text-gray-400">(대체품 자동선택됨)</span></span>}
               </div>
             )}
           </div>
@@ -877,7 +880,12 @@ function Inner() {
                         <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{r.originalCode}</td>
                         <td className="px-3 py-2.5 max-w-[160px]">
                           {m ? (
-                            <span className="text-xs font-medium text-gray-900 leading-tight block truncate">{m.productName}</span>
+                            <div className="flex items-center gap-1 min-w-0">
+                              <span className="text-xs font-medium text-gray-900 leading-tight truncate">{m.productName}</span>
+                              {m.source === "PUBLIC_API" && (
+                                <span className="shrink-0 text-[9px] text-blue-600 bg-blue-50 border border-blue-200 rounded px-1 py-0.5 leading-none">공공</span>
+                              )}
+                            </div>
                           ) : (
                             <span className="text-xs text-orange-600 font-medium">(미매칭)</span>
                           )}
