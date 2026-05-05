@@ -175,6 +175,10 @@ export default function Navbar() {
                       className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
                       <User className="w-4 h-4 text-gray-400" />마이페이지
                     </Link>
+                    <Link href="/mypage/clients" onClick={() => setUserOpen(false)}
+                      className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
+                      <Building2 className="w-4 h-4 text-gray-400" />내 거래처
+                    </Link>
                     <div className="border-t border-gray-100">
                       <button onClick={() => { signOut({ callbackUrl: "/" }); setUserOpen(false); }}
                         className="flex items-center gap-2 px-4 py-2.5 text-sm text-red-500 hover:bg-red-50 w-full">
