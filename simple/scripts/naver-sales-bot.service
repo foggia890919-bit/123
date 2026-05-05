@@ -1,0 +1,18 @@
+[Unit]
+Description=Naver Sales Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/sales/simple
+EnvironmentFile=/home/ubuntu/sales/simple/.env
+ExecStart=/usr/bin/npx tsx /home/ubuntu/sales/simple/bot.ts
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/ubuntu/sales/bot.log
+StandardError=append:/home/ubuntu/sales/bot.log
+
+[Install]
+WantedBy=multi-user.target
