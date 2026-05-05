@@ -3,13 +3,14 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { Upload, Trash2, FileSpreadsheet, FileDown, X, AlertCircle, Loader2, Search, Save, Building2, FileText, ChevronDown, ChevronUp, Filter } from "lucide-react";
+import { Upload, Trash2, FileSpreadsheet, FileDown, X, AlertCircle, Loader2, Search, Save, Building2, FileText, ChevronDown, ChevronUp, Filter, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatPrice } from "@/lib/utils";
 import RequireAuth from "@/components/RequireAuth";
 import { hasRole } from "@/lib/roles";
 import SameIngredientModal from "@/components/SameIngredientModal";
+import StockCheckBatchModal from "@/components/StockCheckBatchModal";
 import type { MedicationItem } from "@/types";
 import * as XLSX from "xlsx";
 
@@ -113,6 +114,7 @@ function BulkRegisterInner() {
   const [clients, setClients] = useState<UserClient[]>([]);
   const [selectedClientId, setSelectedClientId] = useState<string>("");
   const [rows, setRows] = useState<SwapRow[]>([]);
+  const [batchStockOpen, setBatchStockOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [lastSummary, setLastSummary] = useState<{ total: number; matched: number; unmatched: number } | null>(null);
@@ -703,11 +705,14 @@ function BulkRegisterInner() {
               <p className="text-xs text-gray-500 mt-1">
                 거래처의 기존 품목 보험코드를 엑셀 A열에 넣어 업로드하고, 각 품목에 대해 대체할 품목을 선택해서 PDF·Excel로 출력하세요.
               </p>
-              <p className="text-xs text-blue-600 mt-1">
-                재고확인은 제안서로 저장 후 <span className="font-semibold">제안서 메뉴</span>에서 이용하세요.
-              </p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
+              <Button variant="outline" size="sm"
+                onClick={() => setBatchStockOpen(true)}
+                disabled={rows.filter(r => r.alternative?.insuranceCode || r.original?.insuranceCode).length === 0}
+                className="text-emerald-700 border-emerald-200 hover:bg-emerald-50">
+                <RefreshCw className="w-3.5 h-3.5 mr-1" />전체재고 새로고침
+              </Button>
               <Button size="sm" onClick={() => setSaveModalOpen(true)} disabled={rows.length === 0}
                 className="bg-blue-600 hover:bg-blue-700 text-white">
                 <Save className="w-4 h-4 mr-1" /> 제안서로 저장
@@ -1218,6 +1223,16 @@ function BulkRegisterInner() {
           </div>
         </div>
       )}
+      <StockCheckBatchModal
+        open={batchStockOpen}
+        onClose={() => setBatchStockOpen(false)}
+        items={rows.flatMap(r => {
+          const out: { insuranceCode: string; productName: string }[] = [];
+          if (r.alternative?.insuranceCode) out.push({ insuranceCode: r.alternative.insuranceCode, productName: r.alternative.productName });
+          else if (r.original?.insuranceCode) out.push({ insuranceCode: r.original.insuranceCode, productName: r.original.productName });
+          return out;
+        })}
+      />
     </div>
   );
 }

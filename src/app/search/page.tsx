@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import { Search, Filter, ChevronDown, X, Clock, Trash2 } from "lucide-react";
+import { Search, Filter, ChevronDown, X, Clock, Trash2, RefreshCw } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import MedicationTable, { type ColumnVisibility } from "@/components/MedicationTable";
 import ColumnToggles from "@/components/ColumnToggles";
+import StockCheckBatchModal from "@/components/StockCheckBatchModal";
 import GuestGateModal from "@/components/GuestGateModal";
 import { useSession } from "next-auth/react";
 import type { MedicationItem } from "@/types";
@@ -39,6 +40,7 @@ export default function SearchPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [batchStockOpen, setBatchStockOpen] = useState(false);
   const [displayedQuery, setDisplayedQuery] = useState("");
   const [showGate, setShowGate] = useState(false);
   const [cols, setCols] = useState<ColumnVisibility>({
@@ -414,9 +416,23 @@ export default function SearchPage() {
           <>
             <div className="flex items-center justify-between flex-wrap gap-3">
               <p className="text-sm text-gray-500">검색 결과 <span className="font-semibold text-gray-900">{total.toLocaleString()}개</span></p>
-              <ColumnToggles cols={cols} setCols={setCols} isSalesRep={isSalesRep} />
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setBatchStockOpen(true)}
+                  disabled={results.filter(r => r.insuranceCode).length === 0}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />전체재고 새로고침
+                </button>
+                <ColumnToggles cols={cols} setCols={setCols} isSalesRep={isSalesRep} />
+              </div>
             </div>
             <MedicationTable medications={results} loading={loading} {...cols} showRate={isSalesRep ? cols.showRate : false} userId={session?.user?.id} />
+            <StockCheckBatchModal
+              open={batchStockOpen}
+              onClose={() => setBatchStockOpen(false)}
+              items={results.filter(r => r.insuranceCode).map(r => ({ insuranceCode: r.insuranceCode!, productName: r.productName }))}
+            />
           </>
         )}
       </div>

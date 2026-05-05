@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, Fragment } from "react";
-import { X, RefreshCw, ChevronUp, ChevronDown, ChevronsUpDown, Loader2, Plus, FileText, Download } from "lucide-react";
+import { X, RefreshCw, ChevronUp, ChevronDown, ChevronsUpDown, Loader2, Plus, FileText, Download, PackageSearch } from "lucide-react";
+import StockCheckBatchModal from "./StockCheckBatchModal";
 import * as XLSX from "xlsx";
 import { formatPrice } from "@/lib/utils";
 import type { MedicationItem, IngredientMatchLevel } from "@/types";
@@ -108,6 +109,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
   });
   const [dropdown, setDropdown] = useState<DropdownState | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [batchStockOpen, setBatchStockOpen] = useState(false);
   const [localProposals, setLocalProposals] = useState<Proposal[]>(externalProposals ?? []);
   // 기본 = exact(용량까지 정확 일치)만 표시. 토글로 하위 단계 노출.
   const [showOtherDose, setShowOtherDose] = useState(false);
@@ -331,6 +333,15 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
               </p>
             </div>
             <div className="flex items-center gap-1 shrink-0">
+              <button
+                onClick={() => setBatchStockOpen(true)}
+                disabled={visibleSorted.filter(m => m.insuranceCode).length === 0}
+                title="전체재고 새로고침"
+                className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <PackageSearch className="w-3.5 h-3.5" />
+                전체재고
+              </button>
               <button
                 onClick={downloadExcel}
                 disabled={visibleSorted.length === 0}
@@ -655,6 +666,12 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
           {toast}
         </div>
       )}
+
+      <StockCheckBatchModal
+        open={batchStockOpen}
+        onClose={() => setBatchStockOpen(false)}
+        items={visibleSorted.filter(m => m.insuranceCode).map(m => ({ insuranceCode: m.insuranceCode!, productName: m.productName }))}
+      />
     </>
   );
 }

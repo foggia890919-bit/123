@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, Fragment } from "react";
-import { ShoppingCart, ChevronUp, ChevronDown, ChevronsUpDown, Plus, FileText, Loader2 } from "lucide-react";
+import { ShoppingCart, ChevronUp, ChevronDown, ChevronsUpDown, Plus, FileText, Loader2, RefreshCw } from "lucide-react";
 import type { IcdResult } from "@/app/api/medications/icd-analysis/route";
 import { formatPrice } from "@/lib/utils";
 import type { MedicationItem } from "@/types";
@@ -414,11 +414,20 @@ export default function MedicationTable({ medications, loading, userId, showCate
                       {(showStock || showPrice || showRate) && (
                         <div className="sm:hidden mt-2 pt-1.5 border-t border-gray-100 space-y-1 text-xs">
                           {showStock && (
-                            <div className="flex justify-between">
+                            <div className="flex justify-between items-center">
                               <span className="text-gray-400">재고</span>
-                              {med.stock != null
-                                ? <span className={med.stock > 0 ? "text-green-700 font-medium" : "text-red-500"}>{med.stock > 0 ? med.stock.toLocaleString() : "품절"}</span>
-                                : <span className="text-gray-300">-</span>}
+                              <span className="flex items-center gap-1">
+                                {med.stock != null
+                                  ? <span className={med.stock > 0 ? "text-green-700 font-medium" : "text-red-500"}>{med.stock > 0 ? med.stock.toLocaleString() : "품절"}</span>
+                                  : <span className="text-gray-300">-</span>}
+                                {med.insuranceCode && (
+                                  <button type="button" title="재고 새로고침"
+                                    onClick={() => setStockModal({ insuranceCode: med.insuranceCode!, productName: med.productName })}
+                                    className="p-0.5 text-gray-300 hover:text-emerald-600 transition-colors">
+                                    <RefreshCw className="w-2.5 h-2.5" />
+                                  </button>
+                                )}
+                              </span>
                             </div>
                           )}
                           {showPrice && (
@@ -452,9 +461,18 @@ export default function MedicationTable({ medications, loading, userId, showCate
                     </td>
                     {showStock && (
                       <td className="hidden sm:table-cell px-3 py-2.5 text-right whitespace-nowrap">
-                        {med.stock != null
-                          ? <span className={med.stock > 0 ? "text-green-700 font-medium" : "text-red-500"}>{med.stock > 0 ? med.stock.toLocaleString() : "품절"}</span>
-                          : <span className="text-gray-300">-</span>}
+                        <span className="inline-flex items-center gap-1">
+                          {med.stock != null
+                            ? <span className={med.stock > 0 ? "text-green-700 font-medium" : "text-red-500"}>{med.stock > 0 ? med.stock.toLocaleString() : "품절"}</span>
+                            : <span className="text-gray-300">-</span>}
+                          {med.insuranceCode && (
+                            <button type="button" title="재고 새로고침"
+                              onClick={() => setStockModal({ insuranceCode: med.insuranceCode!, productName: med.productName })}
+                              className="p-0.5 text-gray-300 hover:text-emerald-600 transition-colors">
+                              <RefreshCw className="w-3 h-3" />
+                            </button>
+                          )}
+                        </span>
                       </td>
                     )}
                     {showPrice && <td className="hidden sm:table-cell px-3 py-2.5 text-right text-gray-700 whitespace-nowrap">{formatPrice(med.price)}</td>}
