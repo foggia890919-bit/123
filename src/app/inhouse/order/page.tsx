@@ -70,6 +70,15 @@ interface RecentProduct {
   lastOrderDate: string;
 }
 
+interface LedgerEntry {
+  id: string;
+  entryDate: string;
+  itemName: string;
+  sales: number;
+  payment: number;
+  balance: number;
+}
+
 // ─── 도우미 ────────────────────────────────────────────────────────────────────
 
 function fmt(n: number) { return n.toLocaleString("ko-KR"); }
@@ -123,6 +132,10 @@ export default function InhouseOrderPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
 
+  // 이팜스 매출원장
+  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
+  const [ledgerLoading, setLedgerLoading] = useState(false);
+
   // 제품 검색
   const [searchQ, setSearchQ] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
@@ -175,6 +188,23 @@ export default function InhouseOrderPage() {
   }, []);
   useEffect(() => { loadOrders(); }, [loadOrders]);
 
+  const loadLedger = useCallback(async (biz: string, from: string, to: string) => {
+    setLedgerLoading(true);
+    try {
+      const r = await fetch(`/api/ledger?bizNumber=${biz.replace(/\D/g, "")}&from=${from}&to=${to}`);
+      if (!r.ok) { setLedgerEntries([]); return; }
+      const d = await r.json();
+      setLedgerEntries(Array.isArray(d.entries) ? d.entries : []);
+    } finally {
+      setLedgerLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedClient) loadLedger(selectedClient.bizNumber, periodFrom, periodTo);
+    else setLedgerEntries([]);
+  }, [selectedClient, periodFrom, periodTo, loadLedger]);
+
   // 선택 거래처 + 기간 기준 최근 주문 상품 집계
   const recentProducts = useMemo((): RecentProduct[] => {
     if (!selectedClient) return [];
@@ -224,14 +254,14 @@ export default function InhouseOrderPage() {
     );
   }, [orders, selectedClient, periodFrom, periodTo]);
 
-  // 제품 검색
-  async function handleSearch(e?: React.FormEvent) {
+  // 제품 검색 (q 미입력 시 전체 로드)
+  async function handleSearch(e?: React.FormEvent, overrideQ?: string) {
     e?.preventDefault();
-    if (!searchQ.trim()) return;
+    const q = overrideQ !== undefined ? overrideQ : searchQ;
     setProductLoading(true);
     setSearched(true);
     try {
-      const url = `/api/products?q=${encodeURIComponent(searchQ)}&limit=50${
+      const url = `/api/products?q=${encodeURIComponent(q)}&limit=50${
         selectedClient ? `&bizNumber=${selectedClient.bizNumber.replace(/\D/g, "")}` : ""
       }`;
       const res = await fetch(url);
@@ -242,9 +272,9 @@ export default function InhouseOrderPage() {
     }
   }
 
-  // 거래처 변경 시 검색 재실행
+  // 거래처 선택 시 자동 전체 로드
   useEffect(() => {
-    if (searched) handleSearch();
+    if (selectedClient) handleSearch(undefined, searchQ);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClient]);
 
@@ -555,11 +585,48 @@ export default function InhouseOrderPage() {
                     </table>
                   </div>
                 </div>
+              ) : ledgerLoading ? (
+                <div className="bg-white border border-gray-200 rounded-xl p-4 flex items-center justify-center gap-2 text-gray-400">
+                  <Loader2 className="w-4 h-4 animate-spin" /><span className="text-sm">이팜스 구매이력 로딩 중...</span>
+                </div>
+              ) : ledgerEntries.length > 0 ? (
+                <div className="bg-white border border-purple-200 rounded-xl overflow-hidden">
+                  <div className="px-4 py-2.5 bg-purple-600 text-white flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <ClipboardList className="w-4 h-4" />
+                      <span className="font-semibold text-sm">이팜스 구매이력</span>
+                      <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">{ledgerEntries.length}건</span>
+                    </div>
+                    <span className="text-xs text-purple-200">
+                      {period === "1m" ? "최근 1개월" : period === "3m" ? "최근 3개월" : `${periodFrom} ~ ${periodTo}`} 기준
+                    </span>
+                  </div>
+                  <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-gray-50 border-b border-gray-100">
+                        <tr>
+                          <th className="px-3 py-2 text-left text-gray-500 font-medium w-24">날짜</th>
+                          <th className="px-3 py-2 text-left text-gray-500 font-medium">품목</th>
+                          <th className="px-3 py-2 text-right text-gray-500 font-medium w-24">금액</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-50">
+                        {ledgerEntries.map((e) => (
+                          <tr key={e.id} className="hover:bg-purple-50/30">
+                            <td className="px-3 py-2 text-gray-400 whitespace-nowrap">{e.entryDate.slice(0, 10)}</td>
+                            <td className="px-3 py-2 text-gray-800">{e.itemName}</td>
+                            <td className="px-3 py-2 text-right font-mono text-gray-700">{fmt(e.sales)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               ) : (
                 <div className="bg-white border border-gray-200 rounded-xl p-4 flex items-center gap-3 text-gray-400">
                   <RotateCcw className="w-4 h-4 shrink-0" />
                   <p className="text-sm">
-                    {period === "1m" ? "최근 1개월" : period === "3m" ? "최근 3개월" : "선택 기간"} 내 주문 이력이 없습니다
+                    {period === "1m" ? "최근 1개월" : period === "3m" ? "최근 3개월" : "선택 기간"} 내 구매 이력이 없습니다
                   </p>
                 </div>
               )}
@@ -579,7 +646,7 @@ export default function InhouseOrderPage() {
                       <Search className="w-4 h-4" />검색
                     </button>
                     {searched && (
-                      <button type="button" onClick={() => { setSearchQ(""); setProducts([]); setSearched(false); }}
+                      <button type="button" onClick={() => { setSearchQ(""); handleSearch(undefined, ""); }}
                         className="px-3 py-2 text-sm text-gray-400 hover:text-gray-600 border border-gray-200 rounded-lg">
                         <X className="w-4 h-4" />
                       </button>
@@ -589,7 +656,7 @@ export default function InhouseOrderPage() {
 
                 {!searched ? (
                   <div className="p-8 text-center text-sm text-gray-400">
-                    상품명이나 성분명으로 검색하세요
+                    거래처를 선택하면 자동으로 상품 목록이 로드됩니다
                   </div>
                 ) : productLoading ? (
                   <div className="flex justify-center py-10"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>
@@ -598,7 +665,8 @@ export default function InhouseOrderPage() {
                 ) : (
                   <>
                     <div className="px-4 py-2 bg-gray-50 border-b border-gray-100">
-                      <p className="text-xs text-gray-500">검색결과 <span className="font-semibold text-gray-700">{products.length}개</span>
+                      <p className="text-xs text-gray-500">
+                        {searchQ.trim() ? "검색결과" : "전체 상품"} <span className="font-semibold text-gray-700">{products.length}개</span>
                         <span className="ml-2 text-blue-600">· {selectedClient.clientName} 단가 적용</span>
                       </p>
                     </div>
@@ -740,67 +808,29 @@ export default function InhouseOrderPage() {
                 </div>
               </div>
 
-              {/* 과거 주문내역 */}
+              {/* 이팜스 구매내역 */}
               <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
                 <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
                   <h2 className="font-semibold text-gray-800 text-sm flex items-center gap-2">
-                    <ClipboardList className="w-4 h-4 text-gray-500" />과거 주문내역
+                    <ClipboardList className="w-4 h-4 text-gray-500" />이팜스 구매내역
                   </h2>
-                  <span className="text-xs text-gray-400">{clientOrders.length}건</span>
+                  <span className="text-xs text-gray-400">{ledgerEntries.length}건</span>
                 </div>
-                {clientOrders.length === 0 ? (
-                  <div className="py-6 text-center text-xs text-gray-400">주문내역 없음</div>
+                {ledgerLoading ? (
+                  <div className="py-6 flex justify-center"><Loader2 className="w-4 h-4 animate-spin text-gray-300" /></div>
+                ) : ledgerEntries.length === 0 ? (
+                  <div className="py-6 text-center text-xs text-gray-400">구매내역 없음</div>
                 ) : (
                   <div className="divide-y divide-gray-50 max-h-80 overflow-y-auto">
-                    {clientOrders.map((o) => {
-                      const st = STATUS_LABELS[o.status] ?? { label: o.status, color: "bg-gray-100 text-gray-600" };
-                      const isEx = expandedOrder === o.id;
-                      const total = o.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
-                      return (
-                        <div key={o.id}>
-                          <button onClick={() => setExpandedOrder(isEx ? null : o.id)}
-                            className="w-full px-3 py-2.5 hover:bg-gray-50 text-left flex items-start gap-1.5">
-                            <ChevronRight className={`w-3.5 h-3.5 text-gray-400 mt-0.5 shrink-0 transition-transform ${isEx ? "rotate-90" : ""}`} />
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-1.5">
-                                <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${st.color}`}>{st.label}</span>
-                                <span className="text-[11px] text-gray-400">{o.items.length}품목</span>
-                              </div>
-                              <div className="flex justify-between mt-0.5">
-                                <span className="text-[11px] text-gray-400">{new Date(o.createdAt).toLocaleDateString("ko-KR")}</span>
-                                <span className="text-xs font-mono text-gray-700">{fmt(total)}</span>
-                              </div>
-                            </div>
-                          </button>
-                          {isEx && (
-                            <div className="px-4 pb-2.5">
-                              {o.note && <p className="text-[11px] text-gray-500 bg-gray-50 rounded px-2 py-1 mb-1">{o.note}</p>}
-                              <table className="w-full text-[11px] border border-gray-100 rounded-lg overflow-hidden">
-                                <thead className="bg-gray-50">
-                                  <tr>
-                                    <th className="px-2 py-1.5 text-left text-gray-500">품목</th>
-                                    <th className="px-2 py-1.5 text-right text-gray-500">단가</th>
-                                    <th className="px-2 py-1.5 text-right text-gray-500">수량</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-50">
-                                  {o.items.map((item, i) => (
-                                    <tr key={i}>
-                                      <td className="px-2 py-1.5">
-                                        <p className="font-medium text-gray-700 truncate max-w-[100px]">{item.productName}</p>
-                                        <p className="text-gray-400">{item.spec}</p>
-                                      </td>
-                                      <td className="px-2 py-1.5 text-right font-mono text-gray-600">{fmt(item.unitPrice)}</td>
-                                      <td className="px-2 py-1.5 text-right text-gray-600">{item.quantity}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          )}
+                    {ledgerEntries.map((e) => (
+                      <div key={e.id} className="px-3 py-2.5">
+                        <div className="flex justify-between items-start gap-1">
+                          <p className="text-xs text-gray-700 leading-tight flex-1 min-w-0 break-words">{e.itemName}</p>
+                          <p className="text-xs font-mono text-gray-600 shrink-0 ml-1">{fmt(e.sales)}</p>
                         </div>
-                      );
-                    })}
+                        <p className="text-[11px] text-gray-400 mt-0.5">{e.entryDate.slice(0, 10)}</p>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>

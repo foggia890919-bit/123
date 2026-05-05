@@ -209,6 +209,7 @@ function ProductsContent() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const tableTopRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async (q: string, biz: string, p: number) => {
     setLoading(true);
@@ -235,6 +236,10 @@ function ProductsContent() {
     const t = setTimeout(() => load(search, bizNumberFilter, page), 300);
     return () => clearTimeout(t);
   }, [search, bizNumberFilter, page, load]);
+
+  useEffect(() => {
+    tableTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [page]);
 
   const loadLogs = useCallback(async () => {
     const r = await fetch("/api/products/logs").catch(() => null);
@@ -405,7 +410,7 @@ function ProductsContent() {
       )}
 
       {/* 검색 + 사업자번호 필터 */}
-      <div className="flex gap-2 mb-3 flex-wrap">
+      <div ref={tableTopRef} className="flex gap-2 mb-3 flex-wrap">
         <div className="relative flex-1 min-w-48">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
