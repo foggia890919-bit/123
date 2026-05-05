@@ -40,7 +40,16 @@ const navItems: NavItem[] = [
       { href: "/bulk-register", label: "제안서(대량)", icon: Upload   },
     ],
   },
-  { kind: "link",  href: "/stats",             label: "통계자동입력",    icon: BarChart3, minRole: "BIZ"       },
+  {
+    kind: "group",
+    label: "통계",
+    icon: BarChart3,
+    minRole: "BIZ",
+    matchPrefixes: ["/stats"],
+    children: [
+      { href: "/stats", label: "통계자동입력", icon: BarChart3 },
+    ],
+  },
   {
     kind: "group",
     label: "원내거래",
