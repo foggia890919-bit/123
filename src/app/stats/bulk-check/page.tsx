@@ -97,19 +97,24 @@ function Inner() {
 
       const excelRows = matrix.length;
 
-      const codes = matrix
-        .map((r) => {
-          const s = String(r?.[0] ?? "").trim();
-          if (/^\d{1,8}$/.test(s)) return s.padStart(9, "0");
-          return s;
-        })
-        .filter(Boolean)
-        .filter(
-          (c, i, arr) =>
-            !(i === 0 && /^(보험코드|급여코드|코드|edi|edi code)$/i.test(arr[0]))
-        );
+      // 헤더 행 감지: A열이 보험코드 관련 텍스트면 스킵
+      const isHeader = (row: (string | number)[]) =>
+        /^(보험코드|급여코드|코드|edi|edi code)$/i.test(String(row?.[0] ?? "").trim());
 
-      if (codes.length === 0) {
+      const dataRows = matrix.filter((r, i) => !(i === 0 && isHeader(r)));
+
+      const parsed = dataRows
+        .map((r) => {
+          const rawCode = String(r?.[0] ?? "").trim();
+          if (!rawCode) return null;
+          const code = /^\d{1,8}$/.test(rawCode) ? rawCode.padStart(9, "0") : rawCode;
+          const qty = String(r?.[1] ?? "").trim();
+          const amount = String(r?.[2] ?? "").trim();
+          return { code, qty, amount };
+        })
+        .filter((x): x is { code: string; qty: string; amount: string } => x !== null);
+
+      if (parsed.length === 0) {
         setUploadError("엑셀 A열에 보험코드가 없어요.");
         return;
       }
@@ -117,7 +122,7 @@ function Inner() {
       const res = await fetch("/api/medications/bulk-lookup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ codes, userId }),
+        body: JSON.stringify({ codes: parsed.map((p) => p.code), userId }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -128,12 +133,12 @@ function Inner() {
         rows: { code: string; medication: MedicationItem | null }[];
       };
 
-      const newRows: CheckRow[] = data.rows.map((r) => ({
+      const newRows: CheckRow[] = data.rows.map((r, i) => ({
         id: uid(),
         originalCode: r.code,
         medication: r.medication,
-        prescriptionQty: "",
-        prescriptionAmount: "",
+        prescriptionQty: parsed[i]?.qty ?? "",
+        prescriptionAmount: parsed[i]?.amount ?? "",
       }));
 
       const matched = newRows.filter((r) => r.medication).length;
@@ -265,8 +270,8 @@ function Inner() {
             <div>
               <h1 className="text-xl font-bold text-gray-900">통계엑셀대량확인</h1>
               <p className="text-xs text-gray-500 mt-1">
-                통계 보험코드를 엑셀 A열에 넣어 업로드하면 수수료 정보가 매칭됩니다. 처방수량·처방금액을
-                입력하면 정산 예상금액을 확인할 수 있습니다.
+                엑셀 A열: 보험코드 · B열: 처방수량 · C열: 처방금액 형식으로 업로드하면 수수료가 매칭되고
+                정산 예상금액이 자동으로 계산됩니다.
               </p>
             </div>
             <Button
@@ -288,7 +293,7 @@ function Inner() {
               <div>
                 <h2 className="text-sm font-semibold text-gray-800">엑셀 업로드</h2>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  A열에 보험코드만 넣어주세요. 첫 행이 헤더면 자동 스킵됩니다.
+                  A열: 보험코드 · B열: 처방수량 · C열: 처방금액. 첫 행이 헤더면 자동 스킵됩니다.
                 </p>
               </div>
               <div className="flex items-center gap-2">
