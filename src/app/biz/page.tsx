@@ -5,9 +5,9 @@ import { useRouter, usePathname } from "next/navigation";
 import { useEffect } from "react";
 import Link from "next/link";
 import {
-  Hospital, Building2, FileUp, FileSearch,
+  Building2, FileUp, FileSearch,
   ChevronRight, LayoutDashboard, ClipboardList,
-  BarChart3, PercentCircle, Pill, UserCheck,
+  BarChart3, PercentCircle, Pill,
   Calculator, Network, Users, PackageSearch, Mail, Package, KeyRound, ShoppingCart,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -17,25 +17,11 @@ const BIZ_MENU_GROUPS = [
     label: "유저 관리",
     items: [
       {
-        href: "/biz/clients",
-        label: "병·의원 관리",
-        desc: "병의원 등록·승인·H-코드 생성",
-        icon: Hospital,
+        href: "/biz/users",
+        label: "유저 관리",
+        desc: "병·의원·법인·영업사원 등록·승인·코드 생성",
+        icon: Users,
         color: "bg-blue-50 text-blue-600",
-      },
-      {
-        href: "/biz/dealers",
-        label: "법인 관리",
-        desc: "법인·딜러 계층 등록·C-코드 생성",
-        icon: Building2,
-        color: "bg-purple-50 text-purple-600",
-      },
-      {
-        href: "/biz/sales-reps",
-        label: "영업사원 관리",
-        desc: "영업사원 승인·S-코드 생성",
-        icon: UserCheck,
-        color: "bg-indigo-50 text-indigo-600",
       },
     ],
   },
