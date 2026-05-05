@@ -46,42 +46,28 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
     return () => URL.revokeObjectURL(url);
   }, [file]);
 
-  const onImgLoad = useCallback(async () => {
+  const onImgLoad = useCallback(() => {
     const img = imgRef.current;
     if (!img) return;
     setImgSize({ w: img.naturalWidth, h: img.naturalHeight });
-
-    // 자동 4코너 감지 (OpenCV.js — lazy load).
-    // 실패해도 기본 5%/95% 코너 그대로 사용. 10초 timeout 으로 무한 대기 차단.
-    setDetectStatus("loading");
-    const timeoutPromise = new Promise<null>((resolve) =>
-      setTimeout(() => resolve(null), 10_000),
-    );
-    try {
-      const detected = await Promise.race([
-        detectDocumentCorners(img),
-        timeoutPromise,
-      ]);
-      if (detected) {
-        setCorners(detected);
-        setDetectStatus("found");
-      } else {
-        setDetectStatus("failed");
-      }
-    } catch (e) {
-      console.warn("[Scanner] auto-detect failed", e);
-      setDetectStatus("failed");
-    }
+    // 자동 감지는 사용자가 버튼 누를 때만 실행. 모달 열림 즉시 무거운 OpenCV
+    // 작업 돌리면 폰/저사양 PC 에서 freeze 위험.
   }, []);
 
   function manualRedetect() {
     const img = imgRef.current;
     if (!img) return;
     setDetectStatus("loading");
-    detectDocumentCorners(img).then((d) => {
-      if (d) { setCorners(d); setDetectStatus("found"); }
-      else setDetectStatus("failed");
-    }).catch(() => setDetectStatus("failed"));
+    const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 15_000));
+    Promise.race([detectDocumentCorners(img), timeoutPromise])
+      .then((d) => {
+        if (d) { setCorners(d); setDetectStatus("found"); }
+        else setDetectStatus("failed");
+      })
+      .catch((e) => {
+        console.warn("[Scanner] auto-detect failed", e);
+        setDetectStatus("failed");
+      });
   }
 
   function switchMode(next: Mode) {
@@ -223,22 +209,32 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
               <Pencil className="w-3.5 h-3.5" /> 외곽 자르기 (다각형)
             </button>
           </div>
-          {/* 자동 감지 상태 — corners 모드에서만 의미있음 */}
+          {/* 자동 감지 — 사용자가 버튼 눌러 실행 (모달 freeze 방지) */}
           {mode === "corners" && (
-            <div className="flex items-center gap-1.5 text-[11px]">
+            <div className="flex items-center gap-2 text-[11px]">
+              {detectStatus === "idle" && (
+                <button onClick={manualRedetect} disabled={busy || !imgSize}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white">
+                  <Sparkles className="w-3.5 h-3.5" /> 자동 4코너 감지
+                </button>
+              )}
               {detectStatus === "loading" && (
                 <span className="inline-flex items-center gap-1 text-blue-200">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> 자동 감지 중...
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> 자동 감지 중... (최대 15초)
                 </span>
               )}
               {detectStatus === "found" && (
-                <span className="inline-flex items-center gap-1 text-green-300">
-                  <Sparkles className="w-3.5 h-3.5" /> 자동 감지됨 — 필요 시 코너 미세조정
-                </span>
+                <>
+                  <span className="inline-flex items-center gap-1 text-green-300">
+                    <Sparkles className="w-3.5 h-3.5" /> 자동 감지됨
+                  </span>
+                  <button onClick={manualRedetect} disabled={busy}
+                    className="text-blue-200 hover:text-blue-100 underline">다시</button>
+                </>
               )}
               {detectStatus === "failed" && (
                 <button onClick={manualRedetect} disabled={busy}
-                  className="inline-flex items-center gap-1 text-amber-200 hover:text-amber-100 underline">
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white">
                   자동 감지 실패 — 다시 시도
                 </button>
               )}
