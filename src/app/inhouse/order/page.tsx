@@ -5,7 +5,7 @@ import { useSession } from "next-auth/react";
 import {
   ShoppingCart, Search, Plus, Minus, Trash2, Loader2, ChevronDown,
   X, CheckCircle2, ClipboardList, TrendingUp, Package, Send,
-  ChevronRight, Clock, RotateCcw, CalendarDays,
+  ChevronLeft, ChevronRight, Clock, RotateCcw, CalendarDays,
 } from "lucide-react";
 import RequireRole from "@/components/RequireRole";
 
@@ -140,11 +140,14 @@ export default function InhouseOrderPage() {
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
   const [ledgerLoading, setLedgerLoading] = useState(false);
 
-  // 제품 검색
+  // 제품 검색 + 페이지네이션
   const [searchQ, setSearchQ] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
   const [productLoading, setProductLoading] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [productPage, setProductPage] = useState(1);
+  const [productTotal, setProductTotal] = useState(0);
+  const PRODUCT_PAGE_SIZE = 50;
 
   // 수량 입력 (테이블 인라인)
   const [qtyInput, setQtyInput] = useState<Record<string, string>>({});
@@ -258,19 +261,22 @@ export default function InhouseOrderPage() {
     );
   }, [orders, selectedClient, periodFrom, periodTo]);
 
-  // 제품 검색 (q 미입력 시 전체 로드)
-  async function handleSearch(e?: React.FormEvent, overrideQ?: string) {
+  // 제품 검색 (q 미입력 시 전체 로드, 페이지네이션 지원)
+  async function handleSearch(e?: React.FormEvent, overrideQ?: string, page = 1) {
     e?.preventDefault();
     const q = overrideQ !== undefined ? overrideQ : searchQ;
     setProductLoading(true);
     setSearched(true);
+    setProductPage(page);
     try {
-      const url = `/api/products?q=${encodeURIComponent(q)}&limit=50${
+      const offset = (page - 1) * PRODUCT_PAGE_SIZE;
+      const url = `/api/products?q=${encodeURIComponent(q)}&limit=${PRODUCT_PAGE_SIZE}&offset=${offset}${
         selectedClient ? `&bizNumber=${selectedClient.bizNumber.replace(/\D/g, "")}` : ""
       }`;
       const res = await fetch(url);
       const data = await res.json();
       setProducts(Array.isArray(data.products) ? data.products : []);
+      setProductTotal(typeof data.total === "number" ? data.total : 0);
     } finally {
       setProductLoading(false);
     }
@@ -278,7 +284,7 @@ export default function InhouseOrderPage() {
 
   // 거래처 선택 시 자동 전체 로드
   useEffect(() => {
-    if (selectedClient) handleSearch(undefined, searchQ);
+    if (selectedClient) handleSearch(undefined, searchQ, 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClient]);
 
@@ -656,7 +662,7 @@ export default function InhouseOrderPage() {
                       <Search className="w-4 h-4" />검색
                     </button>
                     {searched && (
-                      <button type="button" onClick={() => { setSearchQ(""); handleSearch(undefined, ""); }}
+                      <button type="button" onClick={() => { setSearchQ(""); handleSearch(undefined, "", 1); }}
                         className="px-3 py-2 text-sm text-gray-400 hover:text-gray-600 border border-gray-200 rounded-lg">
                         <X className="w-4 h-4" />
                       </button>
@@ -674,11 +680,38 @@ export default function InhouseOrderPage() {
                   <div className="p-8 text-center text-sm text-gray-400">검색 결과가 없습니다</div>
                 ) : (
                   <>
-                    <div className="px-4 py-2 bg-gray-50 border-b border-gray-100">
+                    <div className="px-4 py-2 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
                       <p className="text-xs text-gray-500">
-                        {searchQ.trim() ? "검색결과" : "전체 상품"} <span className="font-semibold text-gray-700">{products.length}개</span>
+                        {searchQ.trim() ? "검색결과" : "전체 상품"} <span className="font-semibold text-gray-700">{productTotal.toLocaleString("ko-KR")}개</span>
                         <span className="ml-2 text-blue-600">· {selectedClient.clientName} 단가 적용</span>
                       </p>
+                      {productTotal > PRODUCT_PAGE_SIZE && (
+                        <div className="flex items-center gap-0.5">
+                          <button onClick={() => handleSearch(undefined, searchQ, Math.max(1, productPage - 1))} disabled={productPage === 1}
+                            className="p-1 rounded hover:bg-gray-200 disabled:opacity-30">
+                            <ChevronLeft className="w-3.5 h-3.5" />
+                          </button>
+                          {Array.from({ length: Math.min(5, Math.ceil(productTotal / PRODUCT_PAGE_SIZE)) }, (_, i) => {
+                            const totalPages = Math.ceil(productTotal / PRODUCT_PAGE_SIZE);
+                            let pn: number;
+                            if (totalPages <= 5) pn = i + 1;
+                            else if (productPage <= 3) pn = i + 1;
+                            else if (productPage >= totalPages - 2) pn = totalPages - 4 + i;
+                            else pn = productPage - 2 + i;
+                            return (
+                              <button key={pn} onClick={() => handleSearch(undefined, searchQ, pn)}
+                                className={`w-6 h-6 rounded text-xs font-medium ${productPage === pn ? "bg-blue-600 text-white" : "hover:bg-gray-200 text-gray-600"}`}>
+                                {pn}
+                              </button>
+                            );
+                          })}
+                          <button onClick={() => handleSearch(undefined, searchQ, Math.min(Math.ceil(productTotal / PRODUCT_PAGE_SIZE), productPage + 1))}
+                            disabled={productPage >= Math.ceil(productTotal / PRODUCT_PAGE_SIZE)}
+                            className="p-1 rounded hover:bg-gray-200 disabled:opacity-30">
+                            <ChevronRight className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
