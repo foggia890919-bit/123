@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
-import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Download, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck } from "lucide-react";
+import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck } from "lucide-react";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
 interface NavLeaf {
@@ -28,9 +28,7 @@ type NavItem = NavLeaf | NavGroup;
 
 const navItems: NavItem[] = [
   { kind: "link",  href: "/search",            label: "통합검색",        icon: Search,    minRole: "BASIC"     },
-  { kind: "link",  href: "/search/settlement", label: "정산제약사 검색", icon: Building2, minRole: "SALES_REP" },
   { kind: "link",  href: "/filter",            label: "제약사 필터링",   icon: Filter,    minRole: "BIZ"       },
-  { kind: "link",  href: "/filter-list",       label: "리스트 다운",     icon: Download,  minRole: "SALES_REP" },
   {
     kind: "group",
     label: "제안서",
