@@ -38,9 +38,13 @@ export async function GET(req: NextRequest) {
   const own = req.nextUrl.searchParams.get("own") === "true";
 
   // 영업사원이 본인 담당 원내거래처 조회 (원내주문 화면용)
+  // salesRepId(담당 영업사원) OR kmdUserId(병·의원 본인계정) 둘 중 하나라도 매칭되면 포함
   if (own || (!bizOrAdmin(user.role) && user.role === "SALES_REP")) {
     const rows = await prisma.epharmsAccount.findMany({
-      where: { salesRepId: user.id, active: true },
+      where: {
+        active: true,
+        OR: [{ salesRepId: user.id }, { kmdUserId: user.id }],
+      },
       select: ROW_SELECT,
       orderBy: { clientName: "asc" },
     });
