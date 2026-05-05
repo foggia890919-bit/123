@@ -24,11 +24,18 @@ export async function GET(req: NextRequest) {
 
   // 영업사원이 본인 담당 거래처 외의 가격을 보면 안 되므로 권한 체크
   if (bizNumber && user.role !== "ADMIN" && user.role !== "BIZ") {
-    const allowed = await prisma.userClient.findFirst({
-      where: { userId: user.id, bizNumber, approved: true },
-      select: { id: true },
-    });
-    if (!allowed) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+    const [userClient, kmdAccount] = await Promise.all([
+      prisma.userClient.findFirst({
+        where: { userId: user.id, bizNumber, approved: true },
+        select: { id: true },
+      }),
+      prisma.epharmsAccount.findFirst({
+        where: { bizNumber, kmdUserId: user.id, active: true },
+        select: { id: true },
+      }),
+    ]);
+    if (!userClient && !kmdAccount)
+      return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
   }
 
   if (priceCode) {
