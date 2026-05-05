@@ -52,10 +52,16 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
     setImgSize({ w: img.naturalWidth, h: img.naturalHeight });
 
     // 자동 4코너 감지 (OpenCV.js — lazy load).
-    // 실패해도 기본 5%/95% 코너 그대로 사용.
+    // 실패해도 기본 5%/95% 코너 그대로 사용. 10초 timeout 으로 무한 대기 차단.
     setDetectStatus("loading");
+    const timeoutPromise = new Promise<null>((resolve) =>
+      setTimeout(() => resolve(null), 10_000),
+    );
     try {
-      const detected = await detectDocumentCorners(img);
+      const detected = await Promise.race([
+        detectDocumentCorners(img),
+        timeoutPromise,
+      ]);
       if (detected) {
         setCorners(detected);
         setDetectStatus("found");
