@@ -14,7 +14,7 @@ export async function GET() {
   const workerUrl = process.env.WORKER_URL;
   const workerToken = process.env.WORKER_TOKEN;
   if (!workerUrl || !workerToken) {
-    return NextResponse.json({ sites: [], error: "worker not configured" });
+    return NextResponse.json({ sites: [], workerConfigured: false, error: "worker not configured" });
   }
 
   try {

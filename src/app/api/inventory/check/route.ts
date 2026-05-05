@@ -20,6 +20,19 @@ interface ResultRow {
   scrapedAt: string;
 }
 
+function isNetworkError(msg: string): boolean {
+  return (
+    msg === "fetch failed" ||
+    msg.includes("ECONNREFUSED") ||
+    msg.includes("ETIMEDOUT") ||
+    msg.includes("ENOTFOUND") ||
+    msg.includes("UND_ERR") ||
+    msg.includes("TimeoutError") ||
+    msg.includes("The operation was aborted") ||
+    msg.includes("network")
+  );
+}
+
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
@@ -102,18 +115,62 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ results, source: "snapshot" });
   }
 
-  // Live fallback path — proxy to worker
-  const workerUrl = process.env.WORKER_URL;
-  const workerToken = process.env.WORKER_TOKEN;
-  if (!workerUrl || !workerToken) {
-    return NextResponse.json(
-      { error: "scraper worker not configured (set WORKER_URL and WORKER_TOKEN)" },
-      { status: 503 }
-    );
-  }
-
+  // Live fallback path — proxy to worker (Playwright/Chromium on Lightsail).
+  // The scrapers use a headless browser and cannot run inline in this API route.
+  //
+  // Outer try-catch ensures any unexpected synchronous throw (e.g. bad URL
+  // construction, AbortSignal unavailable) still produces a JSON response
+  // instead of a bare 500 with no body, which the browser reports as a
+  // network-level "fetch failed" error.
   try {
-    const r = await fetch(`${workerUrl.replace(/\/$/, "")}/scrape`, {
+    const workerUrl = process.env.WORKER_URL;
+    const workerToken = process.env.WORKER_TOKEN;
+    if (!workerUrl || !workerToken) {
+      return NextResponse.json(
+        {
+          error:
+            "실시간 조회 서버가 설정되지 않았습니다. " +
+            "Vercel 환경변수에 WORKER_URL과 WORKER_TOKEN을 설정하고 Lightsail 워커를 실행하세요. " +
+            "캐시 데이터는 자동으로 매일 06시/12시/18시(KST)에 갱신됩니다.",
+          workerConfigured: false,
+        },
+        { status: 503 }
+      );
+    }
+
+    const base = workerUrl.replace(/\/$/, "");
+
+    // Fast reachability pre-flight before the potentially 280-second /scrape call.
+    // Caps failure latency at ~5 s when the Lightsail server is down.
+    try {
+      const health = await fetch(`${base}/health`, {
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!health.ok) {
+        return NextResponse.json(
+          {
+            error:
+              `실시간 조회 서버가 응답하지 않습니다 (HTTP ${health.status}). ` +
+              "Lightsail 워커 프로세스 상태를 확인하세요.",
+          },
+          { status: 503 }
+        );
+      }
+    } catch (healthErr) {
+      const hmsg = (healthErr as Error).message ?? "";
+      return NextResponse.json(
+        {
+          error: isNetworkError(hmsg)
+            ? "실시간 조회 서버에 연결할 수 없습니다. " +
+              "Lightsail 워커가 실행 중인지, 방화벽(포트 8080)이 열려 있는지 확인하세요. " +
+              "캐시 데이터는 자동으로 매일 06시/12시/18시(KST)에 갱신됩니다."
+            : `실시간 조회 서버 연결 확인 중 오류: ${hmsg}`,
+        },
+        { status: 503 }
+      );
+    }
+
+    const r = await fetch(`${base}/scrape`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -168,8 +225,13 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ...data, source: "live" });
   } catch (err) {
+    const msg = (err as Error).message ?? "";
     return NextResponse.json(
-      { error: `worker unreachable: ${(err as Error).message}` },
+      {
+        error: isNetworkError(msg)
+          ? "실시간 조회 서버와의 통신이 끊어졌습니다. Lightsail 워커 상태를 확인하세요."
+          : `실시간 조회 중 오류가 발생했습니다: ${msg}`,
+      },
       { status: 504 }
     );
   }

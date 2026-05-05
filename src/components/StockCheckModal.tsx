@@ -33,6 +33,32 @@ export default function StockCheckModal({ open, onClose, insuranceCode, productN
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<ScrapeRow[]>([]);
   const [source, setSource] = useState<"snapshot" | "live" | null>(null);
+  // undefined = not yet checked, true = worker reachable/configured, false = not configured
+  const [workerAvailable, setWorkerAvailable] = useState<boolean | undefined>(undefined);
+
+  // Check once on open whether the worker is configured so we can disable
+  // the live-scrape button with an actionable tooltip instead of letting
+  // the user click and receive a cryptic error after 5+ seconds.
+  useEffect(() => {
+    if (!open) return;
+    fetch("/api/inventory/sites")
+      .then(r => r.json())
+      .then((data: { sites?: unknown[]; workerConfigured?: boolean; error?: string }) => {
+        // workerConfigured === false means WORKER_URL/WORKER_TOKEN are not set.
+        // Any other response (including errors from a reachability failure) is
+        // treated as "configured" — the live call will return a clear message.
+        if (data.workerConfigured === false) {
+          setWorkerAvailable(false);
+        } else {
+          setWorkerAvailable(true);
+        }
+      })
+      .catch(() => {
+        // If the sites endpoint itself fails (e.g. unauthed), optimistically
+        // allow the attempt — the check route will return a clear error.
+        setWorkerAvailable(true);
+      });
+  }, [open]);
 
   const fetchData = useCallback(
     (live: boolean) => {
@@ -87,9 +113,13 @@ export default function StockCheckModal({ open, onClose, insuranceCode, productN
           <div className="flex items-center gap-2">
             <button
               onClick={() => fetchData(true)}
-              disabled={loading}
-              title="지금 새로 조회 (느림 — 30초~1분)"
-              className="text-xs flex items-center gap-1 px-2 py-1 rounded border text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              disabled={loading || workerAvailable === false}
+              title={
+                workerAvailable === false
+                  ? "실시간 조회 서버(Lightsail 워커)가 설정되지 않았습니다. WORKER_URL / WORKER_TOKEN 환경변수를 확인하세요."
+                  : "지금 새로 조회 (느림 — 30초~1분)"
+              }
+              className="text-xs flex items-center gap-1 px-2 py-1 rounded border text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <RefreshCw className={"w-3.5 h-3.5 " + (loading ? "animate-spin" : "")} />
               지금 새로 조회
