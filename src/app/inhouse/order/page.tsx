@@ -73,7 +73,11 @@ interface RecentProduct {
 interface LedgerEntry {
   id: string;
   entryDate: string;
+  ediCode?: string | null;
   itemName: string;
+  spec?: string | null;
+  quantity?: number | null;
+  unitPrice?: number | null;
   sales: number;
   payment: number;
   balance: number;
@@ -614,8 +618,14 @@ export default function InhouseOrderPage() {
                         {ledgerEntries.map((e) => (
                           <tr key={e.id} className="hover:bg-purple-50/30">
                             <td className="px-3 py-2 text-gray-400 whitespace-nowrap">{e.entryDate.slice(0, 10)}</td>
-                            <td className="px-3 py-2 text-gray-800">{e.itemName}</td>
-                            <td className="px-3 py-2 text-right font-mono text-gray-700">{fmt(e.sales)}</td>
+                            <td className="px-3 py-2 text-gray-800">
+                              {e.itemName}
+                              {e.spec && <span className="ml-1 text-gray-400 text-[10px]">{e.spec}</span>}
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono text-gray-700 whitespace-nowrap">
+                              {e.quantity != null && e.quantity > 0 && <span className="text-gray-400 mr-1">{e.quantity}×</span>}
+                              {fmt(Number(e.sales))}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -826,9 +836,9 @@ export default function InhouseOrderPage() {
                       <div key={e.id} className="px-3 py-2.5">
                         <div className="flex justify-between items-start gap-1">
                           <p className="text-xs text-gray-700 leading-tight flex-1 min-w-0 break-words">{e.itemName}</p>
-                          <p className="text-xs font-mono text-gray-600 shrink-0 ml-1">{fmt(e.sales)}</p>
+                          <p className="text-xs font-mono text-gray-600 shrink-0 ml-1">{fmt(Number(e.sales))}</p>
                         </div>
-                        <p className="text-[11px] text-gray-400 mt-0.5">{e.entryDate.slice(0, 10)}</p>
+                        <p className="text-[11px] text-gray-400 mt-0.5">{e.entryDate.slice(0, 10)}{e.quantity != null && e.quantity > 0 ? ` · ${e.quantity}개` : ""}</p>
                       </div>
                     ))}
                   </div>

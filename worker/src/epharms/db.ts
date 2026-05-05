@@ -155,7 +155,7 @@ export function decryptPw(stored: string): string {
 
 function rowHash(r: LedgerRow): string {
   return createHash("sha1")
-    .update(`${r.entryDate}|${r.itemName}|${r.sales}|${r.payment}`)
+    .update(`${r.entryDate}|${r.ediCode}|${r.itemName}|${r.sales}`)
     .digest("hex");
 }
 
@@ -215,20 +215,29 @@ export async function upsertLedgerRows(
       let p = 1;
       for (const r of slice) {
         placeholders.push(
-          `($${p++},$${p++},$${p++},$${p++},$${p++},$${p++},$${p++},$${p++},$${p++},NOW())`
+          `($${p++},$${p++},$${p++},$${p++},$${p++},$${p++},$${p++},$${p++},$${p++},$${p++},$${p++},$${p++},$${p++},NOW())`
         );
         values.push(
           createId(), accountId, bizNumber,
-          r.entryDate, r.itemName,
+          r.entryDate, r.ediCode || null, r.itemName,
+          r.spec || null, r.quantity || null, r.unitPrice || null,
           r.sales, r.payment, r.balance,
           rowHash(r)
         );
       }
       const result = await client.query<{ id: string }>(
         `INSERT INTO "LedgerEntry"
-           ("id","accountId","bizNumber","entryDate","itemName","sales","payment","balance","rowHash","fetchedAt")
+           ("id","accountId","bizNumber","entryDate","ediCode","itemName","spec","quantity","unitPrice","sales","payment","balance","rowHash","fetchedAt")
          VALUES ${placeholders.join(",")}
-         ON CONFLICT ("accountId","rowHash") DO NOTHING
+         ON CONFLICT ("accountId","rowHash") DO UPDATE SET
+           "ediCode"   = EXCLUDED."ediCode",
+           "spec"      = EXCLUDED."spec",
+           "quantity"  = EXCLUDED."quantity",
+           "unitPrice" = EXCLUDED."unitPrice",
+           "sales"     = EXCLUDED."sales",
+           "payment"   = EXCLUDED."payment",
+           "balance"   = EXCLUDED."balance",
+           "fetchedAt" = NOW()
          RETURNING "id"`,
         values
       );

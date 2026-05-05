@@ -771,18 +771,22 @@ model EpharmsAccount {
   @@index([salesRepId])
 }
 
-// 매출원장 한 줄 (원장집계 화면 컬럼 그대로).
+// 매출원장 한 줄 (원장상세 화면 컬럼 기준).
 model LedgerEntry {
   id           String         @id @default(cuid())
   accountId    String
   account      EpharmsAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
   bizNumber    String         // 빠른 필터링용 비정규화
   entryDate    DateTime       // 명세일자
-  itemName     String         // 항목
-  sales        Decimal        @default(0) @db.Decimal(18, 2)
-  payment      Decimal        @default(0) @db.Decimal(18, 2)
-  balance      Decimal        @default(0) @db.Decimal(18, 2)
-  rowHash      String         // entryDate+itemName+sales+payment SHA-1
+  ediCode      String?        // EDI 코드
+  itemName     String         // 제품명
+  spec         String?        // 규격
+  quantity     Int?           // 수량
+  unitPrice    Decimal?       @db.Decimal(18, 2) // 단가
+  sales        Decimal        @default(0) @db.Decimal(18, 2) // 합계
+  payment      Decimal        @default(0) @db.Decimal(18, 2) // 수금
+  balance      Decimal        @default(0) @db.Decimal(18, 2) // 잔액
+  rowHash      String         // entryDate+ediCode+itemName+sales SHA-1
   fetchedAt    DateTime       @default(now())
 
   @@unique([accountId, rowHash])

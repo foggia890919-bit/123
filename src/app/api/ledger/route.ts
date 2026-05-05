@@ -86,7 +86,9 @@ export async function GET(req: NextRequest) {
       },
       orderBy: { entryDate: "asc" },
       select: {
-        id: true, entryDate: true, itemName: true,
+        id: true, entryDate: true,
+        ediCode: true, itemName: true, spec: true,
+        quantity: true, unitPrice: true,
         sales: true, payment: true, balance: true,
       },
     });

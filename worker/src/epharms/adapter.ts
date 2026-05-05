@@ -1,13 +1,10 @@
 // ePharms (yk.ep45.co.kr) 매출원장 스크래퍼
 //
-// 화면 확인 (사장님 캡쳐 기준):
-//   원장집계: https://yk.ep45.co.kr/account/account_list
-//   컬럼: 명세일자 | 항목 | 매출 | 수금 | 잔액
+// 화면 확인:
+//   원장상세: https://yk.ep45.co.kr/account/account_detail
+//   컬럼: 명세일자 | EDI | 제품명 | 규격 | 수량 | 단가 | 합계 | 수금 | 잔액 | 제조번호 | 유효기간 | 비고
 //   조회기간: 시작일 ~ 종료일 + "검색" 버튼
-//   상단: 메뉴 좌측 사이드바 → 장부 > 원장집계
-//
-// 셀렉터는 실제 사이트에서 1회 사람이 들어가서 확정해야 함 (현재는 추정값).
-// 확정 후 SEL 객체만 손보면 됨.
+//   상단: 메뉴 좌측 사이드바 → 장부 > 원장상세
 
 import type { Page } from "playwright";
 
@@ -17,11 +14,15 @@ export interface EpharmsCreds {
 }
 
 export interface LedgerRow {
-  entryDate: string;   // YYYY-MM-DD
-  itemName: string;
-  sales: number;
-  payment: number;
-  balance: number;
+  entryDate: string;   // YYYY-MM-DD (명세일자)
+  ediCode: string;     // EDI 코드
+  itemName: string;    // 제품명
+  spec: string;        // 규격
+  quantity: number;    // 수량
+  unitPrice: number;   // 단가
+  sales: number;       // 합계 (quantity × unitPrice)
+  payment: number;     // 수금
+  balance: number;     // 잔액
 }
 
 const BASE = "https://yk.ep45.co.kr";
@@ -31,30 +32,28 @@ const SEL = {
   idInput:    '#userId',
   pwInput:    '#userPwd',
   loginBtn:   '#loginBtn',
-  // ----- 원장집계 (확정) -----
-  // 페이지에 1개월/3개월/6개월/1년 빠른 선택 버튼이 있어서 이걸 쓰는 게 가장 안정적.
-  // (datepicker 직접 조작은 페이지의 dateFormat·내부 상태 동기화 문제로 깨지기 쉬움)
+  // ----- 원장상세 -----
+  // 1년 빠른선택 버튼 (원장집계와 동일한 selector)
   periodYearBtn: 'button.PeriodBtn[data-periodtyp="Y"][data-periodnum="1"]',
-  // 백업: 직접 날짜 인풋 조작 (위 버튼이 없을 때만)
+  // 백업: 직접 날짜 인풋 조작
   dateFromInput: '#search_pd_start',
   dateToInput:   '#search_pd_end',
   searchBtn:     '#btnSrch',
-  // 결과 테이블: 명세일자 헤더가 있는 테이블의 tbody tr.
+  // 결과 테이블: 명세일자 헤더가 있는 테이블의 tbody tr
   resultRows:    'table:has(th:has-text("명세일자")) tbody tr',
 };
 
-const LOGIN_URL  = `${BASE}/`;                       // 메인이 로그인 폼
-const LEDGER_URL = `${BASE}/account/account_list`;
+const LOGIN_URL  = `${BASE}/`;
+const LEDGER_URL = `${BASE}/account/account_detail`;
 
 function parseMoney(s: string): number {
-  // "458,120" → 458120, "" → 0, "-1,000" → -1000
+  // "7,000" → 7000, "" → 0, "-1,000" → -1000
   const cleaned = (s || "").replace(/[^\d-]/g, "");
   if (!cleaned || cleaned === "-") return 0;
   return Number(cleaned);
 }
 
 function parseDate(s: string): string | null {
-  // "2025-05-02" 형태로 그대로 오면 통과. 다른 포맷이면 ISO로 정규화.
   const t = (s || "").trim();
   const m = t.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
   if (!m) return null;
@@ -68,7 +67,6 @@ export async function login(page: Page, creds: EpharmsCreds): Promise<void> {
   await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
   await page.waitForTimeout(500);
 
-  // 이미 로그인 상태면 PW 인풋 안 보임 → skip
   const pwVisible = await page.locator(SEL.pwInput).first().isVisible().catch(() => false);
   if (!pwVisible) return;
 
@@ -94,13 +92,12 @@ export async function isLoggedIn(page: Page): Promise<boolean> {
   return !(await page.locator(SEL.pwInput).first().isVisible().catch(() => false));
 }
 
-/** 지정 기간의 원장집계를 긁는다. (default: 최근 1년) */
+/** 원장상세에서 최근 1년치 개별 명세 행을 긁는다. */
 export async function fetchLedger(page: Page): Promise<LedgerRow[]> {
   await page.goto(LEDGER_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
   await page.waitForTimeout(800);
 
-  // 페이지의 "1년" 빠른선택 버튼 클릭 — datepicker 내부 상태까지 정확히 세팅됨.
-  // (readonly + jQuery UI datepicker 직접 조작은 dateFormat·내부 상태 동기화 문제로 깨지기 쉬움)
+  // "1년" 빠른선택 버튼 클릭
   const yearBtn = page.locator(SEL.periodYearBtn).first();
   if (await yearBtn.count() > 0) {
     await yearBtn.click();
@@ -110,28 +107,35 @@ export async function fetchLedger(page: Page): Promise<LedgerRow[]> {
     console.warn('[ePharms] "1년" period button not found — falling back to default page state');
   }
 
-  // 검색 버튼 클릭 (페이지가 자동으로 검색 안 한 경우 대비)
+  // 검색 버튼 클릭
   const sBtn = page.locator(SEL.searchBtn).first();
   if (await sBtn.isVisible().catch(() => false)) {
     await sBtn.click();
     await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {});
   }
-  await page.waitForTimeout(1500); // 결과 테이블 렌더링 대기
+  await page.waitForTimeout(1500);
 
   // 결과 테이블 파싱
+  // account_detail 컬럼: [0]명세일자 [1]EDI [2]제품명 [3]규격 [4]수량 [5]단가 [6]합계 [7]수금 [8]잔액 [9]제조번호 [10]유효기간 [11]비고
   const rows = await page.locator(SEL.resultRows).all();
   const out: LedgerRow[] = [];
   for (const row of rows) {
     const cells = await row.locator("td").allInnerTexts();
-    if (cells.length < 5) continue;          // 합계행 / 헤더 스킵
+    if (cells.length < 9) continue;          // 소계행·헤더 스킵
     const date = parseDate(cells[0]);
-    if (!date) continue;                     // "전일잔액" / "월계" 같은 행은 날짜 없음 → 스킵
+    if (!date) continue;                     // "전일잔액" / "명세소계" 행은 날짜 없음 → 스킵
+    const itemName = (cells[2] || "").trim();
+    if (!itemName || itemName === "명세소계") continue;
     out.push({
       entryDate: date,
-      itemName: (cells[1] || "").trim(),
-      sales:   parseMoney(cells[2]),
-      payment: parseMoney(cells[3]),
-      balance: parseMoney(cells[4]),
+      ediCode:   (cells[1] || "").trim(),
+      itemName,
+      spec:      (cells[3] || "").trim(),
+      quantity:  parseMoney(cells[4]),
+      unitPrice: parseMoney(cells[5]),
+      sales:     parseMoney(cells[6]),
+      payment:   parseMoney(cells[7]),
+      balance:   parseMoney(cells[8]),
     });
   }
   return out;
