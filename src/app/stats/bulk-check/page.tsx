@@ -4,6 +4,7 @@ import { useState, useRef, useMemo, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import {
   Upload, Trash2, FileSpreadsheet, AlertCircle, Loader2, Search, X,
+  Building2, Filter, ChevronDown, ChevronUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatPrice } from "@/lib/utils";
@@ -49,6 +50,21 @@ const CRITERIA_PAIRS = [
 ] as const;
 
 type FilterMode = "all" | "settlement";
+
+interface UserClient {
+  id: string;
+  clientName: string;
+  bizNumber: string;
+  approved: boolean;
+}
+
+function StatusBadge({ status }: { status: string }) {
+  if (status === "APPROVED")  return <span className="text-[10px] text-green-700 bg-green-50 border border-green-200 px-1.5 py-0.5 rounded">거래가능</span>;
+  if (status === "REVIEWING") return <span className="text-[10px] text-yellow-700 bg-yellow-50 border border-yellow-200 px-1.5 py-0.5 rounded">검토중</span>;
+  if (status === "PENDING")   return <span className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded">요청됨</span>;
+  if (status === "REJECTED")  return <span className="text-[10px] text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded">거부됨</span>;
+  return null;
+}
 
 function uid() {
   return Math.random().toString(36).slice(2, 10);
@@ -107,25 +123,37 @@ function Inner() {
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
   const [approvedCompanies, setApprovedCompanies] = useState<Set<string>>(new Set());
 
+  // 거래처 + 제약사 현황
+  const [clients, setClients] = useState<UserClient[]>([]);
+  const [selectedClientId, setSelectedClientId] = useState("");
+  const [companyStatuses, setCompanyStatuses] = useState<Record<string, string>>({});
+  const [requestingFilter, setRequestingFilter] = useState<Set<string>>(new Set());
+  const [requestingAll, setRequestingAll] = useState(false);
+  const [expandedCompanies, setExpandedCompanies] = useState<Set<string>>(new Set());
+
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!userId) return;
-    fetch(`/api/filter-request/company-status?userId=${userId}`)
+    fetch(`/api/user-clients?userId=${userId}`)
       .then((r) => r.json())
-      .then((d) => {
-        if (d && typeof d === "object") {
-          setApprovedCompanies(
-            new Set(
-              Object.entries(d as Record<string, string>)
-                .filter(([, s]) => s === "APPROVED")
-                .map(([c]) => c)
-            )
-          );
-        }
-      })
+      .then((d) => { if (Array.isArray(d)) setClients(d); })
       .catch(() => {});
   }, [userId]);
+
+  async function refreshCompanyStatuses() {
+    if (!userId) return;
+    try {
+      const d = await fetch(`/api/filter-request/company-status?userId=${userId}`).then((r) => r.json());
+      if (d && typeof d === "object") {
+        const map = d as Record<string, string>;
+        setCompanyStatuses(map);
+        setApprovedCompanies(new Set(Object.entries(map).filter(([, s]) => s === "APPROVED").map(([c]) => c)));
+      }
+    } catch { /* ignore */ }
+  }
+
+  useEffect(() => { refreshCompanyStatuses(); }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function toggleCriteria(group: string, key: string) {
     setCriteriaSet((prev) => {
@@ -330,6 +358,88 @@ function Inner() {
     selected: displayRows.filter((r) => r.selected).length,
   }), [displayRows]);
 
+  const selectedClient = useMemo(
+    () => clients.find((c) => c.id === selectedClientId) ?? null,
+    [clients, selectedClientId]
+  );
+
+  // 선택품목 기준 제약사 집계
+  const companySummary = useMemo(() => {
+    const map = new Map<string, { count: number; products: Set<string> }>();
+    for (const r of rows) {
+      const name = r.selected?.companyName;
+      if (!name) continue;
+      if (!map.has(name)) map.set(name, { count: 0, products: new Set() });
+      const e = map.get(name)!;
+      e.count++;
+      if (r.selected?.productName) e.products.add(r.selected.productName);
+    }
+    return Array.from(map.entries())
+      .map(([name, d]) => ({ name, count: d.count, products: Array.from(d.products) }))
+      .sort((a, b) => b.count - a.count);
+  }, [rows]);
+
+  const pendingCompanies = useMemo(
+    () => companySummary.map((c) => c.name).filter((name) => {
+      const s = companyStatuses[name];
+      return !s || s === "REJECTED";
+    }),
+    [companySummary, companyStatuses]
+  );
+
+  async function requestFilter(companyName: string) {
+    if (!selectedClient) return;
+    const existing = companyStatuses[companyName];
+    if (existing === "PENDING" || existing === "REVIEWING" || existing === "APPROVED") return;
+    setRequestingFilter((prev) => new Set(prev).add(companyName));
+    try {
+      await fetch("/api/filter-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          userName: session?.user?.name || "",
+          clientName: selectedClient.clientName,
+          bizNumber: selectedClient.bizNumber,
+          companies: [companyName],
+        }),
+      });
+      await refreshCompanyStatuses();
+    } finally {
+      setRequestingFilter((prev) => { const n = new Set(prev); n.delete(companyName); return n; });
+    }
+  }
+
+  async function requestAllFilters() {
+    if (!selectedClient || pendingCompanies.length === 0) return;
+    if (!confirm(`미요청 제약사 ${pendingCompanies.length}개사에 한번에 필터링 요청을 보낼까요?`)) return;
+    setRequestingAll(true);
+    try {
+      await fetch("/api/filter-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          userName: session?.user?.name || "",
+          clientName: selectedClient.clientName,
+          bizNumber: selectedClient.bizNumber,
+          companies: pendingCompanies,
+        }),
+      });
+      await refreshCompanyStatuses();
+    } finally {
+      setRequestingAll(false);
+    }
+  }
+
+  function toggleCompanyExpand(name: string) {
+    setExpandedCompanies((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-[1600px] mx-auto p-4 md:p-6 space-y-4">
@@ -495,6 +605,99 @@ function Inner() {
             )}
           </div>
         </div>
+
+        {/* 제약사 현황 (선택품목 기준) */}
+        {companySummary.length > 0 && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+            <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+              <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">
+                <Building2 className="w-4 h-4 text-gray-500" />
+                제약사 현황
+                <span className="text-xs text-gray-400 font-normal">(선택품목 기준 · {companySummary.length}개사)</span>
+              </h3>
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* 거래처 선택 */}
+                <select
+                  value={selectedClientId}
+                  onChange={(e) => setSelectedClientId(e.target.value)}
+                  className="h-8 px-2 border border-gray-300 rounded-md text-xs bg-white"
+                >
+                  <option value="">거래처 선택 (필터링 요청용)</option>
+                  {clients.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.clientName}{!c.approved ? " (승인전)" : ""}
+                    </option>
+                  ))}
+                </select>
+                {/* 전체요청 */}
+                <button
+                  onClick={requestAllFilters}
+                  disabled={!selectedClient || requestingAll || pendingCompanies.length === 0}
+                  title={!selectedClient ? "거래처를 먼저 선택해주세요" : pendingCompanies.length === 0 ? "미요청 제약사가 없습니다" : undefined}
+                  className="inline-flex items-center gap-1 text-[11px] rounded px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {requestingAll ? <Loader2 className="w-3 h-3 animate-spin" /> : <Filter className="w-3 h-3" />}
+                  전체요청 {pendingCompanies.length > 0 && `(${pendingCompanies.length})`}
+                </button>
+              </div>
+            </div>
+            {!selectedClient && (
+              <div className="flex items-center gap-1.5 bg-orange-50 border border-orange-200 rounded-lg px-2.5 py-1.5 text-[11px] text-orange-700 mb-3">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                거래처를 선택해야 필터링 요청이 가능합니다
+              </div>
+            )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
+              {companySummary.map((c) => {
+                const isExpanded = expandedCompanies.has(c.name);
+                const status = companyStatuses[c.name] || "";
+                const isApproved = status === "APPROVED";
+                const requested = status === "PENDING" || status === "REVIEWING" || isApproved;
+                return (
+                  <div key={c.name} className="rounded-lg border border-gray-200">
+                    <button
+                      onClick={() => toggleCompanyExpand(c.name)}
+                      className="w-full flex items-center justify-between p-2 hover:bg-gray-50 transition-colors"
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-xs font-medium text-gray-900 truncate">{c.name}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className="text-xs text-gray-500">{c.count}개</span>
+                        {isExpanded ? <ChevronUp className="w-3.5 h-3.5 text-gray-400" /> : <ChevronDown className="w-3.5 h-3.5 text-gray-400" />}
+                      </div>
+                    </button>
+                    <div className="px-2 pb-2 flex items-center gap-1 flex-wrap">
+                      {status ? <StatusBadge status={status} /> : <span className="text-[10px] text-gray-400 px-1.5 py-0.5">미요청</span>}
+                      <button
+                        onClick={() => requestFilter(c.name)}
+                        disabled={!selectedClient || requestingFilter.has(c.name) || requested}
+                        title={!selectedClient ? "거래처를 먼저 선택해주세요" : undefined}
+                        className={`inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5 whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed ${
+                          isApproved
+                            ? "text-gray-500 bg-gray-50 border border-gray-200 hover:bg-gray-100"
+                            : "text-blue-600 bg-blue-50 border border-blue-200 hover:bg-blue-100"
+                        }`}
+                      >
+                        {requestingFilter.has(c.name)
+                          ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                          : <Filter className="w-2.5 h-2.5" />}
+                        {status === "PENDING" ? "요청됨" : status === "REVIEWING" ? "검토중" : status === "APPROVED" ? "거래가능" : "필터링 요청"}
+                      </button>
+                    </div>
+                    {isExpanded && c.products.length > 0 && (
+                      <ul className="px-2 pb-2 space-y-0.5 border-t border-gray-100 pt-1.5">
+                        {c.products.map((prod) => (
+                          <li key={prod} className="text-[11px] text-gray-600 truncate">· {prod}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* 표 */}
         {rows.length === 0 ? (
