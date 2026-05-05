@@ -1211,6 +1211,7 @@ interface InhouseBulkPreviewRow {
   clientName: string;
   loginId: string;
   loginPw: string;
+  kmdEmail: string;
   memo: string;
 }
 
@@ -1520,6 +1521,7 @@ function InhouseClientsTab() {
         clientName: String(r["거래처명"] ?? "").trim(),
         loginId: String(r["이팜스ID"] ?? "").trim(),
         loginPw: String(r["이팜스PW"] ?? "").trim(),
+        kmdEmail: String(r["KMD아이디"] ?? "").trim(),
         memo: String(r["메모"] ?? "").trim(),
       }));
       setBulkPreview(preview);
@@ -1911,7 +1913,7 @@ function InhouseClientsTab() {
       {/* Bulk Upload 모달 */}
       {bulkModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => { if (!bulkSubmitting) setBulkModal(false); }}>
-          <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+          <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between px-6 py-4 border-b flex-shrink-0">
               <h2 className="text-lg font-semibold flex items-center gap-2">
                 <Upload className="w-5 h-5 text-green-600" />
@@ -1922,13 +1924,32 @@ function InhouseClientsTab() {
               )}
             </div>
             <div className="p-6 space-y-4 overflow-y-auto flex-1">
-              <p className="text-sm text-gray-500">
-                엑셀 파일 컬럼 순서: <span className="font-mono text-xs bg-gray-100 px-1 rounded">사업자번호</span>{" "}
-                <span className="font-mono text-xs bg-gray-100 px-1 rounded">거래처명</span>{" "}
-                <span className="font-mono text-xs bg-gray-100 px-1 rounded">이팜스ID</span>{" "}
-                <span className="font-mono text-xs bg-gray-100 px-1 rounded">이팜스PW</span>{" "}
-                <span className="font-mono text-xs bg-gray-100 px-1 rounded">메모</span>(선택)
-              </p>
+              <div className="flex items-start justify-between gap-4">
+                <p className="text-sm text-gray-500 leading-relaxed">
+                  컬럼 순서:{" "}
+                  {["사업자번호", "거래처명", "이팜스ID", "이팜스PW", "KMD아이디", "메모(선택)"].map((col) => (
+                    <span key={col} className="inline-block font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded mr-1">{col}</span>
+                  ))}
+                </p>
+                <button
+                  onClick={async () => {
+                    const { utils, write } = await import("xlsx");
+                    const ws = utils.aoa_to_sheet([["사업자번호", "거래처명", "이팜스ID", "이팜스PW", "KMD아이디", "메모"]]);
+                    const wb = utils.book_new();
+                    utils.book_append_sheet(wb, ws, "원내거래처");
+                    const buf = write(wb, { type: "array", bookType: "xlsx" });
+                    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url; a.download = "원내거래처_일괄등록_양식.xlsx"; a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                  className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg hover:bg-gray-50 text-gray-600"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                  양식 다운로드
+                </button>
+              </div>
               <div>
                 <input
                   ref={fileInputRef}
@@ -1937,13 +1958,46 @@ function InhouseClientsTab() {
                   className="hidden"
                   onChange={handleBulkFileChange}
                 />
-                <button
+                <div
                   onClick={() => fileInputRef.current?.click()}
-                  className="flex items-center gap-2 px-4 py-2 border-2 border-dashed border-gray-300 rounded-lg text-sm text-gray-600 hover:border-green-400 hover:text-green-700 transition-colors"
+                  onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("border-green-400", "bg-green-50"); }}
+                  onDragLeave={(e) => { e.currentTarget.classList.remove("border-green-400", "bg-green-50"); }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.currentTarget.classList.remove("border-green-400", "bg-green-50");
+                    const file = e.dataTransfer.files[0];
+                    if (file) {
+                      setBulkFile(file);
+                      setBulkResult(null);
+                      import("xlsx").then(({ read, utils }) => {
+                        file.arrayBuffer().then((buffer) => {
+                          const wb = read(new Uint8Array(buffer), { type: "array" });
+                          const ws = wb.Sheets[wb.SheetNames[0]];
+                          const rows = utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
+                          setBulkPreview(rows.slice(0, 10).map((r) => ({
+                            bizNumber: String(r["사업자번호"] ?? "").replace(/[^0-9]/g, ""),
+                            clientName: String(r["거래처명"] ?? "").trim(),
+                            loginId: String(r["이팜스ID"] ?? "").trim(),
+                            loginPw: String(r["이팜스PW"] ?? "").trim(),
+                            kmdEmail: String(r["KMD아이디"] ?? "").trim(),
+                            memo: String(r["메모"] ?? "").trim(),
+                          })));
+                        }).catch(() => setBulkPreview([]));
+                      });
+                    }
+                  }}
+                  className="cursor-pointer flex flex-col items-center justify-center gap-2 px-6 py-8 border-2 border-dashed border-gray-300 rounded-xl text-sm text-gray-500 hover:border-green-400 hover:bg-green-50 hover:text-green-700 transition-colors"
                 >
-                  <Upload className="w-4 h-4" />
-                  {bulkFile ? bulkFile.name : "xlsx / xls 파일 선택"}
-                </button>
+                  <Upload className="w-7 h-7 text-gray-300" />
+                  {bulkFile ? (
+                    <span className="font-medium text-gray-700">{bulkFile.name}</span>
+                  ) : (
+                    <>
+                      <span className="font-medium">파일을 여기에 끌어다 놓거나 클릭하여 선택</span>
+                      <span className="text-xs text-gray-400">xlsx / xls</span>
+                    </>
+                  )}
+                </div>
               </div>
               {bulkPreview.length > 0 && (
                 <div>
@@ -1956,6 +2010,7 @@ function InhouseClientsTab() {
                           <th className="px-3 py-2 text-left font-semibold text-gray-500">거래처명</th>
                           <th className="px-3 py-2 text-left font-semibold text-gray-500">이팜스ID</th>
                           <th className="px-3 py-2 text-left font-semibold text-gray-500">PW</th>
+                          <th className="px-3 py-2 text-left font-semibold text-gray-500">KMD아이디</th>
                           <th className="px-3 py-2 text-left font-semibold text-gray-500">메모</th>
                         </tr>
                       </thead>
@@ -1966,6 +2021,7 @@ function InhouseClientsTab() {
                             <td className="px-3 py-1.5">{row.clientName || <span className="text-red-400">없음</span>}</td>
                             <td className="px-3 py-1.5 font-mono">{row.loginId || <span className="text-red-400">없음</span>}</td>
                             <td className="px-3 py-1.5 font-mono">{row.loginPw ? "••••••" : <span className="text-red-400">없음</span>}</td>
+                            <td className="px-3 py-1.5 text-gray-500">{row.kmdEmail || <span className="text-gray-300">—</span>}</td>
                             <td className="px-3 py-1.5 text-gray-400">{row.memo || "—"}</td>
                           </tr>
                         ))}
