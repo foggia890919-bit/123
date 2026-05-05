@@ -45,6 +45,7 @@ type SortDir = "asc" | "desc";
 interface ColVis {
   categoryB: boolean; bioStatus: boolean; originalDrug: boolean;
   insuranceCode: boolean; notes: boolean;
+  price: boolean; rate: boolean;
 }
 
 function splitProductName(name: string): [string, string | null, string | null] {
@@ -97,11 +98,13 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [cols, setCols] = useState<ColVis>({
-    categoryB: initialCols?.categoryB ?? false,
-    bioStatus: initialCols?.bioStatus ?? false,
-    originalDrug: initialCols?.originalDrug ?? false,
-    insuranceCode: initialCols?.insuranceCode ?? false,
-    notes: initialCols?.notes ?? false,
+    categoryB: initialCols?.categoryB ?? true,
+    bioStatus: initialCols?.bioStatus ?? true,
+    originalDrug: initialCols?.originalDrug ?? true,
+    insuranceCode: initialCols?.insuranceCode ?? true,
+    notes: initialCols?.notes ?? true,
+    price: true,
+    rate: true,
   });
   const [dropdown, setDropdown] = useState<DropdownState | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -314,7 +317,7 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
   }
 
   const hasRate = visibleSorted.some((m) => m.commissionRate != null);
-  const totalCols = 1 + (hasDetailPanel ? 1 : 0) + 1 + (hasRate ? 4 : 0) + 1;
+  const totalCols = 1 + (hasDetailPanel ? 1 : 0) + (cols.price ? 1 : 0) + (cols.rate && hasRate ? 4 : 0) + 1;
 
   return (
     <>
@@ -360,8 +363,10 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
           )}
 
           <div className="px-4 py-2 border-b bg-gray-50 flex flex-wrap gap-3 text-xs shrink-0 items-center">
-            <span className="text-gray-400">펼쳐보기 항목:</span>
+            <span className="text-gray-500 font-medium">컬럼 설정:</span>
             {([
+              ["price", "약가"],
+              ["rate", "수수료"],
               ["bioStatus", "생동/생산"],
               ["originalDrug", "오리지날"],
               ["insuranceCode", "보험코드"],
@@ -376,10 +381,10 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
             ))}
             <div className="flex gap-1 ml-1">
               <button type="button"
-                onClick={() => setCols({ bioStatus: true, originalDrug: true, insuranceCode: true, categoryB: true, notes: true })}
+                onClick={() => setCols({ bioStatus: true, originalDrug: true, insuranceCode: true, categoryB: true, notes: true, price: true, rate: true })}
                 className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100">전체선택</button>
               <button type="button"
-                onClick={() => setCols({ bioStatus: false, originalDrug: false, insuranceCode: false, categoryB: false, notes: false })}
+                onClick={() => setCols({ bioStatus: false, originalDrug: false, insuranceCode: false, categoryB: false, notes: false, price: false, rate: false })}
                 className="px-2 py-0.5 rounded bg-gray-100 text-gray-600 hover:bg-gray-200">전체해제</button>
             </div>
           </div>
@@ -439,8 +444,8 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
                   <tr>
                     <SortTh label="제품명 / 제약사" k="productName" />
                     {hasDetailPanel && <th className="px-1 py-2 w-6" />}
-                    <SortTh label="약가" k="price" right />
-                    {hasRate && (
+                    {cols.price && <SortTh label="약가" k="price" right />}
+                    {cols.rate && hasRate && (
                       <>
                         <SortTh label="기본수수료" k="commissionRate" right />
                         <SortTh label="추가수수료" k="additionalRate" right />
@@ -508,8 +513,8 @@ export default function SameIngredientModal({ ingredientName, ingredientCode, so
                             </td>
                           )}
 
-                          <td className="px-2 py-2 text-right whitespace-nowrap text-gray-700">{formatPrice(med.price)}</td>
-                          {hasRate && (
+                          {cols.price && <td className="px-2 py-2 text-right whitespace-nowrap text-gray-700">{formatPrice(med.price)}</td>}
+                          {cols.rate && hasRate && (
                             <>
                               <td className="px-2 py-2 text-right whitespace-nowrap text-blue-600 font-medium">{base != null ? `${base}%` : "-"}</td>
                               <td className="px-2 py-2 text-right whitespace-nowrap text-gray-500">{extra != null ? `${extra}%` : "-"}</td>
