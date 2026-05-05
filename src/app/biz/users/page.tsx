@@ -652,18 +652,19 @@ function DealersTab() {
           {query || filterType !== "ALL" ? "검색 결과가 없습니다" : "등록된 법인이 없습니다"}
         </div>
       ) : (
-        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-          <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] text-xs font-semibold text-gray-500 px-4 py-2.5 bg-gray-50 border-b border-gray-100">
+        <div className="bg-white border border-gray-200 rounded-xl">
+          <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto_auto] text-xs font-semibold text-gray-500 px-4 py-2.5 bg-gray-50 border-b border-gray-100 rounded-t-xl">
             <span>거래처명</span>
             <span className="text-center w-28">사업자번호</span>
             <span className="text-center w-24">유형</span>
             <span className="text-center w-24">코드</span>
             <span className="text-center w-16">분류</span>
+            <span className="text-center w-16">정산</span>
             <span className="w-20" />
           </div>
           <div className="divide-y divide-gray-50">
             {filtered.map((c) => (
-              <div key={c.id} className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center px-4 py-3">
+              <div key={c.id} className="grid grid-cols-[1fr_auto_auto_auto_auto_auto_auto] items-center px-4 py-3">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-full bg-purple-50 flex items-center justify-center shrink-0">
                     <Building2 className="w-4 h-4 text-purple-500" />
@@ -691,6 +692,25 @@ function DealersTab() {
                 <div className="w-16 flex justify-center">
                   <TypeDropdown clientId={c.id} current={c.dealerType}
                     onUpdated={(id, type) => setClients((p) => p.map((cl) => cl.id === id ? { ...cl, dealerType: type } : cl))} />
+                </div>
+                <div className="w-16 flex justify-center">
+                  <button
+                    onClick={async () => {
+                      const next = !c.isSettlementTarget;
+                      await fetch(`/api/dealer?id=${c.id}`, {
+                        method: "PATCH", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ isSettlementTarget: next }),
+                      });
+                      setClients((p) => p.map((cl) => cl.id === c.id ? { ...cl, isSettlementTarget: next } : cl));
+                    }}
+                    title={c.isSettlementTarget ? "정산 대상 (클릭시 해제)" : "정산 미대상 (클릭시 설정)"}
+                    className={`text-xs px-2 py-0.5 rounded-full font-medium transition-colors ${
+                      c.isSettlementTarget
+                        ? "bg-green-100 text-green-700 hover:bg-green-200"
+                        : "bg-gray-100 text-gray-400 hover:bg-gray-200"
+                    }`}>
+                    {c.isSettlementTarget ? "정산 ON" : "OFF"}
+                  </button>
                 </div>
                 <div className="w-20 flex justify-end items-center gap-1">
                   <button onClick={() => openEdit(c)} className="text-gray-300 hover:text-blue-500 transition-colors"><Pencil className="w-4 h-4" /></button>
