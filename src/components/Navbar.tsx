@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
-import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck } from "lucide-react";
+import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck, ShoppingCart } from "lucide-react";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
 interface NavLeaf {
@@ -54,9 +54,10 @@ const navItems: NavItem[] = [
     kind: "group",
     label: "원내거래",
     icon: Truck,
-    minRole: "BIZ",
-    matchPrefixes: ["/mypage/ledger"],
+    minRole: "BASIC",
+    matchPrefixes: ["/inhouse", "/mypage/ledger"],
     children: [
+      { href: "/inhouse", label: "주문 작성", icon: ShoppingCart },
       { href: "/mypage/ledger", label: "거래처 매출원장", icon: Building2 },
     ],
   },
