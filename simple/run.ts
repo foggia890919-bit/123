@@ -522,10 +522,6 @@ async function processDay(
   const liveSales = live.reduce((s, r) => s + r.salesAmount, 0);
   const canceledSales = canceled.reduce((s, r) => s + r.salesAmount, 0);
   const grossSales = liveSales + canceledSales;
-  const totalQty = live.reduce((s, r) => s + r.quantity, 0);
-  const totalBottles = live.reduce((s, r) => s + r.bottles, 0);
-  const totalShipments = new Set(live.map((r) => r.orderId)).size;
-  const totalCommission = live.reduce((s, r) => s + r.commission, 0);
 
   const lines: string[] = [];
   lines.push(`<b>📊 ${range.dateStr} 매출 보고</b>`);
@@ -536,29 +532,74 @@ async function processDay(
   }
   lines.push(`✅ <b>최종매출 ${won(liveSales)}</b> (${live.length}건)`);
   lines.push("");
-  lines.push(`📦 ${totalShipments}건 배송 / 출고 ${totalBottles}개 / ${totalQty}개 품목`);
-  lines.push(`💳 수수료 ${won(totalCommission)}`);
-  lines.push("");
 
-  if (summary.length === 0 && summaryCanceled.length === 0) {
-    lines.push("매출 없음.");
-  } else {
-    if (summary.length > 0) {
-      lines.push("<b>━━ 키워드별 (결제완료) ━━</b>");
-      for (const r of summary) {
-        lines.push(`• <b>${r.keyword}</b>\n   ${r.bottles}개 · ${r.orderIds.size}건 · ${won(r.sales)}`);
-      }
-    }
-    if (summaryCanceled.length > 0) {
-      if (summary.length > 0) lines.push("");
-      lines.push("<b>━━ 키워드별 (취소) ━━</b>");
-      for (const r of summaryCanceled) {
-        lines.push(`• <s>${r.keyword}</s>\n   ${r.bottles}개 · ${r.orderIds.size}건 · -${won(r.sales)}`);
-      }
-    }
+  // 스토어별 그룹화
+  const byStore = new Map<string, { live: Row[]; canceled: Row[] }>();
+  for (const r of allRows) {
+    const cur = byStore.get(r.store) ?? { live: [], canceled: [] };
+    if (r.isCanceled) cur.canceled.push(r);
+    else cur.live.push(r);
+    byStore.set(r.store, cur);
   }
-  if (errors.length > 0) {
+
+  for (const store of STORES) {
+    const data = byStore.get(store.name);
+    if (!data || (data.live.length === 0 && data.canceled.length === 0)) continue;
+
+    const sLive = data.live;
+    const sCancel = data.canceled;
+    const sLiveSales = sLive.reduce((s, r) => s + r.salesAmount, 0);
+    const sCancelSales = sCancel.reduce((s, r) => s + r.salesAmount, 0);
+    const sShipments = new Set(sLive.map((r) => r.orderId)).size;
+    const sBottles = sLive.reduce((s, r) => s + r.bottles, 0);
+    const sCommission = sLive.reduce((s, r) => s + r.commission, 0);
+
+    lines.push(`<b>━━ ${store.name} ━━</b>`);
+    lines.push(`✅ 매출 ${won(sLiveSales)} (${sLive.length}건)`);
+    if (sCancel.length > 0) lines.push(`❌ 취소 -${won(sCancelSales)} (${sCancel.length}건)`);
+    lines.push(`📦 ${sShipments}건 배송 / 출고 ${sBottles}개`);
+    lines.push(`💳 수수료 ${won(sCommission)}`);
+
+    // 키워드별 — 결제완료
+    const sBy = new Map<string, { keyword: string; bottles: number; sales: number; orderIds: Set<string> }>();
+    for (const r of sLive) {
+      const k = r.keyword || `(미분류)${r.productName.slice(0, 20)}`;
+      const cur = sBy.get(k) ?? { keyword: k, bottles: 0, sales: 0, orderIds: new Set() };
+      cur.bottles += r.bottles;
+      cur.sales += r.salesAmount;
+      cur.orderIds.add(r.orderId);
+      sBy.set(k, cur);
+    }
+    const sSummary = Array.from(sBy.values()).sort((a, b) => b.sales - a.sales);
+    for (const k of sSummary) {
+      lines.push(`• <b>${k.keyword}</b>  ${k.bottles}개 · ${k.orderIds.size}건 · ${won(k.sales)}`);
+    }
+
+    // 키워드별 — 취소
+    if (sCancel.length > 0) {
+      const sByC = new Map<string, { keyword: string; bottles: number; sales: number; orderIds: Set<string> }>();
+      for (const r of sCancel) {
+        const k = r.keyword || `(미분류)${r.productName.slice(0, 20)}`;
+        const cur = sByC.get(k) ?? { keyword: k, bottles: 0, sales: 0, orderIds: new Set() };
+        cur.bottles += r.bottles;
+        cur.sales += r.salesAmount;
+        cur.orderIds.add(r.orderId);
+        sByC.set(k, cur);
+      }
+      const sSummaryC = Array.from(sByC.values()).sort((a, b) => b.sales - a.sales);
+      for (const k of sSummaryC) {
+        lines.push(`• <s>${k.keyword}</s>  ${k.bottles}개 · ${k.orderIds.size}건 · -${won(k.sales)}`);
+      }
+    }
+
     lines.push("");
+  }
+
+  if (allRows.length === 0) {
+    lines.push("매출 없음.");
+  }
+
+  if (errors.length > 0) {
     lines.push("⚠️ <b>오류:</b>");
     for (const e of errors) lines.push(`• ${e.slice(0, 250)}`);
   }
