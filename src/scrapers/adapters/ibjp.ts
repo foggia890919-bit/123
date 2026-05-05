@@ -47,12 +47,15 @@ async function waitAny(page: Page, selector: string, timeout = 15_000): Promise<
 }
 
 async function dismissQDialogs(page: Page): Promise<void> {
-  // Quasar (Vue) dialog backdrop blocks all pointer events — dismiss with Escape
-  for (let i = 0; i < 3; i++) {
-    const backdrop = page.locator(".q-dialog__backdrop").first();
-    if (!await backdrop.isVisible({ timeout: 800 }).catch(() => false)) break;
+  for (let i = 0; i < 4; i++) {
+    const visible = await page.locator(".q-dialog__backdrop").first().isVisible({ timeout: 800 }).catch(() => false);
+    if (!visible) break;
+    // JS 직접 클릭 (Playwright 오버레이 감지 우회) + Escape 병행
+    await page.evaluate(() => {
+      (document.querySelector(".q-dialog__backdrop") as HTMLElement | null)?.click();
+    }).catch(() => {});
     await page.keyboard.press("Escape");
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(600);
   }
 }
 
