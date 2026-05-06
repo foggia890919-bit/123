@@ -111,6 +111,27 @@ export default function RegisterPage() {
 
   const selectedRole = roles.find((r) => r.value === form.role);
 
+  // 이미지 파일을 Canvas로 압축 (최대 1200px, JPEG 0.75 품질)
+  function compressImage(dataUri: string): Promise<string> {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const MAX = 1200;
+        let { width, height } = img;
+        if (width > MAX || height > MAX) {
+          if (width > height) { height = Math.round((height * MAX) / width); width = MAX; }
+          else { width = Math.round((width * MAX) / height); height = MAX; }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        canvas.getContext("2d")!.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", 0.75));
+      };
+      img.onerror = () => resolve(dataUri); // 압축 실패 시 원본 사용
+      img.src = dataUri;
+    });
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!phoneVerified) { setError("휴대폰 본인인증을 완료해주세요."); return; }
@@ -128,15 +149,27 @@ export default function RegisterPage() {
     };
     reader.onload = async () => {
       try {
-        const fileData = reader.result as string;
-        const res = await fetch("/api/auth/register", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...form,
-            document: { fileName: file.name, fileData, docType: selectedRole?.docLabel },
-          }),
-        });
+        let fileData = reader.result as string;
+        // 이미지면 압축, PDF는 그대로
+        if (file.type.startsWith("image/")) {
+          fileData = await compressImage(fileData);
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30_000);
+        let res: Response;
+        try {
+          res = await fetch("/api/auth/register", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ...form,
+              document: { fileName: file.name, fileData, docType: selectedRole?.docLabel },
+            }),
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timeout);
+        }
         let data: { error?: string } = {};
         try { data = await res.json(); } catch { /* non-JSON response */ }
         if (!res.ok) {
@@ -144,8 +177,13 @@ export default function RegisterPage() {
         } else {
           router.push("/login?registered=1");
         }
-      } catch {
-        setError("네트워크 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "";
+        if (msg.includes("abort") || msg.includes("signal")) {
+          setError("요청 시간이 초과됐어요. 잠시 후 다시 시도해주세요.");
+        } else {
+          setError("네트워크 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
+        }
       } finally {
         setLoading(false);
       }
