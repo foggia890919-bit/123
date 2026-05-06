@@ -7,8 +7,9 @@ import Link from "next/link";
 import {
   Building2, FileUp, FileSearch,
   ChevronRight, LayoutDashboard, ClipboardList,
-  BarChart3, PercentCircle, Pill,
+  BarChart3, PercentCircle, Pill, UserCheck,
   Calculator, Network, Users, PackageSearch, Mail, Package, ShoppingCart,
+  KeyRound, Inbox,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -85,6 +86,13 @@ const BIZ_MENU_GROUPS = [
   {
     label: "필터링 관리",
     items: [
+      {
+        href: "/biz/filter-requests",
+        label: "요청 내역",
+        desc: "본인 + 매칭한 상위법인이 받은 필터링 요청 내역 조회·회신",
+        icon: Inbox,
+        color: "bg-indigo-50 text-indigo-600",
+      },
       {
         href: "/biz/filter-status",
         label: "필터링 현황·플로우",

@@ -10,6 +10,7 @@ export async function GET(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
   const all = req.nextUrl.searchParams.get("all") === "true";
+  const scope = req.nextUrl.searchParams.get("scope"); // "corp" → BIZ가 본인+매칭한 상위법인 요청까지
   const select = {
     id: true, userId: true, userName: true, clientName: true, bizNumber: true,
     bizFileName: true, bizFileKey: true, companyName: true, status: true,
@@ -20,20 +21,33 @@ export async function GET(req: NextRequest) {
     mapping: { select: { managerName: true, managerPhone: true } },
   } as const;
 
-  const rawRequests = all
-    ? (user.role !== "ADMIN"
-        ? null
-        : await prisma.filterRequest.findMany({
-            orderBy: { createdAt: "desc" },
-            select: { ...select, user: { select: { name: true, email: true } } },
-          }))
-    : await prisma.filterRequest.findMany({
-        where: { userId: user.id },
-        orderBy: { createdAt: "desc" },
-        select: { ...select, user: { select: { name: true, email: true } } },
-      });
+  let where: Prisma.FilterRequestWhereInput;
+  if (all) {
+    if (user.role !== "ADMIN") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+    where = {};
+  } else if (scope === "corp") {
+    if (user.role !== "BIZ" && user.role !== "ADMIN") {
+      return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+    }
+    // 본인이 등록한 거래처(UserClient) 중 dealerType=UPPER_CORP 의 clientName 들을
+    // upperCorpName 으로 매칭. 즉 "내가 매칭해둔 상위법인" 이 받는 요청들도 같이 보이게.
+    const myUpperCorps = await prisma.userClient.findMany({
+      where: { userId: user.id, dealerType: "UPPER_CORP" },
+      select: { clientName: true },
+    });
+    const upperCorpNames = Array.from(new Set(myUpperCorps.map((c) => c.clientName).filter(Boolean)));
+    where = upperCorpNames.length > 0
+      ? { OR: [{ userId: user.id }, { upperCorpName: { in: upperCorpNames } }] }
+      : { userId: user.id };
+  } else {
+    where = { userId: user.id };
+  }
 
-  if (rawRequests === null) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+  const rawRequests = await prisma.filterRequest.findMany({
+    where,
+    orderBy: { createdAt: "desc" },
+    select: { ...select, user: { select: { name: true, email: true } } },
+  });
 
   // 상위법인 연락처를 UserClient에서 실시간 조회 (FilterMapping 복사본보다 우선)
   const corpNames = [...new Set(rawRequests.map((r) => r.upperCorpName).filter(Boolean))] as string[];
@@ -176,7 +190,7 @@ export async function PATCH(req: NextRequest) {
 
   const record = await prisma.filterRequest.findUnique({
     where: { id },
-    select: { userId: true, clientName: true, companyName: true, lowerCorpName: true },
+    select: { userId: true, clientName: true, companyName: true, lowerCorpName: true, upperCorpName: true },
   });
   if (!record) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
 
@@ -187,9 +201,21 @@ export async function PATCH(req: NextRequest) {
     if (replyText !== undefined) { data.replyText = replyText || null; data.repliedAt = new Date(); }
     if (respondedResult !== undefined) applyResult(data, respondedResult);
   } else if (user.role === "BIZ") {
+    // BIZ가 자기 매칭한 상위법인의 요청에 대해서는 status/replyText 도 가능
+    let isMyCorpReq = false;
     if (status !== undefined || replyText !== undefined) {
-      return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+      const myUpperCorps = await prisma.userClient.findMany({
+        where: { userId: user.id, dealerType: "UPPER_CORP" },
+        select: { clientName: true },
+      });
+      const myUpperCorpNames = new Set(myUpperCorps.map((c) => c.clientName));
+      isMyCorpReq = !!(record.upperCorpName && myUpperCorpNames.has(record.upperCorpName));
+      if (!isMyCorpReq) {
+        return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+      }
     }
+    if (status !== undefined) data.status = status;
+    if (replyText !== undefined) { data.replyText = replyText || null; data.repliedAt = new Date(); }
     // BIZ는 모든 요청에 결과 설정 가능
     if (respondedResult !== undefined) applyResult(data, respondedResult);
   } else {
