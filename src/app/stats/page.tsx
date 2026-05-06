@@ -964,12 +964,16 @@ export default function StatsPage() {
     const ratePct = (d.commissionRate ?? 0) + (d.additionalRate ?? 0);
     return qty * price * ratePct / 100;
   }
+  // 총수량 = filledManualDrugs 의 quantity 합 (사용자 편집에 즉시 반응).
+  // 총금액 = filledManualDrugs 의 (quantity × 마스터 DB 약가) 합. 마스터 매칭
+  // 안 된 약품은 unitPrice=0 이라 금액에 안 들어감 → noPriceCount 로 노출.
   const totalQuantity = filledManualDrugs.reduce((sum, d) => sum + (parseFloat(d.quantity) || 0), 0);
   const totalAmount = filledManualDrugs.reduce((sum, d) => {
     const qty = parseFloat(d.quantity) || 0;
     const price = d.unitPrice ?? 0;
     return sum + qty * price;
   }, 0);
+  const noPriceCount = filledManualDrugs.filter((d) => (parseFloat(d.quantity) || 0) > 0 && !d.unitPrice).length;
   const totalFee = filledManualDrugs.reduce((sum, d) => sum + rowCommission(d), 0);
 
   const isClientUnnapproved = selectedClient !== null && !selectedClient.approved;
@@ -1330,7 +1334,7 @@ export default function StatsPage() {
         {/* 2-pane data view: 사진매칭 / 최종수정 */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* 사진매칭: OCR 인식 원본 (read-only, 항상 4컬럼 헤더 표시) */}
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col">
+          <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col h-[calc(100vh-180px)] overflow-hidden">
             <div className="border-b border-gray-100 px-3 h-[44px] flex items-center gap-2 overflow-x-auto">
               <span className="text-xs font-semibold text-gray-700">① 사진매칭</span>
               <span className="text-xs bg-blue-50 text-blue-600 border border-blue-200 px-1.5 py-0.5 rounded">CLOVA + GEMINI</span>
@@ -1466,13 +1470,13 @@ export default function StatsPage() {
             ) : (
               <div className="flex-1 overflow-y-auto p-3">
                 <table className="w-full text-xs table-fixed">
-                  <thead>
-                    <tr className="border-b border-gray-200 bg-gray-50">
-                      <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[26%]">보험코드</th>
-                      <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[20%]">제약사</th>
-                      <th className="text-left py-1.5 px-1.5 font-medium text-gray-500">제품명</th>
-                      <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[14%]">수량</th>
-                      <th className="py-1.5 px-1 w-[34px]"></th>
+                  <thead className="sticky top-0 bg-gray-50 z-10">
+                    <tr className="border-b border-gray-200">
+                      <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[26%] bg-gray-50">보험코드</th>
+                      <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[20%] bg-gray-50">제약사</th>
+                      <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 bg-gray-50">제품명</th>
+                      <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[14%] bg-gray-50">수량</th>
+                      <th className="py-1.5 px-1 w-[34px] bg-gray-50"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1508,7 +1512,7 @@ export default function StatsPage() {
 
 
           {/* 최종수정: 사람 확정 입력 */}
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col">
+          <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col h-[calc(100vh-180px)] overflow-hidden">
             <div className="border-b border-gray-100 px-3 h-[44px] flex items-center gap-2 overflow-x-auto">
               <span className="text-xs font-semibold text-gray-700">② 최종 수정</span>
               <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{filledManualDrugs.length}건</span>
@@ -1530,18 +1534,24 @@ export default function StatsPage() {
               </button>
             </div>
 
-            {/* 총수량/총금액/총 수수료 + 최종 승인 — 페이지 스크롤 시에도 항상 보이게 sticky.
-                z-20 으로 sticky 이미지 헤더(z-30)보다 한 단계 낮게 두되, dropdown(z-40)·
-                자동완성 dropdown(z-40) 보다는 낮음. 행 검수 중에 버튼이 사라지지 않게. */}
-            <div className="sticky top-0 z-20 bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between gap-4 shadow-sm">
+            {/* 총수량/총금액/총 수수료 + 최종 승인 — 패널이 height 제한이라
+                자연스럽게 상단 고정 (rows 스크롤은 아래쪽 flex-1 영역에서). */}
+            <div className="bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between gap-4">
               <div className="flex items-center gap-6">
                 <div>
                   <p className="text-[10px] text-gray-400">총수량</p>
                   <p className="text-lg font-bold text-gray-900">{totalQuantity.toLocaleString()}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] text-gray-400">총금액</p>
+                  <p className="text-[10px] text-gray-400" title="수량 × 마스터 DB 약가의 합 (이미지 추출 아님)">
+                    총금액 <span className="text-gray-300">(수량×약가)</span>
+                  </p>
                   <p className="text-lg font-bold text-gray-900">{totalAmount.toLocaleString()}원</p>
+                  {noPriceCount > 0 && (
+                    <p className="text-[10px] text-amber-600 font-medium" title="보험코드 미매칭 또는 마스터 DB 에 없는 약품">
+                      약가 미적용 {noPriceCount}건
+                    </p>
+                  )}
                 </div>
                 <div>
                   <p className="text-[10px] text-gray-400">예상 총 수수료</p>
@@ -1565,14 +1575,14 @@ export default function StatsPage() {
 
             <div className="flex-1 overflow-y-auto p-3">
               <table className="w-full text-xs table-fixed">
-                <thead>
-                  <tr className="border-b border-gray-200 bg-gray-50">
-                    <th className="text-center py-1.5 px-1 font-medium text-gray-500 w-[44px]">#</th>
-                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[24%]">보험코드</th>
-                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[18%]">제약사</th>
-                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500">제품명</th>
-                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[14%]">수량</th>
-                    <th className="py-1.5 px-1 w-[34px]"></th>
+                <thead className="sticky top-0 bg-gray-50 z-10">
+                  <tr className="border-b border-gray-200">
+                    <th className="text-center py-1.5 px-1 font-medium text-gray-500 w-[44px] bg-gray-50">#</th>
+                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[24%] bg-gray-50">보험코드</th>
+                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[18%] bg-gray-50">제약사</th>
+                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 bg-gray-50">제품명</th>
+                    <th className="text-left py-1.5 px-1.5 font-medium text-gray-500 w-[14%] bg-gray-50">수량</th>
+                    <th className="py-1.5 px-1 w-[34px] bg-gray-50"></th>
                   </tr>
                 </thead>
                 <tbody>
