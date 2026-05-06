@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
-import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck, ShoppingCart, ClipboardList } from "lucide-react";
+import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck, ShoppingCart, ClipboardList, MessageCircle } from "lucide-react";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
 interface NavLeaf {
@@ -197,6 +197,16 @@ export default function Navbar() {
                 <span className="hidden sm:inline">로그인</span>
               </Link>
             )}
+
+            <a
+              href="https://open.kakao.com/me/ykmedi"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-yellow-900 bg-yellow-400 hover:bg-yellow-500 transition-colors"
+            >
+              <MessageCircle className="w-4 h-4" />
+              <span className="hidden sm:inline">카톡 문의</span>
+            </a>
 
             {(["BIZ", "ADMIN"] as string[]).includes((session?.user as { role?: string } | undefined)?.role ?? "") && (
               <Link href="/biz"
