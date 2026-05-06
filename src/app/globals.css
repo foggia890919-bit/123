@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #c0b8ac;
+  --foreground: #1a130b;
 }
 
 @theme inline {
@@ -12,9 +12,40 @@
   --font-mono: var(--font-geist-mono);
 }
 
+@theme {
+  /* white → 따뜻한 크림 (버튼 text-white 가독성 유지) */
+  --color-white: #faf5ee;
+
+  /* gray 스케일 → 따뜻한 베이지 계열 */
+  --color-gray-50:  #f2ece2;
+  --color-gray-100: #e5ddd2;
+  --color-gray-200: #cec7bc;
+  --color-gray-300: #b0a898;
+  --color-gray-400: #8c8478;
+  --color-gray-500: #6a6258;
+  --color-gray-600: #504840;
+  --color-gray-700: #3c342c;
+  --color-gray-800: #281f18;
+  --color-gray-900: #1a130b;
+  --color-gray-950: #100c06;
+
+  /* blue → 주황색 (Tailwind orange 스케일) */
+  --color-blue-50:  #fff7ed;
+  --color-blue-100: #ffedd5;
+  --color-blue-200: #fed7aa;
+  --color-blue-300: #fdba74;
+  --color-blue-400: #fb923c;
+  --color-blue-500: #f97316;
+  --color-blue-600: #ea580c;
+  --color-blue-700: #c2410c;
+  --color-blue-800: #9a3412;
+  --color-blue-900: #7c2d12;
+  --color-blue-950: #431407;
+}
+
 body {
-  background: #ffffff;
-  color: #171717;
+  background: var(--background);
+  color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
 

@@ -26,7 +26,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ko" className={geist.variable}>
-      <body className="min-h-screen bg-gray-50 antialiased">
+      <body className="min-h-screen bg-background antialiased">
         <Providers>
           <Navbar />
           <main className="max-w-screen-2xl mx-auto px-4 py-6">{children}</main>
