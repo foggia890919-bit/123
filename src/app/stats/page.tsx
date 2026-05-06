@@ -980,6 +980,19 @@ export default function StatsPage() {
   const suspectedSummaryRows = totalQuantity > 0
     ? filledManualDrugs.filter((d) => (parseFloat(d.quantity) || 0) > totalQuantity * 0.3).length
     : 0;
+  // 중복 보험코드 감지 — 같은 9자리 코드가 여러 행에 등장. OCR 이 한 행을 두 번 읽거나
+  // 다른 행의 코드를 잘못 인식해 같은 코드로 만든 케이스. 정당한 경우 (진료실 1·2)
+  // 도 있어 경고만 노출, 자동 제거는 안 함.
+  const dupCodeRows = (() => {
+    const counts = new Map<string, number>();
+    for (const d of filledManualDrugs) {
+      const c = (d.insuranceCode || "").replace(/\D/g, "");
+      if (c.length === 9) counts.set(c, (counts.get(c) ?? 0) + 1);
+    }
+    let dups = 0;
+    for (const [, n] of counts) if (n > 1) dups += n;
+    return dups;
+  })();
   const totalFee = filledManualDrugs.reduce((sum, d) => sum + rowCommission(d), 0);
 
   const isClientUnnapproved = selectedClient !== null && !selectedClient.approved;
@@ -1340,7 +1353,7 @@ export default function StatsPage() {
         {/* 2-pane data view: 사진매칭 / 최종수정 */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* 사진매칭: OCR 인식 원본 (read-only, 항상 4컬럼 헤더 표시) */}
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col h-[calc(100vh-180px)] overflow-hidden">
+          <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col">
             <div className="border-b border-gray-100 px-3 h-[44px] flex items-center gap-2 overflow-x-auto">
               <span className="text-xs font-semibold text-gray-700">① 사진매칭</span>
               <span className="text-xs bg-blue-50 text-blue-600 border border-blue-200 px-1.5 py-0.5 rounded">CLOVA + GEMINI</span>
@@ -1474,7 +1487,7 @@ export default function StatsPage() {
                 </div>
               </div>
             ) : (
-              <div className="flex-1 overflow-y-auto p-3">
+              <div className="overflow-y-auto p-3 max-h-[calc(100vh-380px)] min-h-[200px]">
                 <table className="w-full text-xs table-fixed">
                   <thead className="sticky top-0 bg-gray-50 z-10">
                     <tr className="border-b border-gray-200">
@@ -1518,7 +1531,7 @@ export default function StatsPage() {
 
 
           {/* 최종수정: 사람 확정 입력 */}
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col h-[calc(100vh-180px)] overflow-hidden">
+          <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col">
             <div className="border-b border-gray-100 px-3 h-[44px] flex items-center gap-2 overflow-x-auto">
               <span className="text-xs font-semibold text-gray-700">② 최종 수정</span>
               <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{filledManualDrugs.length}건</span>
@@ -1554,6 +1567,11 @@ export default function StatsPage() {
                       ⚠ 합계행 의심 {suspectedSummaryRows}건
                     </p>
                   )}
+                  {dupCodeRows > 0 && (
+                    <p className="text-[10px] text-red-600 font-medium" title="같은 9자리 보험코드가 여러 행에 등장 — OCR 이 한 행을 두 번 읽었거나 다른 행 코드를 잘못 읽음">
+                      ⚠ 보험코드 중복 {dupCodeRows}건
+                    </p>
+                  )}
                 </div>
                 <div>
                   <p className="text-[10px] text-gray-400" title="약가 매칭된 행의 (수량 × 마스터 약가) 합">
@@ -1586,7 +1604,7 @@ export default function StatsPage() {
               )}
             </div>
 
-            <div className="flex-1 overflow-y-auto p-3">
+            <div className="overflow-y-auto p-3 max-h-[calc(100vh-380px)] min-h-[200px]">
               <table className="w-full text-xs table-fixed">
                 <thead className="sticky top-0 bg-gray-50 z-10">
                   <tr className="border-b border-gray-200">
