@@ -55,6 +55,7 @@ export async function GET(req: NextRequest) {
   const ingredientOnly = req.nextUrl.searchParams.get("ingredientOnly") === "true";
   const companiesRaw = req.nextUrl.searchParams.get("companies") || "";
   const companyList = companiesRaw.split(",").map((s) => s.trim()).filter(Boolean);
+  const paymentType = req.nextUrl.searchParams.get("paymentType")?.trim() || "";
   // fast=true: 자동완성 전용 — productName 만 검색, count/stock 스킵
   const fast = req.nextUrl.searchParams.get("fast") === "true";
 
@@ -95,6 +96,7 @@ export async function GET(req: NextRequest) {
     AND: [
       settlementOnly ? { isSettlement: true } : {},
       companyList.length > 0 ? { companyName: { in: companyList } } : {},
+      paymentType ? { paymentType } : {},
       ingredientCodeParam
         ? ingredientCodeWhere
         : q

@@ -133,6 +133,8 @@ export default function SearchPage() {
     }
   }
 
+  const [selectedPaymentType, setSelectedPaymentType] = useState("");
+
   const [companies, setCompanies] = useState<CompanyOpt[]>([]);
   const [selectedCompanies, setSelectedCompanies] = useState<Set<string>>(new Set());
   const [companyMenuOpen, setCompanyMenuOpen] = useState(false);
@@ -170,7 +172,7 @@ export default function SearchPage() {
   }
   function clearCompanies() { setSelectedCompanies(new Set()); }
 
-  async function runSearch(q: string, cos: Set<string>) {
+  async function runSearch(q: string, cos: Set<string>, pt?: string) {
     if (!q.trim() && cos.size === 0) return;
     if (!consume()) { setShowGate(true); return; }
     setLoading(true); setSearched(true); setDisplayedQuery(q);
@@ -179,6 +181,8 @@ export default function SearchPage() {
       if (q.trim()) params.set("q", q);
       if (session?.user?.id) params.set("userId", session.user.id);
       if (cos.size > 0) params.set("companies", Array.from(cos).join(","));
+      const activePaymentType = pt !== undefined ? pt : selectedPaymentType;
+      if (activePaymentType) params.set("paymentType", activePaymentType);
       params.set("limit", "500");
       const res = await fetch(`/api/medications/search?${params.toString()}`);
       const data = await res.json();
@@ -201,7 +205,7 @@ export default function SearchPage() {
     await runSearch(item.query, cos);
   }
 
-  async function refetchWithCompanies(nextSet: Set<string>) {
+  async function refetchWithCompanies(nextSet: Set<string>, pt?: string) {
     if (!searched) return;
     if (!query.trim() && nextSet.size === 0) { setResults([]); setTotal(0); return; }
     setLoading(true);
@@ -210,6 +214,8 @@ export default function SearchPage() {
       if (query.trim()) params.set("q", query);
       if (session?.user?.id) params.set("userId", session.user.id);
       if (nextSet.size > 0) params.set("companies", Array.from(nextSet).join(","));
+      const activePaymentType = pt !== undefined ? pt : selectedPaymentType;
+      if (activePaymentType) params.set("paymentType", activePaymentType);
       params.set("limit", "500");
       const res = await fetch(`/api/medications/search?${params.toString()}`);
       const data = await res.json();
@@ -414,6 +420,30 @@ export default function SearchPage() {
 
         {searched && (
           <>
+            {/* paymentType 필터 */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {(["전체", "급여", "비급여", "선별급여"] as const).map((label) => {
+                const value = label === "전체" ? "" : label;
+                const active = selectedPaymentType === value;
+                return (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => {
+                      setSelectedPaymentType(value);
+                      refetchWithCompanies(selectedCompanies, value);
+                    }}
+                    className={`text-xs rounded-full border px-2.5 py-1 transition-colors ${
+                      active
+                        ? "bg-blue-600 border-blue-600 text-white font-semibold"
+                        : "bg-white border-gray-300 text-gray-600 hover:border-blue-400 hover:text-blue-600"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
             <div className="flex items-center justify-between flex-wrap gap-3">
               <p className="text-sm text-gray-500">검색 결과 <span className="font-semibold text-gray-900">{total.toLocaleString()}개</span></p>
               <div className="flex items-center gap-2">
