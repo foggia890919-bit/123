@@ -237,10 +237,12 @@ export async function POST(req: NextRequest) {
       droppedReason: c.reason,
     }));
     if (positionalDrugs.length >= 3) {
-      // positional 추출이 충분하면 LLM 호출 자체 생략 — 단가/순서 보장됨
+      // positional 추출이 충분하면 LLM 호출 자체 생략 — 단가/순서 보장됨.
+      // 부분 추출도 행은 유지: 어떤 한 필드라도 인식됐으면 빈칸은 검수자가 채움.
+      // (이미지에 4행 있고 OCR 이 일부 필드 놓쳤어도 4행 모두 보이게)
       pipeline.mergeUsed = "clova-positional";
       merged = positionalDrugs
-        .filter((p) => p.productName && (p.quantity || p.insuranceCode))
+        .filter((p) => p.productName || p.quantity || p.insuranceCode)
         .map((p) => ({
           insuranceCode: p.insuranceCode,
           productName: p.productName,
@@ -318,8 +320,10 @@ export async function POST(req: NextRequest) {
     );
     const beforeFilter = merged.length;
     const boostedMerged = merged
-      // 1) 그룹/섹션 라벨 제거 — 진짜 약품명이 아닌 것 (제형 키워드 없음 + 짧은 코드만)
-      .filter((m) => isLikelyDrug(m.productName))
+      // 1) 그룹/섹션 라벨 제거 — 진짜 약품명이 아닌 것 (제형 키워드 없음 + 짧은 코드만).
+      //    productName 자체가 비어있으면 (다른 필드만 있는 부분 추출 행) 통과 시킴
+      //    — 사용자가 수동으로 productName 채우게.
+      .filter((m) => !m.productName || isLikelyDrug(m.productName))
       // 2) 거래처 컨텍스트 매칭 시 +5 보너스
       .map((m) => {
         const key = (m.insuranceCode || m.productName).toLowerCase();
@@ -367,7 +371,10 @@ export async function POST(req: NextRequest) {
       const llmConf = clamp01_100(item.confidence);
       const baselineConf = Math.max(llmConf, completeness);
       const finalConfidence = matched.matchedMedicationId ? matched.matchConfidence : baselineConf;
-      const manualCheck = finalConfidence < 95;
+      // 빈 필드(productName/insuranceCode 누락)도 검수 대상으로 강제 — 사용자가
+      // 빨간색 행으로 빠르게 식별해서 빈칸 채울 수 있게.
+      const hasMissingField = !item.productName || !item.insuranceCode;
+      const manualCheck = finalConfidence < 95 || hasMissingField;
       if (matched.matchedMedicationId) {
         pipeline.masterMatchedCount++;
       } else {
