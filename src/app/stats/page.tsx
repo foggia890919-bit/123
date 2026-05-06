@@ -1530,7 +1530,10 @@ export default function StatsPage() {
               </button>
             </div>
 
-            <div className="border-b border-gray-100 px-4 py-3 flex items-center justify-between gap-4">
+            {/* 총수량/총금액/총 수수료 + 최종 승인 — 페이지 스크롤 시에도 항상 보이게 sticky.
+                z-20 으로 sticky 이미지 헤더(z-30)보다 한 단계 낮게 두되, dropdown(z-40)·
+                자동완성 dropdown(z-40) 보다는 낮음. 행 검수 중에 버튼이 사라지지 않게. */}
+            <div className="sticky top-0 z-20 bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between gap-4 shadow-sm">
               <div className="flex items-center gap-6">
                 <div>
                   <p className="text-[10px] text-gray-400">총수량</p>
