@@ -1487,7 +1487,7 @@ export default function StatsPage() {
                 </div>
               </div>
             ) : (
-              <div className="overflow-y-auto p-3 max-h-[calc(100vh-380px)] min-h-[200px]">
+              <div className="overflow-y-auto p-3 max-h-[calc(100vh-580px)] min-h-[200px]">
                 <table className="w-full text-xs table-fixed">
                   <thead className="sticky top-0 bg-gray-50 z-10">
                     <tr className="border-b border-gray-200">
@@ -1604,7 +1604,7 @@ export default function StatsPage() {
               )}
             </div>
 
-            <div className="overflow-y-auto p-3 max-h-[calc(100vh-380px)] min-h-[200px]">
+            <div className="overflow-y-auto p-3 max-h-[calc(100vh-580px)] min-h-[200px]">
               <table className="w-full text-xs table-fixed">
                 <thead className="sticky top-0 bg-gray-50 z-10">
                   <tr className="border-b border-gray-200">
