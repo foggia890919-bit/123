@@ -964,12 +964,16 @@ export default function StatsPage() {
     const ratePct = (d.commissionRate ?? 0) + (d.additionalRate ?? 0);
     return qty * price * ratePct / 100;
   }
+  // 총수량 = filledManualDrugs 의 quantity 합 (사용자 편집에 즉시 반응).
+  // 총금액 = filledManualDrugs 의 (quantity × 마스터 DB 약가) 합. 마스터 매칭
+  // 안 된 약품은 unitPrice=0 이라 금액에 안 들어감 → noPriceCount 로 노출.
   const totalQuantity = filledManualDrugs.reduce((sum, d) => sum + (parseFloat(d.quantity) || 0), 0);
   const totalAmount = filledManualDrugs.reduce((sum, d) => {
     const qty = parseFloat(d.quantity) || 0;
     const price = d.unitPrice ?? 0;
     return sum + qty * price;
   }, 0);
+  const noPriceCount = filledManualDrugs.filter((d) => (parseFloat(d.quantity) || 0) > 0 && !d.unitPrice).length;
   const totalFee = filledManualDrugs.reduce((sum, d) => sum + rowCommission(d), 0);
 
   const isClientUnnapproved = selectedClient !== null && !selectedClient.approved;
@@ -1539,8 +1543,15 @@ export default function StatsPage() {
                   <p className="text-lg font-bold text-gray-900">{totalQuantity.toLocaleString()}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] text-gray-400">총금액</p>
+                  <p className="text-[10px] text-gray-400" title="수량 × 마스터 DB 약가의 합 (이미지 추출 아님)">
+                    총금액 <span className="text-gray-300">(수량×약가)</span>
+                  </p>
                   <p className="text-lg font-bold text-gray-900">{totalAmount.toLocaleString()}원</p>
+                  {noPriceCount > 0 && (
+                    <p className="text-[10px] text-amber-600 font-medium" title="보험코드 미매칭 또는 마스터 DB 에 없는 약품">
+                      약가 미적용 {noPriceCount}건
+                    </p>
+                  )}
                 </div>
                 <div>
                   <p className="text-[10px] text-gray-400">예상 총 수수료</p>
