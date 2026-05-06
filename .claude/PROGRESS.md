@@ -35,6 +35,18 @@
 
 ---
 
+## 통합검색
+
+| 날짜 | 작업 | 결과 |
+|---|---|---|
+| 2026-05-06 | paymentType 필터 추가 (API + 검색 UI) | 완료 |
+
+**변경 파일**:
+- `src/app/api/medications/search/route.ts` — `paymentType` query param 파싱 및 where 조건 적용
+- `src/app/search/page.tsx` — `selectedPaymentType` state, paymentType chip 버튼 UI, runSearch/refetchWithCompanies에 pt 인자 전달
+
+---
+
 ## 🗒 작업 로그
 
 | 시각 | 메뉴 | 모드 | 요약 | 결과 |
