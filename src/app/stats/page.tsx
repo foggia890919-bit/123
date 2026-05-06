@@ -974,6 +974,11 @@ export default function StatsPage() {
     return sum + qty * price;
   }, 0);
   const noPriceCount = filledManualDrugs.filter((d) => (parseFloat(d.quantity) || 0) > 0 && !d.unitPrice).length;
+  // 합계행 자동 감지 — 한 행의 수량이 전체 합의 30% 이상이면 합계행으로 OCR 됐을 가능성
+  // (정상 케이스: 한 약품이 전체 처방의 30%+ 차지 거의 없음). 알림으로만 노출.
+  const suspectedSummaryRows = totalQuantity > 0
+    ? filledManualDrugs.filter((d) => (parseFloat(d.quantity) || 0) > totalQuantity * 0.3).length
+    : 0;
   const totalFee = filledManualDrugs.reduce((sum, d) => sum + rowCommission(d), 0);
 
   const isClientUnnapproved = selectedClient !== null && !selectedClient.approved;
@@ -1541,6 +1546,11 @@ export default function StatsPage() {
                 <div>
                   <p className="text-[10px] text-gray-400">총수량</p>
                   <p className="text-lg font-bold text-gray-900">{totalQuantity.toLocaleString()}</p>
+                  {suspectedSummaryRows > 0 && (
+                    <p className="text-[10px] text-red-600 font-medium" title="한 행의 수량이 전체의 30%+ — 합계행이 약품으로 잘못 OCR 됐을 가능성">
+                      ⚠ 합계행 의심 {suspectedSummaryRows}건
+                    </p>
+                  )}
                 </div>
                 <div>
                   <p className="text-[10px] text-gray-400" title="수량 × 마스터 DB 약가의 합 (이미지 추출 아님)">
