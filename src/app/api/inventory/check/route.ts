@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
     }
     const results: OutRow[] = codes.flatMap<OutRow>(code => {
       const matched = rows.filter(r => r.insuranceCode === code);
-      if (matched.length === 0) return [{ siteKey: "", insuranceCode: code, items: [], error: "no snapshot yet" }];
+      if (matched.length === 0) return [];
       return matched.map(r => ({
         siteKey: r.siteKey,
         insuranceCode: code,

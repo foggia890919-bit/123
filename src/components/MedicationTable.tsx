@@ -43,24 +43,50 @@ function StockButton({ code, productName }: { code: string; productName: string 
 
 function StockColumnCell({ code, productName, fallbackStock }: { code: string; productName: string; fallbackStock: number | null }) {
   const entry = useStockEntry(code);
+  const refreshBtn = (
+    <button
+      type="button"
+      onClick={() => fetchStock(code, productName, true, STOCK_SITES)}
+      className="ml-1 text-gray-300 hover:text-emerald-600 transition-colors align-middle"
+      title="재고 새로고침"
+    >
+      ↻
+    </button>
+  );
   if (entry.status === "idle") {
     return (
-      <span className="text-gray-400">
-        {fallbackStock != null ? (fallbackStock > 0 ? fallbackStock.toLocaleString() : "품절") : "-"}
+      <span className="inline-flex items-center gap-0.5">
+        <span className="text-gray-400">
+          {fallbackStock != null ? (fallbackStock > 0 ? fallbackStock.toLocaleString() : "품절") : "-"}
+        </span>
+        {refreshBtn}
       </span>
     );
   }
   if (entry.status === "loading") return <Loader2 className="w-3 h-3 animate-spin text-gray-400" />;
   if (entry.status === "error") {
-    return <span className="text-red-400 text-[10px]" title={entry.error}>오류</span>;
+    return (
+      <span className="inline-flex items-center gap-0.5">
+        <span className="text-red-400 text-[10px]" title={entry.error}>오류</span>
+        {refreshBtn}
+      </span>
+    );
   }
   const rows = (entry.results ?? []).filter((r) => STOCK_SITES.includes(r.siteKey) && !r.error);
   const total = rows.reduce((sum, r) => sum + r.items.reduce((s, i) => s + (i.stock ?? 0), 0), 0);
   const hasData = rows.length > 0;
-  if (!hasData) return <span className="text-gray-300 text-[10px]">-</span>;
+  if (!hasData) return (
+    <span className="inline-flex items-center gap-0.5">
+      <span className="text-gray-300 text-[10px]">-</span>
+      {refreshBtn}
+    </span>
+  );
   return (
-    <span className={total > 0 ? "text-green-700 font-medium" : "text-red-400"}>
-      {total > 0 ? total.toLocaleString() : "품절"}
+    <span className="inline-flex items-center gap-0.5">
+      <span className={total > 0 ? "text-green-700 font-medium" : "text-red-400"}>
+        {total > 0 ? total.toLocaleString() : "품절"}
+      </span>
+      {refreshBtn}
     </span>
   );
 }
