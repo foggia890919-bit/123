@@ -964,6 +964,12 @@ export default function StatsPage() {
     const ratePct = (d.commissionRate ?? 0) + (d.additionalRate ?? 0);
     return qty * price * ratePct / 100;
   }
+  const totalQuantity = filledManualDrugs.reduce((sum, d) => sum + (parseFloat(d.quantity) || 0), 0);
+  const totalAmount = filledManualDrugs.reduce((sum, d) => {
+    const qty = parseFloat(d.quantity) || 0;
+    const price = d.unitPrice ?? 0;
+    return sum + qty * price;
+  }, 0);
   const totalFee = filledManualDrugs.reduce((sum, d) => sum + rowCommission(d), 0);
 
   const isClientUnnapproved = selectedClient !== null && !selectedClient.approved;
@@ -1628,11 +1634,21 @@ export default function StatsPage() {
               </p>
             </div>
 
-            <div className="border-t border-gray-100 px-4 py-3 flex items-center justify-between">
-              <div>
-                <p className="text-[10px] text-gray-400">예상 총 수수료</p>
-                <p className="text-lg font-bold text-gray-900">{totalFee.toLocaleString()}원</p>
-                {isClientUnnapproved && <p className="text-[10px] text-yellow-600 font-medium">정산서 미반영 (승인전)</p>}
+            <div className="border-t border-gray-100 px-4 py-3 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-6">
+                <div>
+                  <p className="text-[10px] text-gray-400">총수량</p>
+                  <p className="text-lg font-bold text-gray-900">{totalQuantity.toLocaleString()}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-gray-400">총금액</p>
+                  <p className="text-lg font-bold text-gray-900">{totalAmount.toLocaleString()}원</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-gray-400">예상 총 수수료</p>
+                  <p className="text-lg font-bold text-gray-900">{totalFee.toLocaleString()}원</p>
+                  {isClientUnnapproved && <p className="text-[10px] text-yellow-600 font-medium">정산서 미반영 (승인전)</p>}
+                </div>
               </div>
               {submitted ? (
                 <div className="flex items-center gap-2 text-green-600">
