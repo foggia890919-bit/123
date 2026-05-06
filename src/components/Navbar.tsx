@@ -95,7 +95,13 @@ export default function Navbar() {
           {/* 로고 */}
           <Link href="/" className="flex items-center gap-2 shrink-0">
             <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <rect width="32" height="32" rx="8" fill="#2563EB"/>
+              <defs>
+                <linearGradient id="kmd-g" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stopColor="#fb923c"/>
+                  <stop offset="100%" stopColor="#c2410c"/>
+                </linearGradient>
+              </defs>
+              <rect width="32" height="32" rx="8" fill="url(#kmd-g)"/>
               <text x="16" y="22" textAnchor="middle" fill="white" fontSize="13" fontWeight="800" fontFamily="Arial, sans-serif" letterSpacing="-0.5">KMD</text>
             </svg>
             <span className="font-bold text-gray-900 text-lg tracking-tight">Korea Medicine Data</span>
