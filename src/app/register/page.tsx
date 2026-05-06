@@ -115,29 +115,40 @@ export default function RegisterPage() {
     e.preventDefault();
     if (!phoneVerified) { setError("휴대폰 본인인증을 완료해주세요."); return; }
     if (!file) { setError("첨부파일을 업로드해주세요."); return; }
+    if (file.size > 10 * 1024 * 1024) { setError("파일 크기는 10MB 이하여야 합니다."); return; }
 
     setLoading(true);
     setError("");
 
     const reader = new FileReader();
     reader.readAsDataURL(file);
-    reader.onload = async () => {
-      const fileData = reader.result as string;
-      const res = await fetch("/api/auth/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...form,
-          document: { fileName: file.name, fileData, docType: selectedRole?.docLabel },
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "회원가입에 실패했어요.");
-      } else {
-        router.push("/login?registered=1");
-      }
+    reader.onerror = () => {
+      setError("파일을 읽을 수 없어요. 다시 시도해주세요.");
       setLoading(false);
+    };
+    reader.onload = async () => {
+      try {
+        const fileData = reader.result as string;
+        const res = await fetch("/api/auth/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...form,
+            document: { fileName: file.name, fileData, docType: selectedRole?.docLabel },
+          }),
+        });
+        let data: { error?: string } = {};
+        try { data = await res.json(); } catch { /* non-JSON response */ }
+        if (!res.ok) {
+          setError(data.error || "회원가입에 실패했어요. 잠시 후 다시 시도해주세요.");
+        } else {
+          router.push("/login?registered=1");
+        }
+      } catch {
+        setError("네트워크 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
+      } finally {
+        setLoading(false);
+      }
     };
   }
 
