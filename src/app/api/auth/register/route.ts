@@ -24,10 +24,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "전화번호를 입력해주세요." }, { status: 400 });
     }
 
-    // 휴대폰 인증 완료 여부 확인 (30분 이내 인증)
+    // 휴대폰 인증 완료 여부 확인 (시간 제한 없음 — 인증 후 가입 완료 시 삭제됨)
     const verified = await prisma.$queryRawUnsafe<{ id: string }[]>(
       `SELECT "id" FROM "SmsOtp"
-       WHERE "phone"=$1 AND "verified"=true AND "createdAt" > NOW() - INTERVAL '30 minutes'
+       WHERE "phone"=$1 AND "verified"=true
        ORDER BY "createdAt" DESC LIMIT 1`,
       digits
     );
