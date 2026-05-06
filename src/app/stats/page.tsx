@@ -964,14 +964,13 @@ export default function StatsPage() {
     const ratePct = (d.commissionRate ?? 0) + (d.additionalRate ?? 0);
     return qty * price * ratePct / 100;
   }
-  // 총합계 로직: OCR 보험코드 → 마스터 DB 약가 매칭 성공한 행만 totals 에 반영.
-  // 매칭 실패 행(unitPrice 없음) 은 사용자에게 보이지만 합계에는 포함 안 함 —
-  // 검수자가 보험코드 정정해서 약가 잡히면 그때부터 합계에 반영됨.
-  const validForTotals = filledManualDrugs.filter(
-    (d) => (parseFloat(d.quantity) || 0) > 0 && (d.unitPrice ?? 0) > 0,
-  );
-  const totalQuantity = validForTotals.reduce((sum, d) => sum + (parseFloat(d.quantity) || 0), 0);
-  const totalAmount = validForTotals.reduce((sum, d) => {
+  // 총합계 로직 — 사용자 검수 흐름에 맞춤:
+  //   총수량 = OCR 이 잡은 모든 행의 수량 합 (이미지 헤더와 비교해 누락 즉시 식별)
+  //   총금액 = 약가 매칭된 행의 (수량 × 약가) 합 (실제 청구 금액)
+  //   총수료 = 약가 매칭된 행의 수수료 합
+  // 사용자가 한눈에 보고 검수 필요 여부 빠르게 판단 가능.
+  const totalQuantity = filledManualDrugs.reduce((sum, d) => sum + (parseFloat(d.quantity) || 0), 0);
+  const totalAmount = filledManualDrugs.reduce((sum, d) => {
     const qty = parseFloat(d.quantity) || 0;
     const price = d.unitPrice ?? 0;
     return sum + qty * price;
@@ -979,9 +978,9 @@ export default function StatsPage() {
   const noPriceCount = filledManualDrugs.filter((d) => (parseFloat(d.quantity) || 0) > 0 && !d.unitPrice).length;
   // 합계행 자동 감지 — 한 행의 수량이 전체 합의 30% 이상이면 합계행으로 OCR 됐을 가능성
   const suspectedSummaryRows = totalQuantity > 0
-    ? validForTotals.filter((d) => (parseFloat(d.quantity) || 0) > totalQuantity * 0.3).length
+    ? filledManualDrugs.filter((d) => (parseFloat(d.quantity) || 0) > totalQuantity * 0.3).length
     : 0;
-  const totalFee = validForTotals.reduce((sum, d) => sum + rowCommission(d), 0);
+  const totalFee = filledManualDrugs.reduce((sum, d) => sum + rowCommission(d), 0);
 
   const isClientUnnapproved = selectedClient !== null && !selectedClient.approved;
 
@@ -1546,8 +1545,8 @@ export default function StatsPage() {
             <div className="bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between gap-4">
               <div className="flex items-center gap-6">
                 <div>
-                  <p className="text-[10px] text-gray-400" title="약가 매칭 성공 행만 합계에 반영">
-                    총수량 <span className="text-gray-300">(약가 매칭 {validForTotals.length}건)</span>
+                  <p className="text-[10px] text-gray-400" title="OCR 이 잡은 모든 행의 수량 합. 이미지 헤더의 총수량과 비교해 누락 여부 즉시 확인">
+                    총수량 <span className="text-gray-300">(OCR 전체)</span>
                   </p>
                   <p className="text-lg font-bold text-gray-900">{totalQuantity.toLocaleString()}</p>
                   {suspectedSummaryRows > 0 && (
@@ -1557,13 +1556,13 @@ export default function StatsPage() {
                   )}
                 </div>
                 <div>
-                  <p className="text-[10px] text-gray-400" title="약가 매칭 성공 행의 (수량 × 약가) 합">
+                  <p className="text-[10px] text-gray-400" title="약가 매칭된 행의 (수량 × 마스터 약가) 합">
                     총금액 <span className="text-gray-300">(수량×약가)</span>
                   </p>
                   <p className="text-lg font-bold text-gray-900">{totalAmount.toLocaleString()}원</p>
                   {noPriceCount > 0 && (
-                    <p className="text-[10px] text-amber-600 font-medium" title="보험코드 미매칭 — 합계에서 제외됨">
-                      약가 미적용 {noPriceCount}건 (합계 제외)
+                    <p className="text-[10px] text-amber-600 font-medium" title="보험코드 미매칭 — 약가 못 가져와서 0원으로 합산">
+                      약가 미적용 {noPriceCount}건
                     </p>
                   )}
                 </div>
