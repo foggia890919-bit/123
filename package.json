@@ -11,7 +11,8 @@
     "scrape:poc": "tsx src/scrapers/run.ts poc",
     "scrape:frequent": "tsx src/scrapers/run.ts frequent",
     "scrape:full": "tsx src/scrapers/run.ts full",
-    "scrape:inspect": "tsx src/scrapers/inspect.ts"
+    "scrape:inspect": "tsx src/scrapers/inspect.ts",
+    "scrape:naver": "tsx examples/naver-realestate/run.ts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",
