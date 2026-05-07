@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
-import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck, ShoppingCart, ClipboardList, MessageCircle } from "lucide-react";
+import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck, ShoppingCart, ClipboardList, MessageCircle, TrendingUp, Wallet } from "lucide-react";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
 interface NavLeaf {
@@ -182,6 +182,14 @@ export default function Navbar() {
                     <Link href="/mypage" onClick={() => setUserOpen(false)}
                       className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
                       <User className="w-4 h-4 text-gray-400" />마이페이지
+                    </Link>
+                    <Link href="/mypage/performance" onClick={() => setUserOpen(false)}
+                      className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
+                      <TrendingUp className="w-4 h-4 text-gray-400" />실적관리
+                    </Link>
+                    <Link href="/mypage/settlements" onClick={() => setUserOpen(false)}
+                      className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
+                      <Wallet className="w-4 h-4 text-gray-400" />정산관리
                     </Link>
                     <Link href="/mypage/clients" onClick={() => setUserOpen(false)}
                       className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
