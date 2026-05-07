@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 
+interface FinalDrug {
+  companyName?: string;
+  productName?: string;
+  quantity?: string;
+  unitPrice?: number | null;
+}
+
 export async function GET(req: NextRequest) {
   const session = await requireSession();
   if (isNextResponse(session)) return session;
@@ -17,17 +24,38 @@ export async function GET(req: NextRequest) {
       id: true, year: true, month: true,
       hospitalName: true, companyName: true,
       totalFee: true, status: true, createdAt: true,
+      ocrData: true,
     },
   });
 
+  // 현재/전월 (year=올해일 때만 의미 있음)
+  const now = new Date();
+  const curMonth = now.getFullYear() === year ? now.getMonth() + 1 : 12;
+  const prevMonth = curMonth === 1 ? null : curMonth - 1;
+
   // 월별 집계
-  const byMonth: Record<number, { count: number; hospitals: Set<string>; companies: Set<string>; totalFee: number }> = {};
+  const byMonth: Record<number, { count: number; hospitals: Set<string>; companies: Set<string>; totalFee: number; prescriptionTotal: number }> = {};
+  let prescriptionTotal = 0;
+
   for (const r of reports) {
-    if (!byMonth[r.month]) byMonth[r.month] = { count: 0, hospitals: new Set(), companies: new Set(), totalFee: 0 };
+    if (!byMonth[r.month]) byMonth[r.month] = { count: 0, hospitals: new Set(), companies: new Set(), totalFee: 0, prescriptionTotal: 0 };
     byMonth[r.month].count++;
     byMonth[r.month].totalFee += r.totalFee ?? 0;
     if (r.hospitalName) byMonth[r.month].hospitals.add(r.hospitalName);
     if (r.companyName) byMonth[r.month].companies.add(r.companyName);
+
+    // ocrData.finalDrugs → 처방총액
+    try {
+      const ocd = r.ocrData as Record<string, unknown> | null;
+      const drugs: FinalDrug[] = (ocd?.finalDrugs ?? ocd?.aiDrugs ?? []) as FinalDrug[];
+      for (const d of drugs) {
+        const qty = parseFloat(d.quantity ?? "0") || 0;
+        const price = d.unitPrice ?? 0;
+        const rx = qty * price;
+        byMonth[r.month].prescriptionTotal += rx;
+        prescriptionTotal += rx;
+      }
+    } catch { /* ocrData 없는 레코드 무시 */ }
   }
 
   const monthly = Array.from({ length: 12 }, (_, i) => {
@@ -38,6 +66,7 @@ export async function GET(req: NextRequest) {
       hospitalCount: m?.hospitals.size ?? 0,
       companyCount: m?.companies.size ?? 0,
       totalFee: m?.totalFee ?? 0,
+      prescriptionTotal: m?.prescriptionTotal ?? 0,
     };
   });
 
@@ -54,14 +83,29 @@ export async function GET(req: NextRequest) {
     .sort((a, b) => b.totalFee - a.totalFee)
     .slice(0, 10);
 
+  const totalFee = reports.reduce((s, r) => s + (r.totalFee ?? 0), 0);
   const totals = {
     count: reports.length,
     hospitalCount: new Set(reports.map((r) => r.hospitalName).filter(Boolean)).size,
     companyCount: new Set(reports.map((r) => r.companyName).filter(Boolean)).size,
-    totalFee: reports.reduce((s, r) => s + (r.totalFee ?? 0), 0),
+    totalFee,
+    prescriptionTotal,
   };
 
-  // 사용 가능한 연도 목록
+  // 당월 vs 전월 비교
+  const cur = byMonth[curMonth];
+  const prev = prevMonth ? byMonth[prevMonth] : null;
+  const comparison = {
+    curMonth,
+    prevMonth,
+    curHospitals: cur?.hospitals.size ?? 0,
+    prevHospitals: prev?.hospitals.size ?? 0,
+    curCount: cur?.count ?? 0,
+    prevCount: prev?.count ?? 0,
+    curFee: cur?.totalFee ?? 0,
+    prevFee: prev?.totalFee ?? 0,
+  };
+
   const allYears = await prisma.prescriptionReport.findMany({
     where: { userId: session.id },
     select: { year: true },
@@ -69,5 +113,5 @@ export async function GET(req: NextRequest) {
     orderBy: { year: "desc" },
   });
 
-  return NextResponse.json({ year, monthly, totals, byCompany, availableYears: allYears.map((r) => r.year) });
+  return NextResponse.json({ year, monthly, totals, byCompany, comparison, availableYears: allYears.map((r) => r.year) });
 }

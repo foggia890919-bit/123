@@ -40,14 +40,15 @@ export default function SettlementsPage() {
   }, [status, router]);
 
   useEffect(() => {
-    if (!session) return;
+    const uid = (session as { user?: { id?: string } } | null)?.user?.id;
+    if (!uid) return;
     setLoading(true);
     fetch(`/api/mypage/settlements?year=${year}`)
       .then((r) => r.json())
       .then(setData)
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [session, year]);
+  }, [(session as { user?: { id?: string } } | null)?.user?.id, year]); // eslint-disable-line
 
   if (status === "loading" || loading) {
     return (
