@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { prisma } from "@/lib/prisma";
 import { requireSession, requireAdmin, isNextResponse } from "@/lib/auth-guard";
-import { callDocumentAi, isDocumentAiConfigured, type DocAiResult } from "@/lib/document-ai";
+import { callDocumentAi, isDocumentAiConfigured, type DocAiResult, type DocAiTableRow } from "@/lib/document-ai";
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
@@ -59,7 +59,7 @@ export interface PipelineDiagnostics {
   visionOk: boolean;
   visionDrugCount: number;
   visionError: string | null;
-  mergeUsed: "skipped (vision-only)" | "vision+clova" | "clova-only" | "clova-deterministic-fallback" | "clova-positional";
+  mergeUsed: "skipped (vision-only)" | "vision+clova" | "clova-only" | "clova-deterministic-fallback" | "clova-positional" | "docai-primary";
   mergeDrugCount: number;
   mergeError: string | null;
   filteredByIsLikelyDrug: number;        // isLikelyDrug 에서 제거된 수
@@ -143,11 +143,12 @@ export async function POST(req: NextRequest) {
       ext === "tiff" ? "image/tiff" :
       "image/jpeg";
 
-    // ── 1단계: Clova + Gemini Vision + Document AI 병렬 OCR ───────────────
+    // ── 1단계: Clova + Document AI 병렬 OCR (Gemini Vision 은 lazy) ─────
+    // Gemini 2.5 Pro Vision 은 8-15초로 가장 느림. positional/DocAI 둘 다
+    // 실패할 때만 호출해 평균 응답시간 60% 단축.
     const docaiConfigured = isDocumentAiConfigured();
-    const [clovaOut, geminiOut, docaiOut] = await Promise.allSettled([
+    const [clovaOut, docaiOut] = await Promise.allSettled([
       callClovaOcr(base64, ext),
-      callGeminiVision(base64, mimeType, clientContext),
       docaiConfigured ? callDocumentAi(base64, mimeType) : Promise.reject(new Error("not configured")),
     ]);
 
@@ -167,22 +168,8 @@ export async function POST(req: NextRequest) {
     const templateUsed: ColumnTemplate | null = colMap
       ? buildColumnTemplate(colMap, clovaImageWidth, cachedTemplate ? "cached" : "auto")
       : null;
-    const geminiDraft = geminiOut.status === "fulfilled" ? geminiOut.value : null;
-    const geminiText = geminiDraft ? JSON.stringify(geminiDraft, null, 2) : "";
 
-    if (!clovaText && !geminiDraft) {
-      const errs = [
-        clovaOut.status === "rejected" ? `Clova: ${clovaOut.reason}` : "",
-        geminiOut.status === "rejected" ? `Gemini: ${geminiOut.reason}` : "",
-      ].filter(Boolean).join(" | ");
-      return NextResponse.json({ error: `OCR 양쪽 모두 실패: ${errs}` }, { status: 500 });
-    }
-
-    // ── 2단계: 9자리 보험코드 후보로 마스터 DB 사전 조회 ───────────────────
-    const candidateCodes = extractInsuranceCodes(clovaText, geminiDraft);
-    const masterByCode = await fetchMasterByCodes(candidateCodes);
-
-    // Document AI 결과 정리 (현재 PR 에선 진단용으로만 사용)
+    // Document AI 결과 정리
     const docai: DocAiResult | null = docaiOut.status === "fulfilled" ? docaiOut.value : null;
     const docaiTotalRowCount = docai
       ? docai.tables.reduce((s, t) => s + t.length, 0) : 0;
@@ -190,14 +177,46 @@ export async function POST(req: NextRequest) {
       ? docai.tables[0].slice(0, 10).map((r) => r.cells.slice(0, 8))
       : null;
 
-    // 파이프라인 진단 누적
+    if (!clovaText && !docai) {
+      const errs = [
+        clovaOut.status === "rejected" ? `Clova: ${clovaOut.reason}` : "",
+        docaiOut.status === "rejected" ? `DocAI: ${docaiOut.reason}` : "",
+      ].filter(Boolean).join(" | ");
+      return NextResponse.json({ error: `OCR 1차 단계 모두 실패: ${errs}` }, { status: 500 });
+    }
+
+    // ── 2단계: 9자리 보험코드 후보로 마스터 DB 사전 조회 ───────────────────
+    // Clova 텍스트 + Document AI 텍스트 양쪽에서 코드 추출 (Gemini 없이도 충분)
+    const candidateCodes = extractInsuranceCodes(
+      clovaText + "\n" + (docai?.rawText ?? ""),
+      null
+    );
+    const masterByCode = await fetchMasterByCodes(candidateCodes);
+
+    // ── lazy Gemini 호출 헬퍼 — 필요할 때만 호출 (8-15초 절약) ────────────
+    let geminiDraft: GeminiVisionResult | null = null;
+    let geminiCalled = false;
+    let geminiError: string | null = null;
+    async function tryGetGemini(): Promise<GeminiVisionResult | null> {
+      if (geminiCalled) return geminiDraft;
+      geminiCalled = true;
+      try {
+        geminiDraft = await callGeminiVision(base64, mimeType, clientContext);
+        return geminiDraft;
+      } catch (e) {
+        geminiError = String(e).slice(0, 200);
+        return null;
+      }
+    }
+
+    // 파이프라인 진단 누적 — Gemini 관련 필드는 호출 후 갱신
     const pipeline: PipelineDiagnostics = {
       clovaOk: clovaOut.status === "fulfilled",
       clovaChars: clovaText.length,
       clovaError: clovaOut.status === "rejected" ? String(clovaOut.reason).slice(0, 200) : null,
-      visionOk: geminiOut.status === "fulfilled",
-      visionDrugCount: geminiDraft?.drugs.length ?? 0,
-      visionError: geminiOut.status === "rejected" ? String(geminiOut.reason).slice(0, 200) : null,
+      visionOk: false,
+      visionDrugCount: 0,
+      visionError: null,
       mergeUsed: "vision+clova",
       mergeDrugCount: 0,
       mergeError: null,
@@ -220,10 +239,9 @@ export async function POST(req: NextRequest) {
     };
 
     // ── 3단계: 추출 우선순위
-    //   (a) Clova positional — 행 단위 위→아래 순서, 각 행에서 컬럼 X 위치의 값 직접 픽.
-    //       LLM 환각/순서 뒤집힘 없이 가장 단순. 반드시 colMap 가 있어야 함.
-    //   (b) LLM 병합 — positional 이 충분히 못 뽑으면 fallback
-    const visionDrugs = geminiDraft?.drugs ?? [];
+    //   (a) Clova positional — 행 단위 위→아래, 각 행에서 컬럼 X 위치의 값 직접 픽
+    //   (b) Document AI 표 — Form Parser 가 표 구조 직접 추출 (컬럼 혼동 없음, 환각 없음)
+    //   (c) Gemini Vision + Merge — 위 둘 다 부족할 때만 호출 (LLM, 8-15초)
     let merged: MergedDrug[];
 
     const positionalResult = extractDrugsPositionalWithDebug(clovaRows, colMap);
@@ -236,10 +254,12 @@ export async function POST(req: NextRequest) {
       accepted: c.accepted,
       droppedReason: c.reason,
     }));
+
+    // Document AI 표 → MergedDrug[] 변환 시도 (positional 실패 시 사용)
+    const docaiDrugs = docai ? parseDocAiTablesToDrugs(docai.tables) : [];
+
     if (positionalDrugs.length >= 3) {
-      // positional 추출이 충분하면 LLM 호출 자체 생략 — 단가/순서 보장됨.
-      // 부분 추출도 행은 유지: 어떤 한 필드라도 인식됐으면 빈칸은 검수자가 채움.
-      // (이미지에 4행 있고 OCR 이 일부 필드 놓쳤어도 4행 모두 보이게)
+      // (a) positional 추출이 충분 — LLM 호출 자체 생략
       pipeline.mergeUsed = "clova-positional";
       merged = positionalDrugs
         .filter((p) => p.productName || p.quantity || p.insuranceCode)
@@ -252,8 +272,17 @@ export async function POST(req: NextRequest) {
           priceHint: parseInt(p.unitPrice.replace(/[^\d]/g, ""), 10) || undefined,
           anchorYRaw: p.anchorY,
         }));
+    } else if (docaiDrugs.length >= 3) {
+      // (b) Document AI 가 표 구조를 직접 인식 — 환각 행/컬럼 혼동 없음
+      pipeline.mergeUsed = "docai-primary";
+      merged = docaiDrugs;
     } else {
-      // positional 부실 시 기존 LLM 경로
+      // (c) 둘 다 부실 — 이제서야 Gemini Vision 호출 (slow path)
+      const geminiResult: GeminiVisionResult | null = await tryGetGemini();
+      pipeline.visionOk = geminiCalled && !geminiError;
+      pipeline.visionDrugCount = geminiResult?.drugs.length ?? 0;
+      pipeline.visionError = geminiError;
+      const visionDrugs: GeminiVisionDrug[] = geminiResult?.drugs ?? [];
       const visionAllMatched = visionDrugs.length > 0 && visionDrugs.every((d) => {
         const c = d.insuranceCode.replace(/\D/g, "");
         return c.length === 9 && masterByCode.has(c);
@@ -266,7 +295,7 @@ export async function POST(req: NextRequest) {
         try {
           merged = await callGeminiMerge({
             clovaText,
-            geminiDraft,
+            geminiDraft: geminiResult,
             masterCandidates: Array.from(masterByCode.values()).map((m) => ({
               insuranceCode: m.insuranceCode,
               productName: m.productName,
@@ -560,7 +589,7 @@ export async function POST(req: NextRequest) {
       avgConfidence,
       manualCheckCount,
       rawClovaText: clovaText,
-      rawGeminiText: geminiText,
+      rawGeminiText: geminiDraft ? JSON.stringify(geminiDraft, null, 2) : "",
       hospitalName: { value: "", confidence: 0 },
       columnTemplate: templateUsed,
       pipeline,
@@ -1706,4 +1735,101 @@ function parseJsonLoose(text: string): unknown {
   const m = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
   if (!m) return null;
   try { return JSON.parse(m[0]); } catch { return null; }
+}
+
+// ── Document AI 표 → MergedDrug[] 파서 ────────────────────────────────────────
+//
+// Form Parser 가 추출한 표를 그대로 약품 행으로 변환. positional 추출 (Clova 행 +
+// 컬럼 X 좌표) 이 부실할 때 사용. LLM 환각 없이 표 구조 그대로 재구성하므로
+// "환각 행" / "컬럼 혼동" / "합계 행 포함" 문제가 원천 차단됨.
+
+interface DocAiHeaderMap {
+  insuranceCode?: number;
+  productName?: number;
+  quantity?: number;
+  companyName?: number;
+  unitPrice?: number;
+}
+
+function isDocAiDrugHeaderRow(cells: string[]): boolean {
+  const joined = cells.join(" ").replace(/\s+/g, "");
+  const hasName = /약품명|품목명|제품명|처방명|약품영형|명칭/.test(joined);
+  const hasQty = /수량|사용량|투여량|총량|처방량/.test(joined);
+  return hasName && hasQty;
+}
+
+function mapDocAiHeaderToColumns(header: string[]): DocAiHeaderMap {
+  const result: DocAiHeaderMap = {};
+  for (let i = 0; i < header.length; i++) {
+    const h = header[i].replace(/\s+/g, "");
+    if (result.insuranceCode == null && /보험코드|청구코드|EDI코드/i.test(h)) {
+      result.insuranceCode = i;
+    } else if (result.productName == null && /(약품|품목|제품|처방)?(명|명칭)|약품영형/.test(h)) {
+      result.productName = i;
+    } else if (result.quantity == null && /(총)?(사용량|투여량|처방량|수량)/.test(h)) {
+      result.quantity = i;
+    } else if (result.companyName == null && /(제약)?회사(명)?|제약사/.test(h)) {
+      result.companyName = i;
+    } else if (result.unitPrice == null && /단가|약가/.test(h)) {
+      result.unitPrice = i;
+    }
+  }
+  return result;
+}
+
+function isDocAiSummaryRow(cells: string[]): boolean {
+  const joined = cells.join(" ").replace(/\s+/g, "");
+  return /합\s*계|소\s*계|총\s*계|TOTAL|평\s*균/i.test(joined);
+}
+
+function parseDocAiTablesToDrugs(tables: DocAiTableRow[][]): MergedDrug[] {
+  if (!tables.length) return [];
+
+  // 약품 표로 보이는 것들 중 가장 행 많은 것을 선택. 헤더는 첫 3행 안에 있다고 가정.
+  const candidates = tables
+    .map((t) => {
+      const headerIdx = t.slice(0, 3).findIndex((r) => isDocAiDrugHeaderRow(r.cells));
+      return headerIdx >= 0 ? { table: t, headerIdx, score: t.length } : null;
+    })
+    .filter((x): x is { table: DocAiTableRow[]; headerIdx: number; score: number } => x !== null)
+    .sort((a, b) => b.score - a.score);
+
+  if (candidates.length === 0) return [];
+  const { table, headerIdx } = candidates[0];
+
+  const colIdx = mapDocAiHeaderToColumns(table[headerIdx].cells);
+  // 약품명 또는 보험코드 컬럼이 없으면 신뢰도 낮음 → 포기
+  if (colIdx.productName == null && colIdx.insuranceCode == null) return [];
+
+  const drugs: MergedDrug[] = [];
+  for (let i = headerIdx + 1; i < table.length; i++) {
+    const row = table[i].cells;
+    if (isDocAiSummaryRow(row)) continue; // 합계/소계 행 제외
+
+    const insuranceCodeRaw = colIdx.insuranceCode != null ? (row[colIdx.insuranceCode] || "") : "";
+    const insuranceCode = insuranceCodeRaw.replace(/\D/g, "");
+    const productName = colIdx.productName != null ? (row[colIdx.productName] || "").trim() : "";
+    const quantity = colIdx.quantity != null
+      ? (row[colIdx.quantity] || "").replace(/[^\d.]/g, "")
+      : "";
+    const companyName = colIdx.companyName != null ? (row[colIdx.companyName] || "").trim() : "";
+    const unitPriceStr = colIdx.unitPrice != null
+      ? (row[colIdx.unitPrice] || "").replace(/[^\d]/g, "")
+      : "";
+    const priceHint = unitPriceStr ? parseInt(unitPriceStr, 10) : undefined;
+
+    // 약품명도 보험코드도 없는 행은 빈 행 → 스킵
+    if (!productName && !insuranceCode) continue;
+
+    drugs.push({
+      insuranceCode: insuranceCode.length === 9 ? insuranceCode : "",
+      productName,
+      companyName,
+      quantity,
+      // DocAI 표 추출은 LLM 환각 없으므로 신뢰도 90 시작 (마스터 매칭 시 더 올라감)
+      confidence: 90,
+      priceHint: priceHint && priceHint > 0 ? priceHint : undefined,
+    });
+  }
+  return drugs;
 }
