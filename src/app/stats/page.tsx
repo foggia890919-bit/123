@@ -1264,6 +1264,23 @@ export default function StatsPage() {
                   style={{ width: `${zoomLevel}%`, transition: "width 0.2s ease" }}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img ref={imageElRef} src={imageUrl} alt="처방전"
+                    onLoad={() => {
+                      // 이미지 첫 로드 시 컨테이너 높이에 맞춰 zoom 자동 조정 — 사진이
+                      // 패널보다 크면 위쪽 일부만 보이는 문제 방지. 100% 초과로는 늘리지 않음.
+                      const img = imageElRef.current;
+                      const scrollEl = imageScrollRef.current;
+                      if (!img || !scrollEl) return;
+                      const natW = img.naturalWidth;
+                      const natH = img.naturalHeight;
+                      if (!natW || !natH) return;
+                      const containerW = Math.max(1, scrollEl.clientWidth - 16);
+                      const containerH = Math.max(1, scrollEl.clientHeight - 16);
+                      // 100% zoom 일 때 렌더링 폭 = containerW. 그 때 높이 = containerW × (natH/natW).
+                      // 그 높이가 containerH 보다 크면, height 가 딱 맞도록 zoom 축소.
+                      const fitWidth = containerH * (natW / natH);
+                      const fitZoom = Math.min(100, Math.round((fitWidth / containerW) * 100));
+                      if (fitZoom < 100) setZoomLevel(fitZoom);
+                    }}
                     style={{ width: "100%", display: "block" }}
                     className="rounded" draggable={false} />
                   {focusedIdx != null && manualDrugs[focusedIdx]?.bboxYPercent != null && (
