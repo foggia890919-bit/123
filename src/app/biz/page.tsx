@@ -109,6 +109,18 @@ const BIZ_MENU_GROUPS = [
     ],
   },
   {
+    label: "실적 현황",
+    items: [
+      {
+        href: "/biz/sales-performance",
+        label: "영업사원 실적 현황",
+        desc: "전체 영업사원별 월별 처방건수·처방액·수수료 현황 조회",
+        icon: BarChart3,
+        color: "bg-orange-50 text-orange-600",
+      },
+    ],
+  },
+  {
     label: "운영 모니터링",
     items: [
       {
