@@ -1258,13 +1258,20 @@ export default function StatsPage() {
           >
             {imageUrl ? (
               <div onClick={handleImageClick}
-                className={`w-full min-h-full flex items-start justify-center p-2 select-none ${isPanning.current ? "cursor-grabbing" : zoomEnabled ? (isZoomed ? "cursor-zoom-out" : "cursor-zoom-in") : "cursor-grab"}`}>
+                className={`w-full h-full flex items-center justify-center p-2 select-none ${isPanning.current ? "cursor-grabbing" : zoomEnabled ? (isZoomed ? "cursor-zoom-out" : "cursor-zoom-in") : "cursor-grab"}`}
+                style={{ minWidth: "fit-content" }}>
                 {/* 이미지 + 행 하이라이트는 같은 relative 박스 안에 — 좌표가 이미지 크기에 정확히 매핑됨 */}
-                <div className="relative shrink-0"
-                  style={{ width: `${zoomLevel}%`, transition: "width 0.2s ease" }}>
+                <div className="relative shrink-0">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img ref={imageElRef} src={imageUrl} alt="처방전"
-                    style={{ width: "100%", display: "block" }}
+                    style={{
+                      // 패널 높이에 자동 fit (zoomLevel 로 배율). 가로는 aspect 따라감 → 패널보다 가로로 길면 가로 스크롤.
+                      // 사진의 자연 비율 그대로 유지 → 변형/찌그러짐 없음.
+                      height: `${Math.max(1, (imageHeight - 16) * (zoomLevel / 100))}px`,
+                      width: "auto",
+                      maxWidth: "none",
+                      display: "block",
+                    }}
                     className="rounded" draggable={false} />
                   {focusedIdx != null && manualDrugs[focusedIdx]?.bboxYPercent != null && (
                     <div
