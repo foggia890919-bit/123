@@ -11,7 +11,7 @@ function fmt(n: number) { return n > 0 ? n.toLocaleString("ko-KR") + "원" : "-"
 
 interface CrossRow { hospitalName: string; companyName: string; months: number[]; }
 interface LineItem { hospitalName: string; companyName: string; productName: string; month: number; quantity: number; unitPrice: number; prescription: number; fee: number; }
-interface DetailData { year: number; crossTab: CrossRow[]; lineItems: LineItem[]; }
+interface DetailData { year: number; crossTab: CrossRow[]; lineItems: LineItem[]; isUpperCorp?: boolean; }
 
 function DetailContent() {
   const { data: session, status } = useSession();
@@ -63,7 +63,9 @@ function DetailContent() {
       {/* 위쪽 박스: 제출현황 (거래처 × 제약사 × 월별) */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div className="px-5 py-3.5 border-b border-gray-100">
-          <h2 className="text-sm font-semibold text-gray-800">제출현황 — 거래처 × 제약사 × 월별 처방금액</h2>
+          <h2 className="text-sm font-semibold text-gray-800">
+            {data?.isUpperCorp ? "제출현황 — 법인 × 제약사 × 월별 처방금액" : "제출현황 — 거래처 × 제약사 × 월별 처방금액"}
+          </h2>
           <p className="text-xs text-gray-400 mt-0.5">처방금액 = 수량 × 단가</p>
         </div>
         {data && data.crossTab.length > 0 ? (
@@ -71,7 +73,7 @@ function DetailContent() {
             <table className="w-full text-xs whitespace-nowrap">
               <thead className="bg-gray-50 text-gray-500 font-semibold">
                 <tr>
-                  <th className="px-4 py-2.5 text-left sticky left-0 bg-gray-50 z-10 min-w-[110px]">거래처</th>
+                  <th className="px-4 py-2.5 text-left sticky left-0 bg-gray-50 z-10 min-w-[110px]">{data?.isUpperCorp ? "법인" : "거래처"}</th>
                   <th className="px-4 py-2.5 text-left min-w-[100px]">제약사</th>
                   {displayMonths.map((mi) => (
                     <th key={mi} className="px-3 py-2.5 text-right min-w-[80px]">{MONTHS[mi]}</th>
@@ -124,7 +126,7 @@ function DetailContent() {
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div className="px-5 py-3.5 border-b border-gray-100">
           <h2 className="text-sm font-semibold text-gray-800">품목별 상세 내역</h2>
-          <p className="text-xs text-gray-400 mt-0.5">처방통계에 인식된 약품 기준 — 거래처 / 제약사 / 품목 / 수량 / 처방금액</p>
+          <p className="text-xs text-gray-400 mt-0.5">{data?.isUpperCorp ? "법인별 합산 — 법인 / 제약사 / 수량 / 처방금액" : "처방통계에 인식된 약품 기준 — 거래처 / 제약사 / 품목 / 수량 / 처방금액"}</p>
         </div>
         {data && data.lineItems.length > 0 ? (
           <div className="overflow-x-auto">
@@ -132,7 +134,7 @@ function DetailContent() {
               <thead className="bg-gray-50 text-gray-500 font-semibold">
                 <tr>
                   <th className="px-4 py-2.5 text-left min-w-[90px]">월</th>
-                  <th className="px-4 py-2.5 text-left min-w-[110px]">거래처</th>
+                  <th className="px-4 py-2.5 text-left min-w-[110px]">{data?.isUpperCorp ? "법인" : "거래처"}</th>
                   <th className="px-4 py-2.5 text-left min-w-[100px]">제약사</th>
                   <th className="px-4 py-2.5 text-left min-w-[160px]">품목</th>
                   <th className="px-4 py-2.5 text-right min-w-[60px]">수량</th>

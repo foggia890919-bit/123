@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
-import { getViewableUserIds } from "@/lib/hierarchy";
+import { getViewableUserIds, buildChildCorpMap } from "@/lib/hierarchy";
 
 export async function GET(req: NextRequest) {
   const session = await requireSession();
@@ -15,23 +15,22 @@ export async function GET(req: NextRequest) {
     ? undefined
     : await getViewableUserIds(session.id);
 
-  const directChildren = session.role === "ADMIN" ? [] : await prisma.user.findMany({
-    where: { parentUserId: session.id },
-    select: { role: true },
-  });
-  const isAggregateOnly = directChildren.some((c) => c.role === "BIZ");
+  const isUpperCorp = session.role !== "ADMIN" && (
+    await prisma.user.count({ where: { parentUserId: session.id, role: "BIZ" } })
+  ) > 0;
+
+  const corpMap = isUpperCorp ? await buildChildCorpMap(session.id) : null;
 
   const reports = await prisma.prescriptionReport.findMany({
     where: { userId: viewableIds ? { in: viewableIds } : undefined, year },
     orderBy: [{ month: "desc" }, { createdAt: "desc" }],
     select: {
       id: true, year: true, month: true,
-      hospitalName: true, companyName: true,
+      userId: true, hospitalName: true, companyName: true,
       totalFee: true, status: true, createdAt: true,
     },
   });
 
-  // 월별 정산 집계
   const byMonth: Record<number, { confirmed: number; pending: number; confirmedFee: number; pendingFee: number }> = {};
   for (const r of reports) {
     if (!byMonth[r.month]) byMonth[r.month] = { confirmed: 0, pending: 0, confirmedFee: 0, pendingFee: 0 };
@@ -41,7 +40,6 @@ export async function GET(req: NextRequest) {
       byMonth[r.month].confirmedFee += fee;
     } else {
       byMonth[r.month].pending++;
-      byMonth[r.month].pendingFee += fee;
     }
   }
 
@@ -62,12 +60,12 @@ export async function GET(req: NextRequest) {
     totalCount: reports.length,
   };
 
-  // 개별 보고서 목록 (최근 50건)
   const items = reports.slice(0, 50).map((r) => ({
     id: r.id,
     year: r.year,
     month: r.month,
-    hospitalName: r.hospitalName,
+    // 상위법인이면 거래처명 대신 하위법인명 표시
+    hospitalName: isUpperCorp ? (corpMap?.[r.userId] ?? "기타법인") : r.hospitalName,
     companyName: r.companyName,
     totalFee: r.totalFee,
     status: r.totalFee != null && r.totalFee > 0 ? "CONFIRMED" : "PENDING",
@@ -81,10 +79,5 @@ export async function GET(req: NextRequest) {
     orderBy: { year: "desc" },
   });
 
-  return NextResponse.json({
-    year, monthly, totals,
-    items: isAggregateOnly ? [] : items,
-    availableYears: allYears.map((r) => r.year),
-    isAggregateOnly,
-  });
+  return NextResponse.json({ year, monthly, totals, items, availableYears: allYears.map((r) => r.year), isUpperCorp });
 }

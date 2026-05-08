@@ -29,3 +29,24 @@ export async function getViewableUserIds(rootUserId: string): Promise<string[]> 
   }
   return [...visited];
 }
+
+/**
+ * 상위법인용 — 직속 하위법인별로 userId를 묶어서 Map 반환.
+ * { [userId]: "하위법인명" } 형태로, 해당 법인 소속 모든 userId를 커버.
+ * 상위법인 본인의 userId는 포함하지 않음.
+ */
+export async function buildChildCorpMap(parentId: string): Promise<Record<string, string>> {
+  const directCorps = await prisma.user.findMany({
+    where: { parentUserId: parentId },
+    select: { id: true, name: true, email: true },
+  });
+  const corpMap: Record<string, string> = {};
+  for (const corp of directCorps) {
+    const label = corp.name || corp.email;
+    const subIds = await getViewableUserIds(corp.id);
+    for (const id of subIds) {
+      corpMap[id] = label;
+    }
+  }
+  return corpMap;
+}

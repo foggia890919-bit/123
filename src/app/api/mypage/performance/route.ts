@@ -22,12 +22,10 @@ export async function GET(req: NextRequest) {
     ? undefined
     : await getViewableUserIds(session.id);
 
-  // 직속 하위에 BIZ 유저가 있으면 상위법인 → 집계 숫자만 허용, 세부 비공개
-  const directChildren = session.role === "ADMIN" ? [] : await prisma.user.findMany({
-    where: { parentUserId: session.id },
-    select: { role: true },
-  });
-  const isAggregateOnly = directChildren.some((c) => c.role === "BIZ");
+  // 직속 하위에 BIZ가 있으면 상위법인
+  const isUpperCorp = session.role !== "ADMIN" && (
+    await prisma.user.count({ where: { parentUserId: session.id, role: "BIZ" } })
+  ) > 0;
 
   const reports = await prisma.prescriptionReport.findMany({
     where: { userId: viewableIds ? { in: viewableIds } : undefined, year },
@@ -40,12 +38,10 @@ export async function GET(req: NextRequest) {
     },
   });
 
-  // 현재/전월 (year=올해일 때만 의미 있음)
   const now = new Date();
   const curMonth = now.getFullYear() === year ? now.getMonth() + 1 : 12;
   const prevMonth = curMonth === 1 ? null : curMonth - 1;
 
-  // 월별 집계
   const byMonth: Record<number, { count: number; hospitals: Set<string>; companies: Set<string>; totalFee: number; prescriptionTotal: number }> = {};
   let prescriptionTotal = 0;
 
@@ -56,7 +52,6 @@ export async function GET(req: NextRequest) {
     if (r.hospitalName) byMonth[r.month].hospitals.add(r.hospitalName);
     if (r.companyName) byMonth[r.month].companies.add(r.companyName);
 
-    // ocrData.finalDrugs → 처방총액
     try {
       const ocd = r.ocrData as Record<string, unknown> | null;
       const drugs: FinalDrug[] = (ocd?.finalDrugs ?? ocd?.aiDrugs ?? []) as FinalDrug[];
@@ -67,7 +62,7 @@ export async function GET(req: NextRequest) {
         byMonth[r.month].prescriptionTotal += rx;
         prescriptionTotal += rx;
       }
-    } catch { /* ocrData 없는 레코드 무시 */ }
+    } catch { /* skip */ }
   }
 
   const monthly = Array.from({ length: 12 }, (_, i) => {
@@ -82,7 +77,6 @@ export async function GET(req: NextRequest) {
     };
   });
 
-  // 제약사별 집계
   const companyMap: Record<string, { count: number; totalFee: number }> = {};
   for (const r of reports) {
     const k = r.companyName || "기타";
@@ -104,12 +98,10 @@ export async function GET(req: NextRequest) {
     prescriptionTotal,
   };
 
-  // 당월 vs 전월 비교
   const cur = byMonth[curMonth];
   const prev = prevMonth ? byMonth[prevMonth] : null;
   const comparison = {
-    curMonth,
-    prevMonth,
+    curMonth, prevMonth,
     curHospitals: cur?.hospitals.size ?? 0,
     prevHospitals: prev?.hospitals.size ?? 0,
     curCount: cur?.count ?? 0,
@@ -125,5 +117,5 @@ export async function GET(req: NextRequest) {
     orderBy: { year: "desc" },
   });
 
-  return NextResponse.json({ year, monthly, totals, byCompany, comparison, availableYears: allYears.map((r) => r.year), isAggregateOnly });
+  return NextResponse.json({ year, monthly, totals, byCompany, comparison, availableYears: allYears.map((r) => r.year), isUpperCorp });
 }

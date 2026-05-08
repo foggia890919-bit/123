@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
-import { getViewableUserIds } from "@/lib/hierarchy";
+import { getViewableUserIds, buildChildCorpMap } from "@/lib/hierarchy";
 
 interface FinalDrug {
   companyName?: string;
@@ -24,69 +24,66 @@ export async function GET(req: NextRequest) {
     ? undefined
     : await getViewableUserIds(session.id);
 
-  // 상위법인(직속 하위가 BIZ)은 세부 비공개
-  const directChildren = session.role === "ADMIN" ? [] : await prisma.user.findMany({
-    where: { parentUserId: session.id },
-    select: { role: true },
-  });
-  if (directChildren.some((c) => c.role === "BIZ")) {
-    return NextResponse.json({ year, crossTab: [], lineItems: [], isAggregateOnly: true });
-  }
+  // 직속 하위에 BIZ가 있으면 상위법인 → 하위법인명으로 그룹핑
+  const isUpperCorp = session.role !== "ADMIN" && (
+    await prisma.user.count({ where: { parentUserId: session.id, role: "BIZ" } })
+  ) > 0;
+
+  const corpMap = isUpperCorp ? await buildChildCorpMap(session.id) : null;
 
   const reports = await prisma.prescriptionReport.findMany({
     where: { userId: viewableIds ? { in: viewableIds } : undefined, year },
     orderBy: [{ month: "asc" }],
     select: {
       id: true, year: true, month: true,
-      hospitalName: true, totalFee: true, ocrData: true,
+      userId: true, hospitalName: true, totalFee: true, ocrData: true,
     },
   });
 
-  // 크로스탭: (hospital, company) → [12개 월별 처방금액]
   const crossKey = (h: string, c: string) => `${h}|||${c}`;
   const crossMap: Record<string, { hospitalName: string; companyName: string; months: number[] }> = {};
 
-  // 라인 아이템: 개별 약품 내역
   const lineItems: Array<{
     hospitalName: string; companyName: string; productName: string;
     month: number; quantity: number; unitPrice: number; prescription: number; fee: number;
   }> = [];
 
   for (const r of reports) {
-    const hospital = r.hospitalName || "미입력";
+    // 상위법인이면 거래처 대신 하위법인명으로 대체
+    const hospital = isUpperCorp
+      ? (corpMap?.[r.userId] ?? "기타법인")
+      : (r.hospitalName || "미입력");
+
     try {
       const ocd = r.ocrData as Record<string, unknown> | null;
       const drugs: FinalDrug[] = (ocd?.finalDrugs ?? ocd?.aiDrugs ?? []) as FinalDrug[];
 
       for (const d of drugs) {
         const company = d.companyName?.trim() || "기타";
-        const product = d.productName?.trim() || "-";
+        const product = isUpperCorp ? "-" : (d.productName?.trim() || "-");
         const qty = parseFloat(d.quantity ?? "0") || 0;
         const price = d.unitPrice ?? 0;
         const ratePct = (d.commissionRate ?? 0) + (d.additionalRate ?? 0);
         const rx = qty * price;
         const fee = rx * ratePct / 100;
 
-        // 크로스탭
         const k = crossKey(hospital, company);
         if (!crossMap[k]) {
           crossMap[k] = { hospitalName: hospital, companyName: company, months: Array(12).fill(0) };
         }
         crossMap[k].months[r.month - 1] += rx;
 
-        // 라인아이템
         if (qty > 0 || price > 0) {
           lineItems.push({ hospitalName: hospital, companyName: company, productName: product, month: r.month, quantity: qty, unitPrice: price, prescription: rx, fee });
         }
       }
-    } catch { /* ocrData 없는 레코드 */ }
+    } catch { /* skip */ }
   }
 
   const crossTab = Object.values(crossMap).sort((a, b) =>
     a.hospitalName.localeCompare(b.hospitalName) || a.companyName.localeCompare(b.companyName)
   );
-
   lineItems.sort((a, b) => a.month - b.month || a.hospitalName.localeCompare(b.hospitalName));
 
-  return NextResponse.json({ year, crossTab, lineItems });
+  return NextResponse.json({ year, crossTab, lineItems, isUpperCorp });
 }
