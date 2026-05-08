@@ -31,6 +31,12 @@ interface FusionDrug {
   bboxYPercent: number | null;
   debug: DrugDebug | null;
 }
+// 서버의 EmrVendor / CaptureType 과 동기화 — 새 EMR 추가 시 ocr-vendor-classifier.ts 와 같이 수정.
+type EmrVendor =
+  | "doctor" | "doctor2" | "u-pharm" | "eghis" | "nh-pharm"
+  | "chartfree" | "emrpro" | "biit" | "dubeone" | "unknown";
+type CaptureType = "photo" | "screenshot" | "monitor";
+
 interface ColumnTemplate {
   insuranceCode: number | null;
   productName: number | null;
@@ -40,8 +46,18 @@ interface ColumnTemplate {
   total: number | null;
   detectedAt: string;
   source: "auto" | "manual" | "cached";
+  vendor?: EmrVendor;
+  captureType?: CaptureType;
 }
 interface PipelineDiagnostics {
+  vendor: EmrVendor;
+  captureType: CaptureType;
+  vendorConfidence: number;
+  vendorRationale: string;
+  vendorError: string | null;
+  cachedTemplateVendor: EmrVendor | null;
+  cacheHit: boolean;
+  cacheRejectReason: string | null;
   clovaOk: boolean;
   clovaChars: number;
   clovaError: string | null;
@@ -75,6 +91,8 @@ interface PipelineDiagnostics {
 }
 interface OcrResult {
   source: string;
+  vendor: EmrVendor;
+  captureType: CaptureType;
   drugs: FusionDrug[];
   avgConfidence: number;
   manualCheckCount: number;
@@ -224,12 +242,17 @@ function BatchUploadPanel({ clients }: { clients: UserClient[] }) {
           imageData: imageBase64,
           ocrData: {
             source: ocrData.source,
+            vendor: ocrData.vendor,
+            captureType: ocrData.captureType,
             aiDrugs: ocrData.drugs,
             finalDrugs,
             avgConfidence: ocrData.avgConfidence,
             manualCheckCount: ocrData.manualCheckCount,
             rawClovaText: ocrData.rawClovaText,
             rawGeminiText: ocrData.rawGeminiText,
+            // 자동 검수 통과 케이스에서도 다음 업로드용 ColumnTemplate 캐시를 쌓아야
+            // 같은 거래처 재방문 시 헤더 자동감지를 우회할 수 있다 (이전 누락 버그).
+            columnTemplate: ocrData.columnTemplate,
           },
           totalFee,
         }),
@@ -1014,13 +1037,16 @@ export default function StatsPage() {
           imageData: imageBase64,
           ocrData: {
             source: editOcr?.source ?? "manual",
+            vendor: editOcr?.vendor ?? "unknown",
+            captureType: editOcr?.captureType ?? "photo",
             aiDrugs: editOcr?.drugs ?? [],
             finalDrugs: filledManualDrugs,
             avgConfidence: editOcr?.avgConfidence ?? 0,
             manualCheckCount: editOcr?.manualCheckCount ?? 0,
             rawClovaText: editOcr?.rawClovaText,
             rawGeminiText: editOcr?.rawGeminiText,
-            // 다음 업로드부터 같은 거래처 EMR 양식을 자동 재사용하기 위해 같이 저장
+            // 다음 업로드부터 같은 거래처 EMR 양식을 자동 재사용하기 위해 같이 저장.
+            // vendor 가 다르면 fetchCachedColumnTemplate 가 거부 → cross-EMR 오염 방지.
             columnTemplate: editOcr?.columnTemplate ?? null,
           },
           totalFee,
