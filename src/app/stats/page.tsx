@@ -143,7 +143,7 @@ function BatchUploadPanel({ clients }: { clients: UserClient[] }) {
     setRow(clientId, { file, result: null, error: "", ocr: null });
   }
 
-  async function compressImage(file: File, maxDim = 2000, quality = 0.82): Promise<Blob> {
+  async function compressImage(file: File, maxDim = 1600, quality = 0.78): Promise<Blob> {
     const url = URL.createObjectURL(file);
     try {
       const img = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -705,7 +705,7 @@ export default function StatsPage() {
     }
   }
 
-  async function compressImage(file: File, maxDim = 2000, quality = 0.82): Promise<Blob> {
+  async function compressImage(file: File, maxDim = 1600, quality = 0.78): Promise<Blob> {
     const url = URL.createObjectURL(file);
     try {
       const img = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -1087,7 +1087,14 @@ export default function StatsPage() {
 
             {/* 병원 자동완성 */}
             <div className="flex-1 min-w-52" ref={hospitalRef}>
-              <label className="text-xs font-medium text-gray-600 mb-1 block">병원 (거래처)</label>
+              <div className="flex items-center gap-1.5 mb-1 h-4">
+                <label className="text-xs font-medium text-gray-600">병원 (거래처)</label>
+                {selectedClient && (
+                  selectedClient.approved
+                    ? <span className="text-[10px] bg-green-100 text-green-700 border border-green-300 rounded px-1.5 py-0.5">승인완료</span>
+                    : <span className="text-[10px] bg-yellow-100 text-yellow-700 border border-yellow-300 rounded px-1.5 py-0.5">승인전</span>
+                )}
+              </div>
               <div className="relative flex gap-1">
                 <div className="relative flex-1">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
@@ -1157,16 +1164,6 @@ export default function StatsPage() {
                   <UserPlus className="w-4 h-4" />
                 </button>
               </div>
-              {/* 선택된 거래처 배지 */}
-              {selectedClient && (
-                <div className="mt-1.5 flex items-center gap-1.5">
-                  <span className="text-xs text-gray-600">{selectedClient.clientName}</span>
-                  {selectedClient.approved
-                    ? <span className="text-[10px] bg-green-100 text-green-700 border border-green-300 rounded px-1.5 py-0.5">승인완료</span>
-                    : <span className="text-[10px] bg-yellow-100 text-yellow-700 border border-yellow-300 rounded px-1.5 py-0.5">승인전</span>
-                  }
-                </div>
-              )}
             </div>
 
             <div className="flex-1 min-w-40">
