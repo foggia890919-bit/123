@@ -15,6 +15,12 @@ export async function GET(req: NextRequest) {
     ? undefined
     : await getViewableUserIds(session.id);
 
+  const directChildren = session.role === "ADMIN" ? [] : await prisma.user.findMany({
+    where: { parentUserId: session.id },
+    select: { role: true },
+  });
+  const isAggregateOnly = directChildren.some((c) => c.role === "BIZ");
+
   const reports = await prisma.prescriptionReport.findMany({
     where: { userId: viewableIds ? { in: viewableIds } : undefined, year },
     orderBy: [{ month: "desc" }, { createdAt: "desc" }],
@@ -75,5 +81,10 @@ export async function GET(req: NextRequest) {
     orderBy: { year: "desc" },
   });
 
-  return NextResponse.json({ year, monthly, totals, items, availableYears: allYears.map((r) => r.year) });
+  return NextResponse.json({
+    year, monthly, totals,
+    items: isAggregateOnly ? [] : items,
+    availableYears: allYears.map((r) => r.year),
+    isAggregateOnly,
+  });
 }

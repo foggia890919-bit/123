@@ -13,7 +13,7 @@ interface MonthRow { month: number; count: number; hospitalCount: number; compan
 interface CompanyRow { name: string; count: number; totalFee: number; }
 interface Totals { count: number; hospitalCount: number; companyCount: number; totalFee: number; prescriptionTotal: number; }
 interface Comparison { curMonth: number; prevMonth: number | null; curHospitals: number; prevHospitals: number; curCount: number; prevCount: number; curFee: number; prevFee: number; }
-interface Data { year: number; monthly: MonthRow[]; totals: Totals; byCompany: CompanyRow[]; comparison: Comparison; availableYears: number[]; }
+interface Data { year: number; monthly: MonthRow[]; totals: Totals; byCompany: CompanyRow[]; comparison: Comparison; availableYears: number[]; isAggregateOnly?: boolean; }
 
 function DiffBadge({ cur, prev }: { cur: number; prev: number }) {
   const diff = cur - prev;
@@ -143,12 +143,16 @@ export default function PerformancePage() {
             <p className="text-2xl font-bold text-gray-900">{data?.totals.count ?? 0}<span className="text-sm font-normal text-gray-600 ml-0.5">건</span></p>
             <p className="text-xs text-gray-400 mt-1">{data?.totals.hospitalCount ?? 0}개 거래처</p>
           </div>
-          <Link
-            href={`/mypage/performance/detail?year=${year}`}
-            className="mt-4 flex items-center justify-center gap-1.5 w-full py-2 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition-colors"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />자세히 보기
-          </Link>
+          {data?.isAggregateOnly ? (
+            <p className="mt-4 text-[11px] text-gray-400 text-center">세부 내역은 담당 법인에 문의하세요</p>
+          ) : (
+            <Link
+              href={`/mypage/performance/detail?year=${year}`}
+              className="mt-4 flex items-center justify-center gap-1.5 w-full py-2 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition-colors"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />자세히 보기
+            </Link>
+          )}
         </div>
       </div>
 

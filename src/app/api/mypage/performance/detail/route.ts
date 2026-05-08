@@ -24,6 +24,15 @@ export async function GET(req: NextRequest) {
     ? undefined
     : await getViewableUserIds(session.id);
 
+  // 상위법인(직속 하위가 BIZ)은 세부 비공개
+  const directChildren = session.role === "ADMIN" ? [] : await prisma.user.findMany({
+    where: { parentUserId: session.id },
+    select: { role: true },
+  });
+  if (directChildren.some((c) => c.role === "BIZ")) {
+    return NextResponse.json({ year, crossTab: [], lineItems: [], isAggregateOnly: true });
+  }
+
   const reports = await prisma.prescriptionReport.findMany({
     where: { userId: viewableIds ? { in: viewableIds } : undefined, year },
     orderBy: [{ month: "asc" }],

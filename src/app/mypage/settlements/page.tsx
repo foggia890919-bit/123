@@ -8,7 +8,7 @@ import { Wallet, CheckCircle2, Clock, FileText, Loader2, ChevronLeft, ChevronRig
 interface MonthRow { month: number; confirmed: number; pending: number; confirmedFee: number; }
 interface Item { id: string; year: number; month: number; hospitalName: string | null; companyName: string | null; totalFee: number | null; status: string; createdAt: string; }
 interface Totals { totalFee: number; confirmedCount: number; pendingCount: number; totalCount: number; }
-interface Data { year: number; monthly: MonthRow[]; totals: Totals; items: Item[]; availableYears: number[]; }
+interface Data { year: number; monthly: MonthRow[]; totals: Totals; items: Item[]; availableYears: number[]; isAggregateOnly?: boolean; }
 
 const MONTH_LABELS = ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"];
 function fmt(n: number) { return n.toLocaleString("ko-KR") + "원"; }
@@ -146,8 +146,15 @@ export default function SettlementsPage() {
         </div>
       </div>
 
+      {/* 상위법인: 세부 내역 비공개 안내 */}
+      {data?.isAggregateOnly && (
+        <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-gray-400">
+          <p className="text-sm">세부 내역은 담당 법인을 통해 확인하세요</p>
+        </div>
+      )}
+
       {/* 최근 내역 */}
-      {data && data.items.length > 0 && (
+      {data && !data.isAggregateOnly && data.items.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="px-5 py-3.5 border-b border-gray-100">
             <h2 className="text-sm font-semibold text-gray-800">처방 정산 내역 (최근 50건)</h2>
