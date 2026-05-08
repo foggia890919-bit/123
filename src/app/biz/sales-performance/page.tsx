@@ -3,7 +3,8 @@
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { TrendingUp, Loader2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
+import Link from "next/link";
+import { TrendingUp, Loader2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, ExternalLink } from "lucide-react";
 import { BizLayout } from "../page";
 
 const MONTHS = ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"];
@@ -138,11 +139,19 @@ export default function SalesPerformancePage() {
                       >
                         <td className="px-4 py-2.5">
                           <div className="flex items-center gap-2">
-                            <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform ${expanded === u.id ? "rotate-180" : ""}`} />
-                            <div>
+                            <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform flex-shrink-0 ${expanded === u.id ? "rotate-180" : ""}`} />
+                            <div className="flex-1 min-w-0">
                               <p className="font-medium text-gray-800">{u.name || "(이름없음)"}</p>
                               <p className="text-[11px] text-gray-400">{u.salesCode ?? u.email}</p>
                             </div>
+                            <Link
+                              href={`/biz/sales-performance/${u.id}?year=${year}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="flex-shrink-0 p-1 rounded hover:bg-orange-100 text-gray-300 hover:text-orange-600 transition-colors"
+                              title="세부내역 보기"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </Link>
                           </div>
                         </td>
                         <td className="px-3 py-2.5 text-right tabular-nums text-gray-700">
