@@ -282,6 +282,45 @@ export async function POST(req: NextRequest) {
     }
     pipeline.mergeDrugCount = merged.length;
 
+    // ── Phantom 행 교차 검증 (vision-only / vision+clova / clova-only path 한정) ─
+    // Clova positional 은 PR #70 의 phantom Y-tolerance dedupe 를 거쳐 같은 행
+    // 중복이 제거됨. LLM 경로(Gemini Vision) 는 좌표 정보가 없어 같은 행을 두 번
+    // 반환하는 환각이 발생할 수 있음. positional 의 (insuranceCode, productName)
+    // 등장 횟수를 상한으로 LLM 결과를 trim.
+    //
+    // 진료실 1·2 같이 정당하게 같은 약이 두 행에 들어간 경우는 positional 도 2건
+    // 으로 잡혀 (Y 차이 25px+) 상한 = 2 → LLM 2건 그대로 유지됨.
+    if (pipeline.mergeUsed !== "clova-positional" && positionalDrugs.length > 0) {
+      const phantomKey = (insuranceCode: string, productName: string) =>
+        `${insuranceCode}|${productName.replace(/\s+/g, "").toLowerCase()}`;
+      const positionalCount = new Map<string, number>();
+      for (const p of positionalDrugs) {
+        if (!p.insuranceCode || p.insuranceCode.length !== 9) continue;
+        const k = phantomKey(p.insuranceCode, p.productName);
+        positionalCount.set(k, (positionalCount.get(k) ?? 0) + 1);
+      }
+      const seenCount = new Map<string, number>();
+      const phantomTrimmed: MergedDrug[] = [];
+      let phantomRemoved = 0;
+      for (const m of merged) {
+        const code = m.insuranceCode.replace(/\D/g, "");
+        if (code.length !== 9) { phantomTrimmed.push(m); continue; }
+        const k = phantomKey(code, m.productName);
+        const limit = positionalCount.get(k);
+        if (limit == null) { phantomTrimmed.push(m); continue; }
+        const next = (seenCount.get(k) ?? 0) + 1;
+        seenCount.set(k, next);
+        if (next > limit) { phantomRemoved++; continue; }
+        phantomTrimmed.push(m);
+      }
+      if (phantomRemoved > 0) {
+        merged = phantomTrimmed;
+        pipeline.mergeDrugCount = merged.length;
+        // 진단용 로그 — mergeError 자리 빌려서 표기 (별도 필드 추가 없이)
+        pipeline.mergeError = `phantom 행 ${phantomRemoved}건 제거 (positional 교차 검증)`;
+      }
+    }
+
     // FIX #19: LLM 경로에서도 priceHint 를 채워준다.
     //   Vision/Merge LLM 이 productName 만 정확히 잡고 매칭이 dose 변형으로 떨어질 때,
     //   Clova positional 에서 같은 약품의 단가를 찾아 매칭 키로 사용 → 정확한 master row.
