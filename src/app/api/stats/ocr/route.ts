@@ -757,7 +757,33 @@ function extractDrugsPositionalWithDebug(rows: ClovaRow[], colMap: ColumnMap | n
   // Y 순서 정렬
   drugCandidates.sort((a, b) => a.y - b.y);
 
+  // Phantom 행 제거 — 사진이 기울었을 때 Clova OCR 이 같은 약품명을 같은 시각적 행에서
+  // 두 번 검출 (Y 좌표가 다르게 잡힘) → row clustering 이 한 행을 두 행으로 쪼갬.
+  // 같은 약품명이 바로 인접한 Y(< 25px)에 또 등장하면 phantom 으로 판정해 제외.
+  // 진료실 1·2 같이 정당하게 같은 약을 두 행에 처방한 경우는 행 간 Y 차이가 일반적으로
+  // 30px 이상이므로 영향 없음.
+  const PHANTOM_Y_TOLERANCE = 25;
+  const dedupedCandidates: DrugField[] = [];
   for (const cand of drugCandidates) {
+    const norm = cand.field.inferText.replace(/\s+/g, "").toLowerCase();
+    const dup = dedupedCandidates.find((d) => {
+      const dNorm = d.field.inferText.replace(/\s+/g, "").toLowerCase();
+      return dNorm === norm && Math.abs(d.y - cand.y) < PHANTOM_Y_TOLERANCE;
+    });
+    if (dup) {
+      candidates.push({
+        text: cand.field.inferText,
+        y: cand.y,
+        x: fieldXCenter(cand.field),
+        accepted: false,
+        reason: `phantom 행 (Y=${Math.round(dup.y)} 와 ${Math.abs(Math.round(cand.y - dup.y))}px 차이 — 같은 행 OCR 중복 검출로 추정)`,
+      });
+      continue;
+    }
+    dedupedCandidates.push(cand);
+  }
+
+  for (const cand of dedupedCandidates) {
     if (processed.has(cand.field)) {
       candidates.push({ text: cand.field.inferText, y: cand.y, x: fieldXCenter(cand.field), accepted: false, reason: "이전 약품의 풀네임 일부로 합쳐짐" });
       continue;
