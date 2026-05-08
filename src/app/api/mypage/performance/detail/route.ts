@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
   }> = [];
 
   for (const r of reports) {
-    const hospital = r.hospitalName ?? "미입력";
+    const hospital = r.hospitalName || "미입력";
     try {
       const ocd = r.ocrData as Record<string, unknown> | null;
       const drugs: FinalDrug[] = (ocd?.finalDrugs ?? ocd?.aiDrugs ?? []) as FinalDrug[];
