@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { getViewableUserIds } from "@/lib/hierarchy";
 
 interface FinalDrug {
   companyName?: string;
@@ -17,8 +18,12 @@ export async function GET(req: NextRequest) {
     req.nextUrl.searchParams.get("year") ?? String(new Date().getFullYear())
   );
 
+  const viewableIds = session.role === "ADMIN"
+    ? undefined
+    : await getViewableUserIds(session.id);
+
   const reports = await prisma.prescriptionReport.findMany({
-    where: { userId: session.id, year },
+    where: { userId: viewableIds ? { in: viewableIds } : undefined, year },
     orderBy: [{ month: "asc" }, { createdAt: "desc" }],
     select: {
       id: true, year: true, month: true,
@@ -107,7 +112,7 @@ export async function GET(req: NextRequest) {
   };
 
   const allYears = await prisma.prescriptionReport.findMany({
-    where: { userId: session.id },
+    where: { userId: viewableIds ? { in: viewableIds } : undefined },
     select: { year: true },
     distinct: ["year"],
     orderBy: { year: "desc" },
