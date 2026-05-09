@@ -515,19 +515,15 @@ export async function POST(req: NextRequest) {
         return inContext ? { ...m, confidence: Math.min(100, m.confidence + 5) } : m;
       })
       // 3) Clova 컬럼 X 좌표로 사용량 보정 + 디버그 밴드 정보 부착.
-      //    vision-preferred 모드에선 clova 행 클러스터링 자체를 신뢰할 수 없어 (모니터
-      //    사진 깨짐 등의 이유로 vision 우선 진입한 케이스), clova 위치 결과로 덮어쓰면
-      //    vision 의 정답 quantity 가 잘못된 clova 값으로 망가진다. 이 모드에선 디버그
-      //    band 정보만 부착하고 quantity 덮어쓰기는 skip.
+      //    vision-preferred 모드에선 호출 자체를 skip — clova 가 raw 깨짐 (모니터 사진
+      //    행 클러스터링 무너짐) 을 잘못 보정해 vision 정답을 망치는 모든 경로 차단.
+      //    PR #81 (quantity 덮어쓰기만 막기) 만으로 부족한 케이스 발견되어 호출 자체를
+      //    skip 하는 더 강한 차단으로 격상.
       .map((m) => {
-        if (!colMap) return m;
+        if (!colMap || pipeline.mergeUsed === "vision-preferred") return m;
         const r = extractByColumnMap(m.productName, clovaRows, colMap);
         const next: MergedDrug & { _extract?: ExtractResult | null } = { ...m, _extract: r };
-        if (
-          r?.quantity &&
-          r.quantity !== m.quantity.replace(/[^\d.]/g, "") &&
-          pipeline.mergeUsed !== "vision-preferred"
-        ) {
+        if (r?.quantity && r.quantity !== m.quantity.replace(/[^\d.]/g, "")) {
           next.quantity = r.quantity;
         }
         return next;
