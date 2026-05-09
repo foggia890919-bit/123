@@ -117,5 +117,26 @@ export async function GET(req: NextRequest) {
     orderBy: { year: "desc" },
   });
 
-  return NextResponse.json({ year, monthly, totals, byCompany, comparison, availableYears: allYears.map((r) => r.year), isUpperCorp });
+  // 당월 거래처별 제약사 제출현황
+  const curMonthRows: { hospitalName: string; companyName: string; totalFee: number; confirmed: boolean }[] = [];
+  for (const r of reports.filter((r) => r.month === curMonth)) {
+    const hospital = r.hospitalName || "미입력";
+    try {
+      const ocd = r.ocrData as Record<string, unknown> | null;
+      const drugs: FinalDrug[] = (ocd?.finalDrugs ?? ocd?.aiDrugs ?? []) as FinalDrug[];
+      const companies = [...new Set(drugs.map((d) => d.companyName?.trim()).filter(Boolean) as string[])];
+      if (companies.length > 0) {
+        for (const company of companies) {
+          curMonthRows.push({ hospitalName: hospital, companyName: company, totalFee: r.totalFee ?? 0, confirmed: (r.totalFee ?? 0) > 0 });
+        }
+      } else {
+        curMonthRows.push({ hospitalName: hospital, companyName: "-", totalFee: r.totalFee ?? 0, confirmed: (r.totalFee ?? 0) > 0 });
+      }
+    } catch {
+      curMonthRows.push({ hospitalName: hospital, companyName: "-", totalFee: r.totalFee ?? 0, confirmed: (r.totalFee ?? 0) > 0 });
+    }
+  }
+  curMonthRows.sort((a, b) => a.hospitalName.localeCompare(b.hospitalName) || a.companyName.localeCompare(b.companyName));
+
+  return NextResponse.json({ year, monthly, totals, byCompany, comparison, availableYears: allYears.map((r) => r.year), isUpperCorp, curMonth, curMonthRows });
 }
