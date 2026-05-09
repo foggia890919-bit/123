@@ -30,6 +30,11 @@ interface FusionDrug {
   manualCheck: boolean;
   bboxYPercent: number | null;
   debug: DrugDebug | null;
+  mismatch?: {
+    kind: "code-name-mismatch";
+    masterProductName: string;
+    ocrProductName: string;
+  } | null;
 }
 // 서버의 EmrVendor / CaptureType 과 동기화 — 새 EMR 추가 시 ocr-vendor-classifier.ts 와 같이 수정.
 type EmrVendor =
@@ -91,6 +96,13 @@ interface PipelineDiagnostics {
   masterUnmatchedCount: number;
   dedupedCount: number;
   finalCount: number;
+  columnCounts?: {
+    insuranceCode9digit: number;
+    visionRows: number;
+    positionalRows: number;
+    mismatch: boolean;
+  };
+  nameCodeMismatchCount?: number;
   drugCandidates?: Array<{
     text: string;
     yPercent: number;
@@ -1430,9 +1442,10 @@ export default function StatsPage() {
                         editOcr.pipeline.docaiConfigured
                           ? `Document AI: ${editOcr.pipeline.docaiOk ? "OK" : "FAIL"} (표 ${editOcr.pipeline.docaiTableCount ?? 0}개, ${editOcr.pipeline.docaiTotalRowCount ?? 0}행, ${editOcr.pipeline.docaiTextChars ?? 0}자)${editOcr.pipeline.docaiError ? " — " + editOcr.pipeline.docaiError : ""}`
                           : `Document AI: 미설정`,
+                        `컬럼 카운트: 보험코드 ${editOcr.pipeline.columnCounts?.insuranceCode9digit ?? 0} / Vision ${editOcr.pipeline.columnCounts?.visionRows ?? 0} / Positional ${editOcr.pipeline.columnCounts?.positionalRows ?? 0}${editOcr.pipeline.columnCounts?.mismatch ? " ⚠ 불일치" : ""}`,
                         `병합 LLM: ${editOcr.pipeline.mergeUsed} → ${editOcr.pipeline.mergeDrugCount}건${editOcr.pipeline.mergeError ? " — " + editOcr.pipeline.mergeError : ""}`,
                         `isLikelyDrug 필터: -${editOcr.pipeline.filteredByIsLikelyDrug}건`,
-                        `마스터 매칭: 성공 ${editOcr.pipeline.masterMatchedCount} / 실패 ${editOcr.pipeline.masterUnmatchedCount}`,
+                        `마스터 매칭: 성공 ${editOcr.pipeline.masterMatchedCount} / 실패 ${editOcr.pipeline.masterUnmatchedCount}${(editOcr.pipeline.nameCodeMismatchCount ?? 0) > 0 ? ` / 코드↔이름 불일치 ${editOcr.pipeline.nameCodeMismatchCount}` : ""}`,
                         `중복 제거: -${editOcr.pipeline.dedupedCount}건`,
                         `최종: ${editOcr.pipeline.finalCount}건`,
                       ].join("\n")}>
@@ -1509,9 +1522,22 @@ export default function StatsPage() {
                           </div>
                         </details>
                       )}
+                      {editOcr.pipeline.columnCounts && (
+                        <div className={editOcr.pipeline.columnCounts.mismatch ? "text-red-700 font-semibold" : ""}>
+                          컬럼 카운트: 보험코드 9자리 {editOcr.pipeline.columnCounts.insuranceCode9digit}
+                          {" / "}Vision 행 {editOcr.pipeline.columnCounts.visionRows}
+                          {" / "}Positional 행 {editOcr.pipeline.columnCounts.positionalRows}
+                          {editOcr.pipeline.columnCounts.mismatch && <span> ⚠ 컬럼별 N 불일치 — 어느 엔진이 누락/환각했을 가능성</span>}
+                        </div>
+                      )}
                       <div>병합 LLM: {editOcr.pipeline.mergeUsed} → {editOcr.pipeline.mergeDrugCount}건{editOcr.pipeline.mergeError ? ` — ${editOcr.pipeline.mergeError}` : ""}</div>
                       <div>isLikelyDrug 필터: -{editOcr.pipeline.filteredByIsLikelyDrug}건</div>
-                      <div>마스터 매칭: 성공 {editOcr.pipeline.masterMatchedCount} / 실패 {editOcr.pipeline.masterUnmatchedCount}</div>
+                      <div>
+                        마스터 매칭: 성공 {editOcr.pipeline.masterMatchedCount} / 실패 {editOcr.pipeline.masterUnmatchedCount}
+                        {(editOcr.pipeline.nameCodeMismatchCount ?? 0) > 0 && (
+                          <span className="text-red-700 font-semibold"> / 코드↔이름 불일치 {editOcr.pipeline.nameCodeMismatchCount}</span>
+                        )}
+                      </div>
                       <div>중복 제거: -{editOcr.pipeline.dedupedCount}건</div>
                       <div className="font-bold pt-1">최종: {editOcr.pipeline.finalCount}건</div>
                     </div>
@@ -1560,6 +1586,28 @@ export default function StatsPage() {
                         </div>
                       </div>
                     )}
+                    {(() => {
+                      const mismatched = editOcr.drugs.filter((d) => d.mismatch);
+                      if (mismatched.length === 0) return null;
+                      return (
+                        <div className="mt-2">
+                          <p className="text-[10px] font-semibold text-gray-500 mb-1">
+                            보험코드 ↔ 마스터 제품명 불일치 ({mismatched.length}건)
+                          </p>
+                          <div className="text-[11px] bg-red-50 border border-red-300 rounded p-2 font-mono space-y-0.5">
+                            {mismatched.map((d, i) => (
+                              <div key={i} className="text-red-700">
+                                ✗ {d.insuranceCode.value || "—"}{" "}
+                                <span className="text-gray-700">OCR &quot;{d.mismatch!.ocrProductName}&quot; ↔ 마스터 &quot;{d.mismatch!.masterProductName}&quot;</span>
+                              </div>
+                            ))}
+                            <div className="pt-1 text-gray-500 text-[10px]">
+                              ⚠️ 보험코드는 마스터에 있는데 OCR 제품명이 명백히 다른 행. Vision 이 보험코드 한 자리를 잘못 읽었거나 제품명을 환각으로 만들어낸 신호. 해당 행은 빨간 배지로 자동 검수 표시됩니다.
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
                     {editOcr.pipeline.crossValidation && editOcr.pipeline.crossValidation.length > 0 && (() => {
                       const mismatches = editOcr.pipeline.crossValidation.filter((c) => !c.match);
                       const matches = editOcr.pipeline.crossValidation.filter((c) => c.match);
@@ -1630,15 +1678,28 @@ export default function StatsPage() {
                       </td></tr>
                     ) : editOcr.drugs.map((d, i) => {
                       const conf = d.finalConfidence;
-                      const rowBg = d.manualCheck ? "bg-red-50" : conf >= 95 ? "bg-green-50/40" : "";
+                      const rowBg = d.mismatch ? "bg-red-100" : d.manualCheck ? "bg-red-50" : conf >= 95 ? "bg-green-50/40" : "";
+                      const codeTitle = d.mismatch
+                        ? `⚠ 보험코드↔이름 불일치 — 마스터: "${d.mismatch.masterProductName}" / OCR: "${d.mismatch.ocrProductName}"`
+                        : d.insuranceCode.value;
                       return (
                         <tr key={i} className={`border-b border-gray-100 h-9 ${rowBg}`}>
-                          <td className="py-1.5 px-1.5 font-mono text-[11px] truncate" title={d.insuranceCode.value}>{d.insuranceCode.value || "—"}</td>
+                          <td className="py-1.5 px-1.5 font-mono text-[11px] truncate" title={codeTitle}>
+                            {d.mismatch && <span className="text-red-600 font-bold mr-0.5" title="보험코드와 마스터 제품명이 어긋남">⚠</span>}
+                            {d.insuranceCode.value || "—"}
+                          </td>
                           <td className="py-1.5 px-1.5 text-[11px] truncate" title={d.companyName.value}>{d.companyName.value || "—"}</td>
                           <td className="py-1.5 px-1.5 text-[11px]">
                             <div className="flex items-center gap-1">
                               <span className="truncate" title={d.productName.value}>{d.productName.value || "—"}</span>
                               <span className={`shrink-0 text-[9px] px-1 py-0.5 rounded border font-medium ${confColor(conf)}`}>{conf}%</span>
+                              {d.mismatch && (
+                                <span
+                                  className="shrink-0 text-[9px] px-1 py-0.5 rounded border border-red-300 bg-red-100 text-red-700 font-semibold"
+                                  title={`보험코드 ${d.insuranceCode.value} 의 마스터 제품명은 "${d.mismatch.masterProductName}" — OCR/Vision 이 본 "${d.mismatch.ocrProductName}" 와 다릅니다.`}>
+                                  코드↔이름
+                                </span>
+                              )}
                             </div>
                           </td>
                           <td className="py-1.5 px-1.5 text-[11px] truncate">{d.quantity.value || "—"}</td>

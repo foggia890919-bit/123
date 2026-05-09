@@ -43,6 +43,13 @@ export interface FusionDrug {
   manualCheck: boolean;               // < 95 이면 true
   bboxYPercent: number | null;        // 이미지 내 행의 Y 중심 (0~100), 없으면 null
   debug: DrugDebug | null;            // 행 밴드 시각화용 (디버그 토글에서 사용)
+  // 보험코드 ↔ 마스터 제품명 불일치 — Vision 이 보험코드 또는 제품명을 잘못 인식했다는
+  // 강한 신호. UI 에서 빨간 배지 + 메시지 노출. null 이면 정상 또는 검증 불가.
+  mismatch: {
+    kind: "code-name-mismatch";       // 보험코드는 마스터에 있는데 OCR 제품명과 다름
+    masterProductName: string;        // 마스터 DB 의 정식 제품명
+    ocrProductName: string;           // OCR/Vision 이 본 제품명
+  } | null;
 }
 
 // 거래처별 EMR 표 양식 — 컬럼 X 좌표를 이미지 너비 비율로 저장. 다음 사진 OCR 시 그대로
@@ -88,6 +95,19 @@ export interface PipelineDiagnostics {
   masterUnmatchedCount: number;          // 매칭 실패 수
   dedupedCount: number;                  // dedupe 에서 제거된 중복 수
   finalCount: number;                    // 최종 응답 약품 수
+  // 컬럼별 N 카운트 — 누락/할루시네이션 1차 감지용. raw OCR 단계에서 보험코드 9자리
+  // 등장 횟수, Vision 이 본 행 수, Clova positional 행 수를 각각 세서 모두 같은지 비교.
+  // 어긋나면 columnCountMismatch=true → UI 에 경고. 같으면 행 단위 매핑이 정합적이라는
+  // 약한 보장.
+  columnCounts: {
+    insuranceCode9digit: number;          // clovaText 에서 \b\d{9}\b 매치 수 (중복 포함)
+    visionRows: number;
+    positionalRows: number;
+    mismatch: boolean;                    // 셋 중 둘 이상이 다른 값이면 true
+  };
+  // 보험코드 ↔ 마스터 제품명 불일치 행 수 — Vision 이 코드/이름 중 하나를 잘못 인식한
+  // 케이스. 행 단위 mismatch 정보는 FusionDrug.mismatch 에 직접 부착됨.
+  nameCodeMismatchCount: number;
   // Clova 가 본 약품명 후보 전체 — 어느 게 최종 결과에 들어갔는지 사용자가 직접 검증
   drugCandidates: Array<{
     text: string;
@@ -240,6 +260,13 @@ export async function POST(req: NextRequest) {
     const candidateCodes = extractInsuranceCodes(clovaText, geminiDraft);
     const masterByCode = await fetchMasterByCodes(candidateCodes);
 
+    // 컬럼별 N 카운트 — 정합성 1차 검증.
+    // clovaText 에서 9자리 코드 등장 횟수(중복 포함), Vision 행 수, Clova positional 행 수
+    // 셋 중 어느 둘이라도 차이나면 어딘가 누락/환각이 들어왔다는 신호.
+    // candidateCodes 는 set 이라 중복 제거되어 행 단위 비교에 부적합 → raw 매치로 카운트.
+    const clovaCode9Count = (clovaText.match(/\b\d{9}\b/g) ?? []).length;
+    const visionRowCount = geminiDraft?.drugs.length ?? 0;
+
     // Document AI 결과 정리 (현재 PR 에선 진단용으로만 사용)
     const docai: DocAiResult | null = docaiOut.status === "fulfilled" ? docaiOut.value : null;
     const docaiTotalRowCount = docai
@@ -274,6 +301,13 @@ export async function POST(req: NextRequest) {
       crossValidation: [],
       dedupedCount: 0,
       finalCount: 0,
+      columnCounts: {
+        insuranceCode9digit: clovaCode9Count,
+        visionRows: visionRowCount,
+        positionalRows: 0,                  // 3단계 positional 추출 후 채움
+        mismatch: false,                    // 3단계 후 재계산
+      },
+      nameCodeMismatchCount: 0,
       drugCandidates: [],
       docaiOk: docaiOut.status === "fulfilled",
       docaiConfigured,
@@ -307,14 +341,27 @@ export async function POST(req: NextRequest) {
       quantityY: c.quantityY,
       insuranceCode: c.insuranceCode,
     }));
+
+    // 컬럼 카운트 정합성 검증 — Clova 보험코드 등장 수, Vision 행 수, Positional 행 수.
+    // 셋 중 어느 둘이라도 다르면 mismatch (어딘가 누락/환각). 0 인 카운트는 비교 제외
+    // (그 엔진이 아예 못 뽑은 경우 — 없는 데이터로 mismatch 판정하면 안 됨).
+    pipeline.columnCounts.positionalRows = positionalDrugs.length;
+    {
+      const counts = [clovaCode9Count, visionRowCount, positionalDrugs.length].filter((n) => n > 0);
+      pipeline.columnCounts.mismatch = counts.length >= 2 && new Set(counts).size > 1;
+    }
+
     // Vision 결과가 충분 (>=3) 하면 captureType 무관하게 항상 vision 우선.
     // 이유: positional 은 Clova 의 행 클러스터링에 직접 의존하는데 모니터 사진뿐 아니라
     // 종이 사진 일부에서도 클러스터링이 깨져 한 행씩 밀린 매핑이 자주 발생. Vision LLM
     // 은 약품명·보험코드 단위로 LLM 이 알아서 묶어 추출해 raw 깨짐에 강건.
-    // captureType 분류기 실수에 흔들리지 않게 captureType 의존 분기 제거.
-    // positional 결과는 후속 cross-validate 에서 검증 용도로만 사용 — 양쪽 quantity
-    // 다른 행은 자동 manualCheck 빨간 배지로 사용자에게 노출됨.
-    const preferVision = visionDrugs.length >= 3;
+    //
+    // 단, Vision 행 수가 보험코드 등장 수와 어긋나면 Vision 이 행을 누락했거나 환각으로
+    // 추가했다는 강한 신호 → vision-preferred 우회하고 LLM 병합 경로로 폴백해서 Clova
+    // raw + 마스터 후보를 다시 비교한다. Clova 가 코드를 한 자릿수 잘못 읽은 경우는
+    // 코드 카운트 자체가 안 맞을 가능성 적어 false positive 적음.
+    const visionMatchesCodeCount = clovaCode9Count > 0 && visionRowCount === clovaCode9Count;
+    const preferVision = visionDrugs.length >= 3 && (clovaCode9Count === 0 || visionMatchesCodeCount);
 
     if (preferVision) {
       pipeline.mergeUsed = "vision-preferred";
@@ -561,6 +608,7 @@ export async function POST(req: NextRequest) {
       matchedMedicationId: string | null;
       finalConfidence: number;
       manualCheck: boolean;
+      mismatch: FusionDrug["mismatch"];   // 보험코드↔마스터 제품명 불일치 시 채워짐
       anchorY: number | null;
       productNameRaw: string;       // OCR/LLM 이 추출한 원본 productName (마스터 덮어쓰기 전)
       insuranceCodeRaw: string;
@@ -579,10 +627,11 @@ export async function POST(req: NextRequest) {
       const llmConf = clamp01_100(item.confidence);
       const baselineConf = Math.max(llmConf, completeness);
       const finalConfidence = matched.matchedMedicationId ? matched.matchConfidence : baselineConf;
-      // 빈 필드(productName/insuranceCode 누락)도 검수 대상으로 강제 — 사용자가
-      // 빨간색 행으로 빠르게 식별해서 빈칸 채울 수 있게.
+      // 빈 필드(productName/insuranceCode 누락) 또는 코드↔이름 불일치도 검수 대상으로
+      // 강제 — 사용자가 빨간색 행으로 빠르게 식별해서 빈칸 채우거나 정정.
       const hasMissingField = !item.productName || !item.insuranceCode;
-      const manualCheck = finalConfidence < 95 || hasMissingField;
+      const hasNameCodeMismatch = matched.nameCodeMismatch != null;
+      const manualCheck = finalConfidence < 95 || hasMissingField || hasNameCodeMismatch;
       if (matched.matchedMedicationId) {
         pipeline.masterMatchedCount++;
       } else {
@@ -593,6 +642,9 @@ export async function POST(req: NextRequest) {
             unitPriceHint: item.priceHint ?? null,
           });
         }
+      }
+      if (hasNameCodeMismatch) {
+        pipeline.nameCodeMismatchCount++;
       }
 
       const itemWithExtract = item as MergedDrug & { _extract?: ExtractResult | null };
@@ -606,6 +658,9 @@ export async function POST(req: NextRequest) {
         matchedMedicationId: matched.matchedMedicationId,
         finalConfidence,
         manualCheck,
+        mismatch: matched.nameCodeMismatch
+          ? { kind: "code-name-mismatch" as const, ...matched.nameCodeMismatch }
+          : null,
         // positional path 가 알고 있는 정확한 anchor Y 우선 사용 — 텍스트 검색 기반
         // locateRowInClova 는 같은 한글명 다른 dose 변형이 여러 개 있으면 잘못된 행 픽.
         anchorY: item.anchorYRaw != null && clovaImageHeight > 0
@@ -737,6 +792,7 @@ export async function POST(req: NextRequest) {
         manualCheck: d.manualCheck,
         bboxYPercent,
         debug,
+        mismatch: d.mismatch,
       };
     });
 
@@ -2050,7 +2106,16 @@ async function matchMedication(
   commissionRate: number | null;
   matchedMedicationId: string | null;
   matchConfidence: number;
+  // 보험코드는 마스터에 있는데 OCR 제품명이 마스터 제품명과 명백히 다른 경우
+  // (한글 첫 2글자도 안 겹침). Vision 이 코드/이름 중 하나를 잘못 읽은 강한 신호.
+  // null 이면 정상 또는 검증 불가 (코드 매칭이 1차에서 안 일어났거나 이름 비교 X).
+  nameCodeMismatch: { masterProductName: string; ocrProductName: string } | null;
 }> {
+  // 보험코드는 마스터에 있지만 한글명 첫 2글자가 모두 안 겹쳐 fallthrough 한 케이스
+  // 정보. 후속 1·2차 매칭이 성공하든 실패하든 사용자에게 "코드↔이름 불일치"로 표시
+  // 해 검수자가 직접 보험코드 OCR 오타 vs 제품명 OCR 오타를 판정하게 한다.
+  let nameCodeMismatch: { masterProductName: string; ocrProductName: string } | null = null;
+
   // 0차: priceHint (OCR 에서 본 단가) 가 있으면 이름 + 가격으로 정확한 마스터 row 찾기
   // 같은 약품의 dose 변형(로수듀오 10/10 vs 10/20) 은 가격이 달라 한 번에 정확히 구분.
   if (item.priceHint && item.productName) {
@@ -2064,6 +2129,7 @@ async function matchMedication(
         commissionRate: m.commissionRate,
         matchedMedicationId: m.id,
         matchConfidence: 99,
+        nameCodeMismatch: null,
       };
     }
   }
@@ -2097,9 +2163,14 @@ async function matchMedication(
         commissionRate: m.commissionRate,
         matchedMedicationId: m.id,
         matchConfidence: 100,
+        nameCodeMismatch: null,
       };
     }
-    // 이름 명백히 다름 → fallthrough (1·2차 한글 이름 기반 매칭으로 진행)
+    // 이름 명백히 다름 → mismatch 캡처 후 fallthrough (1·2차 한글 이름 기반 매칭으로 진행)
+    nameCodeMismatch = {
+      masterProductName: m.productName,
+      ocrProductName: item.productName,
+    };
   }
 
   // 한글 약품 prefix + 용량 분리
@@ -2150,6 +2221,7 @@ async function matchMedication(
       commissionRate: r.row.commissionRate,
       matchedMedicationId: r.row.id,
       matchConfidence: r.exact ? 98 : 92,
+      nameCodeMismatch,
     };
   }
 
@@ -2167,6 +2239,7 @@ async function matchMedication(
       commissionRate: r.row.commissionRate,
       matchedMedicationId: r.row.id,
       matchConfidence: r.exact ? 95 : 85,
+      nameCodeMismatch,
     };
   }
 
@@ -2178,6 +2251,7 @@ async function matchMedication(
     commissionRate: null,
     matchedMedicationId: null,
     matchConfidence: 0,
+    nameCodeMismatch,
   };
 }
 
