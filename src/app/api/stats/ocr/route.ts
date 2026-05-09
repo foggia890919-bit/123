@@ -366,84 +366,26 @@ export async function POST(req: NextRequest) {
     const visionMatchesCodeCount = clovaCode9Count > 0 && visionRowCount === clovaCode9Count;
     const preferVision = visionDrugs.length >= 3 && (clovaCode9Count === 0 || visionMatchesCodeCount);
 
-    // ── 분기 최우선: Gemini Vision (Pro) 이미지 직접 입력 결과 ─────────────
-    // 사용자 정책: 사진을 Pro 모델에 직접 던져서 표 인식·헤더 매핑·보험코드 매핑까지
-    // 한 번에 처리 (Gemini 웹과 동일 흐름). Vision 이 ≥3건 추출하면 그대로 채택.
-    // 부실 시 Clova text 결정론적 파서 → positional → LLM 폴백 순.
-    const deterministicDrugs = parseDrugsFromClovaText(clovaText);
-
-    if (visionDrugs.length >= 3) {
-      pipeline.mergeUsed = "vision-preferred";
-      merged = visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 90) }));
-    } else if (deterministicDrugs.length >= 3) {
-      pipeline.mergeUsed = "clova-deterministic-fallback";
-      merged = deterministicDrugs;
-    } else if (preferVision) {
-      pipeline.mergeUsed = "vision-preferred";
-      merged = visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 90) }));
-    } else if (positionalDrugs.length >= 3) {
-      // Vision 부실 (API 503 등) 일 때만 positional 사용.
-      // 부분 추출도 행은 유지: 어떤 한 필드라도 인식됐으면 빈칸은 검수자가 채움.
-      pipeline.mergeUsed = "clova-positional";
-      merged = positionalDrugs
-        .filter((p) => p.productName || p.quantity || p.insuranceCode)
-        .map((p) => ({
-          insuranceCode: p.insuranceCode,
-          productName: p.productName,
-          companyName: "",
-          quantity: p.quantity,
-          confidence: 80,
-          priceHint: parseInt(p.unitPrice.replace(/[^\d]/g, ""), 10) || undefined,
-          anchorYRaw: p.anchorY,
-        }));
-    } else {
-      // positional 부실 시 기존 LLM 경로
-      const visionAllMatched = visionDrugs.length > 0 && visionDrugs.every((d) => {
-        const c = d.insuranceCode.replace(/\D/g, "");
-        return c.length === 9 && masterByCode.has(c);
+    // ── 단일 흐름: Pro 모델 교차 검증 ─────────────────────────────────────
+    // 사용자 정책: Clova OCR text + Gemini Vision raw 두 결과를 Pro 모델에 같이 던져서
+    // 행별 교차 검증으로 최종 약품 리스트 결정. 분기 단일화 — Vision 단독/positional/
+    // 결정론적 파서로 분기하지 않음. LLM 한 번에 모든 신호 (Clova + Vision + master 후보)
+    // 보고 결정해야 행 누락·합계행 환각·dose 변형 매칭 오류 모두 차단.
+    pipeline.mergeUsed = visionDrugs.length === 0 ? "clova-only" : "vision+clova";
+    try {
+      merged = await callGeminiMerge({
+        clovaText,
+        geminiDraft,
+        masterCandidates: Array.from(masterByCode.values()).map((m) => ({
+          insuranceCode: m.insuranceCode,
+          productName: m.productName,
+          companyName: m.companyName,
+        })),
+        clientContext: [],
       });
-      // 약국 EMR (PHARM IT3000 등) 은 약품별 표에 보험코드 컬럼이 없어 Vision 행의
-      // insuranceCode 가 빈 문자열인 게 정상 → visionAllMatched 가 항상 false → LLM
-      // 병합 경로로 떨어져 마스터 후보 + clientContext 기반 *환각으로 약품 11건 만들어내던*
-      // 회귀 (사용자 진단: Vision 정장생캡슐 1369 정확 / 최종 결과 10101 + 사진에 없는
-      // 약품 5종 환각). Vision 이 1건이라도 추출했으면 그것만 신뢰하고 LLM 병합 skip.
-      // 누락된 행은 사용자가 수동 입력 — 환각 행보다 빈칸이 훨씬 안전.
-      //
-      // 분류기가 Gemini 503 등으로 실패하면 vendor === "pharm-it3000" 체크가 못 걸려
-      // 같은 회귀가 재발 (사용자 보고: 503 + 약국 사진 → 다시 10101 환각). 분류기 신뢰
-      // 못 하는 상태에서도 약국 EMR 신호가 강하면 vision-only 로 단락한다.
-      // 신호 조합:
-      //   (a) Clova 가 9자리 보험코드 거의 못 잡음 (≤1) — 약국 EMR 약품별 표는 컬럼 자체 없음
-      //   (b) Vision 결과 대다수 (≥70%) 가 보험코드 빈칸
-      // 일반 의원·병원 EMR 은 행마다 보험코드가 있어 두 신호 모두 안 맞아 false positive 적음.
-      const isPharmacyVendor = classifierResult.vendor === "pharm-it3000";
-      const classifierUntrusted =
-        classifierResult.error != null || classifierResult.vendor === "unknown";
-      const visionMostlyNoCode =
-        visionDrugs.length >= 3 &&
-        visionDrugs.filter((d) => d.insuranceCode.replace(/\D/g, "").length !== 9).length /
-          visionDrugs.length >= 0.7;
-      const looksLikePharmacy =
-        isPharmacyVendor ||
-        (classifierUntrusted && visionMostlyNoCode && clovaCode9Count <= 1);
-      if (visionAllMatched || (looksLikePharmacy && visionDrugs.length > 0)) {
-        pipeline.mergeUsed = "skipped (vision-only)";
-        merged = visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 95) }));
-      } else {
-        // 최종 폴백: LLM 병합. 결정론적 파서·positional·vision-only 다 실패한 케이스만.
-        pipeline.mergeUsed = visionDrugs.length === 0 ? "clova-only" : "vision+clova";
-        try {
-          merged = await callGeminiMerge({
-            clovaText,
-            geminiDraft,
-            masterCandidates: [],
-            clientContext: [],
-          });
-        } catch (e) {
-          pipeline.mergeError = String(e).slice(0, 200);
-          merged = visionDrugs;
-        }
-      }
+    } catch (e) {
+      pipeline.mergeError = String(e).slice(0, 200);
+      merged = visionDrugs;
     }
     pipeline.mergeDrugCount = merged.length;
 
@@ -2136,27 +2078,41 @@ async function callGeminiMerge(args: {
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
   const prompt = `당신은 한국 EMR 처방통계 표를 분석하는 전문가입니다. 약사가 직접 보고
-입력하던 작업을 자동화하는 게 목적입니다.
+입력하던 작업을 자동화하는 게 목적입니다. 두 가지 OCR 결과를 행 단위로 교차 검증해서
+최종 약품 리스트를 만드세요.
 
-# 입력: Clova OCR 텍스트
+# 입력 1: Clova OCR 텍스트 (한국어 OCR — 줄/공백 클러스터링 신뢰도 높음)
 ${args.clovaText || "(없음)"}
 
-# 작업
-1) 표 헤더 식별 (예: 처방코드 / 처방명칭 / 환자수 / 단가 / 사용량 / 총액).
-2) 각 약품 행에서 [productName, quantity, insuranceCode, companyName] 추출.
-   - quantity: **반드시 "사용량 / 총사용량 / 총투여량 / 수량 / 조제량 / 투약량" 컬럼 값**.
-     절대 환자수 / 단가 / 약가 / 금액 / 총액 값을 quantity 로 쓰지 말 것.
-   - productName: 약품명/처방명칭/제품명 컬럼 값. **OCR 오타 의심 시 일반 약품명으로
-     자연스럽게 정정** (예: "양로베틴" → "암로베틴", "아라젠" → "아라펜",
-     "토바스틴" → "토바스틴", "암로디핀" 등은 표준 한국 약품명에 맞춰).
-   - insuranceCode: **약품명을 알면 한국 표준 EDI 9자리 보험코드(요양급여비용
-     청구코드) 를 출력**. 예: 아라펜정 → 658600100, 가바로닌캡슐100mg → 656001220,
-     디오디핀정5/80mg → 656004010. 모르거나 확신 없으면 빈 문자열. 추측·환각 금지.
-   - companyName: 제약사명 (셀트리온제약, 알리코제약, 한국메디카, HLB제약 등).
-3) **합계행/메타행 절대 제외**: 약품명 칸이 비었거나 "NH팜 / 비급여 / 총계 / 소계 /
-   거래처명 / 주소 / 전화번호" 같이 약품 아닌 라인. 토큰 갯수가 헤더보다 적으면 메타행.
-4) **행 단위 처리**: 한 줄의 데이터를 다른 줄과 절대 합치지 말 것. 약품명 칸에 다음
-   줄의 환자수·단가 토큰이 끼어들면 안 됨.
+# 입력 2: Gemini Vision 의 1차 구조화 결과 (이미지 직접 분석 — 표 헤더/컬럼 인식 강함)
+${args.geminiDraft && args.geminiDraft.drugs.length ? JSON.stringify(args.geminiDraft.drugs, null, 2) : "(비어있음)"}
+
+# 입력 3: 마스터 DB 후보 (Clova 가 뽑은 9자리 보험코드로 사전 조회 — 정확한 productName 보정용)
+${args.masterCandidates.length ? JSON.stringify(args.masterCandidates, null, 2) : "(없음)"}
+
+# 작업 (반드시 이 순서)
+1) **헤더 식별**: Clova text 첫 데이터 줄 위에서 헤더 줄을 찾고 컬럼 순서 결정
+   (예: 처방코드 / 처방명칭 / 환자수 / 단가 / 사용량 / 총액).
+2) **Clova text 의 데이터 줄을 1행씩 순번 매김**. 각 줄을 공백으로 split → 헤더 컬럼 순서대로
+   토큰 매핑. 토큰 갯수가 헤더보다 적은 줄(NH팜 합계, 거래처명, 주소, 전화번호 등) 은 **제외**.
+3) **Vision 결과를 같은 행에 매핑**: Clova 줄과 Vision raw 항목을 약품명 prefix + 순서로
+   매칭. 두 결과가 다르면 다음 우선순위로 결정:
+   - **insuranceCode**: Clova text 안 9자리 숫자 우선. 없으면 Vision 우선. 둘 다 없으면
+     마스터 후보의 정확 매칭 또는 표준 EDI 9자리 지식으로 매핑 (확신 없으면 빈칸).
+   - **quantity**: Clova text 의 "사용량/총사용량/총투여량/수량/조제량" 컬럼 값을
+     **반드시 우선**. Vision 이 환자수/단가를 잘못 가져왔을 수 있으니 Clova 에서 한 번 더 확인.
+     절대 환자수/단가/약가/금액/총액 값을 quantity 로 쓰지 마세요.
+   - **productName**: 두 결과 합쳐 가장 명확한 형태. OCR 오타는 자연스럽게 정정
+     (예: "양로베틴" → "암로베틴", "아라젠" → "아라펜").
+   - **companyName**: 제약사명 (셀트리온제약, 알리코제약, HLB제약 등).
+4) **합계행/메타행 절대 출력 X**: 약품명이 약품 아닌 라벨 (NH팜, 비급여, 총계, 거래처명,
+   주소, 전화번호) 인 행은 결과에서 완전 제외.
+5) **행 독립 처리**: 한 줄의 데이터를 다른 줄과 절대 합치지 말 것 (약품명 칸에 다음 줄 토큰이
+   끼어드는 환각 금지). 같은 약품 다른 dose (10/10, 20/10, 5/10) 는 별도 행으로 유지 —
+   같은 보험코드로 합치지 말 것.
+6) **마스터 후보 활용**: 입력 3 의 후보는 Clova 9자리 보험코드와 정확 매칭된 약품들.
+   해당 코드 행의 productName/companyName 보정에만 사용. 후보 약품을 표에 없는 행에
+   환각으로 추가 X.
 
 # 출력
 JSON 만:
@@ -2166,8 +2122,7 @@ JSON 만:
   ]
 }
 
-confidence: 헤더 명확 + 행 매핑 명확 + 보험코드 확실 = 95+. 보험코드만 모르면 80.
-약품명 OCR 오타가 심하거나 행 깨짐 = 50~70.`;
+confidence: Clova + Vision 두 결과 모두 명확 일치 = 95+. 한쪽만 명확 = 80. 행 깨짐 = 50~70.`;
 
   try {
     const response = await ai.models.generateContent({
