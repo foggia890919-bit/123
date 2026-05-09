@@ -393,8 +393,25 @@ export async function POST(req: NextRequest) {
       // 회귀 (사용자 진단: Vision 정장생캡슐 1369 정확 / 최종 결과 10101 + 사진에 없는
       // 약품 5종 환각). Vision 이 1건이라도 추출했으면 그것만 신뢰하고 LLM 병합 skip.
       // 누락된 행은 사용자가 수동 입력 — 환각 행보다 빈칸이 훨씬 안전.
+      //
+      // 분류기가 Gemini 503 등으로 실패하면 vendor === "pharm-it3000" 체크가 못 걸려
+      // 같은 회귀가 재발 (사용자 보고: 503 + 약국 사진 → 다시 10101 환각). 분류기 신뢰
+      // 못 하는 상태에서도 약국 EMR 신호가 강하면 vision-only 로 단락한다.
+      // 신호 조합:
+      //   (a) Clova 가 9자리 보험코드 거의 못 잡음 (≤1) — 약국 EMR 약품별 표는 컬럼 자체 없음
+      //   (b) Vision 결과 대다수 (≥70%) 가 보험코드 빈칸
+      // 일반 의원·병원 EMR 은 행마다 보험코드가 있어 두 신호 모두 안 맞아 false positive 적음.
       const isPharmacyVendor = classifierResult.vendor === "pharm-it3000";
-      if (visionAllMatched || (isPharmacyVendor && visionDrugs.length > 0)) {
+      const classifierUntrusted =
+        classifierResult.error != null || classifierResult.vendor === "unknown";
+      const visionMostlyNoCode =
+        visionDrugs.length >= 3 &&
+        visionDrugs.filter((d) => d.insuranceCode.replace(/\D/g, "").length !== 9).length /
+          visionDrugs.length >= 0.7;
+      const looksLikePharmacy =
+        isPharmacyVendor ||
+        (classifierUntrusted && visionMostlyNoCode && clovaCode9Count <= 1);
+      if (visionAllMatched || (looksLikePharmacy && visionDrugs.length > 0)) {
         pipeline.mergeUsed = "skipped (vision-only)";
         merged = visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 95) }));
       } else {
