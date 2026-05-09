@@ -413,16 +413,7 @@ export async function POST(req: NextRequest) {
         (classifierUntrusted && visionMostlyNoCode && clovaCode9Count <= 1);
       if (visionAllMatched || (looksLikePharmacy && visionDrugs.length > 0)) {
         pipeline.mergeUsed = "skipped (vision-only)";
-        // Vision 환각 차단: productName 의 한글 prefix 가 Clova text 에 없으면
-        // 사진에 안 보이는 약품을 마스터 후보·clientContext 로 끌어와 만든 환각으로
-        // 보고 productName/insuranceCode 를 비운다. quantity 는 유지 — 어떤 행에
-        // 붙은 숫자인지 정보로 남기되, 마스터 매칭에서 자동 빠지고 검수 행으로 노출.
-        merged = visionDrugs.map((d) => {
-          if (!isProductNameInClova(d.productName, clovaText)) {
-            return { ...d, productName: "", insuranceCode: "", confidence: 50 };
-          }
-          return { ...d, confidence: Math.max(d.confidence, 95) };
-        });
+        merged = visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 95) }));
       } else {
         pipeline.mergeUsed = visionDrugs.length === 0 ? "clova-only" : "vision+clova";
         try {
@@ -2127,10 +2118,13 @@ async function matchMasterByNameAndPrice(
   const price = parseInt(unitPriceRaw.replace(/[^\d]/g, ""), 10);
   if (!Number.isFinite(price) || price <= 0) return null;
 
-  // 1차: 한글 이름 포함 + 가격 정확 일치
+  // 1차: 한글 이름이 마스터 productName 시작과 일치 + 가격 정확 일치.
+  //   contains 였으나 fuzzy 매칭이 환각 약품을 끌어와 startsWith 로 strict 화 — Vision/Clova
+  //   가 추출한 약품명 prefix 와 마스터 prefix 가 정확히 일치해야 매칭. 매칭 실패 시 행은
+  //   빈칸으로 검수 화면에 노출되어 사용자가 직접 채우거나 삭제 (사용자 정책).
   const exactPrice = await prisma.medication.findMany({
     where: {
-      productName: { contains: parsed.korean, mode: "insensitive" },
+      productName: { startsWith: parsed.korean, mode: "insensitive" },
       price,
     },
     select: { id: true, insuranceCode: true, productName: true, companyName: true, price: true, commissionRate: true },
@@ -2150,7 +2144,7 @@ async function matchMasterByNameAndPrice(
   const priceHigh = Math.ceil(price * 1.05);
   const nearPrice = await prisma.medication.findMany({
     where: {
-      productName: { contains: parsed.korean, mode: "insensitive" },
+      productName: { startsWith: parsed.korean, mode: "insensitive" },
       price: { gte: priceLow, lte: priceHigh },
     },
     select: { id: true, insuranceCode: true, productName: true, companyName: true, price: true, commissionRate: true },
@@ -2274,12 +2268,14 @@ async function matchMedication(
     return { row: exact ?? rows[0], exact: !!exact };
   }
 
-  // 1차: 한글 약품명 + 제약사 + dose
+  // 1차: 한글 약품명 + 제약사 + dose. productName 매칭은 startsWith strict —
+  // 마스터 productName 시작이 OCR 한글 prefix 와 일치해야 매칭. fuzzy contains 폐지
+  // (사용자 정책: 매칭 못 하면 빈칸. fuzzy 매칭으로 다른 약품 끌어오는 건 환각).
   if (koreanCore.length >= 2 && item.companyName.length >= 2) {
     const companyKey = item.companyName.replace(/\(주\)|\(유\)|주식회사|㈜/g, "").trim();
     const r = await searchAndPick(
       {
-        productName: { contains: koreanCore, mode: "insensitive" },
+        productName: { startsWith: koreanCore, mode: "insensitive" },
         companyName: { contains: companyKey.slice(0, 6), mode: "insensitive" },
       },
       true
@@ -2296,10 +2292,11 @@ async function matchMedication(
     };
   }
 
-  // 2차: 한글 약품명 + dose (제약사 무시 — Vision/Clova가 회사명을 못 잡았을 때)
+  // 2차: 한글 약품명 + dose (제약사 무시 — Vision/Clova가 회사명을 못 잡았을 때).
+  // 1차와 동일 정책: startsWith strict, contains 폐지.
   if (koreanCore.length >= 2) {
     const r = await searchAndPick(
-      { productName: { contains: koreanCore, mode: "insensitive" } },
+      { productName: { startsWith: koreanCore, mode: "insensitive" } },
       true
     );
     if (r) return {
@@ -2350,26 +2347,6 @@ function parseDrugName(s: string): { korean: string; dose: string } {
     ?? s.match(/(\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?)/);
   const dose = doseMatch?.[1]?.replace(/\s+/g, "") ?? "";
   return { korean, dose };
-}
-
-// Vision LLM 이 추출한 productName 이 Clova text 에서 근거를 찾을 수 있는지 검증.
-// 약국 EMR 모니터 사진처럼 약품명 컬럼이 일부 잘려 보이는 케이스에서 Vision 이
-// 마스터 후보·clientContext 를 끌어와 "보이지 않는 약품"을 환각하는 회귀 차단.
-// (사용자 진단: 사진 좌측 잘림 + Clova text 에 "네시나메트" 흔적 0건인데 Vision 이
-//  "네시나메트정12.5/1000밀리그램..." 환각으로 추가하고 quantity 240 까지 부착).
-//
-// 한글 prefix 처음 3글자 이상이 Clova text 에 등장하면 정상. prefix 가 너무 짧거나
-// (한글 < 3글자) Clova text 자체가 비면 검증 skip — 정상 케이스 false positive 방지.
-function isProductNameInClova(productName: string, clovaText: string): boolean {
-  if (!productName || !clovaText) return true;
-  const korean = parseDrugName(productName).korean;
-  if (korean.length < 3) return true;
-  const clovaNorm = clovaText.replace(/\s+/g, "");
-  const probeLen = Math.min(korean.length, 5);
-  for (let len = probeLen; len >= 3; len--) {
-    if (clovaNorm.includes(korean.slice(0, len))) return true;
-  }
-  return false;
 }
 
 // 마스터 productName 안에서 dose 비교 시 표기 차이(공백/단위) 흡수
