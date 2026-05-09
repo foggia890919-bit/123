@@ -422,20 +422,28 @@ export async function POST(req: NextRequest) {
         pipeline.mergeUsed = "skipped (vision-only)";
         merged = visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 95) }));
       } else {
-        pipeline.mergeUsed = visionDrugs.length === 0 ? "clova-only" : "vision+clova";
-        try {
-          // masterCandidates / clientContext prompt 입력 제거 — LLM 이 후보 약품을
-          // 실제 표에 없는 행에 환각 매핑하는 회귀 차단. Clova text 만으로 추출하고
-          // 마스터 매칭은 후처리 (matchMedication strict startsWith) 에서.
-          merged = await callGeminiMerge({
-            clovaText,
-            geminiDraft,
-            masterCandidates: [],
-            clientContext: [],
-          });
-        } catch (e) {
-          pipeline.mergeError = String(e).slice(0, 200);
-          merged = visionDrugs;
+        // 1차 시도: Clova text 줄 단위 결정론적 파싱 (LLM 우회).
+        //   Clova 가 표를 줄 단위로 깨끗하게 분리한 경우 (대부분의 종이/스크린샷) 헤더
+        //   + 토큰 매핑만으로 정확 추출 가능. LLM 환각 (합계행을 약품으로 매핑, 행 밀림,
+        //   환자수→quantity) 원천 차단.
+        const deterministicDrugs = parseDrugsFromClovaText(clovaText);
+        if (deterministicDrugs.length >= 3) {
+          pipeline.mergeUsed = "clova-deterministic-fallback";
+          merged = deterministicDrugs;
+        } else {
+          // 2차 폴백: LLM 병합. Clova 행 클러스터링이 깨져 헤더 매칭 실패한 케이스만.
+          pipeline.mergeUsed = visionDrugs.length === 0 ? "clova-only" : "vision+clova";
+          try {
+            merged = await callGeminiMerge({
+              clovaText,
+              geminiDraft,
+              masterCandidates: [],
+              clientContext: [],
+            });
+          } catch (e) {
+            pipeline.mergeError = String(e).slice(0, 200);
+            merged = visionDrugs;
+          }
         }
       }
     }
@@ -1367,6 +1375,94 @@ function isLikelyDrug(name: string): boolean {
   return false;
 }
 
+// Clova OCR 라인 단위 텍스트를 줄 split + 헤더 토큰 매핑으로 결정론적 파싱.
+// LLM 우회 — Clova 가 표를 줄 단위로 깨끗하게 분리한 케이스 (대부분의 종이/스크린샷
+// EMR 출력) 에선 LLM 호출 자체가 불필요. LLM 의 비결정적 환각 (합계행을 약품으로
+// 잘못 매핑, 행을 한 칸 밀려 매핑, 환자수 컬럼을 quantity 로 매핑) 원천 차단.
+//
+// 동작:
+//   1) 헤더 줄 식별 — 약품코드/약품명/환자수/단가/사용량/금액 같은 키워드 3개+ 매칭되는 줄
+//   2) 헤더 토큰 순서대로 컬럼 의미 결정 (productName / quantity / code 의 인덱스)
+//   3) 데이터 줄을 공백으로 split. 끝에서부터 (header.length - productNameIdx - 1)
+//      개를 후행 토큰으로 할당, 나머지 앞 토큰들을 code + productName 으로.
+//   4) productName 이 isLikelyDrug 통과 + quantity 가 숫자면 채택. 합계행/메타행 자동 제외.
+//
+// 한계: Clova 가 한 행을 여러 줄로 나누거나 토큰 클러스터링이 깨진 경우 (모니터 사진
+// 등) 는 헤더 미식별로 빈 결과 → LLM 폴백.
+function parseDrugsFromClovaText(clovaText: string): MergedDrug[] {
+  if (!clovaText) return [];
+  const lines = clovaText.split("\n").map((l) => l.trim()).filter(Boolean);
+
+  type ColType = "code" | "productName" | "patientCount" | "unitPrice" | "quantity" | "total" | "other";
+  const headerKeyword = (t: string): ColType => {
+    const norm = t.replace(/[(){}\[\],.\s]/g, "");
+    if (/^(처방코드|약품코드|보험코드|청구코드)$/.test(norm)) return "code";
+    if (/^(처방명칭|약품명|제품명|품명|명칭|처방약명)$/.test(norm)) return "productName";
+    if (/^(환자수|환자)$/.test(norm)) return "patientCount";
+    if (/^(단가|약가)$/.test(norm)) return "unitPrice";
+    if (/^(사용량|총사용량|총투여량|수량|조제량|용량|투약량|처방량)$/.test(norm)) return "quantity";
+    if (/^(금액|총액|송금액|총금액)$/.test(norm)) return "total";
+    return "other";
+  };
+
+  let headerCols: ColType[] = [];
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(lines.length, 15); i++) {
+    const tokens = lines[i].split(/\s+/);
+    const types = tokens.map(headerKeyword);
+    const knownCount = types.filter((t) => t !== "other").length;
+    if (knownCount >= 3 && types.includes("productName") && types.includes("quantity")) {
+      headerIdx = i;
+      headerCols = types;
+      break;
+    }
+  }
+  if (headerIdx === -1) return [];
+
+  const productNameIdx = headerCols.indexOf("productName");
+  const quantityIdx = headerCols.indexOf("quantity");
+  const codeIdx = headerCols.indexOf("code");
+  // productName 뒤 컬럼 갯수 (quantity, total 등). 데이터 줄 끝에서 이 개수만큼이 후행 토큰.
+  const tailLen = headerCols.length - productNameIdx - 1;
+  if (tailLen < 1) return [];
+  // tailTokens 안에서 quantity 의 인덱스
+  const qInTail = quantityIdx - productNameIdx - 1;
+  if (qInTail < 0 || qInTail >= tailLen) return [];
+
+  const drugs: MergedDrug[] = [];
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const line = lines[i];
+    const tokens = line.split(/\s+/);
+    if (tokens.length < headerCols.length) continue; // 합계행 / 메타행 (토큰 부족)
+
+    const tailTokens = tokens.slice(-tailLen);
+    const headTokens = tokens.slice(0, tokens.length - tailLen);
+    // headTokens 의 첫 토큰 = code (헤더에 code 컬럼 있고 그게 productName 앞이면)
+    const hasCodeBeforeName = codeIdx >= 0 && codeIdx < productNameIdx;
+    const code = hasCodeBeforeName && headTokens.length > 1 ? headTokens[0] : "";
+    const productNameTokens = hasCodeBeforeName ? headTokens.slice(1) : headTokens;
+    const productName = productNameTokens.join("").trim();
+    if (!isLikelyDrug(productName)) continue;
+
+    const quantityRaw = tailTokens[qInTail].replace(/[^\d.]/g, "");
+    if (!quantityRaw) continue;
+
+    // 9자리 보험코드 — 줄 어디든 들어있으면 우선 사용. 처방코드(짧은 숫자)는 insuranceCode
+    // 가 아니므로 9자리만 채움.
+    const codeMatch = line.match(/\b(\d{9})\b/);
+    const insuranceCode = codeMatch ? codeMatch[1] : (/^\d{9}$/.test(code) ? code : "");
+
+    drugs.push({
+      insuranceCode,
+      productName,
+      companyName: "",
+      quantity: quantityRaw,
+      confidence: 90, // 결정론적 추출 — LLM 보다 신뢰도 높게 잡음
+    });
+  }
+  return drugs;
+}
+
 // 표 헤더 행에서 각 컬럼의 X 중심 좌표 추출 — 이후 데이터 행에서 같은 X 영역의 값을
 // 읽어 컬럼 의미별로 매핑한다. LLM 이 단가/사용량 헷갈리는 문제를 X 좌표 기반으로 우회.
 export interface ColumnMap {
@@ -2032,30 +2128,28 @@ async function callGeminiMerge(args: {
   }
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-  const prompt = `당신은 한국 EMR의 처방통계 표를 Clova OCR 텍스트로부터 재구성하는 전문가입니다.
+  const prompt = `당신은 한국 EMR 처방통계 표를 분석하는 전문가입니다. 약사가 직접 보고
+입력하던 작업을 자동화하는 게 목적입니다.
 
-# 입력: Clova OCR 라인 단위 텍스트
+# 입력: Clova OCR 텍스트
 ${args.clovaText || "(없음)"}
 
-# 작업 순서 (반드시 이 순서로)
-1) **헤더 행 식별**: 표의 첫 줄(또는 위쪽 줄) 에서 컬럼 헤더를 찾는다.
-   가능한 헤더 키워드: 약품코드 / 처방코드 / 보험코드 / 청구코드 / 약품명 / 처방명칭 /
-   제품명 / 환자수 / 단가 / 약가 / 사용량 / 총사용량 / 총투여량 / 수량 / 조제량 /
-   금액 / 총액 / 송금액 / 일수 / 매수.
-   헤더 줄에 있는 토큰 순서대로 컬럼 구조를 결정한다.
-2) **각 데이터 행 라벨링**: 헤더에서 결정한 컬럼 순서대로 각 데이터 행의 토큰을 매핑.
-   예: 헤더가 [처방코드 처방명칭 환자수 단가 사용량 총액] 이면
-       "104 가바로닌캡슐(gabapentin100mg)알리코 13 198 118.00 23364" 의
-       처방코드=104, 처방명칭="가바로닌캡슐(gabapentin100mg)알리코", 환자수=13,
-       단가=198, **사용량=118.00**, 총액=23364.
-3) **출력 필드 매핑**:
-   - insuranceCode: 9자리 숫자 보험/약품코드만. 처방코드(103, 205, 219+ 등 짧은 숫자)는
-     insuranceCode 가 아니므로 **빈 문자열**.
-   - productName: 약품명/처방명칭/제품명 컬럼 값 (한글+영문 혼합 그대로).
-   - companyName: 약품명 끝의 제약사명 (있으면).
-   - **quantity: 반드시 헤더의 "사용량/총사용량/총투여량/수량/조제량" 컬럼 값.**
-     ⚠️ 절대 환자수/단가/약가/금액/총액 컬럼 값을 quantity 로 쓰지 말 것.
-4) 헤더, 합계행, 검색기간, 내원구분, EMR 명/주소/전화번호 같은 메타 라인은 제외.
+# 작업
+1) 표 헤더 식별 (예: 처방코드 / 처방명칭 / 환자수 / 단가 / 사용량 / 총액).
+2) 각 약품 행에서 [productName, quantity, insuranceCode, companyName] 추출.
+   - quantity: **반드시 "사용량 / 총사용량 / 총투여량 / 수량 / 조제량 / 투약량" 컬럼 값**.
+     절대 환자수 / 단가 / 약가 / 금액 / 총액 값을 quantity 로 쓰지 말 것.
+   - productName: 약품명/처방명칭/제품명 컬럼 값. **OCR 오타 의심 시 일반 약품명으로
+     자연스럽게 정정** (예: "양로베틴" → "암로베틴", "아라젠" → "아라펜",
+     "토바스틴" → "토바스틴", "암로디핀" 등은 표준 한국 약품명에 맞춰).
+   - insuranceCode: **약품명을 알면 한국 표준 EDI 9자리 보험코드(요양급여비용
+     청구코드) 를 출력**. 예: 아라펜정 → 658600100, 가바로닌캡슐100mg → 656001220,
+     디오디핀정5/80mg → 656004010. 모르거나 확신 없으면 빈 문자열. 추측·환각 금지.
+   - companyName: 제약사명 (셀트리온제약, 알리코제약, 한국메디카, HLB제약 등).
+3) **합계행/메타행 절대 제외**: 약품명 칸이 비었거나 "NH팜 / 비급여 / 총계 / 소계 /
+   거래처명 / 주소 / 전화번호" 같이 약품 아닌 라인. 토큰 갯수가 헤더보다 적으면 메타행.
+4) **행 단위 처리**: 한 줄의 데이터를 다른 줄과 절대 합치지 말 것. 약품명 칸에 다음
+   줄의 환자수·단가 토큰이 끼어들면 안 됨.
 
 # 출력
 JSON 만:
@@ -2065,7 +2159,8 @@ JSON 만:
   ]
 }
 
-confidence: 헤더 식별 명확 + 행 매핑 명확 = 90+. 헤더 일부 누락 또는 행 깨짐 = 60~80.`;
+confidence: 헤더 명확 + 행 매핑 명확 + 보험코드 확실 = 95+. 보험코드만 모르면 80.
+약품명 OCR 오타가 심하거나 행 깨짐 = 50~70.`;
 
   try {
     const response = await ai.models.generateContent({
