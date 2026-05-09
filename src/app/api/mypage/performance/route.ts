@@ -121,9 +121,9 @@ export async function GET(req: NextRequest) {
   // ADMIN / 상위법인은 거래처가 너무 많아 생략
   const curMonthRows: { hospitalName: string; companyName: string; submitted: boolean }[] = [];
   if (!isUpperCorp && session.role !== "ADMIN" && viewableIds) {
-    // 1. 등록된 거래처 전체 (출발점)
+    // 1. 등록된 거래처 전체 (승인 여부 무관)
     const userClients = await prisma.userClient.findMany({
-      where: { userId: { in: viewableIds }, approved: true },
+      where: { userId: { in: viewableIds } },
       select: { id: true, clientName: true, bizNumber: true },
     });
 
@@ -170,5 +170,5 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ year, monthly, totals, byCompany, comparison, availableYears: allYears.map((r) => r.year), isUpperCorp, curMonth, curMonthRows });
+  return NextResponse.json({ year, monthly, totals, byCompany, comparison, availableYears: allYears.map((r) => r.year), isUpperCorp, curMonth, curMonthRows, _debug: { viewableIdCount: viewableIds?.length ?? -1 } });
 }
