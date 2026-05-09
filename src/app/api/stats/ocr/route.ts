@@ -579,11 +579,22 @@ export async function POST(req: NextRequest) {
       //    PR #81 (quantity 덮어쓰기만 막기) 만으로 부족한 케이스 발견되어 호출 자체를
       //    skip 하는 더 강한 차단으로 격상.
       //
-      //    occurrenceIndex: 같은 (한글명+dose) 약품이 여러 번 처방된 케이스 (예: 같은
-      //    테네글립엠서방정20/1000 을 두 의사가 처방) 에서 N번째 호출이 N번째 매칭 row
-      //    를 픽하도록. 이전엔 모두 첫 매칭 row 를 잡아 quantity 가 같아지던 버그 차단.
+      //    clova-positional 모드에서도 호출 자체를 skip — positional 추출이 이미 anchor
+      //    Y 로 정확한 행을 알고 quantity 추출했는데, 여기서 다시 productName 텍스트
+      //    검색으로 row 를 찾으면 같은 약품 두 행 (예: 654004760 크레트롤정 두 번 처방)
+      //    의 두 candidate 가 같은 row 를 픽해 동일한 r.quantity 반환 → 덮어쓰기 조건
+      //    (r !== m) 에 걸려 첫 행만 망가지고 둘 다 같은 quantity 가 되던 버그.
+      //    (사용자 진단: positional 단계에선 505·30 정확히 추출 / 최종 결과는 둘 다
+      //     1985·33 으로 통일 — 덮어쓰기 단계에서 망가짐.)
+      //
+      //    occurrenceIndex: 위 두 모드 모두 skip 이라 더 이상 호출되지 않지만, LLM 병합
+      //    경로(vision+clova / clova-only) 에서 같은 약품 여러 번 처방 케이스 보호용으로 유지.
       .map((m) => {
-        if (!colMap || pipeline.mergeUsed === "vision-preferred") return m;
+        if (
+          !colMap
+          || pipeline.mergeUsed === "vision-preferred"
+          || pipeline.mergeUsed === "clova-positional"
+        ) return m;
         const parsed = parseDrugName(m.productName);
         const occKey = `${parsed.korean.replace(/\s+/g, "").toLowerCase()}|${parsed.dose.replace(/\s+/g, "").toLowerCase()}`;
         const occurrenceIndex = sameDrugOccurrence.get(occKey) ?? 0;
