@@ -13,7 +13,7 @@ interface MonthRow { month: number; count: number; hospitalCount: number; compan
 interface CompanyRow { name: string; count: number; totalFee: number; }
 interface Totals { count: number; hospitalCount: number; companyCount: number; totalFee: number; prescriptionTotal: number; }
 interface Comparison { curMonth: number; prevMonth: number | null; curHospitals: number; prevHospitals: number; curCount: number; prevCount: number; curFee: number; prevFee: number; }
-interface CurMonthRow { hospitalName: string; companyName: string; totalFee: number; submitted: boolean; confirmed: boolean; }
+interface CurMonthRow { hospitalName: string; companyName: string; submitted: boolean; }
 interface Data { year: number; monthly: MonthRow[]; totals: Totals; byCompany: CompanyRow[]; comparison: Comparison; availableYears: number[]; isUpperCorp?: boolean; curMonth: number; curMonthRows: CurMonthRow[]; }
 
 function DiffBadge({ cur, prev }: { cur: number; prev: number }) {
@@ -154,50 +154,50 @@ export default function PerformancePage() {
         </div>
       </div>
 
-      {/* 당월 거래처별 제출현황 */}
-      {data && data.curMonthRows.length > 0 && (
+      {/* 당월 거래처별 제출현황 — 거래가능코드 APPROVED 기준 */}
+      {data && !data.isUpperCorp && (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
             <div>
               <h2 className="text-sm font-semibold text-gray-800">{curMonthLabel} 거래처별 제출현황</h2>
-              <p className="text-xs text-gray-400 mt-0.5">당월 등록된 거래처 × 제약사 제출 내역</p>
+              <p className="text-xs text-gray-400 mt-0.5">거래가능 승인된 거래처 × 제약사 기준</p>
             </div>
             <span className="text-xs text-gray-400">{data.curMonthRows.length}건</span>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-xs text-gray-500 font-semibold">
-                <tr>
-                  <th className="px-4 py-2.5 text-left">거래처</th>
-                  <th className="px-4 py-2.5 text-left">제약사</th>
-                  <th className="px-4 py-2.5 text-right">수수료</th>
-                  <th className="px-4 py-2.5 text-center">제출현황</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {data.curMonthRows.map((row, i) => (
-                  <tr key={i} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-2.5 font-medium text-gray-700">{row.hospitalName}</td>
-                    <td className="px-4 py-2.5 text-gray-600">{row.companyName}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums font-medium text-green-700">
-                      {row.totalFee > 0 ? fmt(row.totalFee) : "-"}
-                    </td>
-                    <td className="px-4 py-2.5 text-center">
-                      {row.submitted ? (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-green-50 text-green-700">
-                          <CheckCircle2 className="w-3 h-3" />제출완료
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
-                          <Clock className="w-3 h-3" />미제출
-                        </span>
-                      )}
-                    </td>
+          {data.curMonthRows.length === 0 ? (
+            <div className="px-5 py-8 text-center text-xs text-gray-400">거래가능 승인된 거래처가 없습니다</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-xs text-gray-500 font-semibold">
+                  <tr>
+                    <th className="px-4 py-2.5 text-left">거래처명</th>
+                    <th className="px-4 py-2.5 text-left">제약사명</th>
+                    <th className="px-4 py-2.5 text-center">제출여부</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {data.curMonthRows.map((row, i) => (
+                    <tr key={i} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-2.5 font-medium text-gray-700">{row.hospitalName}</td>
+                      <td className="px-4 py-2.5 text-gray-600">{row.companyName}</td>
+                      <td className="px-4 py-2.5 text-center">
+                        {row.submitted ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-green-50 text-green-700">
+                            <CheckCircle2 className="w-3 h-3" />제출완료
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                            <Clock className="w-3 h-3" />미제출
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
