@@ -95,6 +95,11 @@ export interface PipelineDiagnostics {
     xPercent: number;       // X 위치
     accepted: boolean;
     droppedReason: string | null;  // 탈락한 경우 이유
+    // accepted=true 일 때만 채워지는 매칭 디버그 정보
+    slope?: number;          // 사용된 row band slope (회귀 진단용)
+    quantity?: string;       // 매칭된 사용량
+    quantityY?: number;      // 매칭된 quantity field 의 raw Y — anchor Y 와 비교해 인접 행 잘못 잡힘 진단
+    insuranceCode?: string;  // 같은 행에서 추출된 9자리 코드
   }>;
   // 마스터 매칭 실패한 drug 들의 (이름, 단가) 샘플 — 마스터 DB 에 약품이 없는지 vs
   // 매칭 로직 버그인지 사용자가 빨리 판단할 수 있게.
@@ -285,6 +290,10 @@ export async function POST(req: NextRequest) {
       xPercent: clovaImageWidth > 0 ? Math.round((c.x / clovaImageWidth) * 1000) / 10 : 0,
       accepted: c.accepted,
       droppedReason: c.reason,
+      slope: c.slope,
+      quantity: c.quantity,
+      quantityY: c.quantityY,
+      insuranceCode: c.insuranceCode,
     }));
     if (positionalDrugs.length >= 3) {
       // positional 추출이 충분하면 LLM 호출 자체 생략 — 단가/순서 보장됨.
@@ -794,7 +803,19 @@ interface PositionalDrug {
 }
 interface PositionalResult {
   drugs: PositionalDrug[];
-  candidates: Array<{ text: string; y: number; x: number; accepted: boolean; reason: string | null }>;
+  candidates: Array<{
+    text: string;
+    y: number;
+    x: number;
+    accepted: boolean;
+    reason: string | null;
+    // accepted=true 일 때만 채워지는 디버그 정보 — 회귀/오인식 행을 사용자가 직접 짚을 수 있게
+    slope?: number;          // 사용된 row band slope (이 약품에 적용된 기울기)
+    bandWidth?: number;      // anchor band 폭 (좁으면 globalSlope 폴백 위험 신호)
+    quantity?: string;       // 매칭된 사용량
+    quantityY?: number;      // 매칭된 quantity field 의 Y (anchor Y 와 비교해 한 행 거리 가늠)
+    insuranceCode?: string;  // 같은 행에서 추출된 9자리 코드
+  }>;
 }
 function extractDrugsPositionalWithDebug(rows: ClovaRow[], colMap: ColumnMap | null): PositionalResult {
   const candidates: PositionalResult["candidates"] = [];
@@ -933,9 +954,11 @@ function extractDrugsPositionalWithDebug(rows: ClovaRow[], colMap: ColumnMap | n
       return fy >= expectedTop - yMargin && fy <= expectedBot + yMargin;
     }
 
-    // 사용량/단가: 같은 행 띠 안에서 컬럼 X ±tolerance 범위의 숫자 field 중 X 가장 가까운 것
-    function nearestNumberAt(colX: number | null, tol: number): string {
-      if (colX == null) return "";
+    // 사용량/단가: 같은 행 띠 안에서 컬럼 X ±tolerance 범위의 숫자 field 중 X 가장 가까운 것.
+    // 매칭된 field 자체도 같이 반환 — 진단 패널에서 quantityY 노출해 anchor Y 와의 거리로
+    // 다음 행 cell 잘못 잡힌 회귀 케이스를 사용자가 즉시 짚을 수 있게.
+    function nearestNumberAt(colX: number | null, tol: number): { value: string; field: ClovaField | null } {
+      if (colX == null) return { value: "", field: null };
       let best: ClovaField | null = null;
       let bestDist = Infinity;
       for (const f of allFields) {
@@ -945,10 +968,12 @@ function extractDrugsPositionalWithDebug(rows: ClovaRow[], colMap: ColumnMap | n
         if (dist > tol) continue;
         if (dist < bestDist) { best = f; bestDist = dist; }
       }
-      return best ? best.inferText.replace(/[^\d.]/g, "") : "";
+      return { value: best ? best.inferText.replace(/[^\d.]/g, "") : "", field: best };
     }
-    const unitPrice = nearestNumberAt(colMap.unitPrice, unitPriceTol);
-    const quantity = nearestNumberAt(colMap.quantity, quantityTol);
+    const unitPriceMatch = nearestNumberAt(colMap.unitPrice, unitPriceTol);
+    const quantityMatch = nearestNumberAt(colMap.quantity, quantityTol);
+    const unitPrice = unitPriceMatch.value;
+    const quantity = quantityMatch.value;
 
     // 9자리 보험코드: 같은 행 띠 안에서 검색
     let insuranceCode = "";
@@ -962,7 +987,18 @@ function extractDrugsPositionalWithDebug(rows: ClovaRow[], colMap: ColumnMap | n
     void row;
 
     drugs.push({ productName, unitPrice, quantity, insuranceCode, anchorY });
-    candidates.push({ text: cand.field.inferText, y: anchorY, x: fieldXCenter(cand.field), accepted: true, reason: null });
+    candidates.push({
+      text: cand.field.inferText,
+      y: anchorY,
+      x: fieldXCenter(cand.field),
+      accepted: true,
+      reason: null,
+      // 회귀/오인식 진단용 — 어느 행이 어떤 slope·매칭값으로 잡혔는지
+      slope: anchorBand ? Math.round(anchorBand.slope * 10000) / 10000 : undefined,
+      quantity,
+      quantityY: quantityMatch.field ? Math.round(fieldYCenter(quantityMatch.field) * 10) / 10 : undefined,
+      insuranceCode: insuranceCode || undefined,
+    });
   }
   return { drugs, candidates };
 }
