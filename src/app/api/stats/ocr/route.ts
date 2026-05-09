@@ -3,6 +3,13 @@ import { GoogleGenAI } from "@google/genai";
 import { prisma } from "@/lib/prisma";
 import { requireSession, requireAdmin, isNextResponse } from "@/lib/auth-guard";
 import { callDocumentAi, isDocumentAiConfigured, type DocAiResult } from "@/lib/document-ai";
+import {
+  classifyVendor,
+  isVendorCompatible,
+  type EmrVendor,
+  type CaptureType,
+  type VendorClassification,
+} from "@/lib/ocr-vendor-classifier";
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
@@ -40,6 +47,8 @@ export interface FusionDrug {
 
 // 거래처별 EMR 표 양식 — 컬럼 X 좌표를 이미지 너비 비율로 저장. 다음 사진 OCR 시 그대로
 // 재사용해 LLM 컬럼 추측을 우회한다. PrescriptionReport.ocrData 안에 같이 보관.
+// vendor 는 캐시 호환성 체크용 — 같은 거래처가 EMR 두 개를 쓰는 경우 (예: 늘편한내과 종이/모니터)
+// 잘못된 템플릿이 적용되지 않도록 한다.
 export interface ColumnTemplate {
   insuranceCode: number | null;   // 0~1, X / imageWidth
   productName: number | null;
@@ -49,10 +58,22 @@ export interface ColumnTemplate {
   total: number | null;
   detectedAt: string;
   source: "auto" | "manual" | "cached";
+  vendor?: EmrVendor;             // 이 템플릿이 어느 EMR 화면에서 학습됐는지
+  captureType?: CaptureType;      // 어느 캡처 종류(사진/스크린샷/모니터) 에서 학습됐는지
 }
 
 // 파이프라인 단계별 진단 정보 — 어느 단계에서 약품이 사라졌는지 추적용
 export interface PipelineDiagnostics {
+  // 0단계: vendor / capture-type 분류
+  vendor: EmrVendor;
+  captureType: CaptureType;
+  vendorConfidence: number;
+  vendorRationale: string;
+  vendorError: string | null;
+  // 캐시 적용 결과 — 캐시가 있었으나 vendor 가 달라 거부된 경우 사용자가 알 수 있게
+  cachedTemplateVendor: EmrVendor | null;   // 마지막 저장된 템플릿의 vendor (없으면 null)
+  cacheHit: boolean;                         // 이번 요청에서 캐시를 실제로 적용했는지
+  cacheRejectReason: string | null;          // 캐시는 있었으나 안 쓴 이유 (vendor mismatch 등)
   clovaOk: boolean;
   clovaChars: number;
   clovaError: string | null;
@@ -92,6 +113,8 @@ export interface PipelineDiagnostics {
 
 export interface FusionResult {
   source: "fusion";
+  vendor: EmrVendor;                       // 분류기가 식별한 EMR (UI 배지·통계용)
+  captureType: CaptureType;                // 사진/스크린샷/모니터 — 후속 전처리 분기 키
   drugs: FusionDrug[];
   avgConfidence: number;
   manualCheckCount: number;
@@ -143,13 +166,21 @@ export async function POST(req: NextRequest) {
       ext === "tiff" ? "image/tiff" :
       "image/jpeg";
 
-    // ── 1단계: Clova + Gemini Vision + Document AI 병렬 OCR ───────────────
+    // ── 0단계: vendor 분류 + 1단계: Clova + Gemini Vision + Document AI 병렬 OCR ──
+    // 동일 거래처가 EMR 두 개 (예: 모니터 사진 + 종이 사진) 를 섞어 올리는 케이스에서
+    // 잘못된 ColumnTemplate 캐시 적용을 막기 위해 OCR 본 작업 전에 vendor 라벨부터 붙인다.
     const docaiConfigured = isDocumentAiConfigured();
-    const [clovaOut, geminiOut, docaiOut] = await Promise.allSettled([
+    const [clovaOut, geminiOut, docaiOut, classifierOut] = await Promise.allSettled([
       callClovaOcr(base64, ext),
       callGeminiVision(base64, mimeType, clientContext),
       docaiConfigured ? callDocumentAi(base64, mimeType) : Promise.reject(new Error("not configured")),
+      classifyVendor(base64, mimeType),
     ]);
+
+    const classifierResult: VendorClassification =
+      classifierOut.status === "fulfilled"
+        ? classifierOut.value
+        : { vendor: "unknown", captureType: "photo", confidence: 0, rationale: "분류기 호출 실패", error: String(classifierOut.reason).slice(0, 200) };
 
     const clovaResult = clovaOut.status === "fulfilled" ? clovaOut.value : null;
     const clovaText = clovaResult?.text ?? "";
@@ -157,15 +188,25 @@ export async function POST(req: NextRequest) {
     const clovaImageHeight = clovaResult?.imageHeight ?? 0;
     const clovaImageWidth = clovaResult?.imageWidth ?? 0;
 
-    // 컬럼 맵: 1) 거래처 캐시 → 2) 헤더 자동 감지. 캐시 우선 (사용자가 한 번 검수해
-    // 저장한 결과이므로 자동 감지보다 신뢰도 높음).
-    const cachedTemplate = clientId ? await fetchCachedColumnTemplate(clientId) : null;
+    // 컬럼 맵: 1) 거래처 캐시 (vendor 호환 시) → 2) 헤더 자동 감지.
+    // 캐시 우선 (사용자가 한 번 검수해 저장한 결과이므로 자동 감지보다 신뢰도 높음).
+    // 단, 캐시가 다른 EMR 에서 학습된 거면 거부 — 같은 거래처라도 EMR 다르면 컬럼 위치도 다름.
+    const cacheInfo = clientId
+      ? await fetchCachedColumnTemplate(clientId, classifierResult.vendor)
+      : { template: null, savedVendor: null, rejectReason: "clientId 없음" };
+    const cachedTemplate = cacheInfo.template;
     const autoColMap = findColumnMap(clovaRows);
     const colMap: ColumnMap | null = cachedTemplate
       ? columnMapFromTemplate(cachedTemplate, clovaImageWidth, clovaRows)
       : autoColMap;
     const templateUsed: ColumnTemplate | null = colMap
-      ? buildColumnTemplate(colMap, clovaImageWidth, cachedTemplate ? "cached" : "auto")
+      ? buildColumnTemplate(
+          colMap,
+          clovaImageWidth,
+          cachedTemplate ? "cached" : "auto",
+          classifierResult.vendor,
+          classifierResult.captureType
+        )
       : null;
     const geminiDraft = geminiOut.status === "fulfilled" ? geminiOut.value : null;
     const geminiText = geminiDraft ? JSON.stringify(geminiDraft, null, 2) : "";
@@ -192,6 +233,14 @@ export async function POST(req: NextRequest) {
 
     // 파이프라인 진단 누적
     const pipeline: PipelineDiagnostics = {
+      vendor: classifierResult.vendor,
+      captureType: classifierResult.captureType,
+      vendorConfidence: classifierResult.confidence,
+      vendorRationale: classifierResult.rationale,
+      vendorError: classifierResult.error,
+      cachedTemplateVendor: cacheInfo.savedVendor,
+      cacheHit: !!cachedTemplate,
+      cacheRejectReason: cachedTemplate ? null : cacheInfo.rejectReason,
       clovaOk: clovaOut.status === "fulfilled",
       clovaChars: clovaText.length,
       clovaError: clovaOut.status === "rejected" ? String(clovaOut.reason).slice(0, 200) : null,
@@ -595,6 +644,8 @@ export async function POST(req: NextRequest) {
 
     const result: FusionResult = {
       source: "fusion",
+      vendor: classifierResult.vendor,
+      captureType: classifierResult.captureType,
       drugs: finalDrugsList,
       avgConfidence,
       manualCheckCount,
@@ -1175,20 +1226,49 @@ function quantityFromColumnMap(
   return r?.quantity ?? null;
 }
 
-// 거래처 직전 PrescriptionReport 의 ocrData.columnTemplate 가져오기
-async function fetchCachedColumnTemplate(clientId: string): Promise<ColumnTemplate | null> {
+// 거래처 직전 PrescriptionReport 의 ocrData.columnTemplate 가져오기.
+// 같은 거래처라도 EMR 이 다르면 (예: 늘편한내과 종이/모니터) 다른 ColumnTemplate 가 필요하므로,
+// 가장 최근 보고서의 vendor 와 현재 vendor 가 호환될 때만 캐시를 적용한다.
+//   - 호환 시: { template, savedVendor, rejectReason: null }
+//   - 비호환 시: { template: null, savedVendor: 저장된 vendor, rejectReason: "..." }
+//   - 데이터 없음: { template: null, savedVendor: null, rejectReason: "..." }
+//
+// FUTURE: 향후 vendor 별로 분기된 캐시를 갖고 싶다면 ocrData.columnTemplatesByVendor 같은
+// dict 를 만들어 여러 EMR 의 템플릿을 동시에 보관할 수 있다 (현재는 LIFO 1슬롯).
+async function fetchCachedColumnTemplate(
+  clientId: string,
+  currentVendor: EmrVendor
+): Promise<{ template: ColumnTemplate | null; savedVendor: EmrVendor | null; rejectReason: string | null }> {
   const recent = await prisma.prescriptionReport.findFirst({
     where: { clientId },
     orderBy: { createdAt: "desc" },
     select: { ocrData: true },
   });
-  if (!recent?.ocrData || typeof recent.ocrData !== "object") return null;
+  if (!recent?.ocrData || typeof recent.ocrData !== "object") {
+    return { template: null, savedVendor: null, rejectReason: "이 거래처 이전 업로드 없음" };
+  }
   const t = (recent.ocrData as Record<string, unknown>).columnTemplate;
-  if (!t || typeof t !== "object") return null;
+  if (!t || typeof t !== "object") {
+    return { template: null, savedVendor: null, rejectReason: "이전 업로드에 columnTemplate 미저장" };
+  }
   const tt = t as Record<string, unknown>;
   // 핵심 필드 검증
-  if (typeof tt.productName !== "number" || typeof tt.quantity !== "number") return null;
-  return {
+  if (typeof tt.productName !== "number" || typeof tt.quantity !== "number") {
+    return { template: null, savedVendor: null, rejectReason: "캐시된 템플릿 필드 누락" };
+  }
+
+  const savedVendor = (typeof tt.vendor === "string" ? tt.vendor : null) as EmrVendor | null;
+  // vendor 비호환 — 같은 거래처가 EMR 두 개 쓰는 케이스 보호
+  if (!isVendorCompatible(savedVendor, currentVendor)) {
+    return {
+      template: null,
+      savedVendor,
+      rejectReason: `vendor mismatch (저장됨: ${savedVendor ?? "?"} → 현재: ${currentVendor})`,
+    };
+  }
+
+  const savedCaptureType = (typeof tt.captureType === "string" ? tt.captureType : undefined) as CaptureType | undefined;
+  const template: ColumnTemplate = {
     insuranceCode: typeof tt.insuranceCode === "number" ? tt.insuranceCode : null,
     productName: tt.productName,
     patientCount: typeof tt.patientCount === "number" ? tt.patientCount : null,
@@ -1197,7 +1277,10 @@ async function fetchCachedColumnTemplate(clientId: string): Promise<ColumnTempla
     total: typeof tt.total === "number" ? tt.total : null,
     detectedAt: String(tt.detectedAt ?? ""),
     source: "cached",
+    vendor: savedVendor ?? undefined,
+    captureType: savedCaptureType,
   };
+  return { template, savedVendor, rejectReason: null };
 }
 
 // 캐시된 비율 템플릿 → 현재 이미지의 ColumnMap (절대 X 좌표) 로 환산
@@ -1249,11 +1332,14 @@ function estimateSlopeFromDrugRows(rows: ClovaRow[]): number {
   return samples[Math.floor(samples.length / 2)];
 }
 
-// ColumnMap → ColumnTemplate (X / imageWidth 비율 로 정규화)
+// ColumnMap → ColumnTemplate (X / imageWidth 비율 로 정규화).
+// vendor / captureType 을 같이 박아 저장 시 호환성 체크용 메타로 보존한다.
 function buildColumnTemplate(
   map: ColumnMap,
   imageWidth: number,
-  source: "auto" | "cached"
+  source: "auto" | "cached",
+  vendor: EmrVendor,
+  captureType: CaptureType
 ): ColumnTemplate | null {
   if (!imageWidth) return null;
   const ratio = (x: number | null) => (x == null ? null : Math.round((x / imageWidth) * 10000) / 10000);
@@ -1267,6 +1353,8 @@ function buildColumnTemplate(
     total: ratio(map.total),
     detectedAt: new Date().toISOString(),
     source,
+    vendor,
+    captureType,
   };
 }
 
