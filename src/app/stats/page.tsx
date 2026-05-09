@@ -37,6 +37,25 @@ type EmrVendor =
   | "chartfree" | "emrpro" | "biit" | "dubeone" | "unknown";
 type CaptureType = "photo" | "screenshot" | "monitor";
 
+const VENDOR_LABEL_KO: Record<EmrVendor, string> = {
+  doctor: "의사랑 v1",
+  doctor2: "의사랑 v2",
+  "u-pharm": "U pharm system",
+  eghis: "eGhis 통합",
+  "nh-pharm": "NH팜",
+  chartfree: "차트프리",
+  emrpro: "EMRpro",
+  biit: "비트",
+  dubeone: "두번에",
+  unknown: "알 수 없음",
+};
+
+const CAPTURE_LABEL_KO: Record<CaptureType, string> = {
+  photo: "종이 사진",
+  screenshot: "스크린샷",
+  monitor: "모니터 촬영",
+};
+
 interface ColumnTemplate {
   insuranceCode: number | null;
   productName: number | null;
@@ -1394,6 +1413,7 @@ export default function StatsPage() {
                     <span
                       className="text-xs bg-purple-50 text-purple-700 border border-purple-200 px-1.5 py-0.5 rounded font-mono cursor-help"
                       title={[
+                        `EMR: ${VENDOR_LABEL_KO[editOcr.pipeline.vendor] ?? editOcr.pipeline.vendor} (${editOcr.pipeline.vendorConfidence}%)${editOcr.pipeline.vendor === "unknown" ? " — 분류 실패" : ""} / 캡처: ${CAPTURE_LABEL_KO[editOcr.pipeline.captureType]}${editOcr.pipeline.cacheHit ? " / 캐시 적용" : " / 캐시 미적용"}`,
                         `Clova: ${editOcr.pipeline.clovaOk ? "OK" : "FAIL"} (${editOcr.pipeline.clovaChars}자)${editOcr.pipeline.clovaError ? " — " + editOcr.pipeline.clovaError : ""}`,
                         `Gemini Vision: ${editOcr.pipeline.visionOk ? "OK" : "FAIL"} (${editOcr.pipeline.visionDrugCount}건)${editOcr.pipeline.visionError ? " — " + editOcr.pipeline.visionError : ""}`,
                         editOcr.pipeline.docaiConfigured
@@ -1425,6 +1445,33 @@ export default function StatsPage() {
                 {editOcr.pipeline && (
                   <div>
                     <p className="text-[10px] font-semibold text-gray-500 mb-1">파이프라인 진단</p>
+                    {/* 0단계: 벤더 분류 결과 — OCR 정확도의 가장 큰 지렛대. 분류 신뢰도가 낮으면 캐시·전처리 분기가 동작하지 않으므로 별도 박스로 강조. */}
+                    <div className={`text-[11px] border rounded p-2 font-mono space-y-0.5 mb-2 ${
+                      editOcr.pipeline.vendorConfidence >= 70 && editOcr.pipeline.vendor !== "unknown"
+                        ? "bg-emerald-50 border-emerald-200"
+                        : "bg-amber-50 border-amber-300"
+                    }`}>
+                      <div>
+                        EMR: <span className="font-semibold">{VENDOR_LABEL_KO[editOcr.pipeline.vendor] ?? editOcr.pipeline.vendor}</span>
+                        {" "}<span className="text-gray-500">({editOcr.pipeline.vendorConfidence}%)</span>
+                        {editOcr.pipeline.vendor === "unknown" && <span className="text-amber-700"> — 분류 실패, 캐시·전처리 분기 미적용</span>}
+                      </div>
+                      <div>캡처 종류: {CAPTURE_LABEL_KO[editOcr.pipeline.captureType]}</div>
+                      {editOcr.pipeline.vendorRationale && (
+                        <div className="text-gray-600 italic text-[10px]">근거: {editOcr.pipeline.vendorRationale}</div>
+                      )}
+                      <div>
+                        캐시 템플릿: {editOcr.pipeline.cacheHit
+                          ? <span className="text-emerald-700">✓ 적용 (이전 학습 컬럼 위치 재사용)</span>
+                          : <span className="text-gray-500">✗ {editOcr.pipeline.cacheRejectReason ?? "사유 미상"}</span>}
+                        {editOcr.pipeline.cachedTemplateVendor && editOcr.pipeline.cachedTemplateVendor !== editOcr.pipeline.vendor && (
+                          <span className="text-amber-700"> (저장된 vendor: {VENDOR_LABEL_KO[editOcr.pipeline.cachedTemplateVendor] ?? editOcr.pipeline.cachedTemplateVendor})</span>
+                        )}
+                      </div>
+                      {editOcr.pipeline.vendorError && (
+                        <div className="text-red-700 text-[10px]">분류기 오류: {editOcr.pipeline.vendorError}</div>
+                      )}
+                    </div>
                     <div className="text-[11px] bg-purple-50 border border-purple-200 rounded p-2 font-mono space-y-0.5">
                       <div>Clova OCR: {editOcr.pipeline.clovaOk ? "✓" : "✗"} ({editOcr.pipeline.clovaChars}자){editOcr.pipeline.clovaError ? ` — ${editOcr.pipeline.clovaError}` : ""}</div>
                       <div>Gemini Vision: {editOcr.pipeline.visionOk ? "✓" : "✗"} ({editOcr.pipeline.visionDrugCount}건){editOcr.pipeline.visionError ? ` — ${editOcr.pipeline.visionError}` : ""}</div>
