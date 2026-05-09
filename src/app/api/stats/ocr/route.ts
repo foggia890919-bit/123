@@ -512,6 +512,9 @@ export async function POST(req: NextRequest) {
       clientContext.map((c) => (c.insuranceCode || c.productName).toLowerCase())
     );
     const beforeFilter = merged.length;
+    // 같은 (한글명+dose) 약품의 step 3 호출 횟수 추적 — N번째 호출은 clova rows 의
+    // N번째 매칭 행으로 매핑되도록 occurrenceIndex 전달.
+    const sameDrugOccurrence = new Map<string, number>();
     const boostedMerged = merged
       // 1) 그룹/섹션 라벨 제거 — 진짜 약품명이 아닌 것 (제형 키워드 없음 + 짧은 코드만).
       //    productName 자체가 비어있으면 (다른 필드만 있는 부분 추출 행) 통과 시킴
@@ -528,9 +531,17 @@ export async function POST(req: NextRequest) {
       //    행 클러스터링 무너짐) 을 잘못 보정해 vision 정답을 망치는 모든 경로 차단.
       //    PR #81 (quantity 덮어쓰기만 막기) 만으로 부족한 케이스 발견되어 호출 자체를
       //    skip 하는 더 강한 차단으로 격상.
+      //
+      //    occurrenceIndex: 같은 (한글명+dose) 약품이 여러 번 처방된 케이스 (예: 같은
+      //    테네글립엠서방정20/1000 을 두 의사가 처방) 에서 N번째 호출이 N번째 매칭 row
+      //    를 픽하도록. 이전엔 모두 첫 매칭 row 를 잡아 quantity 가 같아지던 버그 차단.
       .map((m) => {
         if (!colMap || pipeline.mergeUsed === "vision-preferred") return m;
-        const r = extractByColumnMap(m.productName, clovaRows, colMap);
+        const parsed = parseDrugName(m.productName);
+        const occKey = `${parsed.korean.replace(/\s+/g, "").toLowerCase()}|${parsed.dose.replace(/\s+/g, "").toLowerCase()}`;
+        const occurrenceIndex = sameDrugOccurrence.get(occKey) ?? 0;
+        sameDrugOccurrence.set(occKey, occurrenceIndex + 1);
+        const r = extractByColumnMap(m.productName, clovaRows, colMap, occurrenceIndex);
         const next: MergedDrug & { _extract?: ExtractResult | null } = { ...m, _extract: r };
         if (r?.quantity && r.quantity !== m.quantity.replace(/[^\d.]/g, "")) {
           next.quantity = r.quantity;
@@ -1403,7 +1414,8 @@ interface ExtractResult {
 function extractByColumnMap(
   productName: string,
   rows: ClovaRow[],
-  colMap: ColumnMap
+  colMap: ColumnMap,
+  occurrenceIndex: number = 0  // N번째 매칭 row 픽 (같은 productName+dose 약품 여러 번 처방된 케이스)
 ): ExtractResult | null {
   if (!productName || !colMap.quantity) return null;
   const parsed = parseDrugName(productName);
@@ -1411,16 +1423,24 @@ function extractByColumnMap(
   const doseKey = parsed.dose.replace(/\s+/g, "").toLowerCase();
   if (koreanKey.length < 2) return null;
 
-  // 1) 같은 한글 약품명을 가진 행이 여러 개일 수 있음(다른 용량 변형). 한글 prefix +
-  //    dose 가 모두 들어있는 행만 선택해 용량 변형을 구분.
+  // 1) 같은 한글 약품명을 가진 행이 여러 개일 수 있음(다른 용량 변형 또는 같은 약을 여러
+  //    의사가 처방한 케이스). 한글 prefix + dose 가 모두 들어있는 행 중 occurrenceIndex
+  //    번째 매칭을 선택. 같은 약이 두 행에 있으면 첫 번째 호출은 0번째, 두 번째 호출은
+  //    1번째 매칭 row 픽 → 둘째 행의 진짜 quantity 가 첫째 행으로 덮어씌워지는 버그 차단.
+  //    (사용자 진단: clova-positional 모드에서 테네글립엠서방정20/1000 두 행이 모두
+  //     첫 매칭 row 의 quantity 66 으로 덮어씌워지던 문제)
   let targetRow: ClovaRow | null = null;
+  let foundCount = 0;
   for (const row of rows) {
     if (row.avgY <= colMap.headerY) continue;
     const rowText = row.text.replace(/\s+/g, "").toLowerCase();
     if (!rowText.includes(koreanKey)) continue;
     if (doseKey && !rowText.includes(doseKey)) continue;
-    targetRow = row;
-    break;
+    if (foundCount === occurrenceIndex) {
+      targetRow = row;
+      break;
+    }
+    foundCount++;
   }
   if (!targetRow) return null;
 
