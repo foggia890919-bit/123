@@ -97,6 +97,10 @@ interface PipelineDiagnostics {
     xPercent: number;
     accepted: boolean;
     droppedReason: string | null;
+    slope?: number;
+    quantity?: string;
+    quantityY?: number;
+    insuranceCode?: string;
   }>;
   masterUnmatchedSamples?: Array<{ productName: string; unitPriceHint: number | null }>;
   // Document AI 진단 (있을 수도 없을 수도)
@@ -1517,6 +1521,14 @@ export default function StatsPage() {
                               <div key={i} className={c.accepted ? "text-green-700" : "text-red-700"}>
                                 {c.accepted ? "✓" : "✗"} Y{c.yPercent.toFixed(1)}% &quot;{c.text}&quot;
                                 {c.droppedReason && <span className="text-gray-500"> — {c.droppedReason}</span>}
+                                {c.accepted && (c.quantity || c.insuranceCode || c.slope != null) && (
+                                  <div className="ml-4 text-[10px] text-gray-600">
+                                    {c.insuranceCode && <span>code={c.insuranceCode} </span>}
+                                    {c.quantity != null && <span>qty={c.quantity || "—"} </span>}
+                                    {c.quantityY != null && <span>qtyY={c.quantityY} </span>}
+                                    {c.slope != null && <span>slope={c.slope.toFixed(4)}</span>}
+                                  </div>
+                                )}
                               </div>
                             ))}
                         </div>
