@@ -2248,45 +2248,20 @@ async function matchMedication(
   commissionRate: number | null;
   matchedMedicationId: string | null;
   matchConfidence: number;
-  // 보험코드는 마스터에 있는데 OCR 제품명이 마스터 제품명과 명백히 다른 경우
-  // (한글 첫 2글자도 안 겹침). Vision 이 코드/이름 중 하나를 잘못 읽은 강한 신호.
-  // null 이면 정상 또는 검증 불가 (코드 매칭이 1차에서 안 일어났거나 이름 비교 X).
   nameCodeMismatch: { masterProductName: string; ocrProductName: string } | null;
 }> {
-  // 보험코드는 마스터에 있지만 한글명 첫 2글자가 모두 안 겹쳐 fallthrough 한 케이스
-  // 정보. 후속 1·2차 매칭이 성공하든 실패하든 사용자에게 "코드↔이름 불일치"로 표시
-  // 해 검수자가 직접 보험코드 OCR 오타 vs 제품명 OCR 오타를 판정하게 한다.
-  let nameCodeMismatch: { masterProductName: string; ocrProductName: string } | null = null;
-
-  // 0차: priceHint (OCR 에서 본 단가) 가 있으면 이름 + 가격으로 정확한 마스터 row 찾기
-  // 같은 약품의 dose 변형(로수듀오 10/10 vs 10/20) 은 가격이 달라 한 번에 정확히 구분.
-  if (item.priceHint && item.productName) {
-    const m = await matchMasterByNameAndPrice(item.productName, String(item.priceHint));
-    if (m) {
-      return {
-        insuranceCode: m.insuranceCode ?? item.insuranceCode,
-        productName: m.productName,
-        companyName: m.companyName,
-        unitPrice: m.price,
-        commissionRate: m.commissionRate,
-        matchedMedicationId: m.id,
-        matchConfidence: 99,
-        nameCodeMismatch: null,
-      };
-    }
-  }
-
+  // 사용자 정책: LLM 이 결정한 productName 그대로 유지. 마스터 매칭은 보험코드 9자리만.
+  //   productName 매칭은 dose 변형 (10/10, 20/10, 5/10) 을 한 코드로 뭉치는 회귀가 본질적
+  //   (사용자 진단: 토바스틴 10mg/20mg 두 행이 같은 마스터로, 셀토젯정 10/10·20/10 마찬가지).
+  //   LLM Pro 모델이 이미지 + Clova text 보고 보험코드 정확히 출력하면 마스터에서 단가/
+  //   수수료만 가져옴. 못 하면 LLM 결과 그대로 (productName + quantity) → 검수에서 사용자가
+  //   직접 보험코드 채움.
   const code = item.insuranceCode.replace(/\D/g, "");
   if (code.length === 9 && masterByCode.has(code)) {
     const m = masterByCode.get(code)!;
-    // productName sanity check — Vision 이 보험코드를 한 자리 잘못 인식한 케이스 차단.
-    // 사례: Vision 이 raw OCR 의 678601100(글리디아정) 을 679601100 으로 추측 →
-    //       마스터에 우연히 679601100 = 피나리정 있어서 productName 이 피나리정으로
-    //       덮어씌워지던 버그.
-    // 정책: 한글 약품명 첫 2글자 중 같은 위치에 한 글자라도 일치하면 OCR 오타로 보고
-    //       마스터 채택 (마발탄↔아발탄, 쎄벡스↔쎄넥스 같은 ㅁ↔ㅇ, ㅅ↔ㄴ 한 글자 혼동
-    //       정정 효과 유지). 둘 다 다르면 명백히 다른 약품 → 보험코드 매칭 거부 후
-    //       fallthrough 해서 한글 이름 기반 매칭 (1·2차) 으로 진행.
+    // productName sanity check — LLM 이 보험코드를 한 자리 잘못 출력했는데 마스터에
+    // 우연히 다른 약품이 있어 잘못 매핑되는 케이스 차단. 한글 첫 2글자 중 하나라도
+    // 일치하면 OCR/LLM 오타로 보고 마스터 채택, 둘 다 다르면 mismatch 캡처.
     const ocrKorean = parseDrugName(item.productName).korean;
     const masterKorean = parseDrugName(m.productName).korean;
     let nameSimilar = ocrKorean.length < 2 || masterKorean.length < 2;
@@ -2299,8 +2274,11 @@ async function matchMedication(
     if (nameSimilar) {
       return {
         insuranceCode: code,
-        productName: m.productName,
-        companyName: m.companyName,
+        // productName 은 LLM 결과 우선 — 마스터 productName 으로 덮어쓰면 dose 정보 손실
+        // (LLM 이 "토바스틴정20밀리그램..." 출력했는데 마스터의 "토바스틴정10밀리그램..."
+        //  으로 덮어씌워지던 버그). 단, LLM 이 productName 비웠으면 마스터값 사용.
+        productName: item.productName || m.productName,
+        companyName: item.companyName || m.companyName,
         unitPrice: m.price,
         commissionRate: m.commissionRate,
         matchedMedicationId: m.id,
@@ -2308,86 +2286,19 @@ async function matchMedication(
         nameCodeMismatch: null,
       };
     }
-    // 이름 명백히 다름 → mismatch 캡처 후 fallthrough (1·2차 한글 이름 기반 매칭으로 진행)
-    nameCodeMismatch = {
-      masterProductName: m.productName,
-      ocrProductName: item.productName,
+    return {
+      insuranceCode: code,
+      productName: item.productName,
+      companyName: item.companyName,
+      unitPrice: m.price,
+      commissionRate: m.commissionRate,
+      matchedMedicationId: m.id,
+      matchConfidence: 80,
+      nameCodeMismatch: { masterProductName: m.productName, ocrProductName: item.productName },
     };
   }
 
-  // 한글 약품 prefix + 용량 분리
-  // 예: "로수듀오정(rosuva/ezt10/20)HLB제약" → korean="로수듀오정", dose="10/20"
-  // 예: "셀토젯정Atorva/ezt10/10mg셀트리온" → korean="셀토젯정", dose="10/10"
-  // 예: "디오디핀정(amlo+valsar5/80mg)알리코" → korean="디오디핀정", dose="5/80"
-  const parsed = parseDrugName(item.productName);
-  const koreanCore = parsed.korean;
-  const doseToken = parsed.dose;
-
-  async function searchAndPick(
-    where: object,
-    requireDose: boolean
-  ): Promise<{ row: MasterRow; exact: boolean } | null> {
-    const rows = await prisma.medication.findMany({
-      where,
-      select: { id: true, insuranceCode: true, productName: true, companyName: true, price: true, commissionRate: true },
-      take: 20,
-    });
-    if (rows.length === 0) return null;
-    // 용량 필터 — dose 가 있으면 반드시 매칭. 없으면 빈 결과 반환 (다른 용량 변형으로
-    // 잘못 떨어지는 것 방지: 로수듀오 10/20 이 마스터에 없을 때 10/10 으로 가짜 매칭 X)
-    if (requireDose && doseToken) {
-      const filtered = rows.filter((r: MasterRow) => normalizeForDose(r.productName).includes(normalizeForDose(doseToken)));
-      if (filtered.length === 0) return null;
-      const exact = filtered.find((r: MasterRow) => r.productName === item.productName);
-      return { row: exact ?? filtered[0], exact: !!exact };
-    }
-    const exact = rows.find((r: MasterRow) => r.productName === item.productName);
-    return { row: exact ?? rows[0], exact: !!exact };
-  }
-
-  // 1차: 한글 약품명 + 제약사 + dose. productName 매칭은 startsWith strict —
-  // 마스터 productName 시작이 OCR 한글 prefix 와 일치해야 매칭. fuzzy contains 폐지
-  // (사용자 정책: 매칭 못 하면 빈칸. fuzzy 매칭으로 다른 약품 끌어오는 건 환각).
-  if (koreanCore.length >= 2 && item.companyName.length >= 2) {
-    const companyKey = item.companyName.replace(/\(주\)|\(유\)|주식회사|㈜/g, "").trim();
-    const r = await searchAndPick(
-      {
-        productName: { startsWith: koreanCore, mode: "insensitive" },
-        companyName: { contains: companyKey.slice(0, 6), mode: "insensitive" },
-      },
-      true
-    );
-    if (r) return {
-      insuranceCode: r.row.insuranceCode ?? item.insuranceCode,
-      productName: r.row.productName,
-      companyName: r.row.companyName,
-      unitPrice: r.row.price,
-      commissionRate: r.row.commissionRate,
-      matchedMedicationId: r.row.id,
-      matchConfidence: r.exact ? 98 : 92,
-      nameCodeMismatch,
-    };
-  }
-
-  // 2차: 한글 약품명 + dose (제약사 무시 — Vision/Clova가 회사명을 못 잡았을 때).
-  // 1차와 동일 정책: startsWith strict, contains 폐지.
-  if (koreanCore.length >= 2) {
-    const r = await searchAndPick(
-      { productName: { startsWith: koreanCore, mode: "insensitive" } },
-      true
-    );
-    if (r) return {
-      insuranceCode: r.row.insuranceCode ?? item.insuranceCode,
-      productName: r.row.productName,
-      companyName: r.row.companyName,
-      unitPrice: r.row.price,
-      commissionRate: r.row.commissionRate,
-      matchedMedicationId: r.row.id,
-      matchConfidence: r.exact ? 95 : 85,
-      nameCodeMismatch,
-    };
-  }
-
+  // 보험코드 매칭 실패 — LLM 결과 그대로 반환 (검수 행으로 빨강 표시 → 사용자가 직접 채움)
   return {
     insuranceCode: item.insuranceCode,
     productName: item.productName,
@@ -2396,7 +2307,7 @@ async function matchMedication(
     commissionRate: null,
     matchedMedicationId: null,
     matchConfidence: 0,
-    nameCodeMismatch,
+    nameCodeMismatch: null,
   };
 }
 
