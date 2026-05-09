@@ -13,7 +13,7 @@ interface MonthRow { month: number; count: number; hospitalCount: number; compan
 interface CompanyRow { name: string; count: number; totalFee: number; }
 interface Totals { count: number; hospitalCount: number; companyCount: number; totalFee: number; prescriptionTotal: number; }
 interface Comparison { curMonth: number; prevMonth: number | null; curHospitals: number; prevHospitals: number; curCount: number; prevCount: number; curFee: number; prevFee: number; }
-interface CurMonthRow { hospitalName: string; companyName: string; totalFee: number; confirmed: boolean; }
+interface CurMonthRow { hospitalName: string; companyName: string; totalFee: number; submitted: boolean; confirmed: boolean; }
 interface Data { year: number; monthly: MonthRow[]; totals: Totals; byCompany: CompanyRow[]; comparison: Comparison; availableYears: number[]; isUpperCorp?: boolean; curMonth: number; curMonthRows: CurMonthRow[]; }
 
 function DiffBadge({ cur, prev }: { cur: number; prev: number }) {
@@ -183,13 +183,13 @@ export default function PerformancePage() {
                       {row.totalFee > 0 ? fmt(row.totalFee) : "-"}
                     </td>
                     <td className="px-4 py-2.5 text-center">
-                      {row.confirmed ? (
+                      {row.submitted ? (
                         <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-green-50 text-green-700">
-                          <CheckCircle2 className="w-3 h-3" />완료
+                          <CheckCircle2 className="w-3 h-3" />제출완료
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-orange-50 text-orange-600">
-                          <Clock className="w-3 h-3" />대기
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                          <Clock className="w-3 h-3" />미제출
                         </span>
                       )}
                     </td>
