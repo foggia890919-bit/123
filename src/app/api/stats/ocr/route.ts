@@ -371,12 +371,10 @@ export async function POST(req: NextRequest) {
     // ── 단일 흐름: Pro 모델 교차 검증 ─────────────────────────────────────
     // 사용자 정책: Clova OCR text + Gemini Vision raw 두 결과를 Pro 모델에 같이 던져서
     // 행별 교차 검증으로 최종 약품 리스트 결정. 분기 단일화 — Vision 단독/positional/
-    // 결정론적 파서로 분기하지 않음. LLM 한 번에 모든 신호 (Clova + Vision + master 후보)
-    // 보고 결정해야 행 누락·합계행 환각·dose 변형 매칭 오류 모두 차단.
-    // Clova text 결정론적 파서로 1차 추출 → callGeminiMerge 의 두 번째 입력으로 전달.
-    // Pro 모델이 사진 직접 분석 (Vision 역할) 후 결정론적 파서 결과와 행별 비교 → 일치
-    // 여부로 confidence 부여 (사용자 정책: 두 엔진 일치 = 95+, 불일치 = 60 검토 필요).
-    const clovaDeterministic = parseDrugsFromClovaText(clovaText);
+    // 결정론적 추출 — Document AI (표 셀 단위 — 가장 정확) 우선, 없으면 Clova text 줄 파서.
+    // 이걸 callGeminiMerge 의 입력으로 넘겨 Pro 모델이 약품명 → 보험코드 매핑까지.
+    const docaiDrugs = docai ? parseDrugsFromDocAi(docai) : [];
+    const clovaDeterministic = docaiDrugs.length >= 3 ? docaiDrugs : parseDrugsFromClovaText(clovaText);
     pipeline.mergeUsed = "vision+clova";
     try {
       merged = await callGeminiMerge({
@@ -392,6 +390,7 @@ export async function POST(req: NextRequest) {
       });
     } catch (e) {
       pipeline.mergeError = String(e).slice(0, 200);
+      // LLM 실패 시 결정론적 결과 그대로 (Document AI 우선) — 보험코드는 빈 채로 검수에 노출.
       merged = clovaDeterministic;
     }
     pipeline.mergeDrugCount = merged.length;
@@ -1311,6 +1310,45 @@ function parseDrugsFromClova(rows: ClovaRow[], colMap: ColumnMap | null): Merged
   return drugs;
 }
 
+// Document AI Form Parser 표 결과를 줄 단위 약품 리스트로 변환.
+// 셀 단위 결정론적 추출 — 헤더↔컬럼 매핑이 좌표 기반 OCR 보다 정확. Clova positional 의
+// 환자수↔사용량 매핑 오류 회귀 차단. 보험코드는 표에 없으면 빈 문자열로 두고 LLM 이
+// 약품명 기반으로 매핑.
+function parseDrugsFromDocAi(docai: DocAiResult): MergedDrug[] {
+  if (docai.tables.length === 0) return [];
+  // 첫 번째 표만 처리. (NH팜·약국 EMR 모두 약품 표는 1개)
+  const table = docai.tables[0];
+  if (table.length < 2) return [];
+
+  // 헤더 행 — 보통 첫 행. 키워드 매칭으로 컬럼 인덱스 파악.
+  const headerCells = table[0].cells.map((c) => c.replace(/\s+/g, "").trim());
+  const productNameIdx = headerCells.findIndex((h) =>
+    /(처방명칭|약품명|제품명|품명|명칭|처방약명)/.test(h)
+  );
+  const quantityIdx = headerCells.findIndex((h) =>
+    /(사용량|총사용량|총투여량|총량|수량|조제량|투약량|처방량)/.test(h)
+  );
+  if (productNameIdx === -1 || quantityIdx === -1) return [];
+
+  const drugs: MergedDrug[] = [];
+  for (let i = 1; i < table.length; i++) {
+    const cells = table[i].cells;
+    const productName = (cells[productNameIdx] ?? "").trim();
+    const quantityRaw = (cells[quantityIdx] ?? "").replace(/[^\d.]/g, "");
+    if (!productName || !quantityRaw) continue;
+    if (!isLikelyDrug(productName)) continue;
+
+    drugs.push({
+      insuranceCode: "",
+      productName,
+      companyName: "",
+      quantity: quantityRaw,
+      confidence: 95, // Document AI 셀 단위 추출 — 신뢰도 최고
+    });
+  }
+  return drugs;
+}
+
 function isLikelyDrug(name: string): boolean {
   if (!name) return false;
   const n = name.trim();
@@ -2101,13 +2139,13 @@ async function callGeminiMerge(args: {
 입력하던 작업을 자동화하는 게 목적입니다. **두 가지 OCR 결과를 행 단위로 비교 검증**해서
 일치 여부에 따라 confidence 를 부여하세요.
 
-# 입력 1: 사진 (Gemini Vision — 이미지 직접 분석. 당신이 직접 추출)
-당신이 사진의 표를 읽어서 [productName, quantity, insuranceCode, companyName] 추출.
-
-# 입력 2: Clova OCR 결정론적 파서 결과 (Clova 텍스트만 줄 단위로 split + 헤더 매핑)
+# 입력 1: 결정론적 표 추출 결과 (Document AI Form Parser 또는 Clova text 줄 파서)
+**가장 신뢰도 높은 입력. productName + quantity 는 이걸 기본으로 채택**.
 ${args.clovaDeterministic.length ? JSON.stringify(args.clovaDeterministic, null, 2) : "(비어있음)"}
 
-# 입력 3: Clova OCR 원본 텍스트 (raw)
+# 입력 2: 사진 (Gemini Vision — 보조. 입력 1 의 OCR 오타 정정·검증용)
+
+# 입력 3: Clova OCR 원본 텍스트 (raw — 9자리 보험코드 추출용)
 ${args.clovaText || "(없음)"}
 
 # 입력 4: 마스터 DB 후보 (Clova 9자리 보험코드 사전 조회 — 정확한 productName 보정용)
