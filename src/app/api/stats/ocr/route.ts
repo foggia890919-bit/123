@@ -206,15 +206,17 @@ export async function POST(req: NextRequest) {
     // 동일 거래처가 EMR 두 개 (예: 모니터 사진 + 종이 사진) 를 섞어 올리는 케이스에서
     // 잘못된 ColumnTemplate 캐시 적용을 막기 위해 OCR 본 작업 전에 vendor 라벨부터 붙인다.
     const docaiConfigured = isDocumentAiConfigured();
-    // Gemini Vision (gemini-2.5-pro) 이미지 직접 입력 — Gemini 웹과 동일 흐름.
-    // 사용자 정책: 사진을 Pro 모델에 직접 던져서 표 인식·헤더 매핑·보험코드 매핑까지
-    // LLM 한 번에 처리. clientContext 는 빈 배열로 — 환각 유발 입력 차단.
-    const [clovaOut, geminiOut, docaiOut, classifierOut] = await Promise.allSettled([
+    // Pro 모델은 callGeminiMerge 한 번만 호출 (이미지 + Clova text 동시 입력).
+    // Vision 별도 호출은 제거 — Pro 두 번 호출 시 Vercel 60초 timeout 초과 회귀 방지.
+    const [clovaOut, docaiOut, classifierOut] = await Promise.allSettled([
       callClovaOcr(base64, ext),
-      callGeminiVision(base64, mimeType, []),
       docaiConfigured ? callDocumentAi(base64, mimeType) : Promise.reject(new Error("not configured")),
       classifyVendor(base64, mimeType),
     ]);
+    const geminiOut: PromiseSettledResult<GeminiVisionResult> = {
+      status: "fulfilled",
+      value: { drugs: [] },
+    };
 
     const classifierResult: VendorClassification =
       classifierOut.status === "fulfilled"
@@ -371,21 +373,21 @@ export async function POST(req: NextRequest) {
     // 행별 교차 검증으로 최종 약품 리스트 결정. 분기 단일화 — Vision 단독/positional/
     // 결정론적 파서로 분기하지 않음. LLM 한 번에 모든 신호 (Clova + Vision + master 후보)
     // 보고 결정해야 행 누락·합계행 환각·dose 변형 매칭 오류 모두 차단.
-    pipeline.mergeUsed = visionDrugs.length === 0 ? "clova-only" : "vision+clova";
+    pipeline.mergeUsed = "vision+clova";
     try {
       merged = await callGeminiMerge({
         clovaText,
-        geminiDraft,
+        imageBase64: base64,
+        imageMimeType: mimeType,
         masterCandidates: Array.from(masterByCode.values()).map((m) => ({
           insuranceCode: m.insuranceCode,
           productName: m.productName,
           companyName: m.companyName,
         })),
-        clientContext: [],
       });
     } catch (e) {
       pipeline.mergeError = String(e).slice(0, 200);
-      merged = visionDrugs;
+      merged = [];
     }
     pipeline.mergeDrugCount = merged.length;
 
@@ -2067,49 +2069,44 @@ interface MergedDrug {
 
 async function callGeminiMerge(args: {
   clovaText: string;
-  geminiDraft: GeminiVisionResult | null;
+  imageBase64: string;
+  imageMimeType: string;
   masterCandidates: Array<{ insuranceCode: string | null; productName: string; companyName: string }>;
-  clientContext: ClientContextDrug[];
 }): Promise<MergedDrug[]> {
-  if (!process.env.GEMINI_API_KEY) {
-    // Gemini 미설정이면 Vision 결과만 사용
-    return args.geminiDraft?.drugs ?? [];
-  }
+  if (!process.env.GEMINI_API_KEY) return [];
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
   const prompt = `당신은 한국 EMR 처방통계 표를 분석하는 전문가입니다. 약사가 직접 보고
-입력하던 작업을 자동화하는 게 목적입니다. 두 가지 OCR 결과를 행 단위로 교차 검증해서
-최종 약품 리스트를 만드세요.
+입력하던 작업을 자동화하는 게 목적입니다. 사진 + Clova OCR 텍스트를 교차로 보고 최종
+약품 리스트를 만드세요.
 
-# 입력 1: Clova OCR 텍스트 (한국어 OCR — 줄/공백 클러스터링 신뢰도 높음)
+# 입력 1: 사진 (이미지 직접 분석 — 표 헤더/컬럼 위치 인식)
+
+# 입력 2: Clova OCR 텍스트 (한국어 OCR — 줄/공백 클러스터링 신뢰도 높음)
 ${args.clovaText || "(없음)"}
-
-# 입력 2: Gemini Vision 의 1차 구조화 결과 (이미지 직접 분석 — 표 헤더/컬럼 인식 강함)
-${args.geminiDraft && args.geminiDraft.drugs.length ? JSON.stringify(args.geminiDraft.drugs, null, 2) : "(비어있음)"}
 
 # 입력 3: 마스터 DB 후보 (Clova 가 뽑은 9자리 보험코드로 사전 조회 — 정확한 productName 보정용)
 ${args.masterCandidates.length ? JSON.stringify(args.masterCandidates, null, 2) : "(없음)"}
 
 # 작업 (반드시 이 순서)
-1) **헤더 식별**: Clova text 첫 데이터 줄 위에서 헤더 줄을 찾고 컬럼 순서 결정
+1) **헤더 식별**: 사진과 Clova text 둘 다 보고 헤더 줄을 찾아 컬럼 순서 결정
    (예: 처방코드 / 처방명칭 / 환자수 / 단가 / 사용량 / 총액).
-2) **Clova text 의 데이터 줄을 1행씩 순번 매김**. 각 줄을 공백으로 split → 헤더 컬럼 순서대로
-   토큰 매핑. 토큰 갯수가 헤더보다 적은 줄(NH팜 합계, 거래처명, 주소, 전화번호 등) 은 **제외**.
-3) **Vision 결과를 같은 행에 매핑**: Clova 줄과 Vision raw 항목을 약품명 prefix + 순서로
-   매칭. 두 결과가 다르면 다음 우선순위로 결정:
-   - **insuranceCode**: Clova text 안 9자리 숫자 우선. 없으면 Vision 우선. 둘 다 없으면
-     마스터 후보의 정확 매칭 또는 표준 EDI 9자리 지식으로 매핑 (확신 없으면 빈칸).
+2) **Clova text 의 데이터 줄을 1행씩 순번 매김**. 각 줄을 공백으로 split → 헤더 컬럼
+   순서대로 토큰 매핑. 토큰 갯수가 헤더보다 적은 줄 (NH팜 합계, 거래처명, 주소, 전화번호 등)
+   은 **제외**.
+3) **사진의 같은 행과 교차 검증**. 두 결과가 다르면 다음 우선순위로 결정:
+   - **insuranceCode**: Clova text 안 9자리 숫자 우선. 없으면 사진의 9자리. 둘 다 없으면
+     마스터 후보 정확 매칭 또는 표준 EDI 9자리 지식으로 매핑 (확신 없으면 빈칸).
    - **quantity**: Clova text 의 "사용량/총사용량/총투여량/수량/조제량" 컬럼 값을
-     **반드시 우선**. Vision 이 환자수/단가를 잘못 가져왔을 수 있으니 Clova 에서 한 번 더 확인.
+     **반드시 우선**. 사진에서 환자수/단가를 잘못 가져왔을 수 있으니 Clova 에서 한 번 더 확인.
      절대 환자수/단가/약가/금액/총액 값을 quantity 로 쓰지 마세요.
-   - **productName**: 두 결과 합쳐 가장 명확한 형태. OCR 오타는 자연스럽게 정정
+   - **productName**: 두 입력 합쳐 가장 명확한 형태. OCR 오타는 자연스럽게 정정
      (예: "양로베틴" → "암로베틴", "아라젠" → "아라펜").
    - **companyName**: 제약사명 (셀트리온제약, 알리코제약, HLB제약 등).
 4) **합계행/메타행 절대 출력 X**: 약품명이 약품 아닌 라벨 (NH팜, 비급여, 총계, 거래처명,
    주소, 전화번호) 인 행은 결과에서 완전 제외.
-5) **행 독립 처리**: 한 줄의 데이터를 다른 줄과 절대 합치지 말 것 (약품명 칸에 다음 줄 토큰이
-   끼어드는 환각 금지). 같은 약품 다른 dose (10/10, 20/10, 5/10) 는 별도 행으로 유지 —
-   같은 보험코드로 합치지 말 것.
+5) **행 독립 처리**: 한 줄의 데이터를 다른 줄과 절대 합치지 말 것. 같은 약품 다른 dose
+   (10/10, 20/10, 5/10) 는 별도 행으로 유지 — 같은 보험코드로 합치지 말 것.
 6) **마스터 후보 활용**: 입력 3 의 후보는 Clova 9자리 보험코드와 정확 매칭된 약품들.
    해당 코드 행의 productName/companyName 보정에만 사용. 후보 약품을 표에 없는 행에
    환각으로 추가 X.
@@ -2122,19 +2119,25 @@ JSON 만:
   ]
 }
 
-confidence: Clova + Vision 두 결과 모두 명확 일치 = 95+. 한쪽만 명확 = 80. 행 깨짐 = 50~70.`;
+confidence: 사진 + Clova 둘 다 명확 일치 = 95+. 한쪽만 명확 = 80. 행 깨짐 = 50~70.`;
 
   try {
     const response = await ai.models.generateContent({
-      // gemini-2.5-pro: flash-lite 대비 비용 12배지만 표 헤더↔컬럼 매핑 추론 정확도가
-      // 월등히 높음. Gemini 웹과 동일 모델로 환자수/사용량 헷갈림 같은 회귀 차단.
-      // (사용자 정책: 정확도 우선, 비용 절대값은 무리 없음)
+      // gemini-2.5-pro: 표 헤더↔컬럼 매핑·OCR 오타 정정·보험코드 매핑까지 한 번에.
+      // Gemini 웹과 동일 흐름 (이미지 + 사용자 컨텍스트 → 결과). Vision 호출 별도로
+      // 안 거치고 Merge 한 번에 — Vercel timeout 회피 + 비용 절감.
       model: "gemini-2.5-pro",
-      contents: prompt,
+      contents: [{
+        role: "user",
+        parts: [
+          { inlineData: { mimeType: args.imageMimeType, data: args.imageBase64 } },
+          { text: prompt },
+        ],
+      }],
       config: { responseMimeType: "application/json" },
     });
     const parsed = parseJsonLoose(response.text ?? "") as { drugs?: MergedDrug[] } | null;
-    const drugs = Array.isArray(parsed?.drugs) ? parsed!.drugs : (args.geminiDraft?.drugs ?? []);
+    const drugs = Array.isArray(parsed?.drugs) ? parsed!.drugs : [];
     return drugs.map((d) => ({
       insuranceCode: String(d.insuranceCode ?? "").trim(),
       productName: String(d.productName ?? "").trim(),
@@ -2143,7 +2146,7 @@ confidence: Clova + Vision 두 결과 모두 명확 일치 = 95+. 한쪽만 명�
       confidence: clamp01_100(Number(d.confidence) || 0),
     }));
   } catch {
-    return args.geminiDraft?.drugs ?? [];
+    return [];
   }
 }
 
