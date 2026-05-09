@@ -120,14 +120,46 @@ export async function GET(req: NextRequest) {
   // 당월 거래처 × 제약사(거래가능코드) 제출현황
   // ADMIN / 상위법인은 거래처가 너무 많아 생략
   const curMonthRows: { hospitalName: string; companyName: string; submitted: boolean }[] = [];
+  const _debug: Record<string, unknown> = { role: session.role, isUpperCorp, viewableIdCount: viewableIds?.length ?? -1 };
+
   if (!isUpperCorp && session.role !== "ADMIN" && viewableIds) {
     // 1. 등록된 거래처 전체 (승인 여부 무관)
     const userClients = await prisma.userClient.findMany({
       where: { userId: { in: viewableIds } },
       select: { id: true, clientName: true, bizNumber: true },
     });
+    _debug.userClientCount = userClients.length;
 
-    if (userClients.length > 0) {
+    // 1b. 등록된 거래처 없으면 → 당월 보고서 hospitalName 기반으로 fallback
+    if (userClients.length === 0) {
+      const curMonthReports = await prisma.prescriptionReport.findMany({
+        where: { userId: { in: viewableIds }, year, month: curMonth },
+        select: { clientId: true, hospitalName: true },
+      });
+      _debug.fallback = true;
+      _debug.reportCount = curMonthReports.length;
+      const seen = new Set<string>();
+      for (const r of curMonthReports) {
+        const name = r.hospitalName || "미입력";
+        if (!seen.has(name)) {
+          seen.add(name);
+          curMonthRows.push({ hospitalName: name, companyName: "-", submitted: true });
+        }
+      }
+      // 이전 달 보고서에서도 거래처 추가 (등록된 거래처 목록 대용)
+      const prevReports = await prisma.prescriptionReport.findMany({
+        where: { userId: { in: viewableIds }, year },
+        select: { hospitalName: true },
+      });
+      for (const r of prevReports) {
+        const name = r.hospitalName || "미입력";
+        if (!seen.has(name)) {
+          seen.add(name);
+          curMonthRows.push({ hospitalName: name, companyName: "-", submitted: false });
+        }
+      }
+      curMonthRows.sort((a, b) => a.hospitalName.localeCompare(b.hospitalName));
+    } else {
       const bizNumbers = [...new Set(userClients.map((c) => c.bizNumber).filter(Boolean))] as string[];
 
       // 2. 해당 거래처의 거래가능코드(APPROVED) — bizNumber 기준, userId 무관
@@ -137,6 +169,7 @@ export async function GET(req: NextRequest) {
             select: { bizNumber: true, companyName: true },
           })
         : [];
+      _debug.approvedFilterCount = approvedFilters.length;
 
       // 3. 당월 제출된 보고서 (clientId 기준)
       const curMonthReports = await prisma.prescriptionReport.findMany({
@@ -170,5 +203,5 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ year, monthly, totals, byCompany, comparison, availableYears: allYears.map((r) => r.year), isUpperCorp, curMonth, curMonthRows, _debug: { viewableIdCount: viewableIds?.length ?? -1 } });
+  return NextResponse.json({ year, monthly, totals, byCompany, comparison, availableYears: allYears.map((r) => r.year), isUpperCorp, curMonth, curMonthRows, _debug });
 }
