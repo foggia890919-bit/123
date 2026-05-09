@@ -14,7 +14,7 @@ interface CompanyRow { name: string; count: number; totalFee: number; }
 interface Totals { count: number; hospitalCount: number; companyCount: number; totalFee: number; prescriptionTotal: number; }
 interface Comparison { curMonth: number; prevMonth: number | null; curHospitals: number; prevHospitals: number; curCount: number; prevCount: number; curFee: number; prevFee: number; }
 interface CurMonthRow { hospitalName: string; companyName: string; submitted: boolean; }
-interface Data { year: number; monthly: MonthRow[]; totals: Totals; byCompany: CompanyRow[]; comparison: Comparison; availableYears: number[]; isUpperCorp?: boolean; curMonth: number; curMonthRows: CurMonthRow[]; _debug?: Record<string, unknown>; }
+interface Data { year: number; monthly: MonthRow[]; totals: Totals; byCompany: CompanyRow[]; comparison: Comparison; availableYears: number[]; isUpperCorp?: boolean; curMonth: number; curMonthRows: CurMonthRow[]; }
 
 function DiffBadge({ cur, prev }: { cur: number; prev: number }) {
   const diff = cur - prev;
@@ -153,13 +153,6 @@ export default function PerformancePage() {
           </Link>
         </div>
       </div>
-
-      {/* 임시 디버그 */}
-      {data?._debug && (
-        <pre className="bg-yellow-50 border border-yellow-200 rounded p-3 text-xs text-yellow-900 overflow-x-auto">
-          {JSON.stringify(data._debug, null, 2)}
-        </pre>
-      )}
 
       {/* 당월 거래처별 제출현황 — 거래가능코드 APPROVED 기준 */}
       {data && !data.isUpperCorp && (
