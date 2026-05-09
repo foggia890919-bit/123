@@ -912,11 +912,18 @@ function extractDrugsPositionalWithDebug(rows: ClovaRow[], colMap: ColumnMap | n
     const unitPriceTol = colMap.unitPrice != null ? colTolerance(colMap.unitPrice, colMap.quantity, colMap.patientCount, colMap.productName) : 100;
     const quantityTol = colMap.quantity != null ? colTolerance(colMap.quantity, colMap.unitPrice, colMap.total, colMap.productName) : 100;
 
-    // 약품명 anchor 의 4-vertex 로 행 띠(slope-aware band) 를 그리고, 각 컬럼 X 까지
-    // slope 를 따라 띠를 연장한 expected Y 범위 안에 들어오는 fields 만 매칭.
-    // 사진이 기울어져 같은 행의 셀이 anchor 의 Y 와 벌어지는 케이스 보정 — 이전엔 단순
-    // anchorY ±15 만 보던 자리. anchor 폭이 좁아 band 가 안 잡히면 ±15 폴백.
-    const anchorBand = bandFromField(cand.field, colMap.slope || 0);
+    // 약품명 anchor 영역의 fields 를 모두 합친 polygon 으로 행 띠(slope-aware band) 를
+    // 그리고, 각 컬럼 X 까지 slope 를 따라 띠를 연장한 expected Y 범위 안에 들어오는
+    // fields 만 매칭. 사진이 기울어져 같은 행의 셀이 anchor 의 Y 와 벌어지는 케이스 보정.
+    //
+    // bandFromField (단일) 대신 bandFromFields (다중) 를 쓰는 이유: anchor 단일 field 가
+    // 폭 80px 미만이면 local slope 추정 실패 → globalSlope 폴백인데, 헤더 slope 만으로는
+    // 사진 아래쪽 행 (원근 왜곡으로 더 기울어짐) 을 못 따라간다. productFields 를 합치면
+    // polygon 폭이 1.5~3 배로 늘어 local slope 가 안정 추정된다.
+    const anchorBand = bandFromFields(
+      productFields.length > 0 ? productFields : [cand.field],
+      colMap.slope || 0
+    );
     function inAnchorBand(f: ClovaField, yMargin = 6): boolean {
       if (!anchorBand) return Math.abs(fieldYCenter(f) - anchorY) <= 15;
       const fy = fieldYCenter(f);
@@ -1139,6 +1146,13 @@ function findColumnMap(rows: ClovaRow[]): ColumnMap | null {
       else if (/총사용량|총량|사용량|투여량|투약량|처방량|^수량$|수량$|^용량$/.test(t)) map.quantity = x;
       else if (/송금액|총금액|총액|금액/.test(t)) map.total = x;
     }
+    // 헤더 slope 와 데이터 행 slope 비교 — 사진이 아래로 갈수록 더 기울어지는 원근 왜곡
+    // 케이스에서 헤더(표 위쪽) 만으로는 기울기를 과소 추정함. 데이터 행 slope 가 더 크면
+    // 그쪽을 채택해 표 아래쪽 행 매칭도 보장.
+    const dataSlope = estimateSlopeFromDrugRows(rows);
+    if (Math.abs(dataSlope) > Math.abs(map.slope)) {
+      map.slope = dataSlope;
+    }
     // 약품명 + 사용량 (또는 수량) X 가 둘 다 있어야 의미 있음
     if (map.productName != null && map.quantity != null) return map;
   }
@@ -1321,6 +1335,46 @@ function bandFromField(f: ClovaField, globalSlope: number): RowBand | null {
   return { top, bot, centerY, anchorX, slope };
 }
 
+// bandFromField 의 다중-field 버전. 같은 행에 속하는 인접 fields 들 (예: 약품명 + 영문 INN
+// + 용량 토큰) 의 vertices 를 모두 합쳐 polygon 을 그리고 그 위쪽 가장자리로 slope 추정.
+//
+// 단일 field 폭이 80px 미만이면 bandFromField 가 globalSlope 로 폴백하는데, 모니터 사진
+// 처럼 globalSlope 가 부정확한 케이스에선 같은 행 매칭이 깨짐. 약품명 컬럼 영역의 fields
+// 를 모으면 polygon 폭이 1.5~3 배 길어져 local slope 가 안정적으로 추정된다.
+function bandFromFields(fs: ClovaField[], globalSlope: number): RowBand | null {
+  if (fs.length === 0) return null;
+  if (fs.length === 1) return bandFromField(fs[0], globalSlope);
+  const points: { x: number; y: number }[] = [];
+  for (const f of fs) {
+    for (const v of f.boundingPoly?.vertices ?? []) {
+      points.push({ x: v.x, y: v.y });
+    }
+  }
+  if (points.length < 3) return null;
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  const top = Math.min(...ys);
+  const bot = Math.max(...ys);
+  const anchorX = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const centerY = (top + bot) / 2;
+
+  // local slope: 모든 vertex 중 위쪽 절반의 점들에서 가장 왼쪽·오른쪽 두 점으로 추정.
+  // 결합 polygon 이라 폭이 길어졌으니 임계값을 60px 로 완화 (단일 field 80px 보다 낮음).
+  let slope = globalSlope;
+  const sorted = [...points].sort((a, b) => a.y - b.y);
+  const topHalf = sorted.slice(0, Math.max(2, Math.ceil(sorted.length / 2)));
+  const left = topHalf.reduce((a, b) => (a.x < b.x ? a : b));
+  const right = topHalf.reduce((a, b) => (a.x > b.x ? a : b));
+  const dx = right.x - left.x;
+  if (dx > 60) {
+    const dy = right.y - left.y;
+    const candidate = dy / dx;
+    if (Math.abs(candidate) < 0.3) slope = candidate;
+  }
+
+  return { top, bot, centerY, anchorX, slope };
+}
+
 // 호환용 wrapper — 기존 호출처에서 사용
 function quantityFromColumnMap(
   productName: string,
@@ -1429,7 +1483,9 @@ function estimateSlopeFromDrugRows(rows: ClovaRow[]): number {
     if (dx < 200) continue;
     const dy = fieldYCenter(right) - fieldYCenter(left);
     samples.push(dy / dx);
-    if (samples.length >= 5) break;
+    // 5개 limit 제거 — 표 전체 행을 봐야 사진 아래쪽 (원근 왜곡으로 더 기울어진) 행의
+    // 기울기까지 median 에 반영된다. 위 5개만 보면 표 위쪽 평탄 영역의 작은 slope 만 잡혀
+    // 아래쪽 행 매칭이 깨짐.
   }
   if (samples.length === 0) return 0;
   // 중앙값 (이상치 제거)
