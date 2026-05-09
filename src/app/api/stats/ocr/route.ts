@@ -641,6 +641,7 @@ export async function POST(req: NextRequest) {
           !colMap
           || pipeline.mergeUsed === "vision-preferred"
           || pipeline.mergeUsed === "clova-positional"
+          || pipeline.mergeUsed === "clova-deterministic-fallback"
           || (pipeline.mergeUsed === "skipped (vision-only)" && classifierResult.captureType === "monitor")
         ) return m;
         const parsed = parseDrugName(m.productName);
