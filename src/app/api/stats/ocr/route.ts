@@ -1120,19 +1120,37 @@ function extractDrugsPositionalWithDebug(rows: ClovaRow[], colMap: ColumnMap | n
       return fy >= expectedTop - yMargin && fy <= expectedBot + yMargin;
     }
 
-    // 사용량/단가: 같은 행 띠 안에서 컬럼 X ±tolerance 범위의 숫자 field 중 X 가장 가까운 것.
+    // 사용량/단가: 같은 행 띠 안에서 컬럼 X ±tolerance 범위의 숫자 field 중 점수 최소.
+    // 점수 = anchor 라인까지 Y 거리 + X 거리 * 0.1 — 보험코드 검색(아래 1158-1182) 과
+    // 같은 패턴.
+    //
+    // 변경 이유: 같은 약품이 두 행에 등장 (예: 654004760 크레트롤정 두 번 처방) 하는
+    // 케이스에서 두 candidate 의 anchor band 가 yMargin/slope 로 인접 행 cell 까지
+    // 약간 포함되었을 때, X 거리만으로 best 를 픽하면 두 candidate 모두 colX 에 가장
+    // 가까운 *동일한 cell* 을 픽해 두 행이 같은 quantity 를 받던 버그.
+    // (사용자 진단: 654004760 두 행이 둘 다 1985, 650203656 두 행이 둘 다 33 으로
+    //  인식됨 — 인접 행 cell 이 같은 best 로 잡힌 패턴.)
+    //
     // 매칭된 field 자체도 같이 반환 — 진단 패널에서 quantityY 노출해 anchor Y 와의 거리로
     // 다음 행 cell 잘못 잡힌 회귀 케이스를 사용자가 즉시 짚을 수 있게.
     function nearestNumberAt(colX: number | null, tol: number): { value: string; field: ClovaField | null } {
       if (colX == null) return { value: "", field: null };
       let best: ClovaField | null = null;
-      let bestDist = Infinity;
+      let bestScore = Infinity;
       for (const f of allFields) {
         if (!inAnchorBand(f)) continue;
         if (!/\d/.test(f.inferText)) continue;
-        const dist = Math.abs(fieldXCenter(f) - colX);
-        if (dist > tol) continue;
-        if (dist < bestDist) { best = f; bestDist = dist; }
+        const fx = fieldXCenter(f);
+        const xDist = Math.abs(fx - colX);
+        if (xDist > tol) continue;
+        let yDist = 0;
+        if (anchorBand) {
+          const dx = fx - anchorBand.anchorX;
+          const expectedCenterY = anchorBand.centerY + anchorBand.slope * dx;
+          yDist = Math.abs(fieldYCenter(f) - expectedCenterY);
+        }
+        const score = yDist + xDist * 0.1;
+        if (score < bestScore) { best = f; bestScore = score; }
       }
       return { value: best ? best.inferText.replace(/[^\d.]/g, "") : "", field: best };
     }
