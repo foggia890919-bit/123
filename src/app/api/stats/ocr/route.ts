@@ -387,7 +387,14 @@ export async function POST(req: NextRequest) {
         const c = d.insuranceCode.replace(/\D/g, "");
         return c.length === 9 && masterByCode.has(c);
       });
-      if (visionAllMatched) {
+      // 약국 EMR (PHARM IT3000 등) 은 약품별 표에 보험코드 컬럼이 없어 Vision 행의
+      // insuranceCode 가 빈 문자열인 게 정상 → visionAllMatched 가 항상 false → LLM
+      // 병합 경로로 떨어져 마스터 후보 + clientContext 기반 *환각으로 약품 11건 만들어내던*
+      // 회귀 (사용자 진단: Vision 정장생캡슐 1369 정확 / 최종 결과 10101 + 사진에 없는
+      // 약품 5종 환각). Vision 이 1건이라도 추출했으면 그것만 신뢰하고 LLM 병합 skip.
+      // 누락된 행은 사용자가 수동 입력 — 환각 행보다 빈칸이 훨씬 안전.
+      const isPharmacyVendor = classifierResult.vendor === "pharm-it3000";
+      if (visionAllMatched || (isPharmacyVendor && visionDrugs.length > 0)) {
         pipeline.mergeUsed = "skipped (vision-only)";
         merged = visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 95) }));
       } else {
