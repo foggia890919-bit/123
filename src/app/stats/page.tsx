@@ -103,6 +103,13 @@ interface PipelineDiagnostics {
     insuranceCode?: string;
   }>;
   masterUnmatchedSamples?: Array<{ productName: string; unitPriceHint: number | null }>;
+  crossValidation?: Array<{
+    insuranceCode: string;
+    productName: string;
+    positionalQuantity: string;
+    visionQuantity: string;
+    match: boolean;
+  }>;
   // Document AI 진단 (있을 수도 없을 수도)
   docaiOk?: boolean;
   docaiConfigured?: boolean;
@@ -1553,6 +1560,42 @@ export default function StatsPage() {
                         </div>
                       </div>
                     )}
+                    {editOcr.pipeline.crossValidation && editOcr.pipeline.crossValidation.length > 0 && (() => {
+                      const mismatches = editOcr.pipeline.crossValidation.filter((c) => !c.match);
+                      const matches = editOcr.pipeline.crossValidation.filter((c) => c.match);
+                      return (
+                        <div className="mt-2">
+                          <p className="text-[10px] font-semibold text-gray-500 mb-1">
+                            Vision · Positional 교차 검증 (총 {editOcr.pipeline.crossValidation.length}건 — 일치 {matches.length} / 불일치 <span className={mismatches.length > 0 ? "text-red-700 font-bold" : ""}>{mismatches.length}</span>)
+                          </p>
+                          {mismatches.length > 0 && (
+                            <div className="text-[11px] bg-red-50 border border-red-300 rounded p-2 font-mono space-y-0.5 mb-1">
+                              {mismatches.map((c, i) => (
+                                <div key={i} className="text-red-700">
+                                  ✗ {c.insuranceCode} &quot;{c.productName}&quot;
+                                  <span className="text-gray-700"> — Positional [{c.positionalQuantity}] vs Vision [{c.visionQuantity}]</span>
+                                </div>
+                              ))}
+                              <div className="pt-1 text-gray-500 text-[10px]">
+                                ⚠️ 두 추출 결과가 달라 행 매칭이 어긋났을 가능성. 해당 약품은 자동으로 검토 표시(빨간 배지) 됩니다.
+                              </div>
+                            </div>
+                          )}
+                          {matches.length > 0 && (
+                            <details className="text-[11px]">
+                              <summary className="cursor-pointer text-emerald-700 hover:text-emerald-900 text-[10px]">일치 {matches.length}건 펼치기</summary>
+                              <div className="bg-emerald-50 border border-emerald-200 rounded p-2 font-mono space-y-0.5 mt-1">
+                                {matches.map((c, i) => (
+                                  <div key={i} className="text-emerald-700">
+                                    ✓ {c.insuranceCode} &quot;{c.productName}&quot; — qty [{c.positionalQuantity}]
+                                  </div>
+                                ))}
+                              </div>
+                            </details>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
                 <div>
