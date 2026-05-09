@@ -195,7 +195,8 @@ export async function POST(req: NextRequest) {
       ? await fetchCachedColumnTemplate(clientId, classifierResult.vendor)
       : { template: null, savedVendor: null, rejectReason: "clientId 없음" };
     const cachedTemplate = cacheInfo.template;
-    const autoColMap = findColumnMap(clovaRows);
+    // 1차: 헤더 키워드 기반 정상 감지. 2차: 헤더 OCR 이 깨졌을 때 첫 데이터 행 기반 폴백.
+    const autoColMap = findColumnMap(clovaRows) ?? findColumnMapByDataRow(clovaRows);
     const colMap: ColumnMap | null = cachedTemplate
       ? columnMapFromTemplate(cachedTemplate, clovaImageWidth, clovaRows)
       : autoColMap;
@@ -1055,14 +1056,49 @@ export interface ColumnMap {
   slope:         number;         // 행 기울기 (dy / dx, 사진이 비뚤어진 경우 0이 아님)
 }
 
+// 헤더 후보 키워드 — 카운트용 (느슨하게). 한 행에 3개 이상 매칭되면 헤더 행 후보.
+// EMR 마다 컬럼 표기가 다르므로 일반적으로 등장하는 변형을 폭넓게 포함.
+const HEADER_HIT_KEYWORDS = [
+  // 약품 식별 코드
+  "처방코드", "약품코드", "보험코드", "청구코드", "사용자코드", "내부코드",
+  // 약품명 (한글)
+  "약품명", "처방명칭", "제품명", "품명", "명칭", "처방약명",
+  // 환자수 / 처방빈도
+  "환자수", "환자", "처방횟수", "처방횟", "처방빈도",
+  // 단가 / 단위
+  "단가", "단위", "약가",
+  // 수량 / 투여량
+  "사용량", "총사용량", "총량", "투여량", "투약량", "처방량", "수량", "용량", "투약",
+  // 회수 / 일수
+  "회수", "매수", "일수", "투약일수", "일",
+  // 금액
+  "금액", "총액", "송금액", "총금액",
+];
+
+// OCR 오타 정규화 — 모니터 사진처럼 흐릿한 입력에서 헤더가 깨지는 케이스 대응.
+// 헤더 매칭 직전에만 적용하므로 본문 약품명에는 영향 없음.
+// 새 OCR 오타 패턴이 발견되면 여기에 추가.
+function normalizeHeaderText(s: string): string {
+  return s
+    .replace(/\s+/g, "")
+    .replace(/홍금액/g, "총금액")     // 홍←총 (모니터 사진 단골)
+    .replace(/총엥|종액|총엑/g, "총액") // 액 글자 OCR 오류
+    .replace(/명청|명졍/g, "명칭")     // 청·졍←칭
+    .replace(/용사용당/g, "용사용량")  // 당←량
+    .replace(/총사용당/g, "총사용량")
+    .replace(/약풍명|약품맹/g, "약품명") // 풍←품, 맹←명
+    .replace(/처방횟$/, "처방횟수")    // 행 끝에서 잘린 케이스
+    .replace(/처빙|처방횟단가/g, "처방횟수단가") // 단가 결합형
+    ;
+}
+
 function findColumnMap(rows: ClovaRow[]): ColumnMap | null {
-  // 헤더 키워드 세트 — 한 행에 3개 이상 등장하면 헤더로 본다
-  const HEADER_KEYWORDS = ["처방코드", "약품코드", "보험코드", "청구코드", "약품명", "처방명칭", "제품명", "환자수", "단가", "사용량", "총사용량", "총량", "투여량", "수량", "금액", "총액", "송금액"];
   for (let i = 0; i < Math.min(15, rows.length); i++) {
     const row = rows[i];
-    const hits = row.fields.filter((f) =>
-      HEADER_KEYWORDS.some((k) => f.inferText.includes(k))
-    );
+    const hits = row.fields.filter((f) => {
+      const norm = normalizeHeaderText(f.inferText);
+      return HEADER_HIT_KEYWORDS.some((k) => norm.includes(k));
+    });
     if (hits.length < 3) continue;
     // 헤더 필드들의 (X, Y) 로 행 기울기 추정 — 사진이 비뚤어졌을 때 사용
     const points = hits.map((f) => ({ x: fieldXCenter(f), y: fieldYCenter(f) })).sort((a, b) => a.x - b.x);
@@ -1075,18 +1111,71 @@ function findColumnMap(rows: ClovaRow[]): ColumnMap | null {
       headerY: row.avgY,
       slope,
     };
+    // 컬럼 매핑 — 우선순위: 신뢰도 높은 키워드부터 strict 매칭.
+    // "사용자코드"는 9자리 청구코드와 다른 (EMR 내부 단축 코드) 컬럼이라 insuranceCode 매핑에서 제외.
     for (const f of row.fields) {
       const x = fieldXCenter(f);
-      const t = f.inferText;
-      if (/처방코드|약품코드|보험코드|청구코드/.test(t)) map.insuranceCode = x;
-      else if (/처방명칭|약품명|제품명|품명/.test(t)) map.productName = x;
+      const t = normalizeHeaderText(f.inferText);
+      if (/청구코드|보험코드|약품코드|처방코드/.test(t)) map.insuranceCode = x;
+      else if (/처방명칭|약품명|제품명|처방약명|품명|명칭/.test(t)) map.productName = x;
       else if (/환자수|환자/.test(t)) map.patientCount = x;
-      else if (/^단가$|단가$/.test(t)) map.unitPrice = x;
-      else if (/사용량|총사용량|총량|투여량/.test(t)) map.quantity = x;
-      else if (/송금액|총액|금액/.test(t)) map.total = x;
+      // 단가 — '처방횟수단가' 같은 결합형도 잡되 '약가' 도 fallback 으로 인정
+      else if (/단가|약가/.test(t)) map.unitPrice = x;
+      // 수량 계열 — 가장 다양한 변형. '용량' 도 포함 (일부 EMR)
+      else if (/총사용량|총량|사용량|투여량|투약량|처방량|^수량$|수량$|^용량$/.test(t)) map.quantity = x;
+      else if (/송금액|총금액|총액|금액/.test(t)) map.total = x;
     }
     // 약품명 + 사용량 (또는 수량) X 가 둘 다 있어야 의미 있음
     if (map.productName != null && map.quantity != null) return map;
+  }
+  return null;
+}
+
+// 헤더 매칭 실패 시 폴백 — 첫 약품 데이터 행을 찾아 컬럼 X 를 추정한다.
+// 모니터 사진처럼 헤더 OCR 이 통째로 깨졌을 때 안전망.
+//
+// 휴리스틱:
+//   1) '한글 제형 어미를 가진 약품명' 과 숫자가 같이 있는 첫 행 = 첫 데이터 행
+//   2) productName X = 그 행의 첫 한글 약품명 field X
+//   3) quantity X = productName 보다 오른쪽의 첫 숫자 field X (가장 가까운 것)
+//   4) headerY = 그 행 직전의 행 Y (또는 행 자체보다 1px 위)
+//
+// 한계: 컬럼 순서가 [약품명·환자수·단가·사용량·총액] 인 EMR 에선 quantity 가 환자수로 잘못
+// 매핑될 수 있다. 그래도 헤더 매칭이 통째로 실패해 후보 0건이 되는 것보단 일부 정답.
+// 사용자가 수동 검수에서 잡는 것을 전제로 한 보수적 폴백.
+function findColumnMapByDataRow(rows: ClovaRow[]): ColumnMap | null {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const drugFields = row.fields.filter((f) => isLikelyDrug(f.inferText));
+    if (drugFields.length === 0) continue;
+    const numberFields = row.fields
+      .filter((f) => /\d/.test(f.inferText) && /^\d[\d.,]*$/.test(f.inferText.trim()))
+      .filter((f) => parseInt(f.inferText.replace(/\D/g, ""), 10) >= 1);
+    if (numberFields.length < 1) continue;
+
+    // 첫 한글 약품명 (X 가 작은 것)
+    const drugField = drugFields.sort((a, b) => fieldXCenter(a) - fieldXCenter(b))[0];
+    const drugX = fieldXCenter(drugField);
+    // 약품명 오른쪽의 첫 숫자
+    const rightNumbers = numberFields
+      .filter((f) => fieldXCenter(f) > drugX + 30)
+      .sort((a, b) => fieldXCenter(a) - fieldXCenter(b));
+    if (rightNumbers.length === 0) continue;
+    const quantityX = fieldXCenter(rightNumbers[0]);
+
+    // 헤더 Y — 데이터 행 직전 행이 있으면 그 Y, 없으면 데이터 행보다 1 위로
+    const headerY = i > 0 ? rows[i - 1].avgY : row.avgY - 1;
+
+    return {
+      insuranceCode: null,    // 9자리 정규식이 행 단위로 처리
+      productName: drugX,
+      patientCount: null,
+      unitPrice: null,
+      quantity: quantityX,
+      total: null,
+      headerY,
+      slope: 0,
+    };
   }
   return null;
 }
