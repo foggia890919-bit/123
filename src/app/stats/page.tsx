@@ -1419,7 +1419,7 @@ export default function StatsPage() {
         {/* 2-pane data view: 사진매칭 / 최종수정 */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* 사진매칭: OCR 인식 원본 (read-only, 항상 4컬럼 헤더 표시) */}
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col">
+          <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col max-h-[80vh]">
             <div className="border-b border-gray-100 px-3 h-[44px] flex items-center gap-2 overflow-x-auto">
               <span className="text-xs font-semibold text-gray-700">① 사진매칭</span>
               <span className="text-xs bg-blue-50 text-blue-600 border border-blue-200 px-1.5 py-0.5 rounded">CLOVA + GEMINI</span>
@@ -1661,7 +1661,7 @@ export default function StatsPage() {
                 </div>
               </div>
             ) : (
-              <div className="overflow-y-auto p-3 max-h-[calc(100vh-580px)] min-h-[200px]">
+              <div className="flex-1 overflow-y-auto p-3 min-h-[200px]">
                 <table className="w-full text-xs table-fixed">
                   <thead className="sticky top-0 bg-gray-50 z-10">
                     <tr className="border-b border-gray-200">
@@ -1718,7 +1718,7 @@ export default function StatsPage() {
 
 
           {/* 최종수정: 사람 확정 입력 */}
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col">
+          <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col max-h-[80vh]">
             <div className="border-b border-gray-100 px-3 h-[44px] flex items-center gap-2 overflow-x-auto">
               <span className="text-xs font-semibold text-gray-700">② 최종 수정</span>
               <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{filledManualDrugs.length}건</span>
@@ -1791,7 +1791,7 @@ export default function StatsPage() {
               )}
             </div>
 
-            <div className="overflow-y-auto p-3 max-h-[calc(100vh-580px)] min-h-[200px]">
+            <div className="flex-1 overflow-y-auto p-3 min-h-[200px]">
               <table className="w-full text-xs table-fixed">
                 <thead className="sticky top-0 bg-gray-50 z-10">
                   <tr className="border-b border-gray-200">
