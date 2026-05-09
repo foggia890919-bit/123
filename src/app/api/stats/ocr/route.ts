@@ -80,7 +80,7 @@ export interface PipelineDiagnostics {
   visionOk: boolean;
   visionDrugCount: number;
   visionError: string | null;
-  mergeUsed: "skipped (vision-only)" | "vision+clova" | "clova-only" | "clova-deterministic-fallback" | "clova-positional";
+  mergeUsed: "skipped (vision-only)" | "vision+clova" | "clova-only" | "clova-deterministic-fallback" | "clova-positional" | "vision-preferred (monitor)";
   mergeDrugCount: number;
   mergeError: string | null;
   filteredByIsLikelyDrug: number;        // isLikelyDrug 에서 제거된 수
@@ -307,7 +307,14 @@ export async function POST(req: NextRequest) {
       quantityY: c.quantityY,
       insuranceCode: c.insuranceCode,
     }));
-    if (positionalDrugs.length >= 3) {
+    // 모니터 사진은 Clova 의 행 클러스터링이 모아레/픽셀화로 자주 깨져서 positional
+     // 매핑이 한 행씩 어긋나는 패턴 빈번. 이 케이스에선 Vision LLM 의 약품 단위 추출이
+     // 더 안정적이라 positional 을 우회하고 vision 결과를 우선한다.
+     // (종이·스크린샷 captureType 은 기존대로 positional 우선 — Clova 행 클러스터링 신뢰)
+    const preferVisionForMonitor =
+      pipeline.captureType === "monitor" && visionDrugs.length >= 3;
+
+    if (positionalDrugs.length >= 3 && !preferVisionForMonitor) {
       // positional 추출이 충분하면 LLM 호출 자체 생략 — 단가/순서 보장됨.
       // 부분 추출도 행은 유지: 어떤 한 필드라도 인식됐으면 빈칸은 검수자가 채움.
       // (이미지에 4행 있고 OCR 이 일부 필드 놓쳤어도 4행 모두 보이게)
@@ -323,6 +330,11 @@ export async function POST(req: NextRequest) {
           priceHint: parseInt(p.unitPrice.replace(/[^\d]/g, ""), 10) || undefined,
           anchorYRaw: p.anchorY,
         }));
+    } else if (preferVisionForMonitor) {
+      // 모니터 사진 — vision 결과 그대로. positional 결과는 후속 cross-validate 에서
+      // 검증 용도로만 사용 (양쪽 quantity 다른 행은 자동 manualCheck 표시).
+      pipeline.mergeUsed = "vision-preferred (monitor)";
+      merged = visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 90) }));
     } else {
       // positional 부실 시 기존 LLM 경로
       const visionAllMatched = visionDrugs.length > 0 && visionDrugs.every((d) => {
@@ -353,30 +365,34 @@ export async function POST(req: NextRequest) {
     }
     pipeline.mergeDrugCount = merged.length;
 
-    // ── Vision · Positional 교차 검증 (clova-positional 한정) ───────────────
-    // positional 이 OCR 행 깨짐 (모니터 사진처럼 같은 행이 두 줄로 분할되는 케이스) 을
-    // 그대로 받는 한계 보정. Vision 은 LLM 이 약품 단위로 묶어 추출하므로,
-    // 같은 보험코드의 quantity multi-set 이 두 결과에서 다르면 positional 의 행 매칭
-    // 오류 가능성이 높다.
+    // ── Vision · Positional 교차 검증 ──────────────────────────────────────
+    // 어느 모드든 (clova-positional, vision-preferred 등) 양쪽 결과가 다 있을 때
+    // 보험코드별 quantity multi-set 비교. 다르면 두 값 모두 진단에 노출 + 해당 코드의
+    // 모든 merged drug confidence 60 으로 낮춰 manualCheck 자동 트리거.
     //
     // 동작:
-    //   1) 보험코드별로 positional quantities · vision quantities multi-set 수집
+    //   1) 보험코드별로 merged(채택) quantities · vision quantities multi-set 수집
     //   2) 정렬 후 비교. 한쪽이라도 비어있으면 비교 skip (한 소스만 본 약품)
-    //   3) 다르면 진단에 양쪽 값 노출 + 해당 코드의 모든 positional drug confidence 60
-    //      으로 낮춤 → 후속 단계에서 manualCheck=true (<95) 자동 트리거
-    //   4) 사용자는 검수 화면에서 빨갛게 표시된 행만 1초씩 확인하면 됨
-    if (pipeline.mergeUsed === "clova-positional" && visionDrugs.length > 0) {
+    //   3) 다르면 진단에 양쪽 값 노출 + 해당 코드 confidence 60 → manualCheck (<95)
+    //   4) 사용자는 검수 화면에서 빨갛게 표시된 행만 확인하면 됨
+    //
+    // 두 결과를 채택과 무관하게 비교하는 이유: vision 모드에선 vision 채택값을
+    // positional 로 검증, positional 모드에선 그 반대. 양방향 검증이 가능.
+    if (positionalDrugs.length >= 3 && visionDrugs.length > 0) {
+      // 두 raw 결과 (positional · vision) 를 채택 여부와 무관하게 직접 비교.
+      // vision-preferred 모드면 merged === visionDrugs 라 merged 로 비교하면 항상 일치
+      // 가 나와 검증 의미 없음. 그래서 positionalDrugs 원본 사용.
       const posByCode = new Map<string, string[]>();
       const productByCode = new Map<string, string>();
-      for (const m of merged) {
-        const code = m.insuranceCode.replace(/\D/g, "");
+      for (const p of positionalDrugs) {
+        const code = p.insuranceCode.replace(/\D/g, "");
         if (code.length !== 9) continue;
-        const qty = (m.quantity || "").replace(/[^\d.]/g, "");
+        const qty = (p.quantity || "").replace(/[^\d.]/g, "");
         if (!qty) continue;
         const arr = posByCode.get(code) ?? [];
         arr.push(qty);
         posByCode.set(code, arr);
-        if (!productByCode.has(code)) productByCode.set(code, m.productName);
+        if (!productByCode.has(code)) productByCode.set(code, p.productName);
       }
       const visByCode = new Map<string, string[]>();
       for (const v of visionDrugs) {
