@@ -206,19 +206,15 @@ export async function POST(req: NextRequest) {
     // 동일 거래처가 EMR 두 개 (예: 모니터 사진 + 종이 사진) 를 섞어 올리는 케이스에서
     // 잘못된 ColumnTemplate 캐시 적용을 막기 위해 OCR 본 작업 전에 vendor 라벨부터 붙인다.
     const docaiConfigured = isDocumentAiConfigured();
-    // Vision LLM (Gemini Vision) 이미지 호출 폐지 — 이미지 기반 LLM 분석은 비결정적이고
-    // 환각이 본질적 (사용자 진단: 정장생캡슐 1369→10101, 네시나메트정 환각, 환자수→
-    // quantity 매핑 오류 등 사진마다 다른 회귀). Clova OCR 의 정확한 한글 텍스트만으로
-    // callGeminiMerge 가 헤더 인식 + 행 라벨링하도록 단일화. (사용자 정책: 단순화)
-    const [clovaOut, docaiOut, classifierOut] = await Promise.allSettled([
+    // Gemini Vision (gemini-2.5-pro) 이미지 직접 입력 — Gemini 웹과 동일 흐름.
+    // 사용자 정책: 사진을 Pro 모델에 직접 던져서 표 인식·헤더 매핑·보험코드 매핑까지
+    // LLM 한 번에 처리. clientContext 는 빈 배열로 — 환각 유발 입력 차단.
+    const [clovaOut, geminiOut, docaiOut, classifierOut] = await Promise.allSettled([
       callClovaOcr(base64, ext),
+      callGeminiVision(base64, mimeType, []),
       docaiConfigured ? callDocumentAi(base64, mimeType) : Promise.reject(new Error("not configured")),
       classifyVendor(base64, mimeType),
     ]);
-    const geminiOut: PromiseSettledResult<GeminiVisionResult> = {
-      status: "fulfilled",
-      value: { drugs: [] },
-    };
 
     const classifierResult: VendorClassification =
       classifierOut.status === "fulfilled"
@@ -370,14 +366,16 @@ export async function POST(req: NextRequest) {
     const visionMatchesCodeCount = clovaCode9Count > 0 && visionRowCount === clovaCode9Count;
     const preferVision = visionDrugs.length >= 3 && (clovaCode9Count === 0 || visionMatchesCodeCount);
 
-    // ── 분기 최우선: Clova text 줄 단위 결정론적 파서 ───────────────────────
-    // 종이/스크린샷 사진의 정상 케이스에선 Clova OCR 이 표를 줄 단위로 깨끗하게 잡아
-    // 헤더 + 토큰 매핑만으로 100% 정확 추출 가능. LLM/positional 둘 다 우회 →
-    // 합계행 환각, 행 밀림, 환자수→quantity 매핑 같은 회귀가 원천 발생 불가.
-    // 헤더 인식 실패 시 (모니터 사진처럼 raw 깨진 케이스) 빈 결과 → 아래 분기로 폴백.
+    // ── 분기 최우선: Gemini Vision (Pro) 이미지 직접 입력 결과 ─────────────
+    // 사용자 정책: 사진을 Pro 모델에 직접 던져서 표 인식·헤더 매핑·보험코드 매핑까지
+    // 한 번에 처리 (Gemini 웹과 동일 흐름). Vision 이 ≥3건 추출하면 그대로 채택.
+    // 부실 시 Clova text 결정론적 파서 → positional → LLM 폴백 순.
     const deterministicDrugs = parseDrugsFromClovaText(clovaText);
 
-    if (deterministicDrugs.length >= 3) {
+    if (visionDrugs.length >= 3) {
+      pipeline.mergeUsed = "vision-preferred";
+      merged = visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 90) }));
+    } else if (deterministicDrugs.length >= 3) {
       pipeline.mergeUsed = "clova-deterministic-fallback";
       merged = deterministicDrugs;
     } else if (preferVision) {
@@ -2057,22 +2055,30 @@ async function callGeminiVision(
 - 인접 행의 숫자가 같은 행처럼 보일 때 약품명이 어느 라인에 있는지 다시 확인하세요.
 
 # 출력 필드
-- insuranceCode: **9자리 숫자**인 경우만 채움. EMR 내부 약품코드(예: mosapit, ultra5,
-  처방코드 103/219+/223* 같은 짧은 숫자)는 9자리가 아니면 빈 문자열로 두세요.
-- productName: 정확한 제품명 (예: "모사피트정5밀리그람", "로수듀오정(rosuva/ezt10/10)").
-  약품명/제품명/처방명칭 컬럼 사용. 제약사명은 productName 끝에서 제거.
-- companyName: 제약회사명 ("(주)" 표기는 유지해도 됨, 단 이름 끝의 (주)는 제거)
-- quantity: **반드시 "사용량"·"총사용량"·"총투여량"·"수량" 컬럼의 값**.
-  ⚠️ 절대 단가/금액/총액/환자수가 아님. 헤더에 "단가"라고 적힌 컬럼은 단위가격이지
-  수량이 아닙니다. 헤더에 "환자수"는 환자 명수이지 약품 수량이 아닙니다.
-  표 헤더 예시: [처방코드 / 처방명칭 / 환자수 / 단가 / 사용량 / 총액] →
-  수량 = 사용량 컬럼 값. 단가(118)·환자수(36)·총액(70446)을 절대 수량으로 쓰지 마세요.
-- confidence: 이 행 인식 확신도 0~100 (제품명·수량·제약사 모두 명확하면 90+,
-  제품명만 명확하면 70~85, 일부 결손 50~70)
+- insuranceCode: 한국 표준 EDI 9자리 보험코드(요양급여비용 청구코드).
+  1) 표 안에 9자리 숫자가 있으면 그걸 사용.
+  2) **표에 없어도 제품명을 정확히 알면 표준 EDI 9자리 코드를 출력**.
+     예: 아라펜정 → 658600100, 가바로닌캡슐100mg → 656001220,
+         디오디핀정5/80mg → 656004010, 록사펜정60mg → 656000260,
+         암로베틴정5mg → 656003690, 카디렌정25mg → 657303150,
+         도리스캡슐300mg → 654300440, 클로피렌정75mg → 647302700.
+  3) EMR 내부 코드 (mosapit, 103, 219+, 223* 같은 짧은 숫자) 는 9자리가 아니므로 빈 문자열.
+  4) 모르거나 확신 없으면 빈 문자열. **추측·환각 금지**.
+- productName: 정확한 제품명. OCR 오타가 의심되면 일반 약품명으로 자연스럽게 정정
+  (예: "양로베틴" → "암로베틴", "아라젠" → "아라펜"). 제약사명은 productName 끝에서 제거.
+- companyName: 제약회사명 (셀트리온제약, 알리코제약, 한국메디카, HLB제약 등).
+- quantity: **반드시 "사용량"·"총사용량"·"총투여량"·"수량"·"조제량" 컬럼의 값**.
+  ⚠️ 절대 단가/금액/총액/환자수 컬럼 값이 아님. 헤더에 "단가"는 단위가격, "환자수"는
+  환자 명수. 표 헤더 예시: [처방코드 / 처방명칭 / 환자수 / 단가 / 사용량 / 총액] →
+  수량 = 사용량 컬럼. 단가·환자수·총액을 절대 수량으로 쓰지 마세요.
+- confidence: 약품명·수량·제약사·보험코드 모두 명확 = 95+. 보험코드만 모름 = 80.
+  약품명 오타 심함 또는 행 깨짐 = 50~70.
 
 # 중요
-- **보험코드가 없어도 제품명이 명확하면 반드시 추출**하세요 (confidence 70+).
-- 한 약품의 여러 행은 각각 별도로 추출하세요 (예: 같은 약을 여러 환자에게 처방한 경우).
+- **합계행/메타행 절대 출력 X** — "NH팜", "비급여", "총계", "소계", 거래처명/주소/전화번호
+  같이 약품명 칸이 비었거나 약품 아닌 라벨 라인은 결과에서 완전 제외.
+- **각 약품 행을 독립적으로 처리** — 한 행의 데이터를 다른 행과 합치지 말 것.
+- 같은 약품이 여러 행에 처방되면 각 행별로 별도 추출.
 
 JSON: { "drugs": [ { "insuranceCode": "", "productName": "", "companyName": "", "quantity": "", "confidence": 0 } ] }${clientContextHint(clientContext)}`;
 
