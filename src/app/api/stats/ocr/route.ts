@@ -370,7 +370,17 @@ export async function POST(req: NextRequest) {
     const visionMatchesCodeCount = clovaCode9Count > 0 && visionRowCount === clovaCode9Count;
     const preferVision = visionDrugs.length >= 3 && (clovaCode9Count === 0 || visionMatchesCodeCount);
 
-    if (preferVision) {
+    // ── 분기 최우선: Clova text 줄 단위 결정론적 파서 ───────────────────────
+    // 종이/스크린샷 사진의 정상 케이스에선 Clova OCR 이 표를 줄 단위로 깨끗하게 잡아
+    // 헤더 + 토큰 매핑만으로 100% 정확 추출 가능. LLM/positional 둘 다 우회 →
+    // 합계행 환각, 행 밀림, 환자수→quantity 매핑 같은 회귀가 원천 발생 불가.
+    // 헤더 인식 실패 시 (모니터 사진처럼 raw 깨진 케이스) 빈 결과 → 아래 분기로 폴백.
+    const deterministicDrugs = parseDrugsFromClovaText(clovaText);
+
+    if (deterministicDrugs.length >= 3) {
+      pipeline.mergeUsed = "clova-deterministic-fallback";
+      merged = deterministicDrugs;
+    } else if (preferVision) {
       pipeline.mergeUsed = "vision-preferred";
       merged = visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 90) }));
     } else if (positionalDrugs.length >= 3) {
@@ -422,28 +432,18 @@ export async function POST(req: NextRequest) {
         pipeline.mergeUsed = "skipped (vision-only)";
         merged = visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 95) }));
       } else {
-        // 1차 시도: Clova text 줄 단위 결정론적 파싱 (LLM 우회).
-        //   Clova 가 표를 줄 단위로 깨끗하게 분리한 경우 (대부분의 종이/스크린샷) 헤더
-        //   + 토큰 매핑만으로 정확 추출 가능. LLM 환각 (합계행을 약품으로 매핑, 행 밀림,
-        //   환자수→quantity) 원천 차단.
-        const deterministicDrugs = parseDrugsFromClovaText(clovaText);
-        if (deterministicDrugs.length >= 3) {
-          pipeline.mergeUsed = "clova-deterministic-fallback";
-          merged = deterministicDrugs;
-        } else {
-          // 2차 폴백: LLM 병합. Clova 행 클러스터링이 깨져 헤더 매칭 실패한 케이스만.
-          pipeline.mergeUsed = visionDrugs.length === 0 ? "clova-only" : "vision+clova";
-          try {
-            merged = await callGeminiMerge({
-              clovaText,
-              geminiDraft,
-              masterCandidates: [],
-              clientContext: [],
-            });
-          } catch (e) {
-            pipeline.mergeError = String(e).slice(0, 200);
-            merged = visionDrugs;
-          }
+        // 최종 폴백: LLM 병합. 결정론적 파서·positional·vision-only 다 실패한 케이스만.
+        pipeline.mergeUsed = visionDrugs.length === 0 ? "clova-only" : "vision+clova";
+        try {
+          merged = await callGeminiMerge({
+            clovaText,
+            geminiDraft,
+            masterCandidates: [],
+            clientContext: [],
+          });
+        } catch (e) {
+          pipeline.mergeError = String(e).slice(0, 200);
+          merged = visionDrugs;
         }
       }
     }
