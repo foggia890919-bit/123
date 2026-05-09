@@ -206,12 +206,19 @@ export async function POST(req: NextRequest) {
     // 동일 거래처가 EMR 두 개 (예: 모니터 사진 + 종이 사진) 를 섞어 올리는 케이스에서
     // 잘못된 ColumnTemplate 캐시 적용을 막기 위해 OCR 본 작업 전에 vendor 라벨부터 붙인다.
     const docaiConfigured = isDocumentAiConfigured();
-    const [clovaOut, geminiOut, docaiOut, classifierOut] = await Promise.allSettled([
+    // Vision LLM (Gemini Vision) 이미지 호출 폐지 — 이미지 기반 LLM 분석은 비결정적이고
+    // 환각이 본질적 (사용자 진단: 정장생캡슐 1369→10101, 네시나메트정 환각, 환자수→
+    // quantity 매핑 오류 등 사진마다 다른 회귀). Clova OCR 의 정확한 한글 텍스트만으로
+    // callGeminiMerge 가 헤더 인식 + 행 라벨링하도록 단일화. (사용자 정책: 단순화)
+    const [clovaOut, docaiOut, classifierOut] = await Promise.allSettled([
       callClovaOcr(base64, ext),
-      callGeminiVision(base64, mimeType, clientContext),
       docaiConfigured ? callDocumentAi(base64, mimeType) : Promise.reject(new Error("not configured")),
       classifyVendor(base64, mimeType),
     ]);
+    const geminiOut: PromiseSettledResult<GeminiVisionResult> = {
+      status: "fulfilled",
+      value: { drugs: [] },
+    };
 
     const classifierResult: VendorClassification =
       classifierOut.status === "fulfilled"
@@ -417,15 +424,14 @@ export async function POST(req: NextRequest) {
       } else {
         pipeline.mergeUsed = visionDrugs.length === 0 ? "clova-only" : "vision+clova";
         try {
+          // masterCandidates / clientContext prompt 입력 제거 — LLM 이 후보 약품을
+          // 실제 표에 없는 행에 환각 매핑하는 회귀 차단. Clova text 만으로 추출하고
+          // 마스터 매칭은 후처리 (matchMedication strict startsWith) 에서.
           merged = await callGeminiMerge({
             clovaText,
             geminiDraft,
-            masterCandidates: Array.from(masterByCode.values()).map((m) => ({
-              insuranceCode: m.insuranceCode,
-              productName: m.productName,
-              companyName: m.companyName,
-            })),
-            clientContext,
+            masterCandidates: [],
+            clientContext: [],
           });
         } catch (e) {
           pipeline.mergeError = String(e).slice(0, 200);
@@ -2026,35 +2032,40 @@ async function callGeminiMerge(args: {
   }
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-  const prompt = `당신은 한국 EMR의 처방통계 표를 OCR 결과로부터 재구성하는 전문가입니다.
+  const prompt = `당신은 한국 EMR의 처방통계 표를 Clova OCR 텍스트로부터 재구성하는 전문가입니다.
 
-# 입력 1: Clova OCR 라인 단위 텍스트 (가장 신뢰할 수 있는 raw 데이터)
+# 입력: Clova OCR 라인 단위 텍스트
 ${args.clovaText || "(없음)"}
 
-# 입력 2: Gemini Vision 의 1차 구조화 결과
-${args.geminiDraft && args.geminiDraft.drugs.length ? JSON.stringify(args.geminiDraft.drugs, null, 2) : "(비어있음 — Clova 텍스트를 기반으로 직접 추출하세요)"}
+# 작업 순서 (반드시 이 순서로)
+1) **헤더 행 식별**: 표의 첫 줄(또는 위쪽 줄) 에서 컬럼 헤더를 찾는다.
+   가능한 헤더 키워드: 약품코드 / 처방코드 / 보험코드 / 청구코드 / 약품명 / 처방명칭 /
+   제품명 / 환자수 / 단가 / 약가 / 사용량 / 총사용량 / 총투여량 / 수량 / 조제량 /
+   금액 / 총액 / 송금액 / 일수 / 매수.
+   헤더 줄에 있는 토큰 순서대로 컬럼 구조를 결정한다.
+2) **각 데이터 행 라벨링**: 헤더에서 결정한 컬럼 순서대로 각 데이터 행의 토큰을 매핑.
+   예: 헤더가 [처방코드 처방명칭 환자수 단가 사용량 총액] 이면
+       "104 가바로닌캡슐(gabapentin100mg)알리코 13 198 118.00 23364" 의
+       처방코드=104, 처방명칭="가바로닌캡슐(gabapentin100mg)알리코", 환자수=13,
+       단가=198, **사용량=118.00**, 총액=23364.
+3) **출력 필드 매핑**:
+   - insuranceCode: 9자리 숫자 보험/약품코드만. 처방코드(103, 205, 219+ 등 짧은 숫자)는
+     insuranceCode 가 아니므로 **빈 문자열**.
+   - productName: 약품명/처방명칭/제품명 컬럼 값 (한글+영문 혼합 그대로).
+   - companyName: 약품명 끝의 제약사명 (있으면).
+   - **quantity: 반드시 헤더의 "사용량/총사용량/총투여량/수량/조제량" 컬럼 값.**
+     ⚠️ 절대 환자수/단가/약가/금액/총액 컬럼 값을 quantity 로 쓰지 말 것.
+4) 헤더, 합계행, 검색기간, 내원구분, EMR 명/주소/전화번호 같은 메타 라인은 제외.
 
-# 입력 3: 마스터 DB 후보 (Clova 가 뽑은 9자리 보험코드로 사전 조회)
-${args.masterCandidates.length ? JSON.stringify(args.masterCandidates, null, 2) : "(없음)"}
+# 출력
+JSON 만:
+{
+  "drugs": [
+    { "insuranceCode": "", "productName": "", "companyName": "", "quantity": "", "confidence": 0 }
+  ]
+}
 
-# 작업
-1. Clova 텍스트에서 약품 행들을 식별. 헤더 라인(약품코드/약품명/총투여량/단가/송금액 등)을
-   먼저 찾아 컬럼 구조를 추론.
-2. Vision 결과가 비어있으면 Clova 텍스트만으로 약품 리스트 추출.
-3. 양쪽 모두 있으면 일치 항목은 신뢰도↑, 불일치는 Clova를 우선.
-4. 마스터 DB 후보에 매칭되는 행이 있으면 정확한 productName/companyName 으로 보정.
-
-# 규칙
-- 9자리 숫자가 아닌 EMR 내부 코드(mosapit, ultra5 등)는 insuranceCode 에 넣지 말고
-  빈 문자열로 두기.
-- 보험코드 없어도 제품명 명확하면 추출 (confidence 70+).
-- 헤더, 합계, 검색기간, 내원구분 같은 메타 라인은 제외.
-- quantity 는 **사용량·총사용량·총투여량·수량 컬럼의 숫자만**. 단가/환자수/총액
-  컬럼 값은 절대 수량이 아니다. 표 헤더가 [처방코드/처방명칭/환자수/단가/사용량/총액]
-  이면 사용량 컬럼만 사용.
-- confidence: 양쪽 OCR 일치 90+, 한쪽만 70~85, 마스터 매칭 시 95+.
-
-JSON: { "drugs": [ { "insuranceCode": "", "productName": "", "companyName": "", "quantity": "", "confidence": 0 } ] }${clientContextHint(args.clientContext)}`;
+confidence: 헤더 식별 명확 + 행 매핑 명확 = 90+. 헤더 일부 누락 또는 행 깨짐 = 60~80.`;
 
   try {
     const response = await ai.models.generateContent({
