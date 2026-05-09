@@ -104,6 +104,17 @@ export interface PipelineDiagnostics {
   // 마스터 매칭 실패한 drug 들의 (이름, 단가) 샘플 — 마스터 DB 에 약품이 없는지 vs
   // 매칭 로직 버그인지 사용자가 빨리 판단할 수 있게.
   masterUnmatchedSamples: Array<{ productName: string; unitPriceHint: number | null }>;
+  // Vision · Positional 교차 검증 (clova-positional 경로 한정).
+  // OCR 행이 깨진 모니터 사진에서 positional 의 행 매칭이 어긋나 quantity 가 인접 행
+  // cell 로 잘못 잡히는 경우, Vision LLM 의 약품 단위 추출 결과와 비교해 의심 행을
+  // 자동 표시한다. positional 만 신뢰했을 때 놓치던 회귀 행을 드러내는 안전망.
+  crossValidation: Array<{
+    insuranceCode: string;
+    productName: string;
+    positionalQuantity: string;
+    visionQuantity: string;
+    match: boolean;        // quantity 일치 여부
+  }>;
   // Google Document AI (Form Parser) 결과 — Clova/Gemini 와 비교용. 1단계 통합:
   // 결과만 노출, 실제 약품 추출은 기존 Clova/Gemini 파이프라인 그대로 사용.
   // 다음 PR 에서 Document AI 가 더 정확하면 primary 로 승격 검토.
@@ -260,6 +271,7 @@ export async function POST(req: NextRequest) {
       masterMatchedCount: 0,
       masterUnmatchedCount: 0,
       masterUnmatchedSamples: [],
+      crossValidation: [],
       dedupedCount: 0,
       finalCount: 0,
       drugCandidates: [],
@@ -340,6 +352,65 @@ export async function POST(req: NextRequest) {
       }
     }
     pipeline.mergeDrugCount = merged.length;
+
+    // ── Vision · Positional 교차 검증 (clova-positional 한정) ───────────────
+    // positional 이 OCR 행 깨짐 (모니터 사진처럼 같은 행이 두 줄로 분할되는 케이스) 을
+    // 그대로 받는 한계 보정. Vision 은 LLM 이 약품 단위로 묶어 추출하므로,
+    // 같은 보험코드의 quantity multi-set 이 두 결과에서 다르면 positional 의 행 매칭
+    // 오류 가능성이 높다.
+    //
+    // 동작:
+    //   1) 보험코드별로 positional quantities · vision quantities multi-set 수집
+    //   2) 정렬 후 비교. 한쪽이라도 비어있으면 비교 skip (한 소스만 본 약품)
+    //   3) 다르면 진단에 양쪽 값 노출 + 해당 코드의 모든 positional drug confidence 60
+    //      으로 낮춤 → 후속 단계에서 manualCheck=true (<95) 자동 트리거
+    //   4) 사용자는 검수 화면에서 빨갛게 표시된 행만 1초씩 확인하면 됨
+    if (pipeline.mergeUsed === "clova-positional" && visionDrugs.length > 0) {
+      const posByCode = new Map<string, string[]>();
+      const productByCode = new Map<string, string>();
+      for (const m of merged) {
+        const code = m.insuranceCode.replace(/\D/g, "");
+        if (code.length !== 9) continue;
+        const qty = (m.quantity || "").replace(/[^\d.]/g, "");
+        if (!qty) continue;
+        const arr = posByCode.get(code) ?? [];
+        arr.push(qty);
+        posByCode.set(code, arr);
+        if (!productByCode.has(code)) productByCode.set(code, m.productName);
+      }
+      const visByCode = new Map<string, string[]>();
+      for (const v of visionDrugs) {
+        const code = v.insuranceCode.replace(/\D/g, "");
+        if (code.length !== 9) continue;
+        const qty = (v.quantity || "").replace(/[^\d.]/g, "");
+        if (!qty) continue;
+        const arr = visByCode.get(code) ?? [];
+        arr.push(qty);
+        visByCode.set(code, arr);
+      }
+      const allCodes = new Set([...posByCode.keys(), ...visByCode.keys()]);
+      for (const code of allCodes) {
+        const pos = (posByCode.get(code) ?? []).slice().sort();
+        const vis = (visByCode.get(code) ?? []).slice().sort();
+        if (pos.length === 0 || vis.length === 0) continue;
+        const match = pos.length === vis.length && pos.every((q, i) => q === vis[i]);
+        pipeline.crossValidation.push({
+          insuranceCode: code,
+          productName: productByCode.get(code) ?? "",
+          positionalQuantity: pos.join(", "),
+          visionQuantity: vis.join(", "),
+          match,
+        });
+        if (!match) {
+          for (let i = 0; i < merged.length; i++) {
+            const c = merged[i].insuranceCode.replace(/\D/g, "");
+            if (c === code) {
+              merged[i] = { ...merged[i], confidence: Math.min(merged[i].confidence, 60) };
+            }
+          }
+        }
+      }
+    }
 
     // ── Phantom 행 교차 검증 (vision-only / vision+clova / clova-only path 한정) ─
     // Clova positional 은 PR #70 의 phantom Y-tolerance dedupe 를 거쳐 같은 행
