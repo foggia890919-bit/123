@@ -611,20 +611,23 @@ export async function POST(req: NextRequest) {
       //    (사용자 진단: positional 단계에선 505·30 정확히 추출 / 최종 결과는 둘 다
       //     1985·33 으로 통일 — 덮어쓰기 단계에서 망가짐.)
       //
-      //    skipped (vision-only) 모드도 같은 이유로 skip — 약국 EMR (PHARM IT3000) 모니터
-      //    사진처럼 Clova 행 클러스터링이 깨진 상태에선 colMap 자체가 잘못 잡혀 Vision
-      //    의 정확한 quantity 가 엉뚱한 숫자로 덮어씌워짐 (사용자 진단: Vision raw
+      //    skipped (vision-only) + 모니터 촬영 조합도 skip — 약국 EMR (PHARM IT3000)
+      //    모니터 사진처럼 Clova 행 클러스터링이 깨진 상태에선 colMap 자체가 잘못 잡혀
+      //    Vision 의 정확한 quantity 가 엉뚱한 숫자로 덮어씌워짐 (사용자 진단: Vision raw
       //     정장생캡슐 quantity=1369 / 화면 결과 10101 — vision-only 단락 후 이 단계에서
-      //     덮어써진 것). vision raw 결과를 그대로 채택한 모든 모드는 이 보정을 우회.
+      //     덮어써진 것).
+      //    종이/스크린샷 사진의 vision-only 는 colMap 이 정상이라 보정 적용 — Vision LLM
+      //    이 환자수 컬럼을 quantity 로 잘못 가져오는 비결정적 환각을 colMap.quantity X
+      //    로 자동 정정 (사용자 진단: 남연호내과 종이 사진에서 사용량 대신 환자수 출력).
       //
-      //    occurrenceIndex: 위 세 모드 모두 skip 이라 더 이상 호출되지 않지만, LLM 병합
-      //    경로(vision+clova / clova-only) 에서 같은 약품 여러 번 처방 케이스 보호용으로 유지.
+      //    occurrenceIndex: LLM 병합 경로(vision+clova / clova-only) 와 종이 vision-only
+      //    에서 같은 약품 여러 번 처방 케이스 보호용으로 유지.
       .map((m) => {
         if (
           !colMap
           || pipeline.mergeUsed === "vision-preferred"
           || pipeline.mergeUsed === "clova-positional"
-          || pipeline.mergeUsed === "skipped (vision-only)"
+          || (pipeline.mergeUsed === "skipped (vision-only)" && classifierResult.captureType === "monitor")
         ) return m;
         const parsed = parseDrugName(m.productName);
         const occKey = `${parsed.korean.replace(/\s+/g, "").toLowerCase()}|${parsed.dose.replace(/\s+/g, "").toLowerCase()}`;
