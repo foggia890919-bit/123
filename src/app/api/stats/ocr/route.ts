@@ -1370,42 +1370,57 @@ function parseDrugsFromClovaText(clovaText: string): MergedDrug[] {
   const productNameIdx = headerCols.indexOf("productName");
   const quantityIdx = headerCols.indexOf("quantity");
   const codeIdx = headerCols.indexOf("code");
-  // productName 뒤 컬럼 갯수 (quantity, total 등). 데이터 줄 끝에서 이 개수만큼이 후행 토큰.
-  const tailLen = headerCols.length - productNameIdx - 1;
-  if (tailLen < 1) return [];
-  // tailTokens 안에서 quantity 의 인덱스
+  // quantity 가 productName 뒤 몇 번째 숫자 토큰인지 (헤더 인덱스 기준).
   const qInTail = quantityIdx - productNameIdx - 1;
-  if (qInTail < 0 || qInTail >= tailLen) return [];
+  if (qInTail < 0) return [];
 
   const drugs: MergedDrug[] = [];
   for (let i = headerIdx + 1; i < lines.length; i++) {
     const line = lines[i];
-    const tokens = line.split(/\s+/);
-    if (tokens.length < headerCols.length) continue; // 합계행 / 메타행 (토큰 부족)
+    const allTokens = line.split(/\s+/);
+    if (allTokens.length < 3) continue;
 
-    const tailTokens = tokens.slice(-tailLen);
-    const headTokens = tokens.slice(0, tokens.length - tailLen);
-    // headTokens 의 첫 토큰 = code (헤더에 code 컬럼 있고 그게 productName 앞이면)
-    const hasCodeBeforeName = codeIdx >= 0 && codeIdx < productNameIdx;
-    const code = hasCodeBeforeName && headTokens.length > 1 ? headTokens[0] : "";
-    const productNameTokens = hasCodeBeforeName ? headTokens.slice(1) : headTokens;
+    // 토큰 슬라이싱 (tail/head) 은 약품명 안에 공백이 있거나 처방코드 특수문자가 토큰
+    // 갯수를 변동시키면 매핑이 어긋나 환자수·단가가 productName 에 끼어들던 회귀 발생.
+    // → "첫 순수 숫자 토큰 직전까지가 productName" 로직으로 변경 (토큰 갯수에 robust).
+    //
+    // 1) 처방코드 토큰 skip — 첫 토큰이 짧은 숫자(+,-,*,. 포함) 면 처방코드.
+    let nameStartIdx = 0;
+    if (
+      codeIdx >= 0 && codeIdx < productNameIdx &&
+      /^\d[\d.+\-*]*$/.test(allTokens[0]) && allTokens[0].length <= 7
+    ) {
+      nameStartIdx = 1;
+    }
+    // 2) productName 끝 = 첫 "순수 숫자 토큰" (환자수·단가·사용량·총액의 시작).
+    //    "5mg)알리코" 같이 숫자로 시작하지만 한글/영문 섞인 토큰은 약품명 일부.
+    let nameEndIdx = allTokens.length;
+    for (let j = nameStartIdx; j < allTokens.length; j++) {
+      if (/^\d[\d,.]*$/.test(allTokens[j])) {
+        nameEndIdx = j;
+        break;
+      }
+    }
+    const productNameTokens = allTokens.slice(nameStartIdx, nameEndIdx);
     const productName = productNameTokens.join("").trim();
     if (!isLikelyDrug(productName)) continue;
 
-    const quantityRaw = tailTokens[qInTail].replace(/[^\d.]/g, "");
+    // 3) quantity = productName 뒤의 qInTail 번째 숫자 토큰.
+    const numericTokens = allTokens.slice(nameEndIdx);
+    if (qInTail >= numericTokens.length) continue;
+    const quantityRaw = numericTokens[qInTail].replace(/[^\d.]/g, "");
     if (!quantityRaw) continue;
 
-    // 9자리 보험코드 — 줄 어디든 들어있으면 우선 사용. 처방코드(짧은 숫자)는 insuranceCode
-    // 가 아니므로 9자리만 채움.
+    // 9자리 보험코드 — 줄 어디든 들어있으면 사용. 처방코드(짧은 숫자) 는 insuranceCode 아님.
     const codeMatch = line.match(/\b(\d{9})\b/);
-    const insuranceCode = codeMatch ? codeMatch[1] : (/^\d{9}$/.test(code) ? code : "");
+    const insuranceCode = codeMatch ? codeMatch[1] : "";
 
     drugs.push({
       insuranceCode,
       productName,
       companyName: "",
       quantity: quantityRaw,
-      confidence: 90, // 결정론적 추출 — LLM 보다 신뢰도 높게 잡음
+      confidence: 90,
     });
   }
   return drugs;
