@@ -373,10 +373,15 @@ export async function POST(req: NextRequest) {
     // 행별 교차 검증으로 최종 약품 리스트 결정. 분기 단일화 — Vision 단독/positional/
     // 결정론적 파서로 분기하지 않음. LLM 한 번에 모든 신호 (Clova + Vision + master 후보)
     // 보고 결정해야 행 누락·합계행 환각·dose 변형 매칭 오류 모두 차단.
+    // Clova text 결정론적 파서로 1차 추출 → callGeminiMerge 의 두 번째 입력으로 전달.
+    // Pro 모델이 사진 직접 분석 (Vision 역할) 후 결정론적 파서 결과와 행별 비교 → 일치
+    // 여부로 confidence 부여 (사용자 정책: 두 엔진 일치 = 95+, 불일치 = 60 검토 필요).
+    const clovaDeterministic = parseDrugsFromClovaText(clovaText);
     pipeline.mergeUsed = "vision+clova";
     try {
       merged = await callGeminiMerge({
         clovaText,
+        clovaDeterministic,
         imageBase64: base64,
         imageMimeType: mimeType,
         masterCandidates: Array.from(masterByCode.values()).map((m) => ({
@@ -387,7 +392,7 @@ export async function POST(req: NextRequest) {
       });
     } catch (e) {
       pipeline.mergeError = String(e).slice(0, 200);
-      merged = [];
+      merged = clovaDeterministic;
     }
     pipeline.mergeDrugCount = merged.length;
 
@@ -2069,6 +2074,7 @@ interface MergedDrug {
 
 async function callGeminiMerge(args: {
   clovaText: string;
+  clovaDeterministic: MergedDrug[];
   imageBase64: string;
   imageMimeType: string;
   masterCandidates: Array<{ insuranceCode: string | null; productName: string; companyName: string }>;
@@ -2077,37 +2083,47 @@ async function callGeminiMerge(args: {
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
   const prompt = `당신은 한국 EMR 처방통계 표를 분석하는 전문가입니다. 약사가 직접 보고
-입력하던 작업을 자동화하는 게 목적입니다. 사진 + Clova OCR 텍스트를 교차로 보고 최종
-약품 리스트를 만드세요.
+입력하던 작업을 자동화하는 게 목적입니다. **두 가지 OCR 결과를 행 단위로 비교 검증**해서
+일치 여부에 따라 confidence 를 부여하세요.
 
-# 입력 1: 사진 (이미지 직접 분석 — 표 헤더/컬럼 위치 인식)
+# 입력 1: 사진 (Gemini Vision — 이미지 직접 분석. 당신이 직접 추출)
+당신이 사진의 표를 읽어서 [productName, quantity, insuranceCode, companyName] 추출.
 
-# 입력 2: Clova OCR 텍스트 (한국어 OCR — 줄/공백 클러스터링 신뢰도 높음)
+# 입력 2: Clova OCR 결정론적 파서 결과 (Clova 텍스트만 줄 단위로 split + 헤더 매핑)
+${args.clovaDeterministic.length ? JSON.stringify(args.clovaDeterministic, null, 2) : "(비어있음)"}
+
+# 입력 3: Clova OCR 원본 텍스트 (raw)
 ${args.clovaText || "(없음)"}
 
-# 입력 3: 마스터 DB 후보 (Clova 가 뽑은 9자리 보험코드로 사전 조회 — 정확한 productName 보정용)
+# 입력 4: 마스터 DB 후보 (Clova 9자리 보험코드 사전 조회 — 정확한 productName 보정용)
 ${args.masterCandidates.length ? JSON.stringify(args.masterCandidates, null, 2) : "(없음)"}
 
 # 작업 (반드시 이 순서)
-1) **헤더 식별**: 사진과 Clova text 둘 다 보고 헤더 줄을 찾아 컬럼 순서 결정
-   (예: 처방코드 / 처방명칭 / 환자수 / 단가 / 사용량 / 총액).
-2) **Clova text 의 데이터 줄을 1행씩 순번 매김**. 각 줄을 공백으로 split → 헤더 컬럼
-   순서대로 토큰 매핑. 토큰 갯수가 헤더보다 적은 줄 (NH팜 합계, 거래처명, 주소, 전화번호 등)
-   은 **제외**.
-3) **사진의 같은 행과 교차 검증**. 두 결과가 다르면 다음 우선순위로 결정:
-   - **insuranceCode**: Clova text 안 9자리 숫자 우선. 없으면 사진의 9자리. 둘 다 없으면
-     마스터 후보 정확 매칭 또는 표준 EDI 9자리 지식으로 매핑 (확신 없으면 빈칸).
-   - **quantity**: Clova text 의 "사용량/총사용량/총투여량/수량/조제량" 컬럼 값을
-     **반드시 우선**. 사진에서 환자수/단가를 잘못 가져왔을 수 있으니 Clova 에서 한 번 더 확인.
-     절대 환자수/단가/약가/금액/총액 값을 quantity 로 쓰지 마세요.
-   - **productName**: 두 입력 합쳐 가장 명확한 형태. OCR 오타는 자연스럽게 정정
+1) **사진에서 직접 약품 행 추출** (Gemini Vision 의 일). 표 헤더 인식 → 각 행 [productName,
+   quantity, insuranceCode, companyName] 매핑. 합계행/메타행 (NH팜, 비급여, 거래처명, 주소,
+   전화번호 등) 제외. 같은 약품 다른 dose (10/10, 20/10, 5/10) 별도 행 유지.
+
+2) **입력 2 (Clova 결정론적 파서) 와 행별 비교**. 두 결과의 같은 약품인지 매칭:
+   - 약품명 한글 prefix 일치 (3글자 이상)
+   - 또는 보험코드 9자리 일치
+   순서가 어긋나면 약품명으로 매칭.
+
+3) **각 행 confidence 부여 (사용자 정책: 두 엔진 일치 = 통과, 불일치 = 검토 필요)**:
+   - **두 결과의 productName 한글 prefix + quantity 모두 일치** → confidence **95+**
+   - productName 일치 / quantity 다름 (또는 그 반대) → confidence **60** (검토 필요)
+   - 한쪽 결과만 있고 다른 쪽 누락 → confidence **70** (검수에서 사용자 확인)
+   - 두 결과 다 다름 → confidence **40** (검토 필요)
+
+4) **출력 우선순위 (불일치 시 어느 값 채택)**:
+   - **quantity**: Clova text 의 "사용량/총사용량/총투여량/수량/조제량" 컬럼 값 **반드시 우선**.
+     사진에서 환자수/단가/금액 잘못 가져왔을 수 있음.
+   - **insuranceCode**: 9자리 숫자가 Clova text 또는 사진 어디라도 있으면 그걸 사용.
+     둘 다 없으면 마스터 후보의 정확 productName 매칭으로 채움. 모르면 빈 문자열 (추측 금지).
+   - **productName**: 두 결과 합쳐 가장 명확한 형태. OCR 오타는 표준 약품명으로 정정
      (예: "양로베틴" → "암로베틴", "아라젠" → "아라펜").
    - **companyName**: 제약사명 (셀트리온제약, 알리코제약, HLB제약 등).
-4) **합계행/메타행 절대 출력 X**: 약품명이 약품 아닌 라벨 (NH팜, 비급여, 총계, 거래처명,
-   주소, 전화번호) 인 행은 결과에서 완전 제외.
-5) **행 독립 처리**: 한 줄의 데이터를 다른 줄과 절대 합치지 말 것. 같은 약품 다른 dose
-   (10/10, 20/10, 5/10) 는 별도 행으로 유지 — 같은 보험코드로 합치지 말 것.
-6) **마스터 후보 활용**: 입력 3 의 후보는 Clova 9자리 보험코드와 정확 매칭된 약품들.
+
+5) **마스터 후보 활용**: 입력 4 의 후보는 Clova 9자리 보험코드와 정확 매칭된 약품들.
    해당 코드 행의 productName/companyName 보정에만 사용. 후보 약품을 표에 없는 행에
    환각으로 추가 X.
 
@@ -2119,7 +2135,7 @@ JSON 만:
   ]
 }
 
-confidence: 사진 + Clova 둘 다 명확 일치 = 95+. 한쪽만 명확 = 80. 행 깨짐 = 50~70.`;
+confidence 는 위 3) 의 정책 그대로 적용. 사용자가 confidence < 95 인 행을 검수 빨강으로 봄.`;
 
   try {
     const response = await ai.models.generateContent({
