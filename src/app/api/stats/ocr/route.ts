@@ -1074,12 +1074,44 @@ function extractDrugsPositionalWithDebug(rows: ClovaRow[], colMap: ColumnMap | n
     const unitPrice = unitPriceMatch.value;
     const quantity = quantityMatch.value;
 
-    // 9자리 보험코드: 같은 행 띠 안에서 검색
+    // 9자리 보험코드: 같은 행 띠 안에서 anchor 라인에 가장 가까운 코드 픽.
+    //
+    // 이전엔 첫 매칭에서 break 로 종료했는데, anchor band 가 slope/yMargin/polygon 폭
+    // 으로 인접 위쪽 행 까지 약간 포함되는 케이스에서 위 행 코드가 먼저 매칭되어
+    // 한 행 밀린 매핑이 발생함 (사용자 진단 데이터로 확인:
+    //   raw "2al 698502460 엑스페라정5/160mg" → positional 결과 code=698502470 잘못 잡음
+    //   raw "2al+ 654005510 세바코..."         → positional 결과 code=698502460 잘못 잡음
+    //   raw "3a 657308420 아발탄...5/80"       → positional 결과 code=658106760 잘못 잡음
+    //   raw "3al 657308430 아발탄...5/160"     → positional 결과 code=657308420 잘못 잡음
+    //  — 모두 한 행 위 코드를 잡는 일관된 패턴).
+    //
+    // 변경: anchor 의 실제 Y 라인 (slope 적용한 expected Y) 에서 거리가 가장 가까운
+    // 9자리 코드를 픽. 보험코드 컬럼 X (colMap.insuranceCode) 가 알려진 경우 X 거리도
+    // 보조 점수로 사용.
     let insuranceCode = "";
+    let bestCodeScore = Infinity;
     for (const f of allFields) {
       if (!inAnchorBand(f)) continue;
       const m = f.inferText.match(/\b(\d{9})\b/);
-      if (m) { insuranceCode = m[1]; break; }
+      if (!m) continue;
+      const fx = fieldXCenter(f);
+      const fy = fieldYCenter(f);
+      // 보험코드 컬럼 X 가 있으면 X 거리 100px 초과는 다른 컬럼 (drop)
+      if (colMap.insuranceCode != null && Math.abs(fx - colMap.insuranceCode) > 100) continue;
+      // anchor 라인의 expected Y 와 의 거리 (slope 적용)
+      let yDist = 0;
+      if (anchorBand) {
+        const dx = fx - anchorBand.anchorX;
+        const expectedCenterY = anchorBand.centerY + anchorBand.slope * dx;
+        yDist = Math.abs(fy - expectedCenterY);
+      }
+      const xDist = colMap.insuranceCode != null ? Math.abs(fx - colMap.insuranceCode) : 0;
+      // Y 거리 우선 + X 거리 보조 — 인접 행 코드는 Y 거리로 자기 행 코드보다 멀다
+      const score = yDist + xDist * 0.1;
+      if (score < bestCodeScore) {
+        insuranceCode = m[1];
+        bestCodeScore = score;
+      }
     }
 
     // 같은 클러스터의 다른 row 정보도 사용했을 수 있으니 row 변수 자체는 더 사용 안 함
