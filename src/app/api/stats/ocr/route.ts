@@ -2165,7 +2165,10 @@ confidence: 헤더 명확 + 행 매핑 명확 + 보험코드 확실 = 95+. 보�
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-lite",
+      // gemini-2.5-pro: flash-lite 대비 비용 12배지만 표 헤더↔컬럼 매핑 추론 정확도가
+      // 월등히 높음. Gemini 웹과 동일 모델로 환자수/사용량 헷갈림 같은 회귀 차단.
+      // (사용자 정책: 정확도 우선, 비용 절대값은 무리 없음)
+      model: "gemini-2.5-pro",
       contents: prompt,
       config: { responseMimeType: "application/json" },
     });
