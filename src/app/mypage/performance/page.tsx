@@ -165,7 +165,7 @@ export default function PerformancePage() {
             <span className="text-xs text-gray-400">{data.curMonthRows.length}건</span>
           </div>
           {data.curMonthRows.length === 0 ? (
-            <div className="px-5 py-8 text-center text-xs text-gray-400">거래가능 승인된 거래처가 없습니다</div>
+            <div className="px-5 py-8 text-center text-xs text-gray-400">등록된 거래처가 없습니다</div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

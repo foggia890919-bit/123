@@ -121,19 +121,20 @@ export async function GET(req: NextRequest) {
   // ADMIN / 상위법인은 거래처가 너무 많아 생략
   const curMonthRows: { hospitalName: string; companyName: string; submitted: boolean }[] = [];
   if (!isUpperCorp && session.role !== "ADMIN" && viewableIds) {
-    // 1. 거래가능코드(APPROVED) 전체 — userId 기준만 필터, bizNumber 교집합 조건 없음
-    const approvedFilters = await prisma.filterRequest.findMany({
-      where: { userId: { in: viewableIds }, status: "APPROVED" },
-      select: { bizNumber: true, clientName: true, companyName: true },
+    // 1. 등록된 거래처 전체 (출발점)
+    const userClients = await prisma.userClient.findMany({
+      where: { userId: { in: viewableIds }, approved: true },
+      select: { id: true, clientName: true, bizNumber: true },
     });
 
-    if (approvedFilters.length > 0) {
-      // 2. 해당 bizNumber를 가진 승인 거래처 조회 (제출 여부 확인용)
-      const bizNumbers = [...new Set(approvedFilters.map((f) => f.bizNumber).filter(Boolean))] as string[];
-      const userClients = bizNumbers.length > 0
-        ? await prisma.userClient.findMany({
-            where: { approved: true, bizNumber: { in: bizNumbers } },
-            select: { id: true, clientName: true, bizNumber: true },
+    if (userClients.length > 0) {
+      const bizNumbers = [...new Set(userClients.map((c) => c.bizNumber).filter(Boolean))] as string[];
+
+      // 2. 해당 거래처의 거래가능코드(APPROVED) — bizNumber 기준, userId 무관
+      const approvedFilters = bizNumbers.length > 0
+        ? await prisma.filterRequest.findMany({
+            where: { status: "APPROVED", bizNumber: { in: bizNumbers } },
+            select: { bizNumber: true, companyName: true },
           })
         : [];
 
@@ -143,18 +144,26 @@ export async function GET(req: NextRequest) {
         select: { clientId: true },
       });
       const submittedSet = new Set(curMonthReports.filter((r) => r.clientId).map((r) => r.clientId!));
-      const clientByBiz = new Map(userClients.map((c) => [c.bizNumber, c]));
 
-      // 거래처×제약사 조합 생성, 중복 제거
-      const seen = new Set<string>();
+      // bizNumber → APPROVED 제약사 목록
+      const companiesByBiz = new Map<string, string[]>();
       for (const f of approvedFilters) {
-        const client = f.bizNumber ? clientByBiz.get(f.bizNumber) : undefined;
-        const hospitalName = client?.clientName ?? f.clientName ?? "미입력";
-        const key = `${hospitalName}|||${f.companyName}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const submitted = client ? submittedSet.has(client.id) : false;
-        curMonthRows.push({ hospitalName, companyName: f.companyName ?? "-", submitted });
+        if (!f.bizNumber) continue;
+        if (!companiesByBiz.has(f.bizNumber)) companiesByBiz.set(f.bizNumber, []);
+        companiesByBiz.get(f.bizNumber)!.push(f.companyName ?? "-");
+      }
+
+      // 거래처별 행 생성: 거래가능코드 있으면 제약사별, 없으면 "-" 한 행
+      for (const client of userClients) {
+        const submitted = submittedSet.has(client.id);
+        const companies = client.bizNumber ? (companiesByBiz.get(client.bizNumber) ?? []) : [];
+        if (companies.length > 0) {
+          for (const company of companies) {
+            curMonthRows.push({ hospitalName: client.clientName, companyName: company, submitted });
+          }
+        } else {
+          curMonthRows.push({ hospitalName: client.clientName, companyName: "-", submitted });
+        }
       }
 
       curMonthRows.sort((a, b) => a.hospitalName.localeCompare(b.hospitalName) || a.companyName.localeCompare(b.companyName));
