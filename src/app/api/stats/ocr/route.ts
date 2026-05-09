@@ -371,18 +371,17 @@ export async function POST(req: NextRequest) {
     // ── 단일 흐름: Pro 모델 교차 검증 ─────────────────────────────────────
     // 사용자 정책: Clova OCR text + Gemini Vision raw 두 결과를 Pro 모델에 같이 던져서
     // 행별 교차 검증으로 최종 약품 리스트 결정. 분기 단일화 — Vision 단독/positional/
-    // 사용자 정책: 이미지를 OCR 2개 엔진 (Clova + Document AI) 으로 돌리고, 각각 Pro 로
-    // 검증 (병렬 호출 = max(둘) 시간) 후 결과 비교. 일치 = confidence 95+, 불일치 = 60.
-    pipeline.mergeUsed = "vision+clova";
+    // 사용자 정책: Document AI 셀 단위 추출 (productName, quantity 정확) → LLM 은 추출된
+    // 약품명 → 표준 EDI 보험코드 매핑만. LLM 검증 단계 폐기 (47행 처리 시 일부 누락·환각
+    // 회귀 발생). Document AI 부실 시 Clova text 줄 파서로 폴백.
+    const docaiDrugs = docai ? parseDrugsFromDocAi(docai) : [];
+    const baseDrugs = docaiDrugs.length >= 3 ? docaiDrugs : parseDrugsFromClovaText(clovaText);
+    pipeline.mergeUsed = docaiDrugs.length >= 3 ? "vision+clova" : "clova-deterministic-fallback";
     try {
-      const [clovaValidated, docaiValidated] = await Promise.all([
-        validateClovaWithPro(clovaText, base64, mimeType),
-        validateDocAiWithPro(docai, base64, mimeType),
-      ]);
-      merged = crossValidate(clovaValidated, docaiValidated);
+      merged = await mapProductsToInsuranceCodes(baseDrugs);
     } catch (e) {
       pipeline.mergeError = String(e).slice(0, 200);
-      merged = [];
+      merged = baseDrugs;
     }
     pipeline.mergeDrugCount = merged.length;
 
@@ -2116,136 +2115,54 @@ interface MergedDrug {
   anchorYRaw?: number;  // positional 추출 시 약품명 field 의 raw Y 좌표 (px). 노란 띠 정확한 위치용.
 }
 
-// 사용자 정책: OCR 2개 엔진 (Clova + Document AI) 각각 Gemini Pro 로 검증 후 결과 비교.
-// 일치하면 confidence 95+, 불일치하면 60 (검토 필요).
-//
-// prompt 는 의도적으로 짧게 — Gemini 웹에 사진 던지듯이 단순한 지시. LLM 이 표를 보고
-// 알아서 추출하도록. 복잡한 4-step instructions 가 LLM 추론을 오히려 방해해 환각/오인식
-// 회귀가 발생했음 (사용자 진단).
+// 사용자 정책: Document AI (또는 Clova text 파서) 가 셀 단위로 productName + quantity 를
+// 정확히 추출. LLM 의 일은 **추출된 약품명 → 표준 EDI 9자리 보험코드 매핑** 만.
+// 사진 입력 X — 텍스트 매핑 작업이라 LLM 호출 빠르고 환각 적음.
+async function mapProductsToInsuranceCodes(
+  products: MergedDrug[]
+): Promise<MergedDrug[]> {
+  if (!process.env.GEMINI_API_KEY || products.length === 0) return products;
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-const SIMPLE_PROMPT_BASE = `이 한국 EMR 처방통계 표 사진을 분석해서 약품 리스트를 JSON 으로 추출해.
+  const prompt = `다음 한국 의약품 리스트에 대해 표준 EDI 9자리 보험코드(요양급여비용 청구코드) 와
+제약사명을 매핑해줘. 각 약품의 1부터 시작하는 인덱스를 그대로 유지해서 매핑이 어긋나지 않게.
 
-# 출력 필드
-- insuranceCode: 9자리 EDI 보험코드 (요양급여비용 청구코드).
-  표에 9자리 숫자가 있으면 사용. 없어도 약품명 알면 표준 EDI 코드 출력. 모르면 빈 문자열.
-- productName: 약품명 (한글+영문 그대로). OCR 오타는 표준 약품명으로 정정.
-- companyName: 제약사명 (셀트리온제약, 알리코제약, HLB제약, 한국휴텍스제약 등).
-- quantity: 표 헤더의 "사용량/총사용량/수량/조제량" 컬럼 값. 절대 환자수·단가·금액 X.
+# 약품 리스트
+${products.map((p, i) => `${i + 1}. ${p.productName}`).join("\n")}
 
-# 제외
-합계행 (NH팜, 비급여, 총계 등 약품 아닌 라인). 거래처명·주소·전화번호. 헤더 자체.
+# 규칙
+- insuranceCode: 한국 표준 EDI 9자리 숫자. 확신 없으면 빈 문자열 (추측·환각 금지).
+- companyName: 제약사명 (셀트리온제약, 알리코제약, HLB제약, 한국휴텍스제약, 마더스제약,
+  메디카코리아, 동구바이오제약, 오스틴제약 등). 모르면 빈 문자열.
 
 # 출력 (JSON 만)
-{ "drugs": [{ "insuranceCode": "", "productName": "", "companyName": "", "quantity": "", "confidence": 0 }] }`;
+{ "mappings": [{ "index": 1, "insuranceCode": "658600100", "companyName": "셀트리온제약" }, ...] }`;
 
-async function callProWithImageAndText(
-  imageBase64: string,
-  imageMimeType: string,
-  contextLabel: string,
-  contextText: string,
-): Promise<MergedDrug[]> {
-  if (!process.env.GEMINI_API_KEY) return [];
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  const prompt = `${SIMPLE_PROMPT_BASE}
-
-# 참고 — ${contextLabel}
-${contextText || "(없음)"}`;
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-pro",
-      contents: [{
-        role: "user",
-        parts: [
-          { inlineData: { mimeType: imageMimeType, data: imageBase64 } },
-          { text: prompt },
-        ],
-      }],
+      contents: prompt,
       config: { responseMimeType: "application/json" },
     });
-    const parsed = parseJsonLoose(response.text ?? "") as { drugs?: MergedDrug[] } | null;
-    const drugs = Array.isArray(parsed?.drugs) ? parsed!.drugs : [];
-    return drugs.map((d) => ({
-      insuranceCode: String(d.insuranceCode ?? "").trim(),
-      productName: String(d.productName ?? "").trim(),
-      companyName: String(d.companyName ?? "").trim(),
-      quantity: String(d.quantity ?? "").trim(),
-      confidence: clamp01_100(Number(d.confidence) || 0),
-    }));
+    const parsed = parseJsonLoose(response.text ?? "") as {
+      mappings?: Array<{ index?: number; insuranceCode?: string; companyName?: string }>;
+    } | null;
+    const mappings = Array.isArray(parsed?.mappings) ? parsed!.mappings : [];
+
+    return products.map((p, i) => {
+      const idx = i + 1;
+      const m = mappings.find((mp) => mp.index === idx);
+      if (!m) return p;
+      const code = String(m.insuranceCode ?? "").replace(/\D/g, "");
+      return {
+        ...p,
+        insuranceCode: code.length === 9 ? code : p.insuranceCode,
+        companyName: p.companyName || String(m.companyName ?? "").trim(),
+      };
+    });
   } catch {
-    return [];
+    return products;
   }
-}
-
-// Clova OCR 결과 + 이미지 → Pro 검증 → 약품 리스트 A
-async function validateClovaWithPro(
-  clovaText: string,
-  imageBase64: string,
-  imageMimeType: string,
-): Promise<MergedDrug[]> {
-  return callProWithImageAndText(imageBase64, imageMimeType, "Clova OCR 텍스트", clovaText);
-}
-
-// Document AI 결과 + 이미지 → Pro 검증 → 약품 리스트 B
-async function validateDocAiWithPro(
-  docai: DocAiResult | null,
-  imageBase64: string,
-  imageMimeType: string,
-): Promise<MergedDrug[]> {
-  if (!docai || docai.tables.length === 0) return [];
-  const tableText = docai.tables[0].map((r) => r.cells.join(" | ")).join("\n");
-  return callProWithImageAndText(imageBase64, imageMimeType, "Document AI 표 셀 (구분자: |)", tableText);
-}
-
-// 두 결과 행별 비교 → 일치/불일치 confidence 부여.
-// 매칭 조건: 보험코드 9자리 일치 또는 약품명 한글 prefix 3글자 일치.
-// quantity 까지 일치 = 95+, 한쪽 다름 = 60 (검수 빨강), 한쪽만 있음 = 70.
-function crossValidate(a: MergedDrug[], b: MergedDrug[]): MergedDrug[] {
-  const result: MergedDrug[] = [];
-  const usedB = new Set<number>();
-
-  for (const aDrug of a) {
-    const aKorean = parseDrugName(aDrug.productName).korean;
-    const aCode = aDrug.insuranceCode.replace(/\D/g, "");
-
-    let matchIdx = -1;
-    for (let j = 0; j < b.length; j++) {
-      if (usedB.has(j)) continue;
-      const bDrug = b[j];
-      const bKorean = parseDrugName(bDrug.productName).korean;
-      const bCode = bDrug.insuranceCode.replace(/\D/g, "");
-      const codeMatch = aCode.length === 9 && aCode === bCode;
-      const koreanMatch =
-        aKorean.length >= 3 && bKorean.length >= 3 &&
-        aKorean.slice(0, 3) === bKorean.slice(0, 3);
-      if (codeMatch || koreanMatch) { matchIdx = j; break; }
-    }
-
-    if (matchIdx >= 0) {
-      const bDrug = b[matchIdx];
-      usedB.add(matchIdx);
-      const aQty = aDrug.quantity.replace(/[^\d.]/g, "");
-      const bQty = bDrug.quantity.replace(/[^\d.]/g, "");
-      const qtyMatch = aQty === bQty;
-      // Document AI (b) 가 표 셀 단위 추출이라 우선. 빈 필드만 a 로 보완.
-      result.push({
-        insuranceCode: bDrug.insuranceCode || aDrug.insuranceCode,
-        productName: bDrug.productName || aDrug.productName,
-        companyName: bDrug.companyName || aDrug.companyName,
-        quantity: bDrug.quantity || aDrug.quantity,
-        confidence: qtyMatch ? 95 : 60,
-      });
-    } else {
-      // Clova 만 추출됨 — 검수
-      result.push({ ...aDrug, confidence: 70 });
-    }
-  }
-
-  // Document AI 만 추출된 행 추가 — 검수
-  for (let j = 0; j < b.length; j++) {
-    if (!usedB.has(j)) result.push({ ...b[j], confidence: 70 });
-  }
-
-  return result;
 }
 
 // ── 마스터 DB 매칭 ────────────────────────────────────────────────────────────
