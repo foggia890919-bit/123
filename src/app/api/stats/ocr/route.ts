@@ -80,7 +80,7 @@ export interface PipelineDiagnostics {
   visionOk: boolean;
   visionDrugCount: number;
   visionError: string | null;
-  mergeUsed: "skipped (vision-only)" | "vision+clova" | "clova-only" | "clova-deterministic-fallback" | "clova-positional" | "vision-preferred (monitor)";
+  mergeUsed: "skipped (vision-only)" | "vision+clova" | "clova-only" | "clova-deterministic-fallback" | "clova-positional" | "vision-preferred";
   mergeDrugCount: number;
   mergeError: string | null;
   filteredByIsLikelyDrug: number;        // isLikelyDrug 에서 제거된 수
@@ -307,17 +307,21 @@ export async function POST(req: NextRequest) {
       quantityY: c.quantityY,
       insuranceCode: c.insuranceCode,
     }));
-    // 모니터 사진은 Clova 의 행 클러스터링이 모아레/픽셀화로 자주 깨져서 positional
-     // 매핑이 한 행씩 어긋나는 패턴 빈번. 이 케이스에선 Vision LLM 의 약품 단위 추출이
-     // 더 안정적이라 positional 을 우회하고 vision 결과를 우선한다.
-     // (종이·스크린샷 captureType 은 기존대로 positional 우선 — Clova 행 클러스터링 신뢰)
-    const preferVisionForMonitor =
-      pipeline.captureType === "monitor" && visionDrugs.length >= 3;
+    // Vision 결과가 충분 (>=3) 하면 captureType 무관하게 항상 vision 우선.
+    // 이유: positional 은 Clova 의 행 클러스터링에 직접 의존하는데 모니터 사진뿐 아니라
+    // 종이 사진 일부에서도 클러스터링이 깨져 한 행씩 밀린 매핑이 자주 발생. Vision LLM
+    // 은 약품명·보험코드 단위로 LLM 이 알아서 묶어 추출해 raw 깨짐에 강건.
+    // captureType 분류기 실수에 흔들리지 않게 captureType 의존 분기 제거.
+    // positional 결과는 후속 cross-validate 에서 검증 용도로만 사용 — 양쪽 quantity
+    // 다른 행은 자동 manualCheck 빨간 배지로 사용자에게 노출됨.
+    const preferVision = visionDrugs.length >= 3;
 
-    if (positionalDrugs.length >= 3 && !preferVisionForMonitor) {
-      // positional 추출이 충분하면 LLM 호출 자체 생략 — 단가/순서 보장됨.
+    if (preferVision) {
+      pipeline.mergeUsed = "vision-preferred";
+      merged = visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 90) }));
+    } else if (positionalDrugs.length >= 3) {
+      // Vision 부실 (API 503 등) 일 때만 positional 사용.
       // 부분 추출도 행은 유지: 어떤 한 필드라도 인식됐으면 빈칸은 검수자가 채움.
-      // (이미지에 4행 있고 OCR 이 일부 필드 놓쳤어도 4행 모두 보이게)
       pipeline.mergeUsed = "clova-positional";
       merged = positionalDrugs
         .filter((p) => p.productName || p.quantity || p.insuranceCode)
@@ -330,11 +334,6 @@ export async function POST(req: NextRequest) {
           priceHint: parseInt(p.unitPrice.replace(/[^\d]/g, ""), 10) || undefined,
           anchorYRaw: p.anchorY,
         }));
-    } else if (preferVisionForMonitor) {
-      // 모니터 사진 — vision 결과 그대로. positional 결과는 후속 cross-validate 에서
-      // 검증 용도로만 사용 (양쪽 quantity 다른 행은 자동 manualCheck 표시).
-      pipeline.mergeUsed = "vision-preferred (monitor)";
-      merged = visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 90) }));
     } else {
       // positional 부실 시 기존 LLM 경로
       const visionAllMatched = visionDrugs.length > 0 && visionDrugs.every((d) => {
