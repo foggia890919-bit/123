@@ -427,15 +427,24 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── Phantom 행 교차 검증 (vision-only / vision+clova / clova-only path 한정) ─
+    // ── Phantom 행 교차 검증 (vision+clova / clova-only path 한정) ────────
     // Clova positional 은 PR #70 의 phantom Y-tolerance dedupe 를 거쳐 같은 행
     // 중복이 제거됨. LLM 경로(Gemini Vision) 는 좌표 정보가 없어 같은 행을 두 번
     // 반환하는 환각이 발생할 수 있음. positional 의 (insuranceCode, productName)
     // 등장 횟수를 상한으로 LLM 결과를 trim.
     //
+    // vision-preferred 모드는 SKIP — 모니터 사진처럼 positional 자체가 한 행씩
+    // 밀린 잘못된 매핑을 하는 케이스에서 그 잘못된 카운트를 상한으로 쓰면 vision
+    // 의 정답 행이 phantom 으로 오인되어 제거된다 (사용자 보고 사례). vision-
+    // preferred 진입은 raw 가 깨졌다는 신호이므로 positional 카운트 신뢰 X.
+    //
     // 진료실 1·2 같이 정당하게 같은 약이 두 행에 들어간 경우는 positional 도 2건
     // 으로 잡혀 (Y 차이 25px+) 상한 = 2 → LLM 2건 그대로 유지됨.
-    if (pipeline.mergeUsed !== "clova-positional" && positionalDrugs.length > 0) {
+    if (
+      pipeline.mergeUsed !== "clova-positional" &&
+      pipeline.mergeUsed !== "vision-preferred" &&
+      positionalDrugs.length > 0
+    ) {
       const phantomKey = (insuranceCode: string, productName: string) =>
         `${insuranceCode}|${productName.replace(/\s+/g, "").toLowerCase()}`;
       const positionalCount = new Map<string, number>();
