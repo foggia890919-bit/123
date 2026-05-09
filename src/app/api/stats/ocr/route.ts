@@ -2019,15 +2019,35 @@ async function matchMedication(
   const code = item.insuranceCode.replace(/\D/g, "");
   if (code.length === 9 && masterByCode.has(code)) {
     const m = masterByCode.get(code)!;
-    return {
-      insuranceCode: code,
-      productName: m.productName,
-      companyName: m.companyName,
-      unitPrice: m.price,
-      commissionRate: m.commissionRate,
-      matchedMedicationId: m.id,
-      matchConfidence: 100,
-    };
+    // productName sanity check — Vision 이 보험코드를 한 자리 잘못 인식한 케이스 차단.
+    // 사례: Vision 이 raw OCR 의 678601100(글리디아정) 을 679601100 으로 추측 →
+    //       마스터에 우연히 679601100 = 피나리정 있어서 productName 이 피나리정으로
+    //       덮어씌워지던 버그.
+    // 정책: 한글 약품명 첫 2글자 중 같은 위치에 한 글자라도 일치하면 OCR 오타로 보고
+    //       마스터 채택 (마발탄↔아발탄, 쎄벡스↔쎄넥스 같은 ㅁ↔ㅇ, ㅅ↔ㄴ 한 글자 혼동
+    //       정정 효과 유지). 둘 다 다르면 명백히 다른 약품 → 보험코드 매칭 거부 후
+    //       fallthrough 해서 한글 이름 기반 매칭 (1·2차) 으로 진행.
+    const ocrKorean = parseDrugName(item.productName).korean;
+    const masterKorean = parseDrugName(m.productName).korean;
+    let nameSimilar = ocrKorean.length < 2 || masterKorean.length < 2;
+    if (!nameSimilar) {
+      const limit = Math.min(2, ocrKorean.length, masterKorean.length);
+      for (let i = 0; i < limit; i++) {
+        if (ocrKorean[i] === masterKorean[i]) { nameSimilar = true; break; }
+      }
+    }
+    if (nameSimilar) {
+      return {
+        insuranceCode: code,
+        productName: m.productName,
+        companyName: m.companyName,
+        unitPrice: m.price,
+        commissionRate: m.commissionRate,
+        matchedMedicationId: m.id,
+        matchConfidence: 100,
+      };
+    }
+    // 이름 명백히 다름 → fallthrough (1·2차 한글 이름 기반 매칭으로 진행)
   }
 
   // 한글 약품 prefix + 용량 분리
