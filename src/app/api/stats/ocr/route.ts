@@ -912,13 +912,27 @@ function extractDrugsPositionalWithDebug(rows: ClovaRow[], colMap: ColumnMap | n
     const unitPriceTol = colMap.unitPrice != null ? colTolerance(colMap.unitPrice, colMap.quantity, colMap.patientCount, colMap.productName) : 100;
     const quantityTol = colMap.quantity != null ? colTolerance(colMap.quantity, colMap.unitPrice, colMap.total, colMap.productName) : 100;
 
-    // 사용량/단가: anchor Y ±15px + 컬럼 X ±tolerance 범위의 숫자 field 중 X 가장 가까운 것
+    // 약품명 anchor 의 4-vertex 로 행 띠(slope-aware band) 를 그리고, 각 컬럼 X 까지
+    // slope 를 따라 띠를 연장한 expected Y 범위 안에 들어오는 fields 만 매칭.
+    // 사진이 기울어져 같은 행의 셀이 anchor 의 Y 와 벌어지는 케이스 보정 — 이전엔 단순
+    // anchorY ±15 만 보던 자리. anchor 폭이 좁아 band 가 안 잡히면 ±15 폴백.
+    const anchorBand = bandFromField(cand.field, colMap.slope || 0);
+    function inAnchorBand(f: ClovaField, yMargin = 6): boolean {
+      if (!anchorBand) return Math.abs(fieldYCenter(f) - anchorY) <= 15;
+      const fy = fieldYCenter(f);
+      const dx = fieldXCenter(f) - anchorBand.anchorX;
+      const expectedTop = anchorBand.top + anchorBand.slope * dx;
+      const expectedBot = anchorBand.bot + anchorBand.slope * dx;
+      return fy >= expectedTop - yMargin && fy <= expectedBot + yMargin;
+    }
+
+    // 사용량/단가: 같은 행 띠 안에서 컬럼 X ±tolerance 범위의 숫자 field 중 X 가장 가까운 것
     function nearestNumberAt(colX: number | null, tol: number): string {
       if (colX == null) return "";
       let best: ClovaField | null = null;
       let bestDist = Infinity;
       for (const f of allFields) {
-        if (Math.abs(fieldYCenter(f) - anchorY) > 15) continue;
+        if (!inAnchorBand(f)) continue;
         if (!/\d/.test(f.inferText)) continue;
         const dist = Math.abs(fieldXCenter(f) - colX);
         if (dist > tol) continue;
@@ -929,10 +943,10 @@ function extractDrugsPositionalWithDebug(rows: ClovaRow[], colMap: ColumnMap | n
     const unitPrice = nearestNumberAt(colMap.unitPrice, unitPriceTol);
     const quantity = nearestNumberAt(colMap.quantity, quantityTol);
 
-    // 9자리 보험코드: 같은 Y ±15 범위에서 검색
+    // 9자리 보험코드: 같은 행 띠 안에서 검색
     let insuranceCode = "";
     for (const f of allFields) {
-      if (Math.abs(fieldYCenter(f) - anchorY) > 15) continue;
+      if (!inAnchorBand(f)) continue;
       const m = f.inferText.match(/\b(\d{9})\b/);
       if (m) { insuranceCode = m[1]; break; }
     }
@@ -1174,7 +1188,9 @@ function findColumnMapByDataRow(rows: ClovaRow[]): ColumnMap | null {
       quantity: quantityX,
       total: null,
       headerY,
-      slope: 0,
+      // 사진이 기울어진 케이스 — 데이터 행들의 실제 기울기로 추정.
+      // 0 이면 평평한 사진. positional 추출의 slope-aware band 와 짝.
+      slope: estimateSlopeFromDrugRows(rows),
     };
   }
   return null;
