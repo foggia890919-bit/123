@@ -371,27 +371,18 @@ export async function POST(req: NextRequest) {
     // ── 단일 흐름: Pro 모델 교차 검증 ─────────────────────────────────────
     // 사용자 정책: Clova OCR text + Gemini Vision raw 두 결과를 Pro 모델에 같이 던져서
     // 행별 교차 검증으로 최종 약품 리스트 결정. 분기 단일화 — Vision 단독/positional/
-    // 결정론적 추출 — Document AI (표 셀 단위 — 가장 정확) 우선, 없으면 Clova text 줄 파서.
-    // 이걸 callGeminiMerge 의 입력으로 넘겨 Pro 모델이 약품명 → 보험코드 매핑까지.
-    const docaiDrugs = docai ? parseDrugsFromDocAi(docai) : [];
-    const clovaDeterministic = docaiDrugs.length >= 3 ? docaiDrugs : parseDrugsFromClovaText(clovaText);
+    // 사용자 정책: 이미지를 OCR 2개 엔진 (Clova + Document AI) 으로 돌리고, 각각 Pro 로
+    // 검증 (병렬 호출 = max(둘) 시간) 후 결과 비교. 일치 = confidence 95+, 불일치 = 60.
     pipeline.mergeUsed = "vision+clova";
     try {
-      merged = await callGeminiMerge({
-        clovaText,
-        clovaDeterministic,
-        imageBase64: base64,
-        imageMimeType: mimeType,
-        masterCandidates: Array.from(masterByCode.values()).map((m) => ({
-          insuranceCode: m.insuranceCode,
-          productName: m.productName,
-          companyName: m.companyName,
-        })),
-      });
+      const [clovaValidated, docaiValidated] = await Promise.all([
+        validateClovaWithPro(clovaText, base64, mimeType),
+        validateDocAiWithPro(docai, base64, mimeType),
+      ]);
+      merged = crossValidate(clovaValidated, docaiValidated);
     } catch (e) {
       pipeline.mergeError = String(e).slice(0, 200);
-      // LLM 실패 시 결정론적 결과 그대로 (Document AI 우선) — 보험코드는 빈 채로 검수에 노출.
-      merged = clovaDeterministic;
+      merged = [];
     }
     pipeline.mergeDrugCount = merged.length;
 
@@ -2125,81 +2116,47 @@ interface MergedDrug {
   anchorYRaw?: number;  // positional 추출 시 약품명 field 의 raw Y 좌표 (px). 노란 띠 정확한 위치용.
 }
 
-async function callGeminiMerge(args: {
-  clovaText: string;
-  clovaDeterministic: MergedDrug[];
-  imageBase64: string;
-  imageMimeType: string;
-  masterCandidates: Array<{ insuranceCode: string | null; productName: string; companyName: string }>;
-}): Promise<MergedDrug[]> {
+// 사용자 정책: OCR 2개 엔진 (Clova + Document AI) 각각 Gemini Pro 로 검증 후 결과 비교.
+// 일치하면 confidence 95+, 불일치하면 60 (검토 필요).
+//
+// prompt 는 의도적으로 짧게 — Gemini 웹에 사진 던지듯이 단순한 지시. LLM 이 표를 보고
+// 알아서 추출하도록. 복잡한 4-step instructions 가 LLM 추론을 오히려 방해해 환각/오인식
+// 회귀가 발생했음 (사용자 진단).
+
+const SIMPLE_PROMPT_BASE = `이 한국 EMR 처방통계 표 사진을 분석해서 약품 리스트를 JSON 으로 추출해.
+
+# 출력 필드
+- insuranceCode: 9자리 EDI 보험코드 (요양급여비용 청구코드).
+  표에 9자리 숫자가 있으면 사용. 없어도 약품명 알면 표준 EDI 코드 출력. 모르면 빈 문자열.
+- productName: 약품명 (한글+영문 그대로). OCR 오타는 표준 약품명으로 정정.
+- companyName: 제약사명 (셀트리온제약, 알리코제약, HLB제약, 한국휴텍스제약 등).
+- quantity: 표 헤더의 "사용량/총사용량/수량/조제량" 컬럼 값. 절대 환자수·단가·금액 X.
+
+# 제외
+합계행 (NH팜, 비급여, 총계 등 약품 아닌 라인). 거래처명·주소·전화번호. 헤더 자체.
+
+# 출력 (JSON 만)
+{ "drugs": [{ "insuranceCode": "", "productName": "", "companyName": "", "quantity": "", "confidence": 0 }] }`;
+
+async function callProWithImageAndText(
+  imageBase64: string,
+  imageMimeType: string,
+  contextLabel: string,
+  contextText: string,
+): Promise<MergedDrug[]> {
   if (!process.env.GEMINI_API_KEY) return [];
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const prompt = `${SIMPLE_PROMPT_BASE}
 
-  const prompt = `당신은 한국 EMR 처방통계 표를 분석하는 전문가입니다. 약사가 직접 보고
-입력하던 작업을 자동화하는 게 목적입니다. **두 가지 OCR 결과를 행 단위로 비교 검증**해서
-일치 여부에 따라 confidence 를 부여하세요.
-
-# 입력 1: 결정론적 표 추출 결과 (Document AI Form Parser 또는 Clova text 줄 파서)
-**가장 신뢰도 높은 입력. productName + quantity 는 이걸 기본으로 채택**.
-${args.clovaDeterministic.length ? JSON.stringify(args.clovaDeterministic, null, 2) : "(비어있음)"}
-
-# 입력 2: 사진 (Gemini Vision — 보조. 입력 1 의 OCR 오타 정정·검증용)
-
-# 입력 3: Clova OCR 원본 텍스트 (raw — 9자리 보험코드 추출용)
-${args.clovaText || "(없음)"}
-
-# 입력 4: 마스터 DB 후보 (Clova 9자리 보험코드 사전 조회 — 정확한 productName 보정용)
-${args.masterCandidates.length ? JSON.stringify(args.masterCandidates, null, 2) : "(없음)"}
-
-# 작업 (반드시 이 순서)
-1) **사진에서 직접 약품 행 추출** (Gemini Vision 의 일). 표 헤더 인식 → 각 행 [productName,
-   quantity, insuranceCode, companyName] 매핑. 합계행/메타행 (NH팜, 비급여, 거래처명, 주소,
-   전화번호 등) 제외. 같은 약품 다른 dose (10/10, 20/10, 5/10) 별도 행 유지.
-
-2) **입력 2 (Clova 결정론적 파서) 와 행별 비교**. 두 결과의 같은 약품인지 매칭:
-   - 약품명 한글 prefix 일치 (3글자 이상)
-   - 또는 보험코드 9자리 일치
-   순서가 어긋나면 약품명으로 매칭.
-
-3) **각 행 confidence 부여 (사용자 정책: 두 엔진 일치 = 통과, 불일치 = 검토 필요)**:
-   - **두 결과의 productName 한글 prefix + quantity 모두 일치** → confidence **95+**
-   - productName 일치 / quantity 다름 (또는 그 반대) → confidence **60** (검토 필요)
-   - 한쪽 결과만 있고 다른 쪽 누락 → confidence **70** (검수에서 사용자 확인)
-   - 두 결과 다 다름 → confidence **40** (검토 필요)
-
-4) **출력 우선순위 (불일치 시 어느 값 채택)**:
-   - **quantity**: Clova text 의 "사용량/총사용량/총투여량/수량/조제량" 컬럼 값 **반드시 우선**.
-     사진에서 환자수/단가/금액 잘못 가져왔을 수 있음.
-   - **insuranceCode**: 9자리 숫자가 Clova text 또는 사진 어디라도 있으면 그걸 사용.
-     둘 다 없으면 마스터 후보의 정확 productName 매칭으로 채움. 모르면 빈 문자열 (추측 금지).
-   - **productName**: 두 결과 합쳐 가장 명확한 형태. OCR 오타는 표준 약품명으로 정정
-     (예: "양로베틴" → "암로베틴", "아라젠" → "아라펜").
-   - **companyName**: 제약사명 (셀트리온제약, 알리코제약, HLB제약 등).
-
-5) **마스터 후보 활용**: 입력 4 의 후보는 Clova 9자리 보험코드와 정확 매칭된 약품들.
-   해당 코드 행의 productName/companyName 보정에만 사용. 후보 약품을 표에 없는 행에
-   환각으로 추가 X.
-
-# 출력
-JSON 만:
-{
-  "drugs": [
-    { "insuranceCode": "", "productName": "", "companyName": "", "quantity": "", "confidence": 0 }
-  ]
-}
-
-confidence 는 위 3) 의 정책 그대로 적용. 사용자가 confidence < 95 인 행을 검수 빨강으로 봄.`;
-
+# 참고 — ${contextLabel}
+${contextText || "(없음)"}`;
   try {
     const response = await ai.models.generateContent({
-      // gemini-2.5-pro: 표 헤더↔컬럼 매핑·OCR 오타 정정·보험코드 매핑까지 한 번에.
-      // Gemini 웹과 동일 흐름 (이미지 + 사용자 컨텍스트 → 결과). Vision 호출 별도로
-      // 안 거치고 Merge 한 번에 — Vercel timeout 회피 + 비용 절감.
       model: "gemini-2.5-pro",
       contents: [{
         role: "user",
         parts: [
-          { inlineData: { mimeType: args.imageMimeType, data: args.imageBase64 } },
+          { inlineData: { mimeType: imageMimeType, data: imageBase64 } },
           { text: prompt },
         ],
       }],
@@ -2217,6 +2174,78 @@ confidence 는 위 3) 의 정책 그대로 적용. 사용자가 confidence < 95 
   } catch {
     return [];
   }
+}
+
+// Clova OCR 결과 + 이미지 → Pro 검증 → 약품 리스트 A
+async function validateClovaWithPro(
+  clovaText: string,
+  imageBase64: string,
+  imageMimeType: string,
+): Promise<MergedDrug[]> {
+  return callProWithImageAndText(imageBase64, imageMimeType, "Clova OCR 텍스트", clovaText);
+}
+
+// Document AI 결과 + 이미지 → Pro 검증 → 약품 리스트 B
+async function validateDocAiWithPro(
+  docai: DocAiResult | null,
+  imageBase64: string,
+  imageMimeType: string,
+): Promise<MergedDrug[]> {
+  if (!docai || docai.tables.length === 0) return [];
+  const tableText = docai.tables[0].map((r) => r.cells.join(" | ")).join("\n");
+  return callProWithImageAndText(imageBase64, imageMimeType, "Document AI 표 셀 (구분자: |)", tableText);
+}
+
+// 두 결과 행별 비교 → 일치/불일치 confidence 부여.
+// 매칭 조건: 보험코드 9자리 일치 또는 약품명 한글 prefix 3글자 일치.
+// quantity 까지 일치 = 95+, 한쪽 다름 = 60 (검수 빨강), 한쪽만 있음 = 70.
+function crossValidate(a: MergedDrug[], b: MergedDrug[]): MergedDrug[] {
+  const result: MergedDrug[] = [];
+  const usedB = new Set<number>();
+
+  for (const aDrug of a) {
+    const aKorean = parseDrugName(aDrug.productName).korean;
+    const aCode = aDrug.insuranceCode.replace(/\D/g, "");
+
+    let matchIdx = -1;
+    for (let j = 0; j < b.length; j++) {
+      if (usedB.has(j)) continue;
+      const bDrug = b[j];
+      const bKorean = parseDrugName(bDrug.productName).korean;
+      const bCode = bDrug.insuranceCode.replace(/\D/g, "");
+      const codeMatch = aCode.length === 9 && aCode === bCode;
+      const koreanMatch =
+        aKorean.length >= 3 && bKorean.length >= 3 &&
+        aKorean.slice(0, 3) === bKorean.slice(0, 3);
+      if (codeMatch || koreanMatch) { matchIdx = j; break; }
+    }
+
+    if (matchIdx >= 0) {
+      const bDrug = b[matchIdx];
+      usedB.add(matchIdx);
+      const aQty = aDrug.quantity.replace(/[^\d.]/g, "");
+      const bQty = bDrug.quantity.replace(/[^\d.]/g, "");
+      const qtyMatch = aQty === bQty;
+      // Document AI (b) 가 표 셀 단위 추출이라 우선. 빈 필드만 a 로 보완.
+      result.push({
+        insuranceCode: bDrug.insuranceCode || aDrug.insuranceCode,
+        productName: bDrug.productName || aDrug.productName,
+        companyName: bDrug.companyName || aDrug.companyName,
+        quantity: bDrug.quantity || aDrug.quantity,
+        confidence: qtyMatch ? 95 : 60,
+      });
+    } else {
+      // Clova 만 추출됨 — 검수
+      result.push({ ...aDrug, confidence: 70 });
+    }
+  }
+
+  // Document AI 만 추출된 행 추가 — 검수
+  for (let j = 0; j < b.length; j++) {
+    if (!usedB.has(j)) result.push({ ...b[j], confidence: 70 });
+  }
+
+  return result;
 }
 
 // ── 마스터 DB 매칭 ────────────────────────────────────────────────────────────
