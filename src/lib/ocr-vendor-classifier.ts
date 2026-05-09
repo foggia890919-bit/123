@@ -12,18 +12,19 @@
 
 import { GoogleGenAI } from "@google/genai";
 
-// 한국 의원·병원에서 자주 쓰는 EMR 9종 + unknown.
+// 한국 의원·병원·약국에서 자주 쓰는 EMR + unknown.
 // 새 EMR이 발견되면 이 배열에 추가하고 VENDOR_HINTS 의 키워드만 갱신하면 된다.
 export const EMR_VENDORS = [
-  "doctor",      // 의사랑 v1 (창 제목 "[병원명]-doctor")
-  "doctor2",     // 의사랑 v2 (창 제목 "[병원명]-doctor2")
-  "u-pharm",     // U pharm system (좌상단 "U pharm system" 로고)
-  "eghis",       // eGhis 통합
-  "nh-pharm",    // NH팜
-  "chartfree",   // 차트프리 / 차트
-  "emrpro",      // EMRpro
-  "biit",        // 비트 (BIT)
-  "dubeone",     // 두번에
+  "doctor",         // 의사랑 v1 (창 제목 "[병원명]-doctor")
+  "doctor2",        // 의사랑 v2 (창 제목 "[병원명]-doctor2")
+  "u-pharm",        // U pharm system (좌상단 "U pharm system" 로고)
+  "eghis",          // eGhis 통합
+  "nh-pharm",       // NH팜
+  "chartfree",      // 차트프리 / 차트
+  "emrpro",         // EMRpro
+  "biit",           // 비트 (BIT)
+  "dubeone",        // 두번에
+  "pharm-it3000",   // 약국 — PHARM IT3000 (조제자료분석 화면)
   "unknown",
 ] as const;
 
@@ -55,6 +56,7 @@ const VENDOR_HINTS: Record<Exclude<EmrVendor, "unknown">, string> = {
   emrpro: '"EMRpro" 또는 "이엠알프로" 표기',
   biit: '"BIT" / "비트" 로고. 푸른색 헤더 띠가 흔함',
   dubeone: '"두번에" 한글 로고 또는 헤더',
+  "pharm-it3000": '약국 EMR — 좌상단 "PHARM IT3000" 로고. 메뉴에 "스피드콜 / 조제·판매 / 구매재고 / 청구관리". 탭 "조제자료분석" 화면에서 위쪽 [발행기관별 / 처방의사별 / 보험종별] 표 + 아래쪽 [약품별 / 고객별] 표가 동시에 보임. 약품별 표 컬럼: "약품명 / 조제단가 / 조제량 / 조제금액"',
 };
 
 const PROMPT = `당신은 한국 의료기관에서 사용하는 EMR(전자의무기록) 처방통계 화면/출력물을 식별하는 전문가입니다.

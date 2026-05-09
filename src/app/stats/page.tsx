@@ -39,7 +39,7 @@ interface FusionDrug {
 // 서버의 EmrVendor / CaptureType 과 동기화 — 새 EMR 추가 시 ocr-vendor-classifier.ts 와 같이 수정.
 type EmrVendor =
   | "doctor" | "doctor2" | "u-pharm" | "eghis" | "nh-pharm"
-  | "chartfree" | "emrpro" | "biit" | "dubeone" | "unknown";
+  | "chartfree" | "emrpro" | "biit" | "dubeone" | "pharm-it3000" | "unknown";
 type CaptureType = "photo" | "screenshot" | "monitor";
 
 const VENDOR_LABEL_KO: Record<EmrVendor, string> = {
@@ -52,6 +52,7 @@ const VENDOR_LABEL_KO: Record<EmrVendor, string> = {
   emrpro: "EMRpro",
   biit: "비트",
   dubeone: "두번에",
+  "pharm-it3000": "PHARM IT3000 (약국)",
   unknown: "알 수 없음",
 };
 
