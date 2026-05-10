@@ -76,6 +76,20 @@
         {"name": "amount", "type": "amount", "required": true},
         {"name": "transfer_date", "type": "date", "required": true}
       ]
+    },
+    {
+      "id": "generic_document",
+      "label": "범용 문서 (분류 실패 폴백)",
+      "match_keywords": [],
+      "fields": [
+        {"name": "document_title", "type": "string", "required": false},
+        {"name": "issue_date", "type": "date", "required": false},
+        {"name": "issuer_name", "type": "string", "required": false},
+        {"name": "recipient_name", "type": "string", "required": false},
+        {"name": "total_amount", "type": "amount", "required": false},
+        {"name": "key_value_pairs", "type": "line_items", "required": false},
+        {"name": "line_items", "type": "line_items", "required": false}
+      ]
     }
   ],
   "field_types": {
