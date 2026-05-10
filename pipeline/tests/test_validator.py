@@ -84,6 +84,52 @@ def test_validate_flags_missing_required():
     assert report.needs_manual_review is True
 
 
+def test_pharmacy_stats_row_arith_passes_when_unit_price_qty_match():
+    """단가 × 총사용량 = 총금액 검증 — 모든 행이 맞으면 통과."""
+    registry = load_registry(CONFIG)
+    template = registry.get("pharmacy_stats_kr")
+    extracted = {
+        "hospital_name": "일산365의원",
+        "hospital_biz_no": "687-90-02484",
+        "pharma_company": "위더스제약",
+        "drugs": [
+            {"drug_code": "660701210", "drug_name": "위더스세프라디딘캡슐500mg",
+             "unit": "1캡슐", "prescribe_count": 2, "unit_price": 205,
+             "total_qty": 30, "total_amount": 6150},
+            {"drug_code": "660700830", "drug_name": "아스틴정",
+             "unit": "1정", "prescribe_count": 1, "unit_price": 176,
+             "total_qty": 14, "total_amount": 2464},
+        ],
+    }
+    report = validate(template, extracted, registry.field_types)
+    arith = [c for c in report.logical_checks if c.rule.startswith("row_arith")]
+    assert arith, "row_arith 결과가 있어야 함"
+    assert all(c.passed for c in arith), [c.detail for c in arith if not c.passed]
+
+
+def test_pharmacy_stats_row_arith_pinpoints_bad_row():
+    """한 행만 틀려도 그 행을 콕 집어 fail로 보고."""
+    registry = load_registry(CONFIG)
+    template = registry.get("pharmacy_stats_kr")
+    extracted = {
+        "hospital_name": "일산365의원",
+        "hospital_biz_no": "687-90-02484",
+        "pharma_company": "위더스제약",
+        "drugs": [
+            {"drug_code": "A", "drug_name": "정상행",
+             "unit_price": 100, "total_qty": 10, "total_amount": 1000},
+            {"drug_code": "B", "drug_name": "오류행",
+             "unit_price": 100, "total_qty": 10, "total_amount": 9999},  # 틀림
+        ],
+    }
+    report = validate(template, extracted, registry.field_types)
+    failed = [c for c in report.logical_checks if not c.passed]
+    assert len(failed) == 1
+    assert "오류행" in failed[0].detail
+    assert "9999" in failed[0].detail
+    assert report.needs_manual_review is True
+
+
 def test_validate_flags_format_invalid():
     registry = load_registry(CONFIG)
     template = registry.get("biz_registration_kr")

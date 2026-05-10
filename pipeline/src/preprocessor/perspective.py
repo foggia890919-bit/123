@@ -124,9 +124,56 @@ def warp_to_front(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
     return cv2.warpPerspective(image, M, (width, height))
 
 
-def correct_perspective(image: np.ndarray) -> tuple[np.ndarray, str]:
-    """모서리를 찾아 정면으로 편 이미지와 사용된 방법명을 반환."""
+def _quad_area(corners: np.ndarray) -> float:
+    """4점 사각형의 면적 (Shoelace)."""
+    pts = corners.reshape(4, 2)
+    x = pts[:, 0]
+    y = pts[:, 1]
+    return 0.5 * abs(
+        x[0] * y[1] - x[1] * y[0]
+        + x[1] * y[2] - x[2] * y[1]
+        + x[2] * y[3] - x[3] * y[2]
+        + x[3] * y[0] - x[0] * y[3]
+    )
+
+
+def correct_perspective(
+    image: np.ndarray,
+    min_area_ratio: float = 0.25,
+    aspect_range: tuple[float, float] = (0.4, 2.5),
+    min_span_ratio: float = 0.5,
+) -> tuple[np.ndarray, str]:
+    """모서리를 찾아 정면으로 편 이미지와 사용된 방법명을 반환.
+
+    세 단계 신뢰성 가드 — 하나라도 실패하면 fallback (원본 그대로):
+      1. 사각형 면적 / 원본 면적 >= min_area_ratio
+      2. 결과 종횡비가 aspect_range 안
+      3. corners의 x 범위와 y 범위가 각각 이미지 W·H의 min_span_ratio 이상
+         (종이의 일부분, 예: 우측 절반만 잡은 케이스를 직접 차단)
+
+    실데이터에서 perspective 검출은 본질적으로 불안정하므로 잘못된 결과를
+    내느니 원본을 VLM에 그대로 넘기는 게 안전하다 (VLM이 어느 정도 흡수).
+    """
     result = find_document_corners(image)
     if result.corners is None:
         return image, "fallback"
-    return warp_to_front(image, result.corners), result.method
+
+    h_img, w_img = image.shape[:2]
+    img_area = h_img * w_img
+    quad_area = _quad_area(result.corners)
+    if quad_area < img_area * min_area_ratio:
+        return image, "fallback_too_small"
+
+    pts = result.corners.reshape(4, 2)
+    x_span = (pts[:, 0].max() - pts[:, 0].min()) / w_img
+    y_span = (pts[:, 1].max() - pts[:, 1].min()) / h_img
+    if x_span < min_span_ratio or y_span < min_span_ratio:
+        return image, "fallback_partial"
+
+    warped = warp_to_front(image, result.corners)
+    h, w = warped.shape[:2]
+    aspect = w / h
+    if aspect < aspect_range[0] or aspect > aspect_range[1]:
+        return image, "fallback_bad_aspect"
+
+    return warped, result.method

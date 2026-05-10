@@ -78,6 +78,44 @@
       ]
     },
     {
+      "id": "pharmacy_stats_kr",
+      "label": "제약사별 처방통계",
+      "match_keywords": [
+        "제약사별", "제약회사별", "처방통계", "통계",
+        "청구코드", "약품코드", "처방횟수",
+        "총사용량", "총소모량", "총금액", "단가", "약품명"
+      ],
+      "fields": [
+        {"name": "period_start", "type": "date", "required": false},
+        {"name": "period_end", "type": "date", "required": false},
+        {"name": "hospital_name", "type": "string", "required": true},
+        {"name": "hospital_biz_no", "type": "biz_no", "required": false},
+        {"name": "prescriber_name", "type": "string", "required": false},
+        {"name": "pharma_company", "type": "string", "required": true},
+        {"name": "drugs", "type": "line_items", "required": true},
+        {"name": "summary_total_amount", "type": "amount", "required": false}
+      ],
+      "logical_checks": [
+        {
+          "rule": "row_arith",
+          "list_field": "drugs",
+          "operands": ["unit_price", "total_qty"],
+          "operator": "mul",
+          "equals": "total_amount",
+          "tolerance": 1
+        }
+      ],
+      "line_item_schema": {
+        "drug_code": "string",
+        "drug_name": "string",
+        "unit": "string",
+        "prescribe_count": "int",
+        "unit_price": "int",
+        "total_qty": "int",
+        "total_amount": "int"
+      }
+    },
+    {
       "id": "generic_document",
       "label": "범용 문서 (분류 실패 폴백)",
       "match_keywords": [],
