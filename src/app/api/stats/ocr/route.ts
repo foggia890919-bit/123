@@ -2049,7 +2049,15 @@ async function callGeminiVision(
         { text: prompt },
       ],
     }],
-    config: { responseMimeType: "application/json" },
+    config: {
+      responseMimeType: "application/json",
+      // Gemini 웹과 동일하게 thinking 모드 활성화 — 47행 표 분석 시 모델이 단계적 추론 수행해
+      // 행 매핑 환각 (한 행씩 밀림 / 약품명↔수량 어긋남) 차단. thinkingBudget: -1 = dynamic
+      // (모델이 입력 복잡도에 따라 자동 조정).
+      thinkingConfig: { thinkingBudget: -1, includeThoughts: false },
+      // 결정론적 출력 — 같은 사진 매번 같은 결과.
+      temperature: 0,
+    },
   });
 
   const text = response.text ?? "";
