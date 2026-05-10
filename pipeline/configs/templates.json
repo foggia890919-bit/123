@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "templates": [
+    {
+      "id": "tax_invoice_kr",
+      "label": "세금계산서",
+      "match_keywords": ["세금계산서", "공급자", "공급받는자", "공급가액", "세액"],
+      "fields": [
+        {"name": "supplier_biz_no", "type": "biz_no", "required": true},
+        {"name": "supplier_name", "type": "string", "required": true},
+        {"name": "supplier_ceo", "type": "string", "required": true},
+        {"name": "buyer_biz_no", "type": "biz_no", "required": true},
+        {"name": "buyer_name", "type": "string", "required": true},
+        {"name": "issue_date", "type": "date", "required": true},
+        {"name": "supply_amount", "type": "amount", "required": true},
+        {"name": "tax_amount", "type": "amount", "required": true},
+        {"name": "total_amount", "type": "amount", "required": true}
+      ],
+      "logical_checks": [
+        {"rule": "sum_eq", "operands": ["supply_amount", "tax_amount"], "equals": "total_amount"}
+      ]
+    },
+    {
+      "id": "receipt_generic_kr",
+      "label": "영수증",
+      "match_keywords": ["영수증", "합계", "부가세", "결제"],
+      "fields": [
+        {"name": "merchant_name", "type": "string", "required": true},
+        {"name": "merchant_biz_no", "type": "biz_no", "required": false},
+        {"name": "issue_date", "type": "date", "required": true},
+        {"name": "items", "type": "line_items", "required": false},
+        {"name": "supply_amount", "type": "amount", "required": false},
+        {"name": "tax_amount", "type": "amount", "required": false},
+        {"name": "total_amount", "type": "amount", "required": true}
+      ],
+      "logical_checks": [
+        {"rule": "sum_eq", "operands": ["supply_amount", "tax_amount"], "equals": "total_amount", "optional": true}
+      ]
+    },
+    {
+      "id": "biz_registration_kr",
+      "label": "사업자등록증",
+      "match_keywords": ["사업자등록증", "법인등록번호", "대표자", "개업연월일"],
+      "fields": [
+        {"name": "biz_no", "type": "biz_no", "required": true},
+        {"name": "company_name", "type": "string", "required": true},
+        {"name": "ceo_name", "type": "string", "required": true},
+        {"name": "open_date", "type": "date", "required": true},
+        {"name": "address", "type": "string", "required": true},
+        {"name": "business_type", "type": "string", "required": false},
+        {"name": "business_item", "type": "string", "required": false}
+      ]
+    },
+    {
+      "id": "prescription_kr",
+      "label": "처방전",
+      "match_keywords": ["처방전", "환자", "주민등록번호", "처방의", "조제"],
+      "fields": [
+        {"name": "patient_name", "type": "string", "required": true},
+        {"name": "patient_rrn", "type": "rrn", "required": false},
+        {"name": "issue_date", "type": "date", "required": true},
+        {"name": "prescriber_name", "type": "string", "required": true},
+        {"name": "prescriber_license", "type": "string", "required": false},
+        {"name": "drugs", "type": "line_items", "required": true}
+      ]
+    },
+    {
+      "id": "bank_transfer_slip_kr",
+      "label": "무통장입금증",
+      "match_keywords": ["무통장입금", "입금자", "수취인", "은행", "계좌"],
+      "fields": [
+        {"name": "sender_name", "type": "string", "required": true},
+        {"name": "receiver_name", "type": "string", "required": true},
+        {"name": "bank_name", "type": "string", "required": true},
+        {"name": "account_no", "type": "account_no", "required": true},
+        {"name": "amount", "type": "amount", "required": true},
+        {"name": "transfer_date", "type": "date", "required": true}
+      ]
+    }
+  ],
+  "field_types": {
+    "biz_no": {"regex": "^\\d{3}-\\d{2}-\\d{5}$", "normalize": "biz_no"},
+    "rrn": {"regex": "^\\d{6}-\\d{7}$", "normalize": "rrn"},
+    "phone": {"regex": "^(0\\d{1,2})-?(\\d{3,4})-?(\\d{4})$", "normalize": "phone"},
+    "date": {"regex": "^\\d{4}[-./]\\d{2}[-./]\\d{2}$", "normalize": "date"},
+    "amount": {"regex": "^-?[0-9,]+(?:\\.\\d+)?$", "normalize": "amount"},
+    "account_no": {"regex": "^[0-9-]{8,20}$", "normalize": "account_no"},
+    "string": {},
+    "line_items": {}
+  }
+}
