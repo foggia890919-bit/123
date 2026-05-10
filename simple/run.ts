@@ -522,6 +522,7 @@ async function processDay(
   const liveSales = live.reduce((s, r) => s + r.salesAmount, 0);
   const canceledSales = canceled.reduce((s, r) => s + r.salesAmount, 0);
   const grossSales = liveSales + canceledSales;
+  const liveSettlement = live.reduce((s, r) => s + r.settlement, 0);
 
   const lines: string[] = [];
   lines.push(`<b>📊 ${range.dateStr} 매출 보고</b>`);
@@ -531,6 +532,7 @@ async function processDay(
     lines.push(`❌ 취소매출 -${won(canceledSales)} (${canceled.length}건)`);
   }
   lines.push(`✅ <b>최종매출 ${won(liveSales)}</b> (${live.length}건)`);
+  lines.push(`💵 정산예정 ${won(liveSettlement)} (수수료 차감 후)`);
   lines.push("");
 
   // 스토어별 그룹화
@@ -553,12 +555,13 @@ async function processDay(
     const sShipments = new Set(sLive.map((r) => r.orderId)).size;
     const sBottles = sLive.reduce((s, r) => s + r.bottles, 0);
     const sCommission = sLive.reduce((s, r) => s + r.commission, 0);
+    const sSettlement = sLive.reduce((s, r) => s + r.settlement, 0);
 
     lines.push(`<b>━━ ${store.name} ━━</b>`);
     lines.push(`✅ 매출 ${won(sLiveSales)} (${sLive.length}건)`);
     if (sCancel.length > 0) lines.push(`❌ 취소 -${won(sCancelSales)} (${sCancel.length}건)`);
     lines.push(`📦 ${sShipments}건 배송 / 출고 ${sBottles}개`);
-    lines.push(`💳 수수료 ${won(sCommission)}`);
+    lines.push(`💳 수수료 ${won(sCommission)} / 💵 정산예정 ${won(sSettlement)}`);
 
     // 키워드별 — 결제완료
     const sBy = new Map<string, { keyword: string; bottles: number; sales: number; orderIds: Set<string> }>();
