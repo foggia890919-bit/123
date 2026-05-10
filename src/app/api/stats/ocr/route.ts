@@ -372,18 +372,11 @@ export async function POST(req: NextRequest) {
     // ── 단일 흐름: Pro 모델 교차 검증 ─────────────────────────────────────
     // 사용자 정책: Clova OCR text + Gemini Vision raw 두 결과를 Pro 모델에 같이 던져서
     // 행별 교차 검증으로 최종 약품 리스트 결정. 분기 단일화 — Vision 단독/positional/
-    // 사용자 정책: OCR 결과 그대로 → 화면. LLM 호출 0번. 매핑/검증 X.
-    //   - Document AI 결과 (셀 단위 추출) 우선
-    //   - Document AI 부실 시 Clova text 줄 단위 파서 폴백
-    //   - 보험코드는 마스터 매칭 (matchMedication 의 9자리 매칭) 만으로 단가/수수료 보정
-    const docaiDrugs = docai ? parseDrugsFromDocAi(docai) : [];
-    if (docaiDrugs.length >= 3) {
-      pipeline.mergeUsed = "vision-preferred";
-      merged = docaiDrugs;
-    } else {
-      pipeline.mergeUsed = "clova-deterministic-fallback";
-      merged = parseDrugsFromClovaText(clovaText);
-    }
+    // 사용자 정책 (최종): Clova OCR 줄 파서 결과만 그대로 채택. Document AI 무시
+    // (셀 분리가 사진마다 다르게 나와 신뢰 X). LLM 호출 0번. 매핑/검증 X.
+    // 보험코드는 마스터 매칭 (matchMedication 의 9자리 매칭) 만으로 단가/수수료 보정.
+    pipeline.mergeUsed = "clova-only";
+    merged = parseDrugsFromClovaText(clovaText);
     pipeline.mergeDrugCount = merged.length;
 
     // ── Vision · Positional 교차 검증 ──────────────────────────────────────
