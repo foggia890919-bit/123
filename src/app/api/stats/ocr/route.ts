@@ -206,15 +206,18 @@ export async function POST(req: NextRequest) {
     // 동일 거래처가 EMR 두 개 (예: 모니터 사진 + 종이 사진) 를 섞어 올리는 케이스에서
     // 잘못된 ColumnTemplate 캐시 적용을 막기 위해 OCR 본 작업 전에 vendor 라벨부터 붙인다.
     const docaiConfigured = isDocumentAiConfigured();
-    // 사용자 정책: Gemini Pro Vision 1번 호출만 — 사진 직접 분석. 모든 OCR 후처리 폐기.
-    // (12시간 동안 Clova/Document AI 후처리 + LLM 검증 시도했으나 사진별 회귀 반복 → 사용자 결정).
-    // Clova/Document AI 는 진단 표시용으로만 호출 (메인 흐름엔 미사용).
-    const [clovaOut, geminiOut, docaiOut, classifierOut] = await Promise.allSettled([
+    // 사용자 정책 (최종): LLM 호출 일체 폐기. OCR (Document AI 셀 단위 / Clova text)
+    // 결과 그대로 화면. 마스터 매칭만 보험코드 9자리로 단가/수수료 보정.
+    const [clovaOut, docaiOut, classifierOut] = await Promise.allSettled([
       callClovaOcr(base64, ext),
-      callGeminiVision(base64, mimeType, []),
       docaiConfigured ? callDocumentAi(base64, mimeType) : Promise.reject(new Error("not configured")),
       classifyVendor(base64, mimeType),
     ]);
+    // Vision 호출 폐기 — 진단 표시용 빈 결과
+    const geminiOut: PromiseSettledResult<GeminiVisionResult> = {
+      status: "fulfilled",
+      value: { drugs: [] },
+    };
 
     const classifierResult: VendorClassification =
       classifierOut.status === "fulfilled"
@@ -369,10 +372,18 @@ export async function POST(req: NextRequest) {
     // ── 단일 흐름: Pro 모델 교차 검증 ─────────────────────────────────────
     // 사용자 정책: Clova OCR text + Gemini Vision raw 두 결과를 Pro 모델에 같이 던져서
     // 행별 교차 검증으로 최종 약품 리스트 결정. 분기 단일화 — Vision 단독/positional/
-    // 사용자 정책: Gemini Pro Vision 결과 그대로 채택. OCR 후처리·검증 단계 일체 없음.
-    // 마스터 매칭 (matchMedication) 으로 정확한 단가/수수료만 보정.
-    pipeline.mergeUsed = "vision-preferred";
-    merged = visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 90) }));
+    // 사용자 정책: OCR 결과 그대로 → 화면. LLM 호출 0번. 매핑/검증 X.
+    //   - Document AI 결과 (셀 단위 추출) 우선
+    //   - Document AI 부실 시 Clova text 줄 단위 파서 폴백
+    //   - 보험코드는 마스터 매칭 (matchMedication 의 9자리 매칭) 만으로 단가/수수료 보정
+    const docaiDrugs = docai ? parseDrugsFromDocAi(docai) : [];
+    if (docaiDrugs.length >= 3) {
+      pipeline.mergeUsed = "vision-preferred";
+      merged = docaiDrugs;
+    } else {
+      pipeline.mergeUsed = "clova-deterministic-fallback";
+      merged = parseDrugsFromClovaText(clovaText);
+    }
     pipeline.mergeDrugCount = merged.length;
 
     // ── Vision · Positional 교차 검증 ──────────────────────────────────────
@@ -1300,18 +1311,30 @@ function parseDrugsFromDocAi(docai: DocAiResult): MergedDrug[] {
   const table = docai.tables[0];
   if (table.length < 2) return [];
 
-  // 헤더 행 — 보통 첫 행. 키워드 매칭으로 컬럼 인덱스 파악.
-  const headerCells = table[0].cells.map((c) => c.replace(/\s+/g, "").trim());
-  const productNameIdx = headerCells.findIndex((h) =>
-    /(처방명칭|약품명|제품명|품명|명칭|처방약명)/.test(h)
-  );
-  const quantityIdx = headerCells.findIndex((h) =>
-    /(사용량|총사용량|총투여량|총량|수량|조제량|투약량|처방량)/.test(h)
-  );
-  if (productNameIdx === -1 || quantityIdx === -1) return [];
+  // 헤더 행 검색 — 처음 3행까지 검사 (헤더가 항상 첫 행은 아님; 일부 EMR 은 제목/메타 행이 위에).
+  // productName 키워드 + quantity 키워드 둘 다 매칭되는 행을 헤더로 결정.
+  let productNameIdx = -1;
+  let quantityIdx = -1;
+  let headerRowIdx = -1;
+  for (let i = 0; i < Math.min(table.length, 3); i++) {
+    const cells = table[i].cells.map((c) => c.replace(/\s+/g, "").trim());
+    const pIdx = cells.findIndex((h) =>
+      /(처방명칭|약품명|제품명|품명|명칭|처방약명)/.test(h)
+    );
+    const qIdx = cells.findIndex((h) =>
+      /(사용량|총사용량|총투여량|총량|수량|조제량|투약량|처방량)/.test(h)
+    );
+    if (pIdx !== -1 && qIdx !== -1) {
+      productNameIdx = pIdx;
+      quantityIdx = qIdx;
+      headerRowIdx = i;
+      break;
+    }
+  }
+  if (headerRowIdx === -1) return [];
 
   const drugs: MergedDrug[] = [];
-  for (let i = 1; i < table.length; i++) {
+  for (let i = headerRowIdx + 1; i < table.length; i++) {
     const cells = table[i].cells;
     const productName = (cells[productNameIdx] ?? "").trim();
     const quantityRaw = (cells[quantityIdx] ?? "").replace(/[^\d.]/g, "");
