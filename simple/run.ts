@@ -563,35 +563,56 @@ async function processDay(
     lines.push(`📦 ${sShipments}건 배송 / 출고 ${sBottles}개`);
     lines.push(`💳 수수료 ${won(sCommission)} / 💵 정산예정 ${won(sSettlement)}`);
 
-    // 키워드별 — 결제완료
-    const sBy = new Map<string, { keyword: string; bottles: number; sales: number; orderIds: Set<string> }>();
+    // 상품별 — 결제완료 (상품번호 + 상품명 그룹핑)
+    interface ProductGroup {
+      productKey: string; // channelProductNo (없으면 productName)
+      productName: string;
+      bottles: number;
+      sales: number;
+      orderIds: Set<string>;
+    }
+    const sBy = new Map<string, ProductGroup>();
     for (const r of sLive) {
-      const k = r.keyword || `(미분류)${r.productName.slice(0, 20)}`;
-      const cur = sBy.get(k) ?? { keyword: k, bottles: 0, sales: 0, orderIds: new Set() };
+      const k = r.channelProductNo || r.productName;
+      const cur = sBy.get(k) ?? {
+        productKey: k,
+        productName: r.productName,
+        bottles: 0,
+        sales: 0,
+        orderIds: new Set(),
+      };
       cur.bottles += r.bottles;
       cur.sales += r.salesAmount;
       cur.orderIds.add(r.orderId);
       sBy.set(k, cur);
     }
     const sSummary = Array.from(sBy.values()).sort((a, b) => b.sales - a.sales);
-    for (const k of sSummary) {
-      lines.push(`• <b>${k.keyword}</b>  ${k.bottles}개 · ${k.orderIds.size}건 · ${won(k.sales)}`);
+    for (const p of sSummary) {
+      const shortName = p.productName.length > 35 ? p.productName.slice(0, 35) + "…" : p.productName;
+      lines.push(`• <code>${p.productKey}</code> ${shortName}\n   ${p.bottles}개 · ${p.orderIds.size}건 · ${won(p.sales)}`);
     }
 
-    // 키워드별 — 취소
+    // 상품별 — 취소
     if (sCancel.length > 0) {
-      const sByC = new Map<string, { keyword: string; bottles: number; sales: number; orderIds: Set<string> }>();
+      const sByC = new Map<string, ProductGroup>();
       for (const r of sCancel) {
-        const k = r.keyword || `(미분류)${r.productName.slice(0, 20)}`;
-        const cur = sByC.get(k) ?? { keyword: k, bottles: 0, sales: 0, orderIds: new Set() };
+        const k = r.channelProductNo || r.productName;
+        const cur = sByC.get(k) ?? {
+          productKey: k,
+          productName: r.productName,
+          bottles: 0,
+          sales: 0,
+          orderIds: new Set(),
+        };
         cur.bottles += r.bottles;
         cur.sales += r.salesAmount;
         cur.orderIds.add(r.orderId);
         sByC.set(k, cur);
       }
       const sSummaryC = Array.from(sByC.values()).sort((a, b) => b.sales - a.sales);
-      for (const k of sSummaryC) {
-        lines.push(`• <s>${k.keyword}</s>  ${k.bottles}개 · ${k.orderIds.size}건 · -${won(k.sales)}`);
+      for (const p of sSummaryC) {
+        const shortName = p.productName.length > 35 ? p.productName.slice(0, 35) + "…" : p.productName;
+        lines.push(`• <s><code>${p.productKey}</code> ${shortName}</s>\n   ${p.bottles}개 · ${p.orderIds.size}건 · -${won(p.sales)}`);
       }
     }
 
