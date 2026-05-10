@@ -206,17 +206,15 @@ export async function POST(req: NextRequest) {
     // 동일 거래처가 EMR 두 개 (예: 모니터 사진 + 종이 사진) 를 섞어 올리는 케이스에서
     // 잘못된 ColumnTemplate 캐시 적용을 막기 위해 OCR 본 작업 전에 vendor 라벨부터 붙인다.
     const docaiConfigured = isDocumentAiConfigured();
-    // Pro 모델은 callGeminiMerge 한 번만 호출 (이미지 + Clova text 동시 입력).
-    // Vision 별도 호출은 제거 — Pro 두 번 호출 시 Vercel 60초 timeout 초과 회귀 방지.
-    const [clovaOut, docaiOut, classifierOut] = await Promise.allSettled([
+    // 사용자 정책: Gemini Pro Vision 1번 호출만 — 사진 직접 분석. 모든 OCR 후처리 폐기.
+    // (12시간 동안 Clova/Document AI 후처리 + LLM 검증 시도했으나 사진별 회귀 반복 → 사용자 결정).
+    // Clova/Document AI 는 진단 표시용으로만 호출 (메인 흐름엔 미사용).
+    const [clovaOut, geminiOut, docaiOut, classifierOut] = await Promise.allSettled([
       callClovaOcr(base64, ext),
+      callGeminiVision(base64, mimeType, []),
       docaiConfigured ? callDocumentAi(base64, mimeType) : Promise.reject(new Error("not configured")),
       classifyVendor(base64, mimeType),
     ]);
-    const geminiOut: PromiseSettledResult<GeminiVisionResult> = {
-      status: "fulfilled",
-      value: { drugs: [] },
-    };
 
     const classifierResult: VendorClassification =
       classifierOut.status === "fulfilled"
@@ -371,18 +369,10 @@ export async function POST(req: NextRequest) {
     // ── 단일 흐름: Pro 모델 교차 검증 ─────────────────────────────────────
     // 사용자 정책: Clova OCR text + Gemini Vision raw 두 결과를 Pro 모델에 같이 던져서
     // 행별 교차 검증으로 최종 약품 리스트 결정. 분기 단일화 — Vision 단독/positional/
-    // 사용자 정책: Document AI 셀 단위 추출 (productName, quantity 정확) → LLM 은 추출된
-    // 약품명 → 표준 EDI 보험코드 매핑만. LLM 검증 단계 폐기 (47행 처리 시 일부 누락·환각
-    // 회귀 발생). Document AI 부실 시 Clova text 줄 파서로 폴백.
-    const docaiDrugs = docai ? parseDrugsFromDocAi(docai) : [];
-    const baseDrugs = docaiDrugs.length >= 3 ? docaiDrugs : parseDrugsFromClovaText(clovaText);
-    pipeline.mergeUsed = docaiDrugs.length >= 3 ? "vision+clova" : "clova-deterministic-fallback";
-    try {
-      merged = await mapProductsToInsuranceCodes(baseDrugs);
-    } catch (e) {
-      pipeline.mergeError = String(e).slice(0, 200);
-      merged = baseDrugs;
-    }
+    // 사용자 정책: Gemini Pro Vision 결과 그대로 채택. OCR 후처리·검증 단계 일체 없음.
+    // 마스터 매칭 (matchMedication) 으로 정확한 단가/수수료만 보정.
+    pipeline.mergeUsed = "vision-preferred";
+    merged = visionDrugs.map((d) => ({ ...d, confidence: Math.max(d.confidence, 90) }));
     pipeline.mergeDrugCount = merged.length;
 
     // ── Vision · Positional 교차 검증 ──────────────────────────────────────
@@ -2030,49 +2020,22 @@ async function callGeminiVision(
   if (!process.env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY 미설정");
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-  const prompt = `당신은 한국 병원의 다양한 EMR 처방통계 표를 읽는 전문가입니다.
-
-# 작업 순서
-1. 먼저 표의 **헤더(컬럼명)** 를 식별하세요. EMR마다 컬럼 구성이 다릅니다.
-   - 가능한 헤더: 약품코드, 약품명, 제품명, 약품영형/제형, 단위, 수량, 일수,
-     총투여량, 총사용량, 단가, 금액, 송금액, 제약회사, 제약사, 보험코드, 청구코드
-2. 각 약품 행에서 헤더에 맞춰 값을 뽑으세요.
-3. 합계/소계, 검색기간, 내원구분/급비구분 같은 메타데이터 행은 제외하세요.
-
-# 사진이 비뚤어진 경우 (중요)
-사진이 카메라로 찍혀 약간 기울거나 원근 왜곡이 있을 수 있습니다.
-- 약품명의 가로선(같은 글자 위/아래 라인)을 행의 기준선으로 삼고, 그 라인을 따라
-  좌→우로 같은 행의 데이터를 모으세요.
-- 절대 이미지 좌표 Y 가 약간 다르더라도, 시각적으로 같은 행처럼 정렬돼있다면 같은 행입니다.
-- 인접 행의 숫자가 같은 행처럼 보일 때 약품명이 어느 라인에 있는지 다시 확인하세요.
+  const prompt = `이 한국 EMR 처방통계 표 사진의 약품 리스트를 추출해.
 
 # 출력 필드
-- insuranceCode: 한국 표준 EDI 9자리 보험코드(요양급여비용 청구코드).
-  1) 표 안에 9자리 숫자가 있으면 그걸 사용.
-  2) **표에 없어도 제품명을 정확히 알면 표준 EDI 9자리 코드를 출력**.
-     예: 아라펜정 → 658600100, 가바로닌캡슐100mg → 656001220,
-         디오디핀정5/80mg → 656004010, 록사펜정60mg → 656000260,
-         암로베틴정5mg → 656003690, 카디렌정25mg → 657303150,
-         도리스캡슐300mg → 654300440, 클로피렌정75mg → 647302700.
-  3) EMR 내부 코드 (mosapit, 103, 219+, 223* 같은 짧은 숫자) 는 9자리가 아니므로 빈 문자열.
-  4) 모르거나 확신 없으면 빈 문자열. **추측·환각 금지**.
-- productName: 정확한 제품명. OCR 오타가 의심되면 일반 약품명으로 자연스럽게 정정
-  (예: "양로베틴" → "암로베틴", "아라젠" → "아라펜"). 제약사명은 productName 끝에서 제거.
-- companyName: 제약회사명 (셀트리온제약, 알리코제약, 한국메디카, HLB제약 등).
-- quantity: **반드시 "사용량"·"총사용량"·"총투여량"·"수량"·"조제량" 컬럼의 값**.
-  ⚠️ 절대 단가/금액/총액/환자수 컬럼 값이 아님. 헤더에 "단가"는 단위가격, "환자수"는
-  환자 명수. 표 헤더 예시: [처방코드 / 처방명칭 / 환자수 / 단가 / 사용량 / 총액] →
-  수량 = 사용량 컬럼. 단가·환자수·총액을 절대 수량으로 쓰지 마세요.
-- confidence: 약품명·수량·제약사·보험코드 모두 명확 = 95+. 보험코드만 모름 = 80.
-  약품명 오타 심함 또는 행 깨짐 = 50~70.
+- insuranceCode: 한국 표준 EDI 9자리 보험코드. 표에 9자리 숫자가 있으면 사용. 없어도
+  약품명을 정확히 알면 표준 EDI 코드 출력. 모르거나 확신 없으면 빈 문자열 (추측 금지).
+- productName: 약품명 (한글+영문 그대로). OCR 오타는 표준 약품명으로 정정.
+- companyName: 제약사명 (셀트리온제약, 알리코제약, HLB제약, 한국휴텍스제약, 마더스제약,
+  메디카코리아, 동구바이오제약, 오스틴제약 등).
+- quantity: 사용량/총사용량/총투여량/수량/조제량 컬럼 값. **절대 환자수·단가·금액 X**.
+- confidence: 0~100.
 
-# 중요
-- **합계행/메타행 절대 출력 X** — "NH팜", "비급여", "총계", "소계", 거래처명/주소/전화번호
-  같이 약품명 칸이 비었거나 약품 아닌 라벨 라인은 결과에서 완전 제외.
-- **각 약품 행을 독립적으로 처리** — 한 행의 데이터를 다른 행과 합치지 말 것.
-- 같은 약품이 여러 행에 처방되면 각 행별로 별도 추출.
+# 제외
+합계행 (NH팜, 비급여, 총계 등 약품 아닌 라인). 거래처명·주소·전화번호. 헤더 자체.
 
-JSON: { "drugs": [ { "insuranceCode": "", "productName": "", "companyName": "", "quantity": "", "confidence": 0 } ] }${clientContextHint(clientContext)}`;
+# 출력 (JSON 만)
+{ "drugs": [{ "insuranceCode": "", "productName": "", "companyName": "", "quantity": "", "confidence": 0 }] }${clientContextHint(clientContext)}`;
 
   const response = await ai.models.generateContent({
     // Vision 단계 — 이미지에서 직접 약품 추출. flash-lite 보다 정확한 pro 사용.
