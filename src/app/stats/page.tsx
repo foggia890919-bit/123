@@ -1416,10 +1416,11 @@ export default function StatsPage() {
             title="드래그하여 높이 조절" />
         </div>
 
-        {/* 2-pane data view: 사진매칭 / 최종수정 */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* 사진매칭: OCR 인식 원본 (read-only, 항상 4컬럼 헤더 표시) */}
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col max-h-[80vh]">
+        {/* 사용자 정책: 두 박스 통합 — 사진매칭 (read-only) 숨기고 최종수정 (편집 가능) 만 표시.
+            OCR 결과는 manualDrugs 로 자동 복사되어 최종수정 박스에서 바로 편집 가능. */}
+        <div className="grid grid-cols-1 gap-4">
+          {/* 사진매칭: OCR 인식 원본 — UI 에서 숨김 (데이터/진단은 내부에서 유지) */}
+          <div className="hidden bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col max-h-[80vh]">
             <div className="border-b border-gray-100 px-3 h-[44px] flex items-center gap-2 overflow-x-auto">
               <span className="text-xs font-semibold text-gray-700">① 사진매칭</span>
               <span className="text-xs bg-blue-50 text-blue-600 border border-blue-200 px-1.5 py-0.5 rounded">CLOVA + GEMINI</span>
