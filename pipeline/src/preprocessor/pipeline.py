@@ -43,6 +43,7 @@ class PreprocessOptions:
     apply_clahe: bool = True
     invert_dark_background: bool = True
     boost_table: bool = False        # 표 양식에서만 켠다
+    vlm_adapter: object | None = None  # 주어지면 OpenCV 실패 시 AI-Assisted Cropping 폴백
     debug_dir: Path | str | None = None
 
 
@@ -89,12 +90,14 @@ def preprocess(image: np.ndarray, options: PreprocessOptions | None = None) -> P
                 "→ perspective/shadow 비활성"
             )
 
-    # 3. 원근 보정
+    # 3. 원근 보정 (OpenCV 실패 시 vlm_adapter 있으면 AI-Assisted Cropping으로 폴오버)
     if do_perspective:
-        work, perspective_method = correct_perspective(work)
+        work, perspective_method = correct_perspective(work, vlm_adapter=opts.vlm_adapter)
         debug.save(f"perspective_{perspective_method}", work)
-        if perspective_method == "fallback":
-            notes.append("perspective: 모서리 검출 실패 → 원본 사용")
+        if perspective_method.startswith("fallback"):
+            notes.append(f"perspective: {perspective_method} → 원본 사용")
+        elif perspective_method.startswith("vlm"):
+            notes.append(f"perspective: AI-Assisted Cropping 적용 ({perspective_method})")
 
     # 4. 그림자 제거
     if do_shadow:

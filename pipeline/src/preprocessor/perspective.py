@@ -142,38 +142,75 @@ def correct_perspective(
     min_area_ratio: float = 0.25,
     aspect_range: tuple[float, float] = (0.4, 2.5),
     min_span_ratio: float = 0.5,
+    vlm_adapter: object | None = None,
 ) -> tuple[np.ndarray, str]:
     """모서리를 찾아 정면으로 편 이미지와 사용된 방법명을 반환.
 
-    세 단계 신뢰성 가드 — 하나라도 실패하면 fallback (원본 그대로):
-      1. 사각형 면적 / 원본 면적 >= min_area_ratio
-      2. 결과 종횡비가 aspect_range 안
-      3. corners의 x 범위와 y 범위가 각각 이미지 W·H의 min_span_ratio 이상
-         (종이의 일부분, 예: 우측 절반만 잡은 케이스를 직접 차단)
+    검출 순서:
+      1. OpenCV (Hough → Contour) 시도
+      2. OpenCV가 실패하거나 가드를 못 통과하면 vlm_adapter가 주어진 경우
+         AI-Assisted Cropping (VLM에게 4 모서리 좌표 직접 물음) 시도
+      3. 그것도 실패하면 fallback (원본 그대로)
 
-    실데이터에서 perspective 검출은 본질적으로 불안정하므로 잘못된 결과를
-    내느니 원본을 VLM에 그대로 넘기는 게 안전하다 (VLM이 어느 정도 흡수).
+    세 단계 신뢰성 가드 — 하나라도 실패하면 다음 방법으로 폴오버:
+      - 사각형 면적 / 원본 면적 >= min_area_ratio
+      - 결과 종횡비가 aspect_range 안
+      - corners의 x 범위와 y 범위가 각각 이미지 W·H의 min_span_ratio 이상
     """
-    result = find_document_corners(image)
-    if result.corners is None:
-        return image, "fallback"
-
     h_img, w_img = image.shape[:2]
     img_area = h_img * w_img
-    quad_area = _quad_area(result.corners)
-    if quad_area < img_area * min_area_ratio:
-        return image, "fallback_too_small"
 
-    pts = result.corners.reshape(4, 2)
+    cv_result = find_document_corners(image)
+    cv_status = _evaluate_corners(
+        cv_result.corners, image, img_area, min_area_ratio, aspect_range, min_span_ratio
+    )
+    if cv_status == "ok":
+        return warp_to_front(image, cv_result.corners), cv_result.method
+
+    if vlm_adapter is None:
+        return image, cv_status if cv_result.corners is not None else "fallback"
+
+    from .vlm_corners import locate_corners_with_vlm
+
+    vlm_res = locate_corners_with_vlm(image, vlm_adapter)
+    if vlm_res.corners is None:
+        return image, f"fallback_vlm({vlm_res.note})"
+
+    ordered = _order_corners(vlm_res.corners)
+    vlm_status = _evaluate_corners(
+        ordered, image, img_area, min_area_ratio, aspect_range, min_span_ratio
+    )
+    if vlm_status == "ok":
+        return warp_to_front(image, ordered), f"vlm(conf={vlm_res.confidence:.2f})"
+    return image, f"fallback_vlm_{vlm_status}"
+
+
+def _evaluate_corners(
+    corners: np.ndarray | None,
+    image: np.ndarray,
+    img_area: float,
+    min_area_ratio: float,
+    aspect_range: tuple[float, float],
+    min_span_ratio: float,
+) -> str:
+    """corners가 신뢰할 만한지 검사 — 'ok' 또는 실패 사유 코드 반환."""
+    if corners is None:
+        return "fallback"
+    quad_area = _quad_area(corners)
+    if quad_area < img_area * min_area_ratio:
+        return "fallback_too_small"
+    h_img, w_img = image.shape[:2]
+    pts = corners.reshape(4, 2)
     x_span = (pts[:, 0].max() - pts[:, 0].min()) / w_img
     y_span = (pts[:, 1].max() - pts[:, 1].min()) / h_img
     if x_span < min_span_ratio or y_span < min_span_ratio:
-        return image, "fallback_partial"
-
-    warped = warp_to_front(image, result.corners)
-    h, w = warped.shape[:2]
-    aspect = w / h
+        return "fallback_partial"
+    # 종횡비는 워프 후 해상도로 판단 — pre-warp 모의 측정
+    width = max(np.linalg.norm(pts[2] - pts[3]), np.linalg.norm(pts[1] - pts[0]))
+    height = max(np.linalg.norm(pts[1] - pts[2]), np.linalg.norm(pts[0] - pts[3]))
+    if height < 1:
+        return "fallback_bad_aspect"
+    aspect = width / height
     if aspect < aspect_range[0] or aspect > aspect_range[1]:
-        return image, "fallback_bad_aspect"
-
-    return warped, result.method
+        return "fallback_bad_aspect"
+    return "ok"

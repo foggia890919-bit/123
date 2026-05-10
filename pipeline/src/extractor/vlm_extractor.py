@@ -33,6 +33,8 @@ class ExtractResult:
     parse_errors: list[str]
     raw: dict
     attempt: int = 1
+    confidences: dict[str, float] = field(default_factory=dict)
+    """필드별 VLM 자신감 점수 (0~1). VLM이 _confidences 키로 반환한 값. 없으면 빈 딕트."""
 
 
 _ANCHOR_RULES = (
@@ -60,6 +62,16 @@ _BASE_RULES = (
     "  5. line_items 필드는 행 단위 배열로 반환하되, 각 행을 객체로 만들어라.\n"
 )
 
+_CONFIDENCE_RULES = (
+    "[자신감 점수]\n"
+    "  추출한 각 필드에 대해 0~1 사이의 자신감 점수를 별도 키 '_confidences'에\n"
+    "  같이 반환하라. 1.0 = 글자가 또렷이 보이고 100% 확신, 0.5 = 추론·보정 들어감,\n"
+    "  0.0 = 거의 못 읽음. line_items의 경우 행 자체에 대해 한 점수를 매겨\n"
+    "  '_confidences': {'drugs[0]': 0.9, 'drugs[1]': 0.4, ...} 식으로 표기.\n"
+    "  점수가 0.6 미만인 필드는 후속 검증 단계에서 자동 재추출 대상이 되니\n"
+    "  보수적으로 평가하라.\n"
+)
+
 
 def _build_prompt(template: TemplateSpec, retry: RetryContext | None = None) -> str:
     field_lines = "\n".join(
@@ -71,7 +83,8 @@ def _build_prompt(template: TemplateSpec, retry: RetryContext | None = None) -> 
         "뽑아라.\n\n"
         f"[추출 대상]\n{field_lines}\n\n"
         f"{_ANCHOR_RULES}\n"
-        f"{_BASE_RULES}"
+        f"{_BASE_RULES}\n"
+        f"{_CONFIDENCE_RULES}"
     )
     if retry is None:
         return head
@@ -118,6 +131,15 @@ def extract(
             attempt=attempt,
         )
 
+    confidences_raw = data.pop("_confidences", {}) if isinstance(data, dict) else {}
+    confidences: dict[str, float] = {}
+    if isinstance(confidences_raw, dict):
+        for k, v in confidences_raw.items():
+            try:
+                confidences[str(k)] = max(0.0, min(1.0, float(v)))
+            except (TypeError, ValueError):
+                continue
+
     Model = build_pydantic_model(template)
     try:
         validated = Model.model_validate(data)
@@ -134,4 +156,5 @@ def extract(
         parse_errors=parse_errors,
         raw=data,
         attempt=attempt,
+        confidences=confidences,
     )

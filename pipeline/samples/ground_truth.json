@@ -1,0 +1,122 @@
+{
+  "_note": "5개 샘플의 ground truth. 어시스턴트(multimodal Claude)가 직접 이미지를 읽어 전사. VLM 추출 결과와 자동 비교(diff)하기 위한 oracle. confidence는 사람이 보고 확신한 정도(high/partial). 모니터/회전/dense 사진은 partial로 표시.",
+  "_template_id": "pharmacy_stats_kr",
+  "_footer_format": "YYYY-MM/병원명(사업자번호)/[의사명]/제약사명",
+
+  "01_paper_rotated.jpg": {
+    "confidence": "partial",
+    "footer_raw": "2026-04/신목제일의원(113-96-03529)//정우신약",
+    "summary": {
+      "period_start": "2026-04-01",
+      "period_end": "2026-04-30",
+      "hospital_name": "신목제일의원",
+      "hospital_biz_no": "113-96-03529",
+      "prescriber_name": null,
+      "pharma_company": "정우신약",
+      "drug_count_total": 14,
+      "summary_total_qty": 2329,
+      "summary_total_amount": 1662681
+    },
+    "drugs_partial_high_confidence": [
+      {"drug_code": "645400190", "drug_name": "닥소토닐캡", "unit_price": 781, "total_qty": 30, "total_amount": 23430},
+      {"drug_code": "645400470", "drug_name": "비유푸4정10밀리그램", "unit_price": 421, "total_qty": 45, "total_amount": 18945},
+      {"drug_code": "645400610", "drug_name": "스타비프정", "unit_price": 153, "total_qty": 35, "total_amount": 5355},
+      {"drug_code": "645401310", "drug_name": "콘프조쉘정", "unit_price": 443, "total_qty": 90, "total_amount": 39870},
+      {"drug_code": "645403740", "drug_name": "이토베드정", "unit_price": 106, "total_qty": 84, "total_amount": 8904},
+      {"drug_code": "645404500", "drug_name": "네실렌에쓰정", "unit_price": 1251, "total_qty": 180, "total_amount": 225180},
+      {"drug_code": "645404530", "drug_name": "도세뉴드오정10/10밀리그램", "unit_price": 895, "total_qty": 720, "total_amount": 644400},
+      {"drug_code": "645404550", "drug_name": "도세뉴드오정10/10밀리그램", "unit_price": 611, "total_qty": 120, "total_amount": 73320},
+      {"drug_code": "645405790", "drug_name": "도세코억정", "unit_price": 19293, "total_qty": 1, "total_amount": 19293},
+      {"drug_code": "645406240", "drug_name": "본세바정150밀리그램", "unit_price": 612, "total_qty": 600, "total_amount": 367200},
+      {"drug_code": "652900780", "drug_name": "야토는정10밀리그램", "unit_price": 658, "total_qty": 290, "total_amount": 190820},
+      {"drug_code": "652003140", "drug_name": "도원제약10밀리그램", "unit_price": 725, "total_qty": 60, "total_amount": 43500}
+    ],
+    "_caveats": "회전된 종이 사진. 일부 행은 글자가 가려져 약품명만 부분 전사. 산술 검증 가능한 행만 기재."
+  },
+
+  "02_screenshot_clean.jpg": {
+    "confidence": "high",
+    "footer_raw": "2026-04/일산365의원(687-90-02484)//이재영/위더스제약",
+    "summary": {
+      "period_start": "2026-04-01",
+      "period_end": "2026-04-30",
+      "hospital_name": "일산365의원",
+      "hospital_biz_no": "687-90-02484",
+      "prescriber_name": "이재영",
+      "pharma_company": "위더스제약",
+      "drug_count_total": 4,
+      "summary_total_qty": 1244,
+      "summary_total_amount": 578686
+    },
+    "drugs": [
+      {"drug_code": "660701210", "drug_name": "위더스세프라디캡슐500mg", "unit": "1캡슐", "prescribe_count": 2, "unit_price": 205, "total_qty": 30, "total_amount": 6150},
+      {"drug_code": "660700830", "drug_name": "아스틴정", "unit": "1정", "prescribe_count": 1, "unit_price": 176, "total_qty": 14, "total_amount": 2464},
+      {"drug_code": "660701200", "drug_name": "위더스세파클러캡슐250mg", "unit": "1캡슐", "prescribe_count": 63, "unit_price": 438, "total_qty": 792, "total_amount": 346896},
+      {"drug_code": "660703240", "drug_name": "세프포정(내복)", "unit": "1정", "prescribe_count": 42, "unit_price": 547, "total_qty": 408, "total_amount": 223176}
+    ],
+    "_caveats": "스크린샷 — 100% 신뢰. 모든 산술 검증 통과 (205*30=6150, 176*14=2464, 438*792=346896, 547*408=223176, 합=578686)."
+  },
+
+  "03_monitor_photo.jpg": {
+    "confidence": "partial",
+    "footer_raw": "2026-04/강남대보의원(419-90-65803)//세아엔영약(주)",
+    "summary": {
+      "period_start": "2026-04-01",
+      "period_end": "2026-04-30",
+      "hospital_name": "강남대보의원",
+      "hospital_biz_no": "419-90-65803",
+      "prescriber_name": null,
+      "pharma_company": "세아엔영약(주)",
+      "drug_count_total": 35,
+      "summary_total_qty": 18669.5,
+      "summary_total_amount": 11309366
+    },
+    "drugs_partial_high_confidence": [
+      {"drug_name": "엑스코랄정5/5/5mg", "total_qty": 16669.5, "total_amount": 11309366}
+    ],
+    "_caveats": "회전된 모니터 사진. 약 30+행 매우 작은 글씨. 좌측 트리뷰 UI도 함께 캡처되어 있음. 헤더와 합계만 신뢰. 본문 행 단위 전사는 실제 VLM 호출이 필요."
+  },
+
+  "04_paper_watermark.jpg": {
+    "confidence": "high",
+    "footer_raw": "2026-04/배재천신경과의원(221-90-46977)//경보제약",
+    "summary": {
+      "period_start": "2026-04-01",
+      "period_end": "2026-04-30",
+      "hospital_name": "배재천신경과의원",
+      "hospital_biz_no": "221-90-46977",
+      "prescriber_name": null,
+      "pharma_company": "(주)경보제약",
+      "drug_count_total": 2,
+      "summary_total_qty": 60,
+      "summary_total_amount": 29040
+    },
+    "drugs": [
+      {"drug_code": "665002840", "drug_name": "아픽솔정2.5mg(내복)", "unit": "1정", "prescribe_count": 1, "unit_price": 484, "total_qty": 30, "total_amount": 14520},
+      {"drug_code": "665002850", "drug_name": "아픽솔정5mg(내복)", "unit": "1정", "prescribe_count": 1, "unit_price": 484, "total_qty": 30, "total_amount": 14520}
+    ],
+    "_caveats": "워터마크 '배재천신경과'는 데이터 영역 밖(하단 여백)이라 추출 영향 없음. 산술 검증 통과 (484*30=14520, 합=29040)."
+  },
+
+  "05_monitor_skewed.jpg": {
+    "confidence": "high",
+    "footer_raw": "2026-04/강동천호정형외과(384-98-00322)/원종원/영진약품",
+    "summary": {
+      "period_start": "2026-04-01",
+      "period_end": "2026-04-30",
+      "hospital_name": "강동천호정형외과",
+      "hospital_biz_no": "384-98-00322",
+      "prescriber_name": "원종원",
+      "pharma_company": "영진약품",
+      "drug_count_total": 3,
+      "summary_total_qty": 560,
+      "summary_total_amount": 209600
+    },
+    "drugs": [
+      {"drug_code": "d20past", "drug_name": "오파스트정(리마프로스트알파덱스)_(0.16667mg/정)", "department": "2진료실", "prescribe_count": 22, "days": 149, "total_qty": 298, "unit_price": 319, "total_amount": 95062, "visit_type": "외래"},
+      {"drug_code": "d20past", "drug_name": "오파스트정(리마프로스트알파덱스)_(0.16667mg/정)", "department": "1진료실", "prescribe_count": 5, "days": 44, "total_qty": 118, "unit_price": 319, "total_amount": 37642, "visit_type": "외래"},
+      {"drug_code": "d2rabenew", "drug_name": "라베뉴정10/500밀리그램(라베프라졸나트륨/탄산수소나트륨)", "department": "2진료실", "prescribe_count": 8, "days": 72, "total_qty": 144, "unit_price": 534, "total_amount": 76896, "visit_type": "외래"}
+    ],
+    "_caveats": "약품코드는 영문+숫자 (d20past, d2rabenew) — drug_code 정규식 ^\\d{6,9}$ 위반! 이 사진은 자체 코드 시스템을 쓰는 것으로 보임. 산술 검증 통과 (319*298=95062, 319*118=37642, 534*144=76896, 합=209600)."
+  }
+}

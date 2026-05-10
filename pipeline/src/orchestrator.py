@@ -1,13 +1,12 @@
-"""4단계 파이프라인 오케스트레이터.
+"""5단계 파이프라인 오케스트레이터.
 
-  Stage 1  preprocess     OpenCV 보정 (각도/조도/그림자/표 격자)
+  Stage 1  preprocess     OpenCV + (옵션) AI-Assisted Cropping
   Stage 2  classify       VLM 1-pass 분류 → unknown 시 generic_document 폴백
-  Stage 3  extract        VLM 2-pass 추출 (앵커 기반 프롬프트)
-  Stage 4  self-correct   validate 결과를 피드백으로 재추출 (max_retries)
+  Stage 3  extract        VLM 2-pass 추출 (앵커 기반 + 필드별 confidence)
+  Stage 4  self-correct   validate 결과를 피드백으로 재추출 (max_retries=3)
+  Stage 5  ROI re-crop    행 단위 산술이 실패한 행만 잘라 VLM 재호출
 
-Stage 4가 빠지면 첫 추출이 어긋나는 순간 그대로 unattended pipeline의 final
-output이 된다. 양식이 병원마다 다르고 촬영 환경이 들쑥날쑥인 상황에서는
-"validator가 틀렸다고 신호를 보내면 같은 그림으로 다시 시도" 루프가 핵심.
+99% 신뢰도 추구: 결정적 검증(산술/형식) → 자가수정 → 잘라서 재추출의 3겹.
 """
 
 from __future__ import annotations
@@ -37,6 +36,8 @@ class PipelineResult:
     attempts: int
     retried: bool
     fell_back_to_generic: bool
+    roi_recrop_attempts: int = 0
+    roi_recrop_notes: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
 
@@ -76,6 +77,22 @@ def _issues_from_report(report: ValidationReport) -> list[str]:
     return msgs
 
 
+def _failed_row_indices(report: ValidationReport) -> list[int]:
+    """row_arith[N] 형태의 실패 룰에서 N 추출."""
+    indices: list[int] = []
+    for lc in report.logical_checks:
+        if lc.passed:
+            continue
+        m = _ROW_IDX_RE.search(lc.rule)
+        if m:
+            indices.append(int(m.group(1)))
+    return sorted(set(indices))
+
+
+import re as _re
+_ROW_IDX_RE = _re.compile(r"row_arith\[(\d+)\]")
+
+
 def run_pipeline(
     image: np.ndarray,
     registry: TemplateRegistry,
@@ -83,7 +100,8 @@ def run_pipeline(
     *,
     forced_template_id: str | None = None,
     preprocess_options: PreprocessOptions | None = None,
-    max_retries: int = 1,
+    max_retries: int = 3,
+    enable_roi_recrop: bool = True,
 ) -> PipelineResult:
     notes: list[str] = []
 
@@ -106,7 +124,7 @@ def run_pipeline(
     attempts = 1
     retried = False
 
-    # Stage 4 — self-correction
+    # Stage 4 — self-correction (max_retries회까지 전체 재추출)
     while report.needs_manual_review and attempts <= max_retries:
         retry_ctx = RetryContext(
             prior_fields=extraction.fields,
@@ -120,6 +138,23 @@ def run_pipeline(
         )
         report = validate(template, extraction.fields, registry.field_types)
 
+    # Stage 5 — ROI re-crop: 산술이 여전히 깨진 행만 잘라 재추출
+    roi_attempts = 0
+    roi_notes: list[str] = []
+    if enable_roi_recrop and report.needs_manual_review:
+        from .extractor.roi_recrop import re_extract_failed_rows
+        failed_idx = _failed_row_indices(report)
+        drugs = extraction.fields.get("drugs") if isinstance(extraction.fields, dict) else None
+        if failed_idx and isinstance(drugs, list):
+            new_drugs, roi_reports = re_extract_failed_rows(
+                pre.image, drugs, failed_idx, adapter
+            )
+            roi_attempts = len(roi_reports)
+            for rep in roi_reports:
+                roi_notes.append(f"ROI[{rep.row_index}]: {rep.note}")
+            extraction.fields["drugs"] = new_drugs
+            report = validate(template, extraction.fields, registry.field_types)
+
     return PipelineResult(
         preprocess=pre,
         classify=cls,
@@ -129,6 +164,8 @@ def run_pipeline(
         attempts=attempts,
         retried=retried,
         fell_back_to_generic=fell_back,
+        roi_recrop_attempts=roi_attempts,
+        roi_recrop_notes=roi_notes,
         notes=notes,
     )
 
