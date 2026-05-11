@@ -292,23 +292,38 @@ interface ProductRule {
   label: string;
   costPerUnit: number;
   logisticsPerOrder: number;
+  type: "main" | "additional" | "auto"; // 메인 / 추가 / 자동
 }
 
 async function loadProductRules(): Promise<Map<string, ProductRule>> {
   const map = new Map<string, ProductRule>();
   if (!SHEET_CREDS) return map;
   try {
-    await ensureTab(SHEET_CREDS, "상품매핑", ["상품번호", "라벨", "원가(개당)", "물류비(건당)"]);
-    const rows = await readRange(SHEET_CREDS, "상품매핑!A2:D10000");
+    await ensureTab(SHEET_CREDS, "상품매핑", [
+      "상품번호",
+      "라벨",
+      "원가(개당)",
+      "물류비(건당)",
+      "유형 (메인/추가, 빈칸=자동)",
+    ]);
+    const rows = await readRange(SHEET_CREDS, "상품매핑!A2:E10000");
     for (const r of rows) {
       const num = String(r[0] ?? "").trim();
       const label = String(r[1] ?? "").trim();
       if (!num) continue;
+      const typeStr = String(r[4] ?? "").trim().toLowerCase();
+      const type: ProductRule["type"] =
+        typeStr === "메인" || typeStr === "main" || typeStr === "m"
+          ? "main"
+          : typeStr === "추가" || typeStr === "additional" || typeStr === "추가옵션" || typeStr === "a"
+            ? "additional"
+            : "auto";
       map.set(num, {
         channelProductNo: num,
         label: label || num,
         costPerUnit: Number(String(r[2] ?? "").replace(/,/g, "")) || 0,
         logisticsPerOrder: Number(String(r[3] ?? "").replace(/,/g, "")) || 0,
+        type,
       });
     }
     if (map.size > 0) console.log(`상품매핑 ${map.size}개 로드`);
@@ -631,7 +646,7 @@ async function processDay(
       orderIds: new Set<string>(),
     });
     const groupByMain = (rows: Row[]): Map<string, MainGroup> => {
-      // 1) orderId 별로 묶고, 매출 큰 게 메인
+      // 1) orderId 별로 묶기
       const byOrder = new Map<string, Row[]>();
       for (const r of rows) {
         const list = byOrder.get(r.orderId) ?? [];
@@ -640,9 +655,26 @@ async function processDay(
       }
       const out = new Map<string, MainGroup>();
       for (const list of byOrder.values()) {
-        list.sort((a, b) => b.salesAmount - a.salesAmount);
-        const mainRow = list[0];
-        const adds = list.slice(1);
+        // 메인/추가 결정:
+        //  - 상품매핑에 「메인」 명시된 행이 있으면 그게 메인 (첫 번째)
+        //  - 「추가」 명시된 행은 추가
+        //  - 아무것도 안 정해진 경우: 매출 큰 게 메인 (휴리스틱)
+        const taggedMain = list.find((r) => productRules.get(r.channelProductNo)?.type === "main");
+        let mainRow: Row;
+        let adds: Row[];
+        if (taggedMain) {
+          mainRow = taggedMain;
+          adds = list.filter((r) => r !== taggedMain);
+        } else {
+          // 「추가」 태그된 것 제외하고 가장 매출 큰 게 메인
+          const notTaggedAsAdd = list.filter(
+            (r) => productRules.get(r.channelProductNo)?.type !== "additional",
+          );
+          const pool = notTaggedAsAdd.length > 0 ? notTaggedAsAdd : list;
+          pool.sort((a, b) => b.salesAmount - a.salesAmount);
+          mainRow = pool[0];
+          adds = list.filter((r) => r !== mainRow);
+        }
         const mainKey = mainRow.channelProductNo || mainRow.productName;
         let g = out.get(mainKey);
         if (!g) {
