@@ -286,6 +286,38 @@ async function loadRules(): Promise<Rule[]> {
   return DEFAULT_RULES;
 }
 
+// 「상품매핑」 — 상품번호 → 라벨/원가/물류비 (옵션매핑 패턴보다 우선 적용)
+interface ProductRule {
+  channelProductNo: string;
+  label: string;
+  costPerUnit: number;
+  logisticsPerOrder: number;
+}
+
+async function loadProductRules(): Promise<Map<string, ProductRule>> {
+  const map = new Map<string, ProductRule>();
+  if (!SHEET_CREDS) return map;
+  try {
+    await ensureTab(SHEET_CREDS, "상품매핑", ["상품번호", "라벨", "원가(개당)", "물류비(건당)"]);
+    const rows = await readRange(SHEET_CREDS, "상품매핑!A2:D10000");
+    for (const r of rows) {
+      const num = String(r[0] ?? "").trim();
+      const label = String(r[1] ?? "").trim();
+      if (!num) continue;
+      map.set(num, {
+        channelProductNo: num,
+        label: label || num,
+        costPerUnit: Number(String(r[2] ?? "").replace(/,/g, "")) || 0,
+        logisticsPerOrder: Number(String(r[3] ?? "").replace(/,/g, "")) || 0,
+      });
+    }
+    if (map.size > 0) console.log(`상품매핑 ${map.size}개 로드`);
+  } catch (err) {
+    console.warn("상품매핑 시트 읽기 실패:", err instanceof Error ? err.message : String(err));
+  }
+  return map;
+}
+
 function classify(productName: string, option: string, rules: Rule[]): Rule | null {
   // 상품명 우선 매칭 (어떤 상품의 주문전환인지가 먼저).
   // 상품명에 매칭 없으면 옵션으로 fallback.
@@ -365,6 +397,7 @@ interface ProcessOptions {
 async function processDay(
   range: { fromIso: string; toIso: string; dateStr: string },
   rules: Rule[],
+  productRules: Map<string, ProductRule>,
   options: ProcessOptions,
 ): Promise<void> {
   console.log(`\n[${range.dateStr}] ${options.sendTelegram ? '메인 보고' : '시트 동기화 only'}`);
@@ -379,7 +412,15 @@ async function processDay(
       const orders = await fetchOrdersForDay(store, range.fromIso, range.toIso);
       for (const o of orders) {
         const po = o.productOrder;
-        const matched = classify(po.productName, po.productOption ?? "", rules);
+        const channelProductNo = po.channelProductNo ?? po.productId ?? "";
+        // 1순위: 「상품매핑」 (productNo 직접 매핑) → 2순위: 「옵션매핑」 (패턴 매칭)
+        const productRule = productRules.get(channelProductNo);
+        const matched = productRule
+          ? null
+          : classify(po.productName, po.productOption ?? "", rules);
+        const keyword = productRule?.label ?? matched?.keyword ?? "";
+        const costPerUnit = productRule?.costPerUnit ?? matched?.costPerUnit ?? 0;
+        const logisticsPerOrder = productRule?.logisticsPerOrder ?? matched?.logisticsPerOrder ?? 0;
         const perUnitBottles = extractBottles(po.productOption ?? po.productName);
         const totalUnits = po.quantity * perUnitBottles;
         const commission =
@@ -389,18 +430,18 @@ async function processDay(
           ?? po.settlementAmount
           ?? po.settleAmount
           ?? (po.totalPaymentAmount - commission);
-        const cost = (matched?.costPerUnit ?? 0) * totalUnits;
-        const logistics = matched?.logisticsPerOrder ?? 0; // 건당 (행 1건에 1번)
+        const cost = costPerUnit * totalUnits;
+        const logistics = logisticsPerOrder;
         const profit = settlement - cost - logistics;
         allRows.push({
           paymentDate: po.paymentDate ?? o.order?.paymentDate ?? "",
           store: store.name,
           orderId: o.order?.orderId ?? po.orderId ?? "",
           productOrderId: po.productOrderId,
-          channelProductNo: po.channelProductNo ?? po.productId ?? "",
+          channelProductNo,
           productName: po.productName,
           optionName: po.productOption ?? "",
-          keyword: matched?.keyword ?? "",
+          keyword,
           quantity: po.quantity,
           bottles: totalUnits,
           salesAmount: po.totalPaymentAmount,
@@ -563,9 +604,10 @@ async function processDay(
     lines.push(`📦 ${sShipments}건 배송 / 출고 ${sBottles}개`);
     lines.push(`💳 수수료 ${won(sCommission)} / 💵 정산예정 ${won(sSettlement)}`);
 
-    // 상품별 — 결제완료 (상품번호 + 상품명 그룹핑)
+    // 상품별 — 결제완료 (상품번호 + 라벨 + 상품명 그룹핑)
     interface ProductGroup {
       productKey: string; // channelProductNo (없으면 productName)
+      label: string;
       productName: string;
       bottles: number;
       sales: number;
@@ -576,6 +618,7 @@ async function processDay(
       const k = r.channelProductNo || r.productName;
       const cur = sBy.get(k) ?? {
         productKey: k,
+        label: r.keyword || `(미분류)${r.productName.slice(0, 15)}`,
         productName: r.productName,
         bottles: 0,
         sales: 0,
@@ -588,8 +631,7 @@ async function processDay(
     }
     const sSummary = Array.from(sBy.values()).sort((a, b) => b.sales - a.sales);
     for (const p of sSummary) {
-      const shortName = p.productName.length > 35 ? p.productName.slice(0, 35) + "…" : p.productName;
-      lines.push(`• <code>${p.productKey}</code> ${shortName}\n   ${p.bottles}개 · ${p.orderIds.size}건 · ${won(p.sales)}`);
+      lines.push(`• <b>${p.label}</b> <code>${p.productKey}</code>\n   ${p.bottles}개 · ${p.orderIds.size}건 · ${won(p.sales)}`);
     }
 
     // 상품별 — 취소
@@ -599,6 +641,7 @@ async function processDay(
         const k = r.channelProductNo || r.productName;
         const cur = sByC.get(k) ?? {
           productKey: k,
+          label: r.keyword || `(미분류)${r.productName.slice(0, 15)}`,
           productName: r.productName,
           bottles: 0,
           sales: 0,
@@ -611,8 +654,7 @@ async function processDay(
       }
       const sSummaryC = Array.from(sByC.values()).sort((a, b) => b.sales - a.sales);
       for (const p of sSummaryC) {
-        const shortName = p.productName.length > 35 ? p.productName.slice(0, 35) + "…" : p.productName;
-        lines.push(`• <s><code>${p.productKey}</code> ${shortName}</s>\n   ${p.bottles}개 · ${p.orderIds.size}건 · -${won(p.sales)}`);
+        lines.push(`• <s><b>${p.label}</b> <code>${p.productKey}</code></s>\n   ${p.bottles}개 · ${p.orderIds.size}건 · -${won(p.sales)}`);
       }
     }
 
@@ -658,6 +700,7 @@ async function main() {
   const arg2 = process.argv[3];
   const rules = await loadRules();
   console.log(`키워드 룰 ${rules.length}개`);
+  const productRules = await loadProductRules();
 
   // 범위 백필: `npx tsx run.ts 2026-04-01 2026-05-01` → 텔레그램 X, 시트만 갱신
   if (arg1 && arg2) {
@@ -677,7 +720,7 @@ async function main() {
     for (let i = 0; i < days.length; i++) {
       console.log(`\n[${i + 1}/${days.length}] ${days[i]}`);
       try {
-        await processDay(dateKstRange(days[i]), rules, { sendTelegram: false });
+        await processDay(dateKstRange(days[i]), rules, productRules, { sendTelegram: false });
       } catch (err) {
         console.error(`[${days[i]}] 실패:`, err instanceof Error ? err.message : String(err));
       }
@@ -688,7 +731,7 @@ async function main() {
 
   // 단일 날짜 백필: 텔레그램 발송
   if (arg1) {
-    await processDay(dateKstRange(arg1), rules, { sendTelegram: true });
+    await processDay(dateKstRange(arg1), rules, productRules, { sendTelegram: true });
     return;
   }
 
@@ -699,7 +742,7 @@ async function main() {
     const range = ranges[i];
     const sendTg = (i === 0);
     try {
-      await processDay(range, rules, { sendTelegram: sendTg });
+      await processDay(range, rules, productRules, { sendTelegram: sendTg });
     } catch (err) {
       console.error(`[${range.dateStr}] 실패:`, err instanceof Error ? err.message : String(err));
     }
