@@ -298,5 +298,11 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   console.error("FATAL:", err instanceof Error ? err.message : String(err));
+  if (err instanceof Error && err.cause) {
+    console.error("CAUSE:", err.cause);
+  }
+  if (err instanceof Error && err.stack) {
+    console.error("STACK:", err.stack.split("\n").slice(0, 5).join("\n"));
+  }
   process.exit(1);
 });
