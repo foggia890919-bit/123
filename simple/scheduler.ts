@@ -19,7 +19,14 @@
 import "dotenv/config";
 import { execSync } from "node:child_process";
 import { existsSync, writeFileSync, unlinkSync, statSync } from "node:fs";
-import { ensureTab, readRange, writeRange, loadCredsFromEnv, type SheetCreds } from "./sheets";
+import {
+  ensureTab,
+  readRange,
+  writeRange,
+  setCheckboxValidation,
+  loadCredsFromEnv,
+  type SheetCreds,
+} from "./sheets";
 
 const SHEET_CREDS: SheetCreds | null = loadCredsFromEnv();
 if (!SHEET_CREDS) throw new Error("Google Sheet 환경변수 없음");
@@ -60,19 +67,38 @@ function nowKst(): string {
   }).format(d);
 }
 
-/** 시트에 작업 행이 모두 있도록 보장 (없는 작업 추가) */
+/** 시트에 작업 행이 모두 있도록 보장 (없는 작업 추가) + GO 행에 체크박스 자동 설정 */
 async function ensureTasks(): Promise<void> {
   await ensureTab(SHEET_CREDS!, TAB, ["작업", "실행 (트리거)", "상태", "마지막 실행", "결과"]);
   const existing = await readRange(SHEET_CREDS!, `${TAB}!A2:A100`);
   const existingNames = new Set(existing.map((r) => String(r[0] ?? "").trim()).filter(Boolean));
-  // 누락된 작업 append
+  // 누락된 작업 append — 행 번호도 추적 (체크박스용)
+  const taskRows = new Map<string, number>(); // 작업명 → 행 번호 (1-based)
+  existing.forEach((r, idx) => {
+    const name = String(r[0] ?? "").trim();
+    if (name) taskRows.set(name, idx + 2);
+  });
   let nextRow = existing.length + 2;
   for (const t of TASKS) {
     if (!existingNames.has(t.name)) {
       await writeRange(SHEET_CREDS!, `${TAB}!A${nextRow}:E${nextRow}`, [
         [t.name, "", "", "", `힌트: ${t.hint}`],
       ]);
+      taskRows.set(t.name, nextRow);
       nextRow++;
+    }
+  }
+
+  // GO 트리거 작업 행의 B열에 체크박스 자동 설정 (DATE_* 는 텍스트 입력이라 제외)
+  const checkboxRows = TASKS
+    .filter((t) => t.hint === "GO")
+    .map((t) => taskRows.get(t.name))
+    .filter((n): n is number => typeof n === "number");
+  if (checkboxRows.length > 0) {
+    try {
+      await setCheckboxValidation(SHEET_CREDS!, TAB, checkboxRows, 1); // B열 = index 1
+    } catch (e) {
+      console.warn(`[scheduler] 체크박스 설정 실패 (무시하고 진행): ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 }

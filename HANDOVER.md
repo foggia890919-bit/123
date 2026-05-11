@@ -38,25 +38,33 @@
 - 검색량 조회 (`volume.ts`) — 헬렌카민스키 107,600회 등 시트에 박힘
 - scheduler.ts 트리거 인식 — GO/실행/TRUE(체크박스) 다 처리
 - 90eb05a 푸시까지 완료
+- **체크박스 자동 생성 코드 구현 완료** (이번 세션) — `sheets.ts:setCheckboxValidation` + `scheduler.ts:ensureTasks` 에서 `hint === "GO"` 행에만 batchUpdate 로 한 번에 설정. 사장님 검증 대기.
 
 ### ❌ 막힌 곳
 
-**1. 시트 체크박스가 자동으로 안 생긴다**
-- 증상: `scheduler.ts` 가 「자동화」 탭에 작업 행은 등록하지만, B열에 체크박스 데이터 검증을 박지 않음
-- 원인 추정: `ensureTasks()` 에서 `writeRange` 로 빈 문자열만 쓰고 있음 (scheduler.ts:72). Sheets API 의 `setDataValidation` 또는 `addDataValidation` 호출 누락
-- 워크어라운드: 사장님이 시트 메뉴 「삽입」 → 「체크박스」 수동 추가
-
-**2. 검색량 조회 중 ~1분 시점에 멈춤 (의심: 타임아웃)**
+**1. 검색량 조회 중 ~1분 시점에 멈춤 (의심: 타임아웃)** ← 유일하게 남은 코드 이슈
 - 증상: `volume.ts` 일부 키워드 처리 후 에러로 종료
-- 원인 *미확인*. 가설:
-  - (a) scheduler.ts 가 1분 cron 인데 작업이 1분 넘으면 lock 충돌 후 강제 종료? — 그런데 `execSync` timeout 은 90분(scheduler.ts:134) 이라 모순
+- 원인 *미확인*. 가설(검증 전):
+  - (a) scheduler.ts 가 1분 cron 인데 작업이 1분 넘으면 lock 충돌? — `execSync` timeout 은 90분(scheduler.ts:141) 이라 모순
   - (b) 네이버 검색광고 API 자체 rate limit / per-request timeout
   - (c) Lightsail 1GB OOM
-- **금지**: 추측만으로 코드 수정 X. 다음 세션에서 정확한 에러 메시지·스택·실행 시각 먼저 확보.
+- **금지**: 추측만으로 코드 수정 X. 다음 세션에서 정확한 에러 메시지·스택·실행 시각·메모리 상태 먼저 확보.
 
-### ⏸ 미확인 (사장님 액션 대기)
-- `bash scripts/install-cron.sh` 결과 + `crontab -l` 출력 확인 안 됨
-- cron 2줄(매일 8시 run + 매분 scheduler) 다 등록됐는지 검증 필요
+### ⏸ 사장님 액션 대기
+
+**A. 체크박스 자동 생성 검증** (이번 세션 산출물)
+1. `cd ~/sales/simple && git pull` (Lightsail)
+2. 1분 안에 scheduler 가 한 번 돌아감 — 시트 「자동화」 탭 B열 (GO 행들) 체크박스 자동 생성 확인
+3. 안 보이면 콘솔 로그 `/home/ubuntu/scheduler.log` 에서 `[scheduler] 체크박스 설정 실패` 메시지 확인
+
+**B. `bash scripts/install-cron.sh` 결과** (이전 세션부터 미확인)
+- 한 줄: `cd ~/sales/simple && git pull && bash scripts/install-cron.sh && crontab -l`
+- cron 2줄(매일 8시 run + 매분 scheduler) 다 등록됐는지 확인
+
+**C. 검색량 타임아웃 — 다음 실행 시 수집할 데이터**
+- 에러 메시지 전문 + 스택
+- `volume.ts` 처리 키워드 번호/시각 (현재 console.log 부족하면 임시 추가)
+- 실행 중 `free -m` 출력
 
 ---
 
@@ -77,16 +85,13 @@
 
 ## 다음 액션 (우선순위 순)
 
-1. **install-cron.sh 결과 확인** — 사장님이 Lightsail SSH 에서 한 줄 실행 후 출력 첨부:
+1. **사장님 — Lightsail 에서 git pull + 검증** (위 「A」, 「B」)
    ```
    cd ~/sales/simple && git pull && bash scripts/install-cron.sh && crontab -l
    ```
-2. **체크박스 자동 생성 구현** — `simple/sheets.ts` 에 `setCheckboxValidation(range)` 헬퍼 추가 후 `scheduler.ts:ensureTasks()` 에서 B열에 적용. Sheets API `batchUpdate` + `setDataValidation` 사용
-3. **검색량 조회 타임아웃 원인 추적** — 추측 X. 다음 실행 시:
-   - 에러 메시지 전문
-   - `console.log` 로 처리 키워드 번호/시각
-   - Lightsail `free -m` 메모리 상태
-   - 그 후에야 수정 방향 결정
+   → 시트 「자동화」 탭 1분 후 새로고침, B열 체크박스 자동 생성 확인
+2. **검색량 조회 타임아웃 진단** — 「C」 의 에러·로그·메모리 확보 후 다음 세션에서 원인 추적 (추측 금지)
+3. **catalog OOM** — 인스턴스 업그레이드 vs catalog 분할 결정 (보류)
 
 ---
 

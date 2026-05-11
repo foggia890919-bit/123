@@ -303,6 +303,57 @@ export async function applyCancelRedRule(
   if (!res.ok) throw new Error(`condFormat ${res.status}: ${await res.text()}`);
 }
 
+/**
+ * 특정 셀들에 체크박스(BOOLEAN) 데이터 검증 적용.
+ * 이미 있어도 덮어쓰기(idempotent). 텍스트 입력이 필요한 행은 제외해서 호출할 것.
+ */
+export async function setCheckboxValidation(
+  c: SheetCreds,
+  tabName: string,
+  rows: number[], // 1-based 행 번호 (체크박스를 박을 행)
+  colIndex: number, // 0-based (B열 = 1)
+): Promise<void> {
+  if (rows.length === 0) return;
+  const token = await getToken(c);
+  const meta = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}?fields=sheets.properties(title,sheetId)`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!meta.ok) throw new Error(`meta ${meta.status}: ${await meta.text()}`);
+  const json = (await meta.json()) as {
+    sheets?: { properties: { title: string; sheetId: number } }[];
+  };
+  const sheetId = json.sheets?.find((s) => s.properties.title === tabName)?.properties.sheetId;
+  if (sheetId == null) throw new Error(`체크박스 — 탭 「${tabName}」 못 찾음`);
+
+  const requests = rows.map((rowNum) => ({
+    setDataValidation: {
+      range: {
+        sheetId,
+        startRowIndex: rowNum - 1,
+        endRowIndex: rowNum,
+        startColumnIndex: colIndex,
+        endColumnIndex: colIndex + 1,
+      },
+      rule: {
+        condition: { type: "BOOLEAN" },
+        showCustomUi: true,
+        strict: false,
+      },
+    },
+  }));
+
+  const res = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}:batchUpdate`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ requests }),
+    },
+  );
+  if (!res.ok) throw new Error(`setCheckboxValidation ${res.status}: ${await res.text()}`);
+}
+
 export function loadCredsFromEnv(): SheetCreds | null {
   const sheetId = process.env.GOOGLE_SHEETS_ID;
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
