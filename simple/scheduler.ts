@@ -91,13 +91,17 @@ async function pollAndRun(): Promise<void> {
 
     const rowNum = i + 2;
 
+    // 체크박스 트리거? (TRUE 면 체크박스, 그 외 텍스트 입력)
+    const isCheckbox = triggerRaw === "TRUE";
+    const clearVal: string | boolean = isCheckbox ? false : "";
+
     // 실행 명령 결정
     let cmd = task.cmd;
     if (task.cmd === "DATE_RANGE") {
       const parts = triggerRaw.split(/\s+/);
       if (parts.length !== 2 || !/^\d{4}-\d{2}-\d{2}$/.test(parts[0]) || !/^\d{4}-\d{2}-\d{2}$/.test(parts[1])) {
         await writeRange(SHEET_CREDS!, `${TAB}!B${rowNum}:E${rowNum}`, [
-          ["", "ERROR", nowKst(), `형식 오류: 「${task.hint}」 형태로 입력`],
+          [clearVal, "ERROR", nowKst(), `형식 오류: 「${task.hint}」 형태로 입력`],
         ]);
         continue;
       }
@@ -105,16 +109,16 @@ async function pollAndRun(): Promise<void> {
     } else if (task.cmd === "DATE_SINGLE") {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(triggerRaw)) {
         await writeRange(SHEET_CREDS!, `${TAB}!B${rowNum}:E${rowNum}`, [
-          ["", "ERROR", nowKst(), `형식 오류: ${task.hint} 형태로 입력`],
+          [clearVal, "ERROR", nowKst(), `형식 오류: ${task.hint} 형태로 입력`],
         ]);
         continue;
       }
       cmd = `npx tsx run.ts ${triggerRaw}`;
     } else {
-      // GO / 실행 등 트리거값 검증
+      // GO / 실행 / TRUE(체크박스) 등 트리거값 검증
       if (!TRIGGER_VALUES.has(triggerRaw.toLowerCase())) {
         await writeRange(SHEET_CREDS!, `${TAB}!B${rowNum}:E${rowNum}`, [
-          ["", "ERROR", nowKst(), `「GO」 또는 「실행」 입력`],
+          [clearVal, "ERROR", nowKst(), `「GO」 또는 ☑️ 체크박스 입력`],
         ]);
         continue;
       }
@@ -122,20 +126,20 @@ async function pollAndRun(): Promise<void> {
 
     // RUNNING 표시
     await writeRange(SHEET_CREDS!, `${TAB}!B${rowNum}:E${rowNum}`, [
-      [RUNNING, RUNNING, nowKst(), ""],
+      [triggerRaw, RUNNING, nowKst(), ""],
     ]);
 
     console.log(`[${nowKst()}] ▶ ${name}: ${cmd}`);
     try {
       execSync(cmd, { cwd: WORKDIR, stdio: "inherit", timeout: 90 * 60 * 1000 });
       await writeRange(SHEET_CREDS!, `${TAB}!B${rowNum}:E${rowNum}`, [
-        ["", "OK", nowKst(), `✅ 완료 ${nowKst()}`],
+        [clearVal, "OK", nowKst(), `✅ 완료 ${nowKst()}`],
       ]);
       console.log(`[${nowKst()}] ✅ ${name} 완료`);
     } catch (err) {
       const msg = err instanceof Error ? err.message.slice(0, 200) : String(err);
       await writeRange(SHEET_CREDS!, `${TAB}!B${rowNum}:E${rowNum}`, [
-        ["", "ERROR", nowKst(), `❌ ${msg}`],
+        [clearVal, "ERROR", nowKst(), `❌ ${msg}`],
       ]);
       console.error(`[${nowKst()}] ❌ ${name}: ${msg}`);
     }

@@ -188,7 +188,7 @@ export async function readRange(c: SheetCreds, rangeA1: string): Promise<string[
 export async function writeRange(
   c: SheetCreds,
   rangeA1: string,
-  values: (string | number)[][],
+  values: (string | number | boolean)[][],
 ): Promise<void> {
   const token = await getToken(c);
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values/${encodeURIComponent(rangeA1)}?valueInputOption=USER_ENTERED`;
