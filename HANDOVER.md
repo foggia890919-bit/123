@@ -11,7 +11,7 @@
 |---|---|
 | 리포 | `https://github.com/foggia890919-bit/123` |
 | 브랜치 | `claude/naver-sales-automation-VKAMr` |
-| 실행 호스트 | AWS Lightsail (1GB RAM, `/home/ubuntu/sales/simple`) |
+| 실행 호스트 | AWS Lightsail 인스턴스 `naver-sales` (512MB RAM, 2 vCPU, 20GB SSD, Seoul Zone A, 43.203.82.234) — 업그레이드 대상 |
 | cron | 매일 08:00 `run.ts` + 매분 `scheduler.ts` |
 | 시트 | Google Sheets (탭: 주문원본, 옵션매핑, 일일집계, 자동화, 검색량조회, …) |
 | 알림 | 텔레그램 |
@@ -23,7 +23,7 @@
 
 - `simple/run.ts` — 매출 보고 (어제 + 7일 롤링, 백필)
 - `simple/scheduler.ts` — 시트 「자동화」 탭 1분 폴링 + lock file
-- `simple/catalog.ts` — 상품 카탈로그 (Lightsail 1GB 에서 OOM 위험)
+- `simple/catalog.ts` — 상품 카탈로그 (Lightsail 512MB 에서 OOM 위험)
 - `simple/volume.ts` — 키워드 검색량 (시트 「검색량조회」 탭)
 - `simple/market.ts` — 시장 카테고리/Top500/규모/순위
 - `simple/audit.ts` — 정산 차감 추적
@@ -53,7 +53,7 @@
 - 원인 *미확인*. 가설(검증 전):
   - (a) scheduler.ts 가 1분 cron 인데 작업이 1분 넘으면 lock 충돌? — `execSync` timeout 은 90분(scheduler.ts:141) 이라 모순
   - (b) 네이버 검색광고 API 자체 rate limit / per-request timeout
-  - (c) Lightsail 1GB OOM
+  - (c) Lightsail 512MB OOM
 - **금지**: 추측만으로 코드 수정 X. 다음 세션에서 정확한 에러 메시지·스택·실행 시각·메모리 상태 먼저 확보.
 
 ### ⏸ 사장님 액션 대기
@@ -104,12 +104,12 @@
    ```
 3. 1분 기다린 후 시트 확인 — scheduler.log 에 lock skip 메시지 끊겨야 정상
 
-### 결정 필요 — catalog OOM 근본 해결
-1GB Lightsail 에서 catalog.ts 가 무조건 OOM. 둘 중 하나:
-- (A) Lightsail 인스턴스 업그레이드 (1GB → 2GB, 월 $5 → $10 수준)
-- (B) catalog.ts 분할 — 페이지 단위 스트림 처리로 메모리 절감 (코드 작업 필요)
-
-결정 후 다음 세션에서 진행.
+### 결정됨 — (A) Lightsail 512MB → 2GB 업그레이드
+- 대상 인스턴스: `naver-sales` (Seoul Zone A, 43.203.82.234)
+- 결정 사유: 시간 절약 + 다른 무거운 작업(market.ts tree, volume.ts) 도 같은 위험 → RAM 여유가 의사결정 자유도 증가
+- 비용: 월 $3.50 → $12 수준 (512MB nano → 2GB 등급)
+- 참고: 같은 계정에 별개 인스턴스 `inventory-worker` (13.125.11.218) 있는데 이번 업그레이드 대상 아님
+- 절차: 스냅샷 → 2GB plan 으로 새 인스턴스 생성 → 정적 IP 재할당 (또는 SSH 접속 정보 갱신) → 검증 후 구 인스턴스 삭제
 
 ### 보류 중
 - **검색량 조회 타임아웃** — 에러 로그·메모리 상태 확보 후 다음 세션에서 진단 (추측 금지)
