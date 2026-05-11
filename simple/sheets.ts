@@ -185,6 +185,21 @@ export async function readRange(c: SheetCreds, rangeA1: string): Promise<string[
   return data.values ?? [];
 }
 
+export async function writeRange(
+  c: SheetCreds,
+  rangeA1: string,
+  values: (string | number)[][],
+): Promise<void> {
+  const token = await getToken(c);
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values/${encodeURIComponent(rangeA1)}?valueInputOption=USER_ENTERED`;
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ values }),
+  });
+  if (!res.ok) throw new Error(`writeRange ${res.status}: ${await res.text()}`);
+}
+
 export async function ensureTab(c: SheetCreds, name: string, headers: string[]): Promise<void> {
   const token = await getToken(c);
   const meta = await fetch(

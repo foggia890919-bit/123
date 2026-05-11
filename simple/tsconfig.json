@@ -10,5 +10,5 @@
     "noEmit": true,
     "lib": ["ES2022"]
   },
-  "include": ["run.ts", "sheets.ts", "market.ts", "bot.ts", "lookup.ts", "volume.ts", "audit.ts", "catalog.ts"]
+  "include": ["run.ts", "sheets.ts", "market.ts", "bot.ts", "lookup.ts", "volume.ts", "audit.ts", "catalog.ts", "scheduler.ts"]
 }
