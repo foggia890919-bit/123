@@ -77,6 +77,55 @@ interface ProductSearchItem {
   channelProducts?: ChannelProduct[];
 }
 
+interface OptionCombo {
+  id?: string | number;
+  optionManageCode?: string;
+  option1?: string;
+  option2?: string;
+  option3?: string;
+  sellerManagementCode?: string;
+  price?: number;
+  stockQuantity?: number;
+  usable?: boolean;
+}
+
+interface AdditionalProduct {
+  id?: string | number;
+  optionManageCode?: string;
+  groupName?: string;
+  name?: string;
+  price?: number;
+  stockQuantity?: number;
+  usable?: boolean;
+}
+
+async function fetchOriginDetail(token: string, originProductNo: string): Promise<{
+  options: OptionCombo[];
+  additionals: AdditionalProduct[];
+} | null> {
+  try {
+    const res = await fetch(`${NAVER_BASE}/v2/products/origin-products/${originProductNo}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as Record<string, unknown>;
+    // 가능한 경로들 시도 (네이버 API 응답 구조가 가끔 변함)
+    const origin = (data.originProduct ?? data) as Record<string, unknown> | undefined;
+    const detailAttr = origin?.detailAttribute as Record<string, unknown> | undefined;
+    const optionInfo =
+      (detailAttr?.optionInfo as Record<string, unknown> | undefined)
+      ?? (origin?.optionInfo as Record<string, unknown> | undefined);
+    const options = (optionInfo?.optionCombinations as OptionCombo[] | undefined) ?? [];
+    const additionals =
+      (optionInfo?.additionalProducts as AdditionalProduct[] | undefined)
+      ?? (optionInfo?.addProducts as AdditionalProduct[] | undefined)
+      ?? [];
+    return { options, additionals };
+  } catch {
+    return null;
+  }
+}
+
 async function searchProducts(token: string, storeName: string): Promise<ProductSearchItem[]> {
   const all: ProductSearchItem[] = [];
   let page = 1;
@@ -121,11 +170,13 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
     "스토어",
     "원본상품번호",
     "채널상품번호",
+    "옵션관리번호",
     "상품명",
+    "옵션명",
     "카테고리",
     "가격",
     "상태",
-    "유형(추정)",
+    "유형 (메인/옵션/추가)",
     "수집일",
   ]);
 
@@ -139,29 +190,43 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
       const token = await getToken(store.clientId, store.clientSecret);
       const products = await searchProducts(token, store.name);
       let count = 0;
+      let detailFetched = 0;
       for (const p of products) {
         const channels = p.channelProducts ?? [];
+        const originNo = String(p.originProductNo ?? "");
+
+        // 옵션 + 추가상품 detail 가져오기 (메인 상품만 있으면 충분, 채널 사이는 중복)
+        const detail = originNo ? await fetchOriginDetail(token, originNo) : null;
+        if (detail) detailFetched++;
+        await sleep(500); // detail API 호출 사이 딜레이
+
+        // 채널 행 추가
         if (channels.length === 0) {
-          // 채널 없는 경우 — 원본만이라도 기록
           rows.push([
             store.name,
-            String(p.originProductNo ?? ""),
+            originNo,
             "",
+            "", // 옵션관리번호
             p.name ?? "",
+            "",
             "",
             0,
             p.statusType ?? "",
-            "",
+            "메인",
             today,
           ]);
           count++;
         }
         for (const ch of channels) {
+          const chNo = String(ch.channelProductNo ?? "");
+          // 메인 행
           rows.push([
             store.name,
-            String(p.originProductNo ?? ""),
-            String(ch.channelProductNo ?? ""),
+            originNo,
+            chNo,
+            "", // 옵션관리번호 (메인이라서 빈 칸)
             ch.name ?? p.name ?? "",
+            "",
             ch.wholeCategoryName ?? "",
             ch.salePrice ?? 0,
             ch.statusType ?? p.statusType ?? "",
@@ -169,9 +234,46 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
             today,
           ]);
           count++;
+
+          // 옵션 행 (같은 채널상품번호 아래, 옵션관리번호로 구별)
+          for (const opt of detail?.options ?? []) {
+            const optName = [opt.option1, opt.option2, opt.option3].filter(Boolean).join(" / ");
+            rows.push([
+              store.name,
+              originNo,
+              chNo,
+              String(opt.optionManageCode ?? opt.id ?? ""),
+              ch.name ?? p.name ?? "",
+              optName,
+              ch.wholeCategoryName ?? "",
+              opt.price ?? 0,
+              opt.usable === false ? "STOPPED" : "SALE",
+              "옵션",
+              today,
+            ]);
+            count++;
+          }
+
+          // 추가상품 행 (같은 채널상품번호 아래)
+          for (const add of detail?.additionals ?? []) {
+            rows.push([
+              store.name,
+              originNo,
+              chNo,
+              String(add.optionManageCode ?? add.id ?? ""),
+              add.groupName ?? add.name ?? "",
+              add.name ?? "",
+              ch.wholeCategoryName ?? "",
+              add.price ?? 0,
+              add.usable === false ? "STOPPED" : "SALE",
+              "추가",
+              today,
+            ]);
+            count++;
+          }
         }
       }
-      console.log(`  → 정리 ${count}행`);
+      console.log(`  → 정리 ${count}행 (detail ${detailFetched}개)`);
     } catch (err) {
       console.error(`  실패: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}`);
     }
@@ -182,8 +284,8 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
     console.log("\n⚠️ 수집된 상품 없음. (API 권한 / IP 화이트리스트 확인)");
     return;
   }
-  // 스토어+채널상품번호 기준 upsert
-  await upsertRows(creds, "상품목록", rows, (r) => `${r[0]}|${r[2]}`);
+  // 스토어+채널+옵션관리번호 기준 upsert (옵션 행 구분)
+  await upsertRows(creds, "상품목록", rows, (r) => `${r[0]}|${r[2]}|${r[3]}`);
   console.log(`\n✅ 「상품목록」 ${rows.length}행 갱신`);
 }
 
