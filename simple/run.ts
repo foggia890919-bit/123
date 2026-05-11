@@ -568,7 +568,7 @@ async function processDay(
   const lines: string[] = [];
   lines.push(`<b>📊 ${range.dateStr} 매출 보고</b>`);
   lines.push("");
-  lines.push(`💰 전체매출 ${won(grossSales)} (${allRows.length}건)`);
+  lines.push(`💰 총매출 ${won(grossSales)} (${allRows.length}건)`);
   if (canceled.length > 0) {
     lines.push(`❌ 취소매출 -${won(canceledSales)} (${canceled.length}건)`);
   }
@@ -598,9 +598,13 @@ async function processDay(
     const sCommission = sLive.reduce((s, r) => s + r.commission, 0);
     const sSettlement = sLive.reduce((s, r) => s + r.settlement, 0);
 
+    const sGrossSales = sLiveSales + sCancelSales;
+    const sTotalCount = sLive.length + sCancel.length;
+
     lines.push(`<b>━━ ${store.name} ━━</b>`);
-    lines.push(`✅ 매출 ${won(sLiveSales)} (${sLive.length}건)`);
-    if (sCancel.length > 0) lines.push(`❌ 취소 -${won(sCancelSales)} (${sCancel.length}건)`);
+    lines.push(`💰 총매출 ${won(sGrossSales)} (${sTotalCount}건)`);
+    if (sCancel.length > 0) lines.push(`❌ 취소매출 -${won(sCancelSales)} (${sCancel.length}건)`);
+    lines.push(`✅ 최종매출 ${won(sLiveSales)} (${sLive.length}건)`);
     lines.push(`📦 ${sShipments}건 배송 / 출고 ${sBottles}개`);
     lines.push(`💳 수수료 ${won(sCommission)} / 💵 정산예정 ${won(sSettlement)}`);
 
