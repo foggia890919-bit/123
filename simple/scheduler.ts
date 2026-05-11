@@ -18,6 +18,7 @@
 
 import "dotenv/config";
 import { execSync } from "node:child_process";
+import { existsSync, writeFileSync, unlinkSync, statSync } from "node:fs";
 import { ensureTab, readRange, writeRange, loadCredsFromEnv, type SheetCreds } from "./sheets";
 
 const SHEET_CREDS: SheetCreds | null = loadCredsFromEnv();
@@ -25,6 +26,8 @@ if (!SHEET_CREDS) throw new Error("Google Sheet 환경변수 없음");
 
 const TAB = "자동화";
 const WORKDIR = process.env.SALES_DIR ?? "/home/ubuntu/sales/simple";
+const LOCK_FILE = "/tmp/sales-scheduler.lock";
+const LOCK_STALE_MS = 2 * 60 * 60 * 1000; // 2시간 — stale lock 자동 제거
 
 interface TaskDef {
   name: string;
@@ -140,8 +143,23 @@ async function pollAndRun(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  await ensureTasks();
-  await pollAndRun();
+  // 중복 실행 방지 — lock file
+  if (existsSync(LOCK_FILE)) {
+    const age = Date.now() - statSync(LOCK_FILE).mtimeMs;
+    if (age < LOCK_STALE_MS) {
+      console.log(`[scheduler] 이미 실행 중 (lock ${Math.round(age / 1000)}초 전). skip.`);
+      return;
+    }
+    console.log(`[scheduler] stale lock 제거 (${Math.round(age / 60000)}분 경과)`);
+    unlinkSync(LOCK_FILE);
+  }
+  writeFileSync(LOCK_FILE, String(process.pid));
+  try {
+    await ensureTasks();
+    await pollAndRun();
+  } finally {
+    if (existsSync(LOCK_FILE)) unlinkSync(LOCK_FILE);
+  }
 }
 
 main().catch((err) => {
