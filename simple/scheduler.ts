@@ -109,8 +109,10 @@ async function pollAndRun(): Promise<void> {
     const r = rows[i];
     const name = String(r[0] ?? "").trim();
     const triggerRaw = String(r[1] ?? "").trim();
+    const statusRaw = String(r[2] ?? "").trim();
     if (!name || !triggerRaw) continue;
-    if (triggerRaw === RUNNING) continue; // 이미 실행 중
+    if (triggerRaw === "FALSE") continue; // 체크박스 unchecked = 트리거 아님 (트리거값 검증 실패 → 무한 ERROR 루프 방지)
+    if (statusRaw === RUNNING) continue;  // 상태(C열)가 RUNNING — 이전 실행이 비정상 종료(OOM 등). 사장님 수동 정리 대기
 
     const task = TASKS.find((t) => t.name === name);
     if (!task) continue;

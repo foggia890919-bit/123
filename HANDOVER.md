@@ -37,8 +37,14 @@
 ### ✅ 작동 확인
 - 검색량 조회 (`volume.ts`) — 헬렌카민스키 107,600회 등 시트에 박힘
 - scheduler.ts 트리거 인식 — GO/실행/TRUE(체크박스) 다 처리
-- 90eb05a 푸시까지 완료
-- **체크박스 자동 생성 코드 구현 완료** (이번 세션) — `sheets.ts:setCheckboxValidation` + `scheduler.ts:ensureTasks` 에서 `hint === "GO"` 행에만 batchUpdate 로 한 번에 설정. 사장님 검증 대기.
+- 체크박스 자동 생성 검증 완료 (B열 7개, DATE_* 행 제외) ✓
+
+### 🚨 발생한 사고 (2026-05-11 catalog OOM)
+- 「상품 카탈로그 갱신」 시작 후 ~7분 시점에 Linux OOM 킬러가 catalog.ts 강제 종료
+- `Killed` 시그너처 + `/home/ubuntu/scheduler.log` 의 lock 600초+ 까지 skip 누적이 증거
+- SIGKILL 때문에 `finally { unlinkSync(LOCK_FILE) }` 안 돌아서 `/tmp/sales-scheduler.lock` stale 상태
+- 시트 5행: B5=TRUE, C5=RUNNING 박힌 채 멈춤
+- 추가로 발견된 코드 버그: `scheduler.ts:113` 의 RUNNING 체크가 잘못된 칼럼(B) 을 보고 있어서 2시간 후 stale lock 자동 제거되면 무한 OOM 루프 위험. 한 줄 수정 완료(C열 보도록 변경) + 푸시 대기.
 
 ### ❌ 막힌 곳
 
@@ -85,13 +91,29 @@
 
 ## 다음 액션 (우선순위 순)
 
-1. **사장님 — Lightsail 에서 git pull + 검증** (위 「A」, 「B」)
+### 🚑 긴급 — catalog OOM 사고 정리 (사장님 직접)
+
+**순서대로**:
+1. 시트 「자동화」 탭 5행:
+   - B5 체크박스 클릭 해제 (☑ → ☐)
+   - C5 「RUNNING」 텍스트 삭제 (셀 비우기)
+2. Lightsail SSH:
    ```
-   cd ~/sales/simple && git pull && bash scripts/install-cron.sh && crontab -l
+   rm /tmp/sales-scheduler.lock
+   cd ~/sales/simple && git pull   # 버그 수정 반영
    ```
-   → 시트 「자동화」 탭 1분 후 새로고침, B열 체크박스 자동 생성 확인
-2. **검색량 조회 타임아웃 진단** — 「C」 의 에러·로그·메모리 확보 후 다음 세션에서 원인 추적 (추측 금지)
-3. **catalog OOM** — 인스턴스 업그레이드 vs catalog 분할 결정 (보류)
+3. 1분 기다린 후 시트 확인 — scheduler.log 에 lock skip 메시지 끊겨야 정상
+
+### 결정 필요 — catalog OOM 근본 해결
+1GB Lightsail 에서 catalog.ts 가 무조건 OOM. 둘 중 하나:
+- (A) Lightsail 인스턴스 업그레이드 (1GB → 2GB, 월 $5 → $10 수준)
+- (B) catalog.ts 분할 — 페이지 단위 스트림 처리로 메모리 절감 (코드 작업 필요)
+
+결정 후 다음 세션에서 진행.
+
+### 보류 중
+- **검색량 조회 타임아웃** — 에러 로그·메모리 상태 확보 후 다음 세션에서 진단 (추측 금지)
+- **시장 작업 검증** — catalog 정리 후 「시장 카테고리 트리」 부터 단계별 진행 (의존 순서: 트리 → 추적 표시 → 키워드 → 규모/순위)
 
 ---
 
