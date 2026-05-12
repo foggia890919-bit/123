@@ -41,6 +41,8 @@ interface CategoryNode {
   childCount: number;
 }
 
+let categoryDebugLogged = false;
+
 async function fetchCategoryChildren(parentCid: string): Promise<{ cid: string; name: string; childCount: number }[]> {
   const res = await fetch("https://datalab.naver.com/shoppingInsight/getCategory.naver", {
     method: "POST",
@@ -53,8 +55,16 @@ async function fetchCategoryChildren(parentCid: string): Promise<{ cid: string; 
     body: `cid=${encodeURIComponent(parentCid)}`,
   });
   if (!res.ok) throw new Error(`category ${parentCid}: ${res.status}: ${await res.text().then((t) => t.slice(0, 200))}`);
-  const data = (await res.json()) as { childList?: { cid: string; name: string; childCount: number }[] };
-  return data.childList ?? [];
+  const data = (await res.json()) as Record<string, unknown>;
+  // 진단: 첫 응답(cid=0) raw 출력 — childCount 필드명 + 응답 구조 확인용
+  if (!categoryDebugLogged) {
+    categoryDebugLogged = true;
+    console.log(`\n[진단3] DataLab category cid=${parentCid} 응답 raw (3000자):`);
+    console.log(JSON.stringify(data, null, 2).slice(0, 3000));
+    console.log(`[진단3] 끝\n`);
+  }
+  const childList = (data.childList as { cid: string; name: string; childCount: number }[] | undefined) ?? [];
+  return childList;
 }
 
 async function fetchCategoryTree(): Promise<CategoryNode[]> {
