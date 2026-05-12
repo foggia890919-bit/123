@@ -80,6 +80,10 @@ interface ProductSearchItem {
 interface OptionCombo {
   id?: string | number;
   optionManageCode?: string;
+  optionName1?: string;
+  optionName2?: string;
+  optionName3?: string;
+  // 구버전 호환
   option1?: string;
   option2?: string;
   option3?: string;
@@ -111,7 +115,17 @@ async function fetchOriginDetail(token: string, originProductNo: string): Promis
     });
     if (!res.ok) return null;
     const data = (await res.json()) as Record<string, unknown>;
-    // 진단: 옵션 데이터가 *실제로 채워진* 첫 detail 만 raw 출력 (빈 옵션 상품은 skip)
+    // 진단4: 사장님이 추가상품 쓰는 특정 상품의 raw 출력 (HTML 제외, 추가상품 위치 파악용)
+    if (originProductNo === "12365897567") {
+      const cleaned = JSON.parse(JSON.stringify(data));
+      if (cleaned?.originProduct?.detailContent) cleaned.originProduct.detailContent = "[HTML 생략]";
+      console.log(`\n[진단4] origin-product ${originProductNo} 전체 detail (HTML 제외):`);
+      console.log(`  최상위 keys: ${Object.keys(data).join(", ")}`);
+      console.log(JSON.stringify(cleaned, null, 2).slice(0, 12000));
+      console.log(`[진단4] 끝\n`);
+    }
+
+    // 진단2: 옵션 데이터가 *실제로 채워진* 첫 detail 만 raw 출력 (빈 옵션 상품은 skip)
     if (!detailDebugLogged) {
       const op = (data.originProduct ?? data) as Record<string, unknown>;
       const detailAttr = op?.detailAttribute as Record<string, unknown> | undefined;
@@ -268,7 +282,11 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
 
           // 옵션 행 (같은 채널상품번호 아래, 옵션관리번호로 구별)
           for (const opt of detail?.options ?? []) {
-            const optName = [opt.option1, opt.option2, opt.option3].filter(Boolean).join(" / ");
+            const optName = [
+              opt.optionName1 ?? opt.option1,
+              opt.optionName2 ?? opt.option2,
+              opt.optionName3 ?? opt.option3,
+            ].filter(Boolean).join(" / ");
             rows.push([
               store.name,
               originNo,
