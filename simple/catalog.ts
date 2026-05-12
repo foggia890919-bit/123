@@ -105,6 +105,7 @@ interface AdditionalProduct {
 }
 
 let detailDebugLogged = false; // 첫 detail 1개만 raw 응답 출력 (옵션명 매핑 진단용)
+let searchDebugLogged = false; // 첫 search 응답 raw 출력 (URL 위치 파악용)
 
 async function fetchOriginDetail(token: string, originProductNo: string): Promise<{
   options: OptionCombo[];
@@ -197,7 +198,16 @@ async function searchProducts(token: string, storeName: string): Promise<Product
     }
     const data = (await res.json()) as { contents?: ProductSearchItem[]; totalPages?: number; totalElements?: number };
     const items = data.contents ?? [];
-    if (page === 1) console.log(`  [${storeName}] 총 ${data.totalElements ?? "?"}개`);
+    if (page === 1) {
+      console.log(`  [${storeName}] 총 ${data.totalElements ?? "?"}개`);
+      // 진단5: 첫 상품 raw 출력 (URL 위치 파악용) — 1회만
+      if (!searchDebugLogged && items.length > 0) {
+        searchDebugLogged = true;
+        console.log(`\n[진단5] searchProducts 첫 상품 raw (URL 위치 파악):`);
+        console.log(JSON.stringify(items[0], null, 2).slice(0, 5000));
+        console.log(`[진단5] 끝\n`);
+      }
+    }
     all.push(...items);
     if (items.length < SIZE) break;
     if (data.totalPages && page >= data.totalPages) break;
@@ -227,10 +237,16 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
     "가격",
     "상태",
     "유형 (메인/옵션/추가)",
+    "URL",
     "수집일",
   ]);
 
-  const today = new Date().toISOString().slice(0, 10);
+  // 수집일 — KST 기준 "YYYY-MM-DD HH:mm" (시트가 날짜로 변형하지 못하게 + 분까지 표시)
+  const nowKst = new Date(Date.now() + 9 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 16)
+    .replace("T", " ");
+  const today = nowKst;
   const rows: (string | number)[][] = [];
 
   for (const store of STORES) {
@@ -263,12 +279,14 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
             0,
             p.statusType ?? "",
             "메인",
+            "", // URL 없음 (채널 정보 없는 메인)
             today,
           ]);
           count++;
         }
         for (const ch of channels) {
           const chNo = String(ch.channelProductNo ?? "");
+          const url = chNo ? `https://smartstore.naver.com/main/products/${chNo}` : "";
           // 메인 행
           rows.push([
             store.name,
@@ -281,6 +299,7 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
             ch.salePrice ?? 0,
             ch.statusType ?? p.statusType ?? "",
             inferType(ch, p),
+            url,
             today,
           ]);
           count++;
@@ -303,6 +322,7 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
               opt.price ?? 0,
               opt.usable === false ? "STOPPED" : "SALE",
               "옵션",
+              url,
               today,
             ]);
             count++;
@@ -321,6 +341,7 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
               add.price ?? 0,
               add.usable === false ? "STOPPED" : "SALE",
               "추가",
+              url,
               today,
             ]);
             count++;
