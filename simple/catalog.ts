@@ -99,6 +99,8 @@ interface AdditionalProduct {
   usable?: boolean;
 }
 
+let detailDebugLogged = false; // 첫 detail 1개만 raw 응답 출력 (옵션명 매핑 진단용)
+
 async function fetchOriginDetail(token: string, originProductNo: string): Promise<{
   options: OptionCombo[];
   additionals: AdditionalProduct[];
@@ -109,6 +111,17 @@ async function fetchOriginDetail(token: string, originProductNo: string): Promis
     });
     if (!res.ok) return null;
     const data = (await res.json()) as Record<string, unknown>;
+    // 진단: 옵션이 있는 첫 detail 1개만 raw 응답 출력 (옵션명 필드명 파악용)
+    if (!detailDebugLogged) {
+      const dataStr = JSON.stringify(data, null, 2);
+      // 옵션이 있는 detail 만 출력 (없는 건 스킵)
+      if (dataStr.includes("optionCombination") || dataStr.includes("optionInfo")) {
+        detailDebugLogged = true;
+        console.log(`\n[진단] origin-product ${originProductNo} detail raw 응답 (5000자):`);
+        console.log(dataStr.slice(0, 5000));
+        console.log(`[진단] 끝\n`);
+      }
+    }
     // 가능한 경로들 시도 (네이버 API 응답 구조가 가끔 변함)
     const origin = (data.originProduct ?? data) as Record<string, unknown> | undefined;
     const detailAttr = origin?.detailAttribute as Record<string, unknown> | undefined;
