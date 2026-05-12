@@ -24,7 +24,7 @@
 
 import "dotenv/config";
 import bcrypt from "bcryptjs";
-import { ensureTab, upsertRows, loadCredsFromEnv, type SheetCreds } from "./sheets";
+import { ensureTab, appendRows, clearTabData, loadCredsFromEnv, type SheetCreds } from "./sheets";
 
 interface StoreConfig {
   name: string;
@@ -282,11 +282,13 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
 
   if (rows.length === 0) {
     console.log("\n⚠️ 수집된 상품 없음. (API 권한 / IP 화이트리스트 확인)");
+    console.log("   기존 시트 데이터는 그대로 유지 (안전망)");
     return;
   }
-  // 스토어+채널+옵션관리번호 기준 upsert (옵션 행 구분)
-  await upsertRows(creds, "상품목록", rows, (r) => `${r[0]}|${r[2]}|${r[3]}`);
-  console.log(`\n✅ 「상품목록」 ${rows.length}행 갱신`);
+  // 매 실행마다 시트 데이터 싹 지우고 새로 작성 — 컬럼 정렬·stale 행·삭제 상품 자동 정리
+  await clearTabData(creds, "상품목록", 2);
+  await appendRows(creds, "상품목록!A2", rows);
+  console.log(`\n✅ 「상품목록」 ${rows.length}행 새로 작성 (기존 데이터 클리어 후)`);
 }
 
 async function main(): Promise<void> {

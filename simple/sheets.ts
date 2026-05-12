@@ -304,6 +304,26 @@ export async function applyCancelRedRule(
 }
 
 /**
+ * 시트 탭의 데이터 영역(헤더 제외) 전체 비우기.
+ * 매번 처음부터 새로 채우는 작업(catalog/market 등)에서 컬럼 정렬 어긋남·stale 행을 원천 차단.
+ */
+export async function clearTabData(
+  c: SheetCreds,
+  tabName: string,
+  startRow = 2,
+): Promise<void> {
+  const token = await getToken(c);
+  const range = `${tabName}!A${startRow}:Z100000`;
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values/${encodeURIComponent(range)}:clear`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) throw new Error(`clearTabData ${res.status}: ${await res.text()}`);
+}
+
+/**
  * 특정 셀들에 체크박스(BOOLEAN) 데이터 검증 적용.
  * 이미 있어도 덮어쓰기(idempotent). 텍스트 입력이 필요한 행은 제외해서 호출할 것.
  */
