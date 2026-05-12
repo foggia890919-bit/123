@@ -189,15 +189,28 @@ export async function writeRange(
   c: SheetCreds,
   rangeA1: string,
   values: (string | number | boolean)[][],
+  maxAttempts = 3,
 ): Promise<void> {
-  const token = await getToken(c);
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values/${encodeURIComponent(rangeA1)}?valueInputOption=USER_ENTERED`;
-  const res = await fetch(url, {
-    method: "PUT",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ values }),
-  });
-  if (!res.ok) throw new Error(`writeRange ${res.status}: ${await res.text()}`);
+  // 네트워크 일시 장애(fetch failed 등) 자동 회피 — 1.5s, 3s, 4.5s 백오프
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const token = await getToken(c);
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values/${encodeURIComponent(rangeA1)}?valueInputOption=USER_ENTERED`;
+      const res = await fetch(url, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ values }),
+      });
+      if (!res.ok) throw new Error(`writeRange ${res.status}: ${await res.text()}`);
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (attempt === maxAttempts) throw err;
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
+    }
+  }
+  throw lastErr;
 }
 
 export async function ensureTab(c: SheetCreds, name: string, headers: string[]): Promise<void> {

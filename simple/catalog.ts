@@ -95,7 +95,8 @@ interface OptionCombo {
 
 interface AdditionalProduct {
   id?: string | number;
-  optionManageCode?: string;
+  optionManageCode?: string; // 구버전
+  sellerManagementCode?: string; // 신버전 (supplementProducts)
   groupName?: string;
   name?: string;
   price?: number;
@@ -161,8 +162,12 @@ async function fetchOriginDetail(token: string, originProductNo: string): Promis
       (detailAttr?.optionInfo as Record<string, unknown> | undefined)
       ?? (origin?.optionInfo as Record<string, unknown> | undefined);
     const options = (optionInfo?.optionCombinations as OptionCombo[] | undefined) ?? [];
+
+    // 추가상품 — detailAttribute.supplementProductInfo.supplementProducts (확인됨)
+    const supplementInfo = detailAttr?.supplementProductInfo as Record<string, unknown> | undefined;
     const additionals =
-      (optionInfo?.additionalProducts as AdditionalProduct[] | undefined)
+      (supplementInfo?.supplementProducts as AdditionalProduct[] | undefined)
+      ?? (optionInfo?.additionalProducts as AdditionalProduct[] | undefined) // 구버전 호환
       ?? (optionInfo?.addProducts as AdditionalProduct[] | undefined)
       ?? [];
     return { options, additionals };
@@ -309,7 +314,7 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
               store.name,
               originNo,
               chNo,
-              String(add.optionManageCode ?? add.id ?? ""),
+              String(add.sellerManagementCode ?? add.optionManageCode ?? add.id ?? ""),
               add.groupName ?? add.name ?? "",
               add.name ?? "",
               ch.wholeCategoryName ?? "",
