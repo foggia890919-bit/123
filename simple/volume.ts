@@ -176,15 +176,27 @@ async function main(): Promise<void> {
     await sleep(300);
   }
 
-  // 시트에 한 행씩 쓰기 (행 번호 비연속일 수 있어서)
-  for (const item of items) {
+  // 시트에 batch update — 한 번의 HTTP 요청으로 quota 1회만 소비 (분당 60회 write 한도 회피)
+  // 행 번호가 비연속일 수 있어서 range 별 묶음 형식 사용
+  const updates = items.map((item) => {
     const r = results.get(item.keyword)!;
-    await writeRowsRange(SHEET_CREDS, `${TAB}!B${item.row}:F${item.row}`, [
-      [r.pc, r.mb, r.pc + r.mb, r.comp, today],
-    ]);
-  }
+    return {
+      range: `${TAB}!B${item.row}:F${item.row}`,
+      values: [[r.pc, r.mb, r.pc + r.mb, r.comp, today]],
+    };
+  });
+  const token = await getToken(SHEET_CREDS);
+  const batchRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_CREDS.sheetId}/values:batchUpdate`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ valueInputOption: "USER_ENTERED", data: updates }),
+    },
+  );
+  if (!batchRes.ok) throw new Error(`batchUpdate ${batchRes.status}: ${await batchRes.text()}`);
 
-  console.log(`\n✅ 완료: ${items.length}개 키워드 시트 갱신.`);
+  console.log(`\n✅ 완료: ${items.length}개 키워드 시트 갱신 (batchUpdate 1회).`);
 }
 
 main().catch((err) => {

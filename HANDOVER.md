@@ -11,7 +11,7 @@
 |---|---|
 | 리포 | `https://github.com/foggia890919-bit/123` |
 | 브랜치 | `claude/naver-sales-automation-VKAMr` |
-| 실행 호스트 | AWS Lightsail 인스턴스 `naver-sales` (512MB RAM, 2 vCPU, 20GB SSD, Seoul Zone A, 43.203.82.234) — 업그레이드 대상 |
+| 실행 호스트 | AWS Lightsail 인스턴스 `Ubuntu-1` (2GB RAM, 2 vCPU, 60GB SSD, Seoul Zone A, **3.35.13.72**) — 2026-05-12 업그레이드 완료 |
 | cron | 매일 08:00 `run.ts` + 매분 `scheduler.ts` |
 | 시트 | Google Sheets (탭: 주문원본, 옵션매핑, 일일집계, 자동화, 검색량조회, …) |
 | 알림 | 텔레그램 |
@@ -39,12 +39,10 @@
 - scheduler.ts 트리거 인식 — GO/실행/TRUE(체크박스) 다 처리
 - 체크박스 자동 생성 검증 완료 (B열 7개, DATE_* 행 제외) ✓
 
-### 🚨 발생한 사고 (2026-05-11 catalog OOM)
-- 「상품 카탈로그 갱신」 시작 후 ~7분 시점에 Linux OOM 킬러가 catalog.ts 강제 종료
-- `Killed` 시그너처 + `/home/ubuntu/scheduler.log` 의 lock 600초+ 까지 skip 누적이 증거
-- SIGKILL 때문에 `finally { unlinkSync(LOCK_FILE) }` 안 돌아서 `/tmp/sales-scheduler.lock` stale 상태
-- 시트 5행: B5=TRUE, C5=RUNNING 박힌 채 멈춤
-- 추가로 발견된 코드 버그: `scheduler.ts:113` 의 RUNNING 체크가 잘못된 칼럼(B) 을 보고 있어서 2시간 후 stale lock 자동 제거되면 무한 OOM 루프 위험. 한 줄 수정 완료(C열 보도록 변경) + 푸시 대기.
+### ✅ 해결된 사고 (2026-05-11 → 2026-05-12)
+- catalog OOM: 512MB 인스턴스에서 catalog.ts 가 메모리 부족으로 SIGKILL → 2GB 인스턴스 업그레이드로 해결
+- 2026-05-12 19:49 catalog.ts OK 완주 확인
+- 부수적으로 발견·수정한 버그: scheduler.ts 의 RUNNING 칼럼 오인식 + FALSE 트리거 차단 (c51dce1 까지 푸시)
 
 ### ❌ 막힌 곳
 
@@ -91,29 +89,31 @@
 
 ## 다음 액션 (우선순위 순)
 
-### 🚑 긴급 — catalog OOM 사고 정리 (사장님 직접)
+### ✅ 완료된 액션 (2026-05-11 ~ 12)
+- ~~catalog OOM 사고 정리~~ (시트 정리 + lock 제거 + 코드 fix 푸시)
+- ~~Lightsail 512MB → 2GB 업그레이드~~ — 스냅샷 → 새 `Ubuntu-1` 생성 (3.35.13.72) → 기존 `naver-sales` 삭제
+- ~~catalog.ts 작동 검증~~ — 2GB 에서 OOM 없이 OK 완주 확인
 
-**순서대로**:
-1. 시트 「자동화」 탭 5행:
-   - B5 체크박스 클릭 해제 (☑ → ☐)
-   - C5 「RUNNING」 텍스트 삭제 (셀 비우기)
-2. Lightsail SSH:
-   ```
-   rm /tmp/sales-scheduler.lock
-   cd ~/sales/simple && git pull   # 버그 수정 반영
-   ```
-3. 1분 기다린 후 시트 확인 — scheduler.log 에 lock skip 메시지 끊겨야 정상
+### 🔧 진행 중 — 검색량 429 fix (2026-05-12)
+- 증상: volume.ts 가 150개 키워드 처리 후 시트에 쓸 때 Google Sheets API 429 `RATE_LIMIT_EXCEEDED` (분당 60 write 한도 초과)
+- 원인: `volume.ts:180~185` 가 150개 행을 *한 행씩* PUT → 150번 HTTP 요청
+- 수정: `values:batchUpdate` 로 한 번의 HTTP 요청으로 묶음 (quota 1회만 소비)
+- 푸시 대기. 푸시 후 Lightsail pull → 시트에서 「키워드 검색량 갱신」 재시도
 
-### 결정됨 — (A) Lightsail 512MB → 2GB 업그레이드
-- 대상 인스턴스: `naver-sales` (Seoul Zone A, 43.203.82.234)
-- 결정 사유: 시간 절약 + 다른 무거운 작업(market.ts tree, volume.ts) 도 같은 위험 → RAM 여유가 의사결정 자유도 증가
-- 비용: 월 $3.50 → $12 수준 (512MB nano → 2GB 등급)
-- 참고: 같은 계정에 별개 인스턴스 `inventory-worker` (13.125.11.218) 있는데 이번 업그레이드 대상 아님
-- 절차: 스냅샷 → 2GB plan 으로 새 인스턴스 생성 → 정적 IP 재할당 (또는 SSH 접속 정보 갱신) → 검증 후 구 인스턴스 삭제
+### 🚨 부수로 발견된 별개 문제 — catalog 의 일부 스토어 API IP 막힘
+- catalog.ts 로그: `여기명품` `와이케이팜` 두 스토어 → `GW.IP_NOT_ALLOWED` (403)
+- 원인: 새 인스턴스 IP `3.35.13.72` 가 네이버 커머스 API IP 화이트리스트에 미등록 (기존 `43.203.82.234` 만 등록돼있던 것)
+- 영향: catalog 가 OK 로 끝났지만 두 스토어 데이터는 실제로 못 가져옴 — 사장님이 미인지 가능성
+- 해결책 두 가지:
+  - (1) 네이버 커머스 API 콘솔에서 새 IP `3.35.13.72` 화이트리스트 추가
+  - (2) Lightsail 정적 IP 붙여서 IP 고정 → 향후 인스턴스 교체 시 동일
 
-### 보류 중
-- **검색량 조회 타임아웃** — 에러 로그·메모리 상태 확보 후 다음 세션에서 진단 (추측 금지)
-- **시장 작업 검증** — catalog 정리 후 「시장 카테고리 트리」 부터 단계별 진행 (의존 순서: 트리 → 추적 표시 → 키워드 → 규모/순위)
+### 다음 작업 (우선순위 미정)
+1. **검색량 429 fix 푸시 + 재시도** — 위 진행 중 항목
+2. **catalog IP 화이트리스트 해결** — 위 별개 문제 (1)·(2) 중 사장님 결정
+3. **시장 작업** — 「시장 카테고리 트리」 부터 시작 → 「시장조사_카테고리」 시트 F열에 추적할 카테고리 'o' 표시 → 「시장 키워드」 → 시장규모/순위추적
+4. **install-cron.sh 정리** — `crontab -l` 헤더 주석 8중 중복 (동작 무관)
+5. **스냅샷 정리** — `naver-sales-1778469786` 스냅샷 며칠 후 삭제 (월 $0.5 절약)
 
 ---
 
