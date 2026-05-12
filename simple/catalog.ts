@@ -111,15 +111,22 @@ async function fetchOriginDetail(token: string, originProductNo: string): Promis
     });
     if (!res.ok) return null;
     const data = (await res.json()) as Record<string, unknown>;
-    // 진단: 옵션이 있는 첫 detail 1개만 raw 응답 출력 (옵션명 필드명 파악용)
+    // 진단: 옵션 있는 첫 detail 1개만 raw 응답 출력 (옵션/추가상품 필드명 파악용)
+    // detailContent (HTML 거대) 는 제외하고 detailAttribute/optionInfo 만 출력
     if (!detailDebugLogged) {
-      const dataStr = JSON.stringify(data, null, 2);
-      // 옵션이 있는 detail 만 출력 (없는 건 스킵)
-      if (dataStr.includes("optionCombination") || dataStr.includes("optionInfo")) {
+      const op = (data.originProduct ?? data) as Record<string, unknown>;
+      const detailAttr = op?.detailAttribute as Record<string, unknown> | undefined;
+      const optionInfo =
+        (detailAttr?.optionInfo as Record<string, unknown> | undefined)
+        ?? (op?.optionInfo as Record<string, unknown> | undefined);
+      if (optionInfo) {
         detailDebugLogged = true;
-        console.log(`\n[진단] origin-product ${originProductNo} detail raw 응답 (5000자):`);
-        console.log(dataStr.slice(0, 5000));
-        console.log(`[진단] 끝\n`);
+        console.log(`\n[진단2] origin-product ${originProductNo} (옵션 있는 상품):`);
+        console.log(`  detailAttribute keys: ${detailAttr ? Object.keys(detailAttr).join(", ") : "N/A"}`);
+        console.log(`  optionInfo keys: ${Object.keys(optionInfo).join(", ")}`);
+        console.log(`  optionInfo raw (8000자):`);
+        console.log(JSON.stringify(optionInfo, null, 2).slice(0, 8000));
+        console.log(`[진단2] 끝\n`);
       }
     }
     // 가능한 경로들 시도 (네이버 API 응답 구조가 가끔 변함)

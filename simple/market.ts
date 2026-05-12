@@ -302,18 +302,7 @@ async function fetchKeywordMarketSize(keyword: string): Promise<MarketSize | nul
 }
 
 async function dumpMarketSize(creds: SheetCreds, limit = 100): Promise<void> {
-  // 추적 키워드 가져오기 (시장조사_키워드 탭에서 키워드 칼럼만)
-  const rows = await readRange(creds, "시장조사_키워드!C2:C100000");
-  const allKeywords = Array.from(new Set(rows.map((r) => r[0]).filter(Boolean)));
-  const keywords = allKeywords.slice(0, limit);
-
-  if (keywords.length === 0) {
-    console.log("⚠️ 「시장조사_키워드」 가 비어있음. 먼저 `npx tsx market.ts keywords` 실행.");
-    return;
-  }
-
-  console.log(`\n시장규모 수집 — ${keywords.length}개 키워드 (5초 간격, 차단 회피)`);
-
+  // 결과 시트 항상 먼저 만들기 (데이터 없어도 헤더 보이게)
   await ensureTab(creds, "시장조사_시장규모", [
     "수집일",
     "키워드",
@@ -324,6 +313,18 @@ async function dumpMarketSize(creds: SheetCreds, limit = 100): Promise<void> {
     "Top40 판매량(6개월)",
     "Top40 평균가",
   ]);
+
+  // 추적 키워드 가져오기 (시장조사_키워드 탭에서 키워드 칼럼만)
+  const rows = await readRange(creds, "시장조사_키워드!C2:C100000");
+  const allKeywords = Array.from(new Set(rows.map((r) => r[0]).filter(Boolean)));
+  const keywords = allKeywords.slice(0, limit);
+
+  if (keywords.length === 0) {
+    console.log("⚠️ 「시장조사_키워드」 가 비어있음. 먼저 「시장 키워드 (Top500)」 실행.");
+    throw new Error("「시장조사_키워드」 비어있음 — 먼저 「시장 키워드 (Top500)」 작업 실행");
+  }
+
+  console.log(`\n시장규모 수집 — ${keywords.length}개 키워드 (5초 간격, 차단 회피)`);
 
   const today = new Date().toISOString().slice(0, 10);
   const collected: (string | number)[][] = [];
@@ -415,8 +416,17 @@ async function fetchShoppingSearch(keyword: string, maxRank = 200): Promise<Shop
 }
 
 async function dumpRankTracking(creds: SheetCreds, maxRank = 200): Promise<void> {
-  // 「순위추적_상품」 탭에서 추적할 상품 + 키워드 읽기
+  // 입력 시트 + 결과 시트 모두 항상 먼저 만들기
   await ensureTab(creds, "순위추적_상품", ["productId", "라벨", "추적키워드 (콤마구분)"]);
+  await ensureTab(creds, "순위추적_데이터", [
+    "수집일",
+    "키워드",
+    "productId",
+    "라벨",
+    "순위",
+    "전체결과수",
+  ]);
+
   const productRows = await readRange(creds, "순위추적_상품!A2:C10000");
   const targets = productRows
     .filter((r) => r[0] && r[2])
@@ -427,7 +437,7 @@ async function dumpRankTracking(creds: SheetCreds, maxRank = 200): Promise<void>
     }));
   if (targets.length === 0) {
     console.log("⚠️ 「순위추적_상품」 비어있음. productId/라벨/추적키워드 입력 후 재실행.");
-    return;
+    throw new Error("「순위추적_상품」 비어있음 — productId/라벨/추적키워드(콤마구분) 입력 후 다시 실행");
   }
 
   // 키워드별로 묶어서 한 번씩만 조회 (효율)
@@ -440,15 +450,6 @@ async function dumpRankTracking(creds: SheetCreds, maxRank = 200): Promise<void>
     }
   }
   console.log(`\n순위추적 — ${keywordToProducts.size}개 키워드, ${targets.length}개 상품`);
-
-  await ensureTab(creds, "순위추적_데이터", [
-    "수집일",
-    "키워드",
-    "productId",
-    "라벨",
-    "순위",
-    "전체결과수",
-  ]);
   const today = new Date().toISOString().slice(0, 10);
   const collected: (string | number)[][] = [];
 
@@ -484,10 +485,22 @@ async function dumpRankTracking(creds: SheetCreds, maxRank = 200): Promise<void>
 
 async function dumpCategoryTree(creds: SheetCreds): Promise<void> {
   console.log("[1/3] 카테고리 트리 수집…");
-  const tree = await fetchCategoryTree();
-  console.log(`  → ${tree.length} 개 카테고리`);
 
+  // 결과 시트 미리 만들기 (없으면 생성, 있으면 헤더만 보장)
   await ensureTab(creds, "시장조사_카테고리", ["코드", "1차", "2차", "3차", "4차", "추적"]);
+
+  // 기존 시트의 「추적」 (F열) 값 미리 읽어 보존 — 사장님이 'o' 표시한 거 안 지워지게
+  const existing = await readRange(creds, "시장조사_카테고리!A2:F100000");
+  const cidToTracked = new Map<string, string>();
+  for (const row of existing) {
+    const cid = String(row[0] ?? "").trim();
+    const tracked = String(row[5] ?? "").trim();
+    if (cid) cidToTracked.set(cid, tracked);
+  }
+
+  const tree = await fetchCategoryTree();
+  console.log(`  → ${tree.length} 개 카테고리 (기존 추적 표시 ${[...cidToTracked.values()].filter(Boolean).length}개 보존)`);
+
   // 부모 체인 만들기
   const cidToNode = new Map(tree.map((n) => [n.cid, n]));
   const cidToChain = (cid: string): string[] => {
@@ -507,7 +520,7 @@ async function dumpCategoryTree(creds: SheetCreds): Promise<void> {
       chain[1] ?? "",
       chain[2] ?? "",
       chain[3] ?? "",
-      "", // 추적 칼럼 — 사장님이 ✓ 표시
+      cidToTracked.get(n.cid) ?? "", // 추적 — 기존 값 보존 (없으면 빈 칸)
     ];
   });
   await upsertRows(creds, "시장조사_카테고리", rows, (r) => String(r[0] ?? ""));
@@ -525,13 +538,7 @@ async function fetchTrackedCategories(creds: SheetCreds): Promise<{ cid: string;
 }
 
 async function dumpKeywordsForTrackedCategories(creds: SheetCreds): Promise<void> {
-  const tracked = await fetchTrackedCategories(creds);
-  if (tracked.length === 0) {
-    console.log("\n⚠️ 추적 카테고리 없음 — 시트 「시장조사_카테고리」 의 F열(추적) 에 'o' 표시한 행만 처리됩니다.");
-    return;
-  }
-  console.log(`\n[2/3] 추적 ${tracked.length}개 카테고리 키워드 수집…`);
-
+  // 결과 시트 항상 먼저 만들기 (데이터 없어도 헤더는 보이게)
   await ensureTab(creds, "시장조사_키워드", [
     "카테고리코드",
     "카테고리명",
@@ -545,6 +552,13 @@ async function dumpKeywordsForTrackedCategories(creds: SheetCreds): Promise<void
     "경쟁도",
     "수집일",
   ]);
+
+  const tracked = await fetchTrackedCategories(creds);
+  if (tracked.length === 0) {
+    console.log("\n⚠️ 추적 카테고리 없음 — 시트 「시장조사_카테고리」 의 F열(추적) 에 'o' 표시한 행만 처리됩니다.");
+    throw new Error("추적 카테고리 없음 — 「시장조사_카테고리」 F열(추적) 에 모니터링할 카테고리에 'o' 표시 후 다시 실행");
+  }
+  console.log(`\n[2/3] 추적 ${tracked.length}개 카테고리 키워드 수집…`);
 
   const today = new Date().toISOString().slice(0, 10);
 
