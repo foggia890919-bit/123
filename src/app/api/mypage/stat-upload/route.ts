@@ -110,7 +110,9 @@ export async function POST(req: NextRequest) {
 
   const failed = uploadResults.findIndex((r) => !r.ok);
   if (failed !== -1) {
-    return NextResponse.json({ error: `업로드 실패: ${uploadResults[failed].error}` }, { status: 500 });
+    const supabaseOrigin = (() => { try { return new URL(process.env.SUPABASE_URL ?? "").origin; } catch { return process.env.SUPABASE_URL ?? "미설정"; } })();
+    console.error("[stat-upload] storage error:", uploadResults[failed].error, "| supabase origin:", supabaseOrigin, "| key:", items[failed].storageKey);
+    return NextResponse.json({ error: `업로드 실패: ${uploadResults[failed].error} | supabase: ${supabaseOrigin}` }, { status: 500 });
   }
 
   // DB 저장 (한 번에)

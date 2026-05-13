@@ -32,7 +32,12 @@ export function storageEnabled(): boolean {
 }
 
 function baseUrl(): string {
-  return process.env.SUPABASE_URL!.replace(/\/+$/, "");
+  const raw = process.env.SUPABASE_URL!;
+  try {
+    return new URL(raw).origin; // strip any /rest/v1 or other path suffixes
+  } catch {
+    return raw.replace(/\/+$/, "");
+  }
 }
 
 function serviceKey(): string {
