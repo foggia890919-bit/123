@@ -183,6 +183,11 @@ export default function Navbar() {
                       className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
                       <User className="w-4 h-4 text-gray-400" />마이페이지
                     </Link>
+                    <div className="px-4 pt-2 pb-0.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">통계등록</div>
+                    <Link href="/stats" onClick={() => setUserOpen(false)}
+                      className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 pl-6">
+                      <BarChart3 className="w-4 h-4 text-gray-400" />통계자동입력
+                    </Link>
                     <Link href="/mypage/performance" onClick={() => setUserOpen(false)}
                       className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
                       <TrendingUp className="w-4 h-4 text-gray-400" />실적관리
