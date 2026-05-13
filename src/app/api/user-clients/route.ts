@@ -72,7 +72,7 @@ export async function GET(req: NextRequest) {
       where: { userId, dealerType: null },
       orderBy: { createdAt: "desc" },
       select: {
-        id: true, clientName: true, bizNumber: true,
+        id: true, clientName: true, bizNumber: true, address: true,
         bizFileName: true, approved: true, createdAt: true, code: true, dealerType: true,
       },
     });
@@ -115,7 +115,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
-  const { clientName, bizNumber, bizDocument, bizFileName, dealerType } = await req.json();
+  const { clientName, bizNumber, bizDocument, bizFileName, dealerType, address } = await req.json();
   if (!clientName || !bizNumber) {
     return NextResponse.json({ error: "필수 항목 누락" }, { status: 400 });
   }
@@ -129,12 +129,13 @@ export async function POST(req: NextRequest) {
       bizDocument: bizDocumentFallback,
       bizFileKey,
       bizFileName: bizFileName || null,
+      address: address ? String(address).trim() : null,
     };
     if (dealerType !== undefined) createData.dealerType = dealerType ?? null;
     const row = await prisma.userClient.create({
       data: createData as Parameters<typeof prisma.userClient.create>[0]["data"],
       select: {
-        id: true, clientName: true, bizNumber: true,
+        id: true, clientName: true, bizNumber: true, address: true,
         bizFileName: true, approved: true, createdAt: true, dealerType: true,
       },
     });

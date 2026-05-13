@@ -11,6 +11,7 @@ interface UserClient {
   id: string;
   clientName: string;
   bizNumber: string;
+  address?: string | null;
   bizFileName: string | null;
   approved: boolean | null;
   createdAt: string;
@@ -53,6 +54,7 @@ export default function ClientsPage() {
 
   const [name, setName] = useState("");
   const [biz, setBiz] = useState("");
+  const [address, setAddress] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [dealerType, setDealerType] = useState<"medical" | "business" | null>(null);
   const [registering, setRegistering] = useState(false);
@@ -144,6 +146,7 @@ export default function ClientsPage() {
       body: JSON.stringify({
         clientName: name.trim(),
         bizNumber: digits,
+        address: address.trim() || null,
         bizDocument,
         bizFileName,
         dealerType: dealerType === "business" ? "BUSINESS" : null,
@@ -152,7 +155,7 @@ export default function ClientsPage() {
     if (res.ok) {
       const created: UserClient = await res.json();
       setClients((prev) => [created, ...prev]);
-      setName(""); setBiz(""); setFile(null); setDupChecked("none");
+      setName(""); setBiz(""); setAddress(""); setFile(null); setDupChecked("none");
       setNtsResult(null); setDealerType(null);
     } else {
       const d = await res.json();
@@ -210,6 +213,14 @@ export default function ClientsPage() {
                 {dupChecked === "dup" && !bizError && <p className="text-xs text-red-500">이미 등록된 사업자번호예요.</p>}
                 {dupChecked === "ok" && !ntsLoading && !ntsResult && <p className="text-xs text-green-600">사용 가능한 사업자번호예요. ✓</p>}
               </div>
+            </div>
+
+            {/* 주소 */}
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-gray-600">
+                주소 <span className="text-gray-400 font-normal">(선택)</span>
+              </label>
+              <Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="예: 서울시 강남구 테헤란로 123" />
             </div>
 
             {/* NTS 조회 결과 */}
@@ -348,6 +359,9 @@ export default function ClientsPage() {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-800 truncate">{c.clientName}</p>
                     <p className="text-xs text-gray-400 font-mono mt-0.5">{c.bizNumber}</p>
+                    {c.address && (
+                      <p className="text-xs text-gray-500 mt-0.5 truncate">{c.address}</p>
+                    )}
                     {c.companies && c.companies.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-1">
                         {c.companies.map((co) => (

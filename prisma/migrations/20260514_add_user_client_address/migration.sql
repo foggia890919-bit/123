@@ -1,0 +1,1 @@
+ALTER TABLE "UserClient" ADD COLUMN IF NOT EXISTS "address" TEXT;
