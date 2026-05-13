@@ -17,6 +17,14 @@ import sys
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
+# pipeline/.env 를 자동 로딩 — 키를 매번 export 하지 않아도 되도록.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).parent / ".env")
+except ImportError:
+    pass
+
 from .src.llm import get_adapter
 from .src.orchestrator import run_pipeline
 from .src.preprocessor import PreprocessOptions
@@ -49,8 +57,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--debug", action="store_true", help="전처리 중간 산출물 저장")
     parser.add_argument("--boost-table", action="store_true", help="복잡한 표 양식 격자 강화")
     parser.add_argument(
-        "--max-retries", type=int, default=1,
-        help="self-correction 재추출 한도 (기본 1, 0이면 비활성)",
+        "--max-retries", type=int, default=3,
+        help="self-correction 재추출 한도 (기본 3, 0이면 비활성)",
+    )
+    parser.add_argument(
+        "--no-roi-recrop", action="store_true",
+        help="Stage 5 ROI 재추출 비활성 (비용 절감용)",
     )
     args = parser.parse_args(argv)
 
@@ -68,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         forced_template_id=args.template,
         preprocess_options=pre_opts,
         max_retries=args.max_retries,
+        enable_roi_recrop=not args.no_roi_recrop,
     )
 
     output = {

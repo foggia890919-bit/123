@@ -8,7 +8,7 @@ from .base import VLMAdapter
 
 
 def get_adapter(provider: str | None = None) -> VLMAdapter:
-    chosen = (provider or os.environ.get("VLM_PROVIDER") or "gemini").lower()
+    chosen = (provider or os.environ.get("VLM_PROVIDER") or "claude").lower()
     if chosen == "gemini":
         from .gemini import GeminiAdapter
 

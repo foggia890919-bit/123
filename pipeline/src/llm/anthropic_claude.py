@@ -16,8 +16,9 @@ from .base import VLMAdapter, VLMResponse
 
 
 class ClaudeAdapter(VLMAdapter):
-    def __init__(self, model: str = "claude-opus-4-7") -> None:
-        self.model = model
+    def __init__(self, model: str | None = None) -> None:
+        # 환경변수 CLAUDE_MODEL 로 오버라이드 가능. 기본값은 최신 Opus.
+        self.model = model or os.environ.get("CLAUDE_MODEL") or "claude-opus-4-7"
 
     def generate_json(
         self,
