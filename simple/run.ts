@@ -641,6 +641,9 @@ async function processDay(
   const canceledSales = canceled.reduce((s, r) => s + r.salesAmount, 0);
   const grossSales = liveSales + canceledSales;
   const liveSettlement = live.reduce((s, r) => s + r.settlement, 0);
+  const totalCost = live.reduce((s, r) => s + r.cost, 0);
+  const totalLogistics = live.reduce((s, r) => s + r.logistics, 0);
+  const totalProfit = live.reduce((s, r) => s + r.profit, 0);
 
   const lines: string[] = [];
   lines.push(`<b>📊 ${range.dateStr} 매출 보고</b>`);
@@ -651,6 +654,8 @@ async function processDay(
   }
   lines.push(`✅ <b>최종매출 ${won(liveSales)}</b> (${live.length}건)`);
   lines.push(`💵 정산예정 ${won(liveSettlement)} (수수료 차감 후)`);
+  lines.push(`📦 원가 ${won(totalCost)} · 🚚 물류비 ${won(totalLogistics)}`);
+  lines.push(`💎 <b>이익 ${won(totalProfit)}</b>`);
   lines.push("");
 
   // 스토어별 그룹화
@@ -674,6 +679,9 @@ async function processDay(
     const sBottles = sLive.reduce((s, r) => s + r.bottles, 0);
     const sCommission = sLive.reduce((s, r) => s + r.commission, 0);
     const sSettlement = sLive.reduce((s, r) => s + r.settlement, 0);
+    const sCost = sLive.reduce((s, r) => s + r.cost, 0);
+    const sLogistics = sLive.reduce((s, r) => s + r.logistics, 0);
+    const sProfit = sLive.reduce((s, r) => s + r.profit, 0);
 
     const sGrossSales = sLiveSales + sCancelSales;
     const sTotalCount = sLive.length + sCancel.length;
@@ -684,6 +692,7 @@ async function processDay(
     lines.push(`✅ 최종매출 ${won(sLiveSales)} (${sLive.length}건)`);
     lines.push(`📦 ${sShipments}건 배송 / 출고 ${sBottles}개`);
     lines.push(`💳 수수료 ${won(sCommission)} / 💵 정산예정 ${won(sSettlement)}`);
+    lines.push(`📦 원가 ${won(sCost)} · 🚚 물류비 ${won(sLogistics)} → 💎 이익 ${won(sProfit)}`);
 
     // 상품별 — 결제완료 (orderId 기준 메인 + 추가상품 계층)
     // 같은 orderId 내에서 가장 매출 큰 productOrder = 메인, 나머지 = 추가상품
