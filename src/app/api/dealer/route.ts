@@ -60,7 +60,17 @@ export async function GET(req: NextRequest) {
       });
       return NextResponse.json(rows);
     } catch {
-      return NextResponse.json([]);
+      // Last resort: dealerType column may not exist in DB yet — return all user's clients
+      try {
+        const rows = await prisma.userClient.findMany({
+          where: { userId: user.id },
+          select: { id: true, clientName: true, bizNumber: true, approved: true, createdAt: true },
+          orderBy: { clientName: "asc" },
+        });
+        return NextResponse.json(rows);
+      } catch {
+        return NextResponse.json([]);
+      }
     }
   }
 }

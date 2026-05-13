@@ -66,7 +66,26 @@ export async function GET(req: NextRequest) {
           : null,
       });
     } catch {
-      return NextResponse.json({ myDuplicate: false, existing: null, dbError: true }, { status: 500 });
+      // Fallback: dealerType or address column may not exist in DB yet — dup-check only
+      try {
+        const [myRecord, anyRecord] = await Promise.all([
+          prisma.userClient.findFirst({
+            where: { userId: user.id, OR: [{ bizNumber: stripped }, { bizNumber: fmt }] },
+            select: { id: true },
+          }),
+          prisma.userClient.findFirst({
+            where: { OR: [{ bizNumber: stripped }, { bizNumber: fmt }] },
+            select: { clientName: true },
+            orderBy: { createdAt: "desc" },
+          }),
+        ]);
+        return NextResponse.json({
+          myDuplicate: !!myRecord,
+          existing: anyRecord ? { clientName: anyRecord.clientName, address: null } : null,
+        });
+      } catch {
+        return NextResponse.json({ myDuplicate: false, existing: null, dbError: true }, { status: 500 });
+      }
     }
   }
 
@@ -153,14 +172,19 @@ export async function GET(req: NextRequest) {
 
   // 각 거래처의 승인된 제약사 목록 첨부
   const bizNumbers = rows.map((r) => r.bizNumber).filter(Boolean) as string[];
-  const filters = bizNumbers.length
-    ? await prisma.filterRequest.findMany({
+  let filters: { bizNumber: string; companyName: string }[] = [];
+  try {
+    if (bizNumbers.length) {
+      filters = await prisma.filterRequest.findMany({
         where: { bizNumber: { in: bizNumbers }, status: "APPROVED" },
         select: { bizNumber: true, companyName: true },
         distinct: ["bizNumber", "companyName"],
         orderBy: { companyName: "asc" },
-      })
-    : [];
+      });
+    }
+  } catch {
+    // filterRequest table or columns may not be available
+  }
 
   const companyMap = new Map<string, string[]>();
   for (const f of filters) {
