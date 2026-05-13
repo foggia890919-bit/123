@@ -1,7 +1,11 @@
-import { google } from "googleapis";
+import { google, drive_v3 } from "googleapis";
 import { Readable } from "stream";
 
-function getDriveClient() {
+// 요청당 한 번만 클라이언트 생성 (토큰 재발급 방지)
+let _drive: drive_v3.Drive | null = null;
+
+function getDriveClient(): drive_v3.Drive {
+  if (_drive) return _drive;
   const email = process.env.GOOGLE_DRIVE_CLIENT_EMAIL;
   const key = process.env.GOOGLE_DRIVE_PRIVATE_KEY?.replace(/\\n/g, "\n");
   if (!email || !key) throw new Error("Google Drive credentials not configured");
@@ -10,7 +14,8 @@ function getDriveClient() {
     credentials: { client_email: email, private_key: key },
     scopes: ["https://www.googleapis.com/auth/drive"],
   });
-  return google.drive({ version: "v3", auth });
+  _drive = google.drive({ version: "v3", auth });
+  return _drive;
 }
 
 export function driveEnabled() {
@@ -26,14 +31,8 @@ export async function uploadFileToDrive(
   const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID!;
 
   const res = await drive.files.create({
-    requestBody: {
-      name: storedName,
-      parents: [folderId],
-    },
-    media: {
-      mimeType,
-      body: Readable.from(buffer),
-    },
+    requestBody: { name: storedName, parents: [folderId] },
+    media: { mimeType, body: Readable.from(buffer) },
     fields: "id,webViewLink",
   });
 
@@ -42,8 +41,11 @@ export async function uploadFileToDrive(
   return { fileId, viewUrl };
 }
 
-export async function getDriveDownloadUrl(fileId: string): Promise<string> {
-  return `https://drive.google.com/uc?export=download&id=${fileId}`;
+// 여러 파일을 완전 병렬로 업로드
+export async function uploadFilesBatch(
+  items: { buffer: Buffer; storedName: string; mimeType: string }[],
+): Promise<{ fileId: string; viewUrl: string }[]> {
+  return Promise.all(items.map((item) => uploadFileToDrive(item.buffer, item.storedName, item.mimeType)));
 }
 
 export async function deleteDriveFile(fileId: string): Promise<void> {

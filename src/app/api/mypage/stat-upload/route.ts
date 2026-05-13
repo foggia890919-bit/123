@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
-import { uploadFileToDrive, driveEnabled } from "@/lib/google-drive";
+import { uploadFilesBatch, driveEnabled } from "@/lib/google-drive";
 import { randomUUID } from "crypto";
 
-export const maxDuration = 60; // Vercel 최대 60초
+export const maxDuration = 60;
 
 const MAX_FILES = 30;
-const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20MB per file
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 // GET — 내 업로드 목록
 export async function GET(req: NextRequest) {
@@ -27,7 +27,6 @@ export async function GET(req: NextRequest) {
     orderBy: { createdAt: "desc" },
   });
 
-  // 배치 단위로 그룹화
   const batches = new Map<string, typeof images>();
   for (const img of images) {
     if (!batches.has(img.batchKey)) batches.set(img.batchKey, []);
@@ -53,10 +52,14 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ batches: result, driveEnabled: driveEnabled() });
 }
 
-// POST — 파일 업로드
+// POST — 파일 업로드 (전체 병렬)
 export async function POST(req: NextRequest) {
   const session = await requireSession();
   if (isNextResponse(session)) return session;
+
+  if (!driveEnabled()) {
+    return NextResponse.json({ error: "Google Drive 미설정" }, { status: 503 });
+  }
 
   const form = await req.formData();
   const year = parseInt(form.get("year") as string);
@@ -68,7 +71,13 @@ export async function POST(req: NextRequest) {
   if (!files.length) return NextResponse.json({ error: "파일 없음" }, { status: 400 });
   if (files.length > MAX_FILES) return NextResponse.json({ error: `최대 ${MAX_FILES}개` }, { status: 400 });
 
-  // 거래처명 조회 (파일명 생성용)
+  for (const file of files) {
+    if (file.size > MAX_FILE_BYTES) {
+      return NextResponse.json({ error: `파일 크기 초과: ${file.name} (최대 20MB)` }, { status: 400 });
+    }
+  }
+
+  // 거래처명 조회
   let clientName = "병원";
   if (clientId) {
     const client = await prisma.userClient.findUnique({ where: { id: clientId }, select: { clientName: true } });
@@ -77,52 +86,52 @@ export async function POST(req: NextRequest) {
 
   const prefix = `${year}년${month}월_${clientName}`;
   const batchKey = randomUUID();
-  const created: { storedName: string; driveFileId: string; driveViewUrl: string | null }[] = [];
 
-  if (!driveEnabled()) {
-    return NextResponse.json({ error: "Google Drive 미설정 (GOOGLE_DRIVE_CLIENT_EMAIL, GOOGLE_DRIVE_PRIVATE_KEY, GOOGLE_DRIVE_FOLDER_ID 환경변수 필요)" }, { status: 503 });
+  // 모든 파일 버퍼 병렬 로드
+  const buffers = await Promise.all(files.map((f) => f.arrayBuffer().then(Buffer.from)));
+
+  // Drive에 전체 병렬 업로드 (인증 클라이언트 1회 공유)
+  const items = buffers.map((buffer, i) => {
+    const ext = files[i].name.split(".").pop() ?? "jpg";
+    return {
+      buffer,
+      storedName: `${prefix}_${i + 1}.${ext}`,
+      mimeType: files[i].type || "image/jpeg",
+    };
+  });
+
+  let driveResults;
+  try {
+    driveResults = await uploadFilesBatch(items);
+  } catch (e) {
+    console.error("Drive upload error:", e);
+    return NextResponse.json({ error: `Drive 업로드 실패: ${(e as Error).message}` }, { status: 500 });
   }
 
-  // 크기 검사 먼저
-  for (const file of files) {
-    if (file.size > MAX_FILE_BYTES) {
-      return NextResponse.json({ error: `파일 크기 초과: ${file.name} (최대 20MB)` }, { status: 400 });
-    }
-  }
+  // DB 저장 (한 번에)
+  await prisma.statImage.createMany({
+    data: driveResults.map(({ fileId, viewUrl }, i) => ({
+      userId: session.id,
+      clientId,
+      year,
+      month,
+      driveFileId: fileId,
+      driveViewUrl: viewUrl,
+      fileName: files[i].name,
+      storedName: items[i].storedName,
+      mimeType: items[i].mimeType,
+      batchKey,
+    })),
+  });
 
-  // 파일을 5개씩 병렬 업로드
-  const BATCH = 5;
-  for (let start = 0; start < files.length; start += BATCH) {
-    const chunk = files.slice(start, start + BATCH);
-    const results = await Promise.all(
-      chunk.map(async (file, j) => {
-        const i = start + j;
-        const ext = file.name.split(".").pop() ?? "jpg";
-        const storedName = `${prefix}_${i + 1}.${ext}`;
-        const buffer = Buffer.from(await file.arrayBuffer());
-        const { fileId, viewUrl } = await uploadFileToDrive(buffer, storedName, file.type || "image/jpeg");
-        return { file, storedName, fileId, viewUrl };
-      })
-    );
-
-    // DB는 배치 단위로 한 번에
-    await prisma.statImage.createMany({
-      data: results.map(({ file, storedName, fileId, viewUrl }) => ({
-        userId: session.id,
-        clientId,
-        year,
-        month,
-        driveFileId: fileId,
-        driveViewUrl: viewUrl,
-        fileName: file.name,
-        storedName,
-        mimeType: file.type || "image/jpeg",
-        batchKey,
-      })),
-    });
-
-    created.push(...results.map(({ storedName, fileId, viewUrl }) => ({ storedName, driveFileId: fileId, driveViewUrl: viewUrl })));
-  }
-
-  return NextResponse.json({ ok: true, batchKey, count: created.length, files: created });
+  return NextResponse.json({
+    ok: true,
+    batchKey,
+    count: driveResults.length,
+    files: driveResults.map(({ fileId, viewUrl }, i) => ({
+      storedName: items[i].storedName,
+      driveFileId: fileId,
+      driveViewUrl: viewUrl,
+    })),
+  });
 }
