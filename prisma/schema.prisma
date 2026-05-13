@@ -41,6 +41,7 @@ model User {
   epharmsAccounts            EpharmsAccount[]      @relation("KmdUserEpharms")
   salesRepEpharmsAccounts    EpharmsAccount[]      @relation("SalesRepEpharmsAccounts")
   inhouseOrders              InhouseOrder[]
+  statImages                 StatImage[]
 
   @@index([parentUserId])
 }
@@ -106,6 +107,7 @@ model UserClient {
   isRateTarget        Boolean    @default(false)
   createdAt    DateTime   @default(now())
   proposals             Proposal[]
+  statImages            StatImage[]
   prescriptionReports   PrescriptionReport[]
   corpRateFiles         CorpRateFile[]
 
@@ -915,4 +917,26 @@ enum InhouseOrderStatus {
   CONFIRMED  // BIZ 담당자 확인
   ORDERED    // ePharms 주문 완료
   REJECTED   // 반려
+}
+
+model StatImage {
+  id           String      @id @default(cuid())
+  userId       String
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientId     String?
+  client       UserClient? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  year         Int
+  month        Int
+  driveFileId  String      // Google Drive file ID
+  driveViewUrl String?     // 브라우저 미리보기 URL
+  fileName     String      // 원본 파일명
+  storedName   String      // Drive 저장명: YYYY년M월_병원명_N
+  mimeType     String?
+  batchKey     String      // 같은 업로드 묶음 식별 (ulid/uuid)
+  createdAt    DateTime    @default(now())
+
+  @@index([userId])
+  @@index([clientId])
+  @@index([batchKey])
+  @@index([year, month])
 }
