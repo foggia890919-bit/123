@@ -190,7 +190,7 @@ export default function Navbar() {
                     </Link>
                     <Link href="/mypage/sub-clients" onClick={() => setUserOpen(false)}
                       className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 pl-6">
-                      <Users className="w-4 h-4 text-gray-400" />거래처 관리 (하위법인)
+                      <Users className="w-4 h-4 text-gray-400" />상위 하위 법인관리
                     </Link>
                     <Link href="/mypage/stat-upload" onClick={() => setUserOpen(false)}
                       className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 pl-6">

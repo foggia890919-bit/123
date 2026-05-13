@@ -63,7 +63,7 @@ export default function SubClientsPage() {
   const { data: session } = useSession();
   const [clients, setClients] = useState<UserClient[]>([]);
   const [listLoading, setListLoading] = useState(true);
-  const [clientFilter, setClientFilter] = useState<"all" | "medical" | "business">("all");
+  const [clientFilter, setClientFilter] = useState<"all" | "upper" | "lower">("all");
   const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
   const [editingAddressVal, setEditingAddressVal] = useState("");
 
@@ -75,7 +75,7 @@ export default function SubClientsPage() {
   const [biz, setBiz] = useState("");
   const [address, setAddress] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [dealerType, setDealerType] = useState<"medical" | "business" | null>(null);
+  const [dealerType, setDealerType] = useState<"upper" | "lower" | null>(null);
   const [registering, setRegistering] = useState(false);
   const [error, setError] = useState("");
   const [bizError, setBizError] = useState("");
@@ -117,7 +117,7 @@ export default function SubClientsPage() {
         const ntsRes = await fetch("/api/biz-verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bizNumber: digits }) });
         const ntsData: BizVerifyResult = await ntsRes.json();
         setNtsResult(ntsData);
-        if (ntsData.valid === true) setDealerType(ntsData.isMedicalLikely ? "medical" : "business");
+        if (ntsData.valid === true) setDealerType("lower");
       } catch { setNtsResult({ valid: null, error: "국세청 조회 실패" }); }
       finally { setNtsLoading(false); }
     }
@@ -144,7 +144,7 @@ export default function SubClientsPage() {
     const res = await fetch("/api/user-clients", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientName: name.trim(), bizNumber: digits, address: address.trim() || null, bizDocument, bizFileName, dealerType: dealerType === "business" ? "BUSINESS" : null }),
+      body: JSON.stringify({ clientName: name.trim(), bizNumber: digits, address: address.trim() || null, bizDocument, bizFileName, dealerType: dealerType === "upper" ? "UPPER_CORP" : "LOWER_CORP" }),
     });
     if (res.ok) {
       const created: UserClient = await res.json();
@@ -193,7 +193,9 @@ export default function SubClientsPage() {
   }
 
   const filteredClients = clients.filter((c) =>
-    clientFilter === "all" ? true : clientFilter === "business" ? !!c.dealerType : !c.dealerType
+    clientFilter === "all" ? true :
+    clientFilter === "upper" ? c.dealerType === "UPPER_CORP" :
+    c.dealerType === "LOWER_CORP"
   );
 
   return (
@@ -201,9 +203,9 @@ export default function SubClientsPage() {
       <div className="max-w-2xl mx-auto space-y-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Users className="w-6 h-6 text-purple-600" />거래처 관리 (하위법인)
+            <Users className="w-6 h-6 text-purple-600" />상위 하위 법인관리
           </h1>
-          <p className="text-gray-500 text-sm mt-1">하위 딜러·법인의 거래처를 등록하고 관리합니다.</p>
+          <p className="text-gray-500 text-sm mt-1">상위법인·하위법인을 등록하고 관리합니다.</p>
         </div>
 
         {/* 등록 폼 */}
@@ -266,13 +268,13 @@ export default function SubClientsPage() {
 
                 {dupChecked === "ok" && !bizError && (
                   <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-gray-600">거래처 유형 <span className="text-red-500">*</span></label>
+                    <label className="text-xs font-medium text-gray-600">법인 구분 <span className="text-red-500">*</span></label>
                     <div className="grid grid-cols-2 gap-2">
-                      <button type="button" onClick={() => setDealerType("medical")} className={`flex items-center gap-2 p-3 rounded-lg border-2 text-left transition-colors ${dealerType === "medical" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-gray-200 hover:border-gray-300 text-gray-600"}`}>
-                        <Stethoscope className="w-4 h-4 shrink-0" /><div><p className="text-sm font-medium">의료기관</p><p className="text-xs opacity-70">병의원·약국</p></div>
+                      <button type="button" onClick={() => setDealerType("upper")} className={`flex items-center gap-2 p-3 rounded-lg border-2 text-left transition-colors ${dealerType === "upper" ? "border-purple-500 bg-purple-50 text-purple-700" : "border-gray-200 hover:border-gray-300 text-gray-600"}`}>
+                        <Building2 className="w-4 h-4 shrink-0" /><div><p className="text-sm font-medium">상위법인</p><p className="text-xs opacity-70">본사·모법인</p></div>
                       </button>
-                      <button type="button" onClick={() => setDealerType("business")} className={`flex items-center gap-2 p-3 rounded-lg border-2 text-left transition-colors ${dealerType === "business" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-gray-200 hover:border-gray-300 text-gray-600"}`}>
-                        <Briefcase className="w-4 h-4 shrink-0" /><div><p className="text-sm font-medium">사업자</p><p className="text-xs opacity-70">도매·법인·기타</p></div>
+                      <button type="button" onClick={() => setDealerType("lower")} className={`flex items-center gap-2 p-3 rounded-lg border-2 text-left transition-colors ${dealerType === "lower" ? "border-purple-500 bg-purple-50 text-purple-700" : "border-gray-200 hover:border-gray-300 text-gray-600"}`}>
+                        <Users className="w-4 h-4 shrink-0" /><div><p className="text-sm font-medium">하위법인</p><p className="text-xs opacity-70">지사·하위딜러</p></div>
                       </button>
                     </div>
                   </div>
@@ -292,7 +294,7 @@ export default function SubClientsPage() {
                 <Button type="submit" disabled={registering || dupChecked === "dup" || !!bizError || !dealerType} className="w-full">
                   {registering ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />등록 중...</> : <><Plus className="w-4 h-4 mr-2" />거래처 등록</>}
                 </Button>
-                {dupChecked === "ok" && !dealerType && <p className="text-xs text-center text-gray-400">거래처 유형을 선택해야 등록할 수 있어요.</p>}
+                {dupChecked === "ok" && !dealerType && <p className="text-xs text-center text-gray-400">법인 구분을 선택해야 등록할 수 있어요.</p>}
               </form>
             ) : (
               <div className="space-y-4">
@@ -360,10 +362,10 @@ export default function SubClientsPage() {
               <span className="ml-2 text-sm font-normal text-gray-400">({clients.length}개)</span>
             </h2>
             <div className="flex gap-1">
-              {(["all", "medical", "business"] as const).map((f) => (
+              {(["all", "upper", "lower"] as const).map((f) => (
                 <button key={f} onClick={() => setClientFilter(f)}
-                  className={`text-xs px-2.5 py-1 rounded-full transition-colors ${clientFilter === f ? "bg-orange-500 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}>
-                  {f === "all" ? "전체" : f === "medical" ? "의료기관" : "사업자"}
+                  className={`text-xs px-2.5 py-1 rounded-full transition-colors ${clientFilter === f ? "bg-purple-500 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}>
+                  {f === "all" ? "전체" : f === "upper" ? "상위법인" : "하위법인"}
                 </button>
               ))}
             </div>
@@ -380,7 +382,7 @@ export default function SubClientsPage() {
             <div className="divide-y divide-gray-100">
               {filteredClients.map((c) => (
                 <div key={c.id} className="flex items-center gap-3 px-5 py-3.5 hover:bg-gray-50">
-                  {c.dealerType ? <Briefcase className="w-4 h-4 text-gray-300 shrink-0" /> : <Stethoscope className="w-4 h-4 text-gray-300 shrink-0" />}
+                  {c.dealerType === "UPPER_CORP" ? <Building2 className="w-4 h-4 text-purple-300 shrink-0" /> : <Users className="w-4 h-4 text-blue-300 shrink-0" />}
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-800 truncate">{c.clientName}</p>
                     <p className="text-xs text-gray-400 font-mono mt-0.5">{c.bizNumber}</p>
@@ -409,8 +411,8 @@ export default function SubClientsPage() {
                     )}
                     {c.companies && c.companies.length === 0 && <p className="text-[10px] text-gray-300 mt-1">거래 제약사 없음</p>}
                   </div>
-                  <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 border ${c.dealerType ? "text-purple-600 bg-purple-50 border-purple-100" : "text-blue-600 bg-blue-50 border-blue-100"}`}>
-                    {c.dealerType ? "사업자" : "의료기관"}
+                  <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 border ${c.dealerType === "UPPER_CORP" ? "text-purple-600 bg-purple-50 border-purple-100" : "text-blue-600 bg-blue-50 border-blue-100"}`}>
+                    {c.dealerType === "UPPER_CORP" ? "상위법인" : "하위법인"}
                   </span>
                   {c.bizFileName && <span className="text-xs text-gray-500 bg-gray-50 border border-gray-100 px-1.5 py-0.5 rounded shrink-0">서류첨부</span>}
                   <span className="text-xs text-gray-400 shrink-0">{new Date(c.createdAt).toLocaleDateString("ko-KR")}</span>
