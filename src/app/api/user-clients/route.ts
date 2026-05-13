@@ -108,7 +108,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json(rows.map((r) => ({
     ...r,
-    companies: r.bizNumber ? (companyMap.get(r.bizNumber) ?? []) : [],
+    companies: r.bizNumber ? (companyMap.get(r.bizNumber) ?? []).sort((a, b) => a.localeCompare(b, "ko")) : [],
   })));
 }
 
