@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { Building2, Plus, Trash2, FileText, CheckCircle2, XCircle, Loader2, AlertCircle, Stethoscope, Briefcase } from "lucide-react";
+import { Building2, Plus, Trash2, FileText, CheckCircle2, XCircle, Loader2, AlertCircle, Stethoscope, Briefcase, Pencil, MapPin } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import RequireRole from "@/components/RequireRole";
@@ -51,6 +51,8 @@ export default function ClientsPage() {
   const { data: session } = useSession();
   const [clients, setClients] = useState<UserClient[]>([]);
   const [listLoading, setListLoading] = useState(true);
+  const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
+  const [editingAddressVal, setEditingAddressVal] = useState("");
 
   const [name, setName] = useState("");
   const [biz, setBiz] = useState("");
@@ -168,6 +170,18 @@ export default function ClientsPage() {
     if (!confirm(`"${clientName}" 거래처를 삭제할까요?`)) return;
     const res = await fetch(`/api/user-clients?id=${id}`, { method: "DELETE" });
     if (res.ok) setClients((prev) => prev.filter((c) => c.id !== id));
+  }
+
+  async function handleSaveAddress(id: string) {
+    const res = await fetch(`/api/user-clients?id=${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address: editingAddressVal.trim() || null }),
+    });
+    if (res.ok) {
+      setClients((prev) => prev.map((c) => c.id === id ? { ...c, address: editingAddressVal.trim() || null } : c));
+      setEditingAddressId(null);
+    }
   }
 
   return (
@@ -359,8 +373,30 @@ export default function ClientsPage() {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-800 truncate">{c.clientName}</p>
                     <p className="text-xs text-gray-400 font-mono mt-0.5">{c.bizNumber}</p>
-                    {c.address && (
-                      <p className="text-xs text-gray-500 mt-0.5 truncate">{c.address}</p>
+                    {/* 주소 인라인 편집 */}
+                    {editingAddressId === c.id ? (
+                      <div className="flex items-center gap-1 mt-1" onClick={(e) => e.stopPropagation()}>
+                        <Input
+                          autoFocus
+                          value={editingAddressVal}
+                          onChange={(e) => setEditingAddressVal(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") handleSaveAddress(c.id); if (e.key === "Escape") setEditingAddressId(null); }}
+                          placeholder="주소 입력"
+                          className="h-6 text-xs py-0 px-2"
+                        />
+                        <button onClick={() => handleSaveAddress(c.id)} className="text-[10px] text-white bg-orange-500 hover:bg-orange-600 rounded px-1.5 py-0.5 shrink-0">저장</button>
+                        <button onClick={() => setEditingAddressId(null)} className="text-[10px] text-gray-400 hover:text-gray-600 shrink-0">취소</button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => { setEditingAddressId(c.id); setEditingAddressVal(c.address ?? ""); }}
+                        className="flex items-center gap-1 mt-0.5 group"
+                      >
+                        <MapPin className="w-3 h-3 text-gray-300 group-hover:text-orange-400 shrink-0" />
+                        <span className="text-xs text-gray-500 group-hover:text-orange-500 truncate">
+                          {c.address || <span className="text-gray-300">주소 추가</span>}
+                        </span>
+                      </button>
                     )}
                     {c.companies && c.companies.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-1">

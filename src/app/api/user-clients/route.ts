@@ -159,8 +159,10 @@ export async function PATCH(req: NextRequest) {
 
   const isAdmin = user.role === "ADMIN";
   const isOwner = existing.userId === user.id;
+  if (!isAdmin && !isOwner) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+
   const body = await req.json();
-  const { approved, bizDocument, bizFileName } = body;
+  const { approved, bizDocument, bizFileName, address } = body;
 
   if (approved !== undefined && !isAdmin) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
   if ((bizDocument !== undefined || bizFileName !== undefined) && !isAdmin && !isOwner) {
@@ -168,6 +170,7 @@ export async function PATCH(req: NextRequest) {
   }
 
   const data: Record<string, unknown> = {};
+  if (address !== undefined) data.address = address ? String(address).trim() : null;
   if (approved !== undefined) data.approved = Boolean(approved);
   if (bizDocument !== undefined) {
     const { fileKey: bizFileKey, fileData: bizDocumentFallback } =
