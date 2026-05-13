@@ -70,13 +70,10 @@ export default function ClientsPage() {
   const [biz, setBiz] = useState("");
   const [address, setAddress] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [dealerType, setDealerType] = useState<"medical" | "business" | null>(null);
   const [registering, setRegistering] = useState(false);
   const [regError, setRegError] = useState("");
   const [bizError, setBizError] = useState("");
   const [dupChecked, setDupChecked] = useState<"none" | "checking" | "ok" | "dup">("none");
-  const [ntsResult, setNtsResult] = useState<BizVerifyResult | null>(null);
-  const [ntsLoading, setNtsLoading] = useState(false);
 
   /* ── 제약사 필터링 state ── */
   const proposalMenuRef = useRef<HTMLDivElement>(null);
@@ -163,7 +160,7 @@ export default function ClientsPage() {
   /* ── 거래처 등록 핸들러 ── */
   async function handleBizChange(val: string) {
     const formatted = formatBizNumber(val);
-    setBiz(formatted); setBizError(""); setDupChecked("none"); setNtsResult(null); setDealerType(null);
+    setBiz(formatted); setBizError(""); setDupChecked("none");
     const digits = formatted.replace(/\D/g, "");
     if (digits.length === 10) {
       if (!validateBizNumber(formatted)) { setBizError("유효하지 않은 사업자등록번호예요."); return; }
@@ -171,13 +168,6 @@ export default function ClientsPage() {
       const res = await fetch(`/api/user-clients?bizNumber=${digits}`);
       if ((await res.json()).found) { setDupChecked("dup"); return; }
       setDupChecked("ok");
-      setNtsLoading(true);
-      try {
-        const ntsData: BizVerifyResult = await fetch("/api/biz-verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bizNumber: digits }) }).then(r => r.json());
-        setNtsResult(ntsData);
-        if (ntsData.valid === true) setDealerType(ntsData.isMedicalLikely ? "medical" : "business");
-      } catch { setNtsResult({ valid: null, error: "국세청 조회 실패" }); }
-      finally { setNtsLoading(false); }
     }
   }
 
@@ -194,11 +184,11 @@ export default function ClientsPage() {
       bizDocument = await new Promise<string>((resolve) => { const r = new FileReader(); r.readAsDataURL(file); r.onload = () => resolve(r.result as string); });
       bizFileName = file.name;
     }
-    const res = await fetch("/api/user-clients", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientName: name.trim(), bizNumber: digits, address: address.trim() || null, bizDocument, bizFileName, dealerType: dealerType === "business" ? "BUSINESS" : null }) });
+    const res = await fetch("/api/user-clients", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientName: name.trim(), bizNumber: digits, address: address.trim() || null, bizDocument, bizFileName, dealerType: null }) });
     if (res.ok) {
       const newClient = await res.json();
       setClients((prev) => [newClient, ...prev]);
-      setName(""); setBiz(""); setAddress(""); setFile(null); setDupChecked("none"); setNtsResult(null); setDealerType(null);
+      setName(""); setBiz(""); setAddress(""); setFile(null); setDupChecked("none");
     } else { setRegError((await res.json()).error || "등록 중 오류가 발생했어요."); }
     setRegistering(false);
   }
@@ -267,44 +257,19 @@ export default function ClientsPage() {
                     <div className="relative">
                       <Input value={biz} onChange={(e) => handleBizChange(e.target.value)} placeholder="000-00-00000" maxLength={12}
                         className={bizError || dupChecked === "dup" ? "border-red-400 pr-9" : dupChecked === "ok" ? "border-green-400 pr-9" : "pr-9"} />
-                      {(dupChecked === "checking" || ntsLoading) && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-gray-400" />}
-                      {dupChecked === "ok" && !ntsLoading && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-green-500" />}
+                      {dupChecked === "checking" && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-gray-400" />}
+                      {dupChecked === "ok" && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-green-500" />}
                       {dupChecked === "dup" && <XCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-red-500" />}
                     </div>
                     {bizError && <p className="text-xs text-red-500">{bizError}</p>}
                     {dupChecked === "dup" && !bizError && <p className="text-xs text-red-500">이미 등록된 사업자번호예요.</p>}
-                    {dupChecked === "ok" && !ntsLoading && !ntsResult && <p className="text-xs text-green-600">사용 가능한 사업자번호예요. ✓</p>}
+                    {dupChecked === "ok" && <p className="text-xs text-green-600">사용 가능한 사업자번호예요. ✓</p>}
                   </div>
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-600">주소 <span className="text-gray-400 font-normal">(선택)</span></label>
                   <Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="예: 서울시 강남구 테헤란로 123" />
                 </div>
-                {ntsResult && dupChecked === "ok" && (
-                  <div className={`rounded-lg p-3 text-sm flex items-start gap-2 ${ntsResult.valid === null ? "bg-gray-50 text-gray-500 border border-gray-200" : ntsResult.valid === false ? "bg-red-50 text-red-700 border border-red-200" : "bg-green-50 text-green-800 border border-green-200"}`}>
-                    {ntsResult.valid === null && <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />}
-                    {ntsResult.valid === false && <XCircle className="w-4 h-4 shrink-0 mt-0.5" />}
-                    {ntsResult.valid === true && <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />}
-                    <div>
-                      {ntsResult.valid === null && <p>국세청 조회 불가 — 수동으로 거래처 유형을 선택해주세요.</p>}
-                      {ntsResult.valid === false && <p>{ntsResult.closed ? "폐업된 사업자입니다." : `사업자 상태: ${ntsResult.statusText || "확인 불가"}`}</p>}
-                      {ntsResult.valid === true && <div><p className="font-medium">국세청 조회 완료 ✓</p><p className="text-xs mt-0.5 opacity-80">상태: {ntsResult.statusText} · 과세유형: {ntsResult.taxType}{ntsResult.isMedicalLikely && " · 면세사업자 (의료기관 가능성 높음)"}</p></div>}
-                    </div>
-                  </div>
-                )}
-                {dupChecked === "ok" && !bizError && (
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-gray-600">거래처 유형 <span className="text-red-500">*</span>{ntsResult?.isMedicalLikely && <span className="ml-1 text-green-600 font-normal">(국세청 조회 기준 자동 선택됨)</span>}</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button type="button" onClick={() => setDealerType("medical")} className={`flex items-center gap-2 p-3 rounded-lg border-2 text-left transition-colors ${dealerType === "medical" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-gray-200 hover:border-gray-300 text-gray-600"}`}>
-                        <Stethoscope className="w-4 h-4 shrink-0" /><div><p className="text-sm font-medium">의료기관</p><p className="text-xs opacity-70">병의원·약국</p></div>
-                      </button>
-                      <button type="button" onClick={() => setDealerType("business")} className={`flex items-center gap-2 p-3 rounded-lg border-2 text-left transition-colors ${dealerType === "business" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-gray-200 hover:border-gray-300 text-gray-600"}`}>
-                        <Briefcase className="w-4 h-4 shrink-0" /><div><p className="text-sm font-medium">사업자</p><p className="text-xs opacity-70">도매·법인·기타</p></div>
-                      </button>
-                    </div>
-                  </div>
-                )}
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-600">사업자등록증 <span className="text-gray-400 font-normal">(선택)</span></label>
                   <label className="flex items-center gap-2 border border-dashed border-gray-300 rounded-lg p-3 cursor-pointer hover:bg-gray-50 transition-colors">
@@ -315,10 +280,9 @@ export default function ClientsPage() {
                   </label>
                 </div>
                 {regError && <p className="text-sm text-red-600 bg-red-50 p-3 rounded-lg">{regError}</p>}
-                <Button type="submit" disabled={registering || dupChecked === "dup" || !!bizError || !dealerType} className="w-full">
+                <Button type="submit" disabled={registering || dupChecked === "dup" || !!bizError || dupChecked !== "ok"} className="w-full">
                   {registering ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />등록 중...</> : <><Plus className="w-4 h-4 mr-2" />거래처 등록</>}
                 </Button>
-                {dupChecked === "ok" && !dealerType && <p className="text-xs text-center text-gray-400">거래처 유형을 선택해야 등록할 수 있어요.</p>}
               </form>
             )}
 
