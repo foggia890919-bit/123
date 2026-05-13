@@ -31,14 +31,19 @@ export async function GET(req: NextRequest) {
     const fmt = stripped.length === 10
       ? `${stripped.slice(0, 3)}-${stripped.slice(3, 5)}-${stripped.slice(5)}`
       : stripped;
-    const client = await prisma.userClient.findFirst({
-      where: {
-        userId: user.id,
-        OR: [{ bizNumber: stripped }, { bizNumber: fmt }],
-      },
-      select: { id: true, clientName: true, bizNumber: true },
-    });
-    return NextResponse.json({ found: !!client, client: client ?? null });
+    try {
+      const client = await prisma.userClient.findFirst({
+        where: {
+          userId: user.id,
+          OR: [{ bizNumber: stripped }, { bizNumber: fmt }],
+        },
+        select: { id: true, clientName: true, bizNumber: true },
+      });
+      return NextResponse.json({ found: !!client, client: client ?? null });
+    } catch {
+      // DB error — treat as potentially duplicate to prevent false "available"
+      return NextResponse.json({ found: false, dbError: true }, { status: 500 });
+    }
   }
 
   const all = req.nextUrl.searchParams.get("all") === "true";

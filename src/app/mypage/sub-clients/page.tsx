@@ -154,10 +154,20 @@ export default function SubClientsPage() {
     if (digits.length === 10) {
       if (!validateBizNumber(formatted)) { setBizError("유효하지 않은 사업자등록번호예요."); return; }
       setDupChecked("checking");
-      const res = await fetch(`/api/user-clients?bizNumber=${digits}`);
-      const data = await res.json();
-      if (data.found) { setDupChecked("dup"); return; }
-      setDupChecked("ok");
+      try {
+        const res = await fetch(`/api/user-clients?bizNumber=${digits}`);
+        if (!res.ok) {
+          setDupChecked("none");
+          setBizError("중복 확인 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
+          return;
+        }
+        const data = await res.json();
+        if (data.found) { setDupChecked("dup"); return; }
+        setDupChecked("ok");
+      } catch {
+        setDupChecked("none");
+        setBizError("중복 확인 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
+      }
     }
   }
 
@@ -266,7 +276,7 @@ export default function SubClientsPage() {
     c.dealerType === "LOWER_CORP"
   );
 
-  const canRegister = !!dealerType && !!name.trim() && !!biz.trim() && !bizError && dupChecked !== "dup" && !registering;
+  const canRegister = !!dealerType && !!name.trim() && !!biz.trim() && !bizError && dupChecked === "ok" && !registering;
 
   return (
     <RequireRole minRole="BASIC">
