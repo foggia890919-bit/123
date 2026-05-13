@@ -137,6 +137,12 @@ interface BulkOrder {
     paymentDate?: string;
     channelProductNo?: string;
     productId?: string;
+    // 옵션 매칭용 후보 필드들 (네이버 API 응답에 있을 수 있는 키들 — 진단 후 확정)
+    optionManageCode?: string;
+    sellerProductManagementCode?: string;
+    optionCode?: string;
+    sellerManagementCode?: string;
+    productOptionId?: string | number;
   };
   order?: { orderId: string; ordererName?: string; paymentDate?: string };
 }
@@ -286,49 +292,69 @@ async function loadRules(): Promise<Rule[]> {
   return DEFAULT_RULES;
 }
 
-// 「상품매핑」 — 상품번호 → 라벨/원가/물류비 (옵션매핑 패턴보다 우선 적용)
-interface ProductRule {
+// 「⭐옵션매핑」 — 사장님이 직접 입력하는 옵션관리번호별 매핑 (정밀)
+interface OptionMapRule {
+  originProductNo: string;
   channelProductNo: string;
+  optionManageCode: string;
   label: string;
   costPerUnit: number;
   logisticsPerOrder: number;
-  type: "main" | "additional" | "auto"; // 메인 / 추가 / 자동
+  type: "메인" | "추가" | ""; // 빈 칸 = 미지정
 }
 
-async function loadProductRules(): Promise<Map<string, ProductRule>> {
-  const map = new Map<string, ProductRule>();
+/**
+ * 「⭐옵션매핑」 시트 로드. 사장님이 「상품목록」 시트 보고 직접 매핑 입력.
+ *
+ * 시트 컬럼:
+ *   A 원본상품번호, B 채널상품번호, C 옵션관리번호, D 라벨,
+ *   E 원가(개당), F 물류비(건당), G 유형(메인/추가)
+ *
+ * 매칭 키 (우선순위):
+ *   1. `${channelProductNo}|${optionManageCode}` (가장 정밀)
+ *   2. `${channelProductNo}` (옵션관리번호 비어있을 때 = 상품 전체 매핑)
+ */
+async function loadOptionMapping(): Promise<Map<string, OptionMapRule>> {
+  const map = new Map<string, OptionMapRule>();
   if (!SHEET_CREDS) return map;
   try {
-    await ensureTab(SHEET_CREDS, "상품매핑", [
-      "상품번호",
+    await ensureTab(SHEET_CREDS, "⭐옵션매핑", [
+      "원본상품번호",
+      "채널상품번호",
+      "옵션관리번호",
       "라벨",
       "원가(개당)",
       "물류비(건당)",
-      "유형 (메인/추가, 빈칸=자동)",
+      "유형(메인/추가)",
     ]);
-    const rows = await readRange(SHEET_CREDS, "상품매핑!A2:E10000");
+    const rows = await readRange(SHEET_CREDS, "⭐옵션매핑!A2:G10000");
     for (const r of rows) {
-      const num = String(r[0] ?? "").trim();
-      const label = String(r[1] ?? "").trim();
-      if (!num) continue;
-      const typeStr = String(r[4] ?? "").trim().toLowerCase();
-      const type: ProductRule["type"] =
-        typeStr === "메인" || typeStr === "main" || typeStr === "m"
-          ? "main"
-          : typeStr === "추가" || typeStr === "additional" || typeStr === "추가옵션" || typeStr === "a"
-            ? "additional"
-            : "auto";
-      map.set(num, {
-        channelProductNo: num,
-        label: label || num,
-        costPerUnit: Number(String(r[2] ?? "").replace(/,/g, "")) || 0,
-        logisticsPerOrder: Number(String(r[3] ?? "").replace(/,/g, "")) || 0,
+      const originNo = String(r[0] ?? "").trim();
+      const chNo = String(r[1] ?? "").trim();
+      const optCode = String(r[2] ?? "").trim();
+      const label = String(r[3] ?? "").trim();
+      if (!chNo) continue; // 채널상품번호 필수
+      const cost = Number(String(r[4] ?? "").replace(/,/g, "")) || 0;
+      const logi = Number(String(r[5] ?? "").replace(/,/g, "")) || 0;
+      const typeStr = String(r[6] ?? "").trim();
+      const type: OptionMapRule["type"] =
+        typeStr === "메인" || typeStr.toLowerCase() === "main" ? "메인"
+          : typeStr === "추가" || typeStr.toLowerCase() === "additional" ? "추가"
+            : "";
+      const key = optCode ? `${chNo}|${optCode}` : chNo;
+      map.set(key, {
+        originProductNo: originNo,
+        channelProductNo: chNo,
+        optionManageCode: optCode,
+        label: label || chNo,
+        costPerUnit: cost,
+        logisticsPerOrder: logi,
         type,
       });
     }
-    if (map.size > 0) console.log(`상품매핑 ${map.size}개 로드`);
+    if (map.size > 0) console.log(`⭐옵션매핑 ${map.size}개 로드`);
   } catch (err) {
-    console.warn("상품매핑 시트 읽기 실패:", err instanceof Error ? err.message : String(err));
+    console.warn("⭐옵션매핑 시트 읽기 실패:", err instanceof Error ? err.message : String(err));
   }
   return map;
 }
@@ -361,17 +387,31 @@ function isCanceled(status: string): boolean {
 // ─────────────────── 텔레그램
 const won = (n: number) => n.toLocaleString("ko-KR") + "원";
 
-async function sendTelegram(text: string): Promise<void> {
+async function sendTelegram(text: string, maxAttempts = 3): Promise<void> {
   if (!TG_TOKEN || !TG_CHAT) {
     console.error("TELEGRAM 환경변수 누락");
     return;
   }
-  const res = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: TG_CHAT, text, parse_mode: "HTML", disable_web_page_preview: true }),
-  });
-  if (!res.ok) throw new Error(`telegram ${res.status}: ${await res.text()}`);
+  // 네트워크 일시 장애(fetch failed) 회피용 retry — 1.5s, 3s, 4.5s 백오프
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: TG_CHAT, text, parse_mode: "HTML", disable_web_page_preview: true }),
+      });
+      if (!res.ok) throw new Error(`telegram ${res.status}: ${await res.text()}`);
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (attempt === maxAttempts) throw err;
+      const msg = err instanceof Error ? err.message.slice(0, 100) : String(err);
+      console.warn(`[telegram] 재시도 ${attempt}/${maxAttempts}: ${msg}`);
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
+    }
+  }
+  throw lastErr;
 }
 
 // ─────────────────── 메인
@@ -409,10 +449,12 @@ interface ProcessOptions {
   sendTelegram: boolean;
 }
 
+let orderDebugLogged = false;
+
 async function processDay(
   range: { fromIso: string; toIso: string; dateStr: string },
   rules: Rule[],
-  productRules: Map<string, ProductRule>,
+  productRules: Map<string, OptionMapRule>,
   options: ProcessOptions,
 ): Promise<void> {
   console.log(`\n[${range.dateStr}] ${options.sendTelegram ? '메인 보고' : '시트 동기화 only'}`);
@@ -428,8 +470,28 @@ async function processDay(
       for (const o of orders) {
         const po = o.productOrder;
         const channelProductNo = po.channelProductNo ?? po.productId ?? "";
-        // 1순위: 「상품매핑」 (productNo 직접 매핑) → 2순위: 「옵션매핑」 (패턴 매칭)
-        const productRule = productRules.get(channelProductNo);
+        // 진단7: 첫 주문의 raw 출력 (옵션관리번호 필드명 확인용) - 1회만
+        if (!orderDebugLogged) {
+          orderDebugLogged = true;
+          console.log(`[진단7] 주문 raw (옵션관리번호 필드 파악용):`);
+          console.log(JSON.stringify(po, null, 2).slice(0, 2000));
+        }
+        // 옵션관리번호 후보 — 네이버 응답에 있을 수 있는 여러 필드 시도
+        const optionManageCode = String(
+          po.optionManageCode ??
+            po.sellerProductManagementCode ??
+            po.optionCode ??
+            po.sellerManagementCode ??
+            po.productOptionId ??
+            ""
+        ).trim();
+
+        // 매칭 우선순위:
+        //  1) `${channelProductNo}|${optionManageCode}` — 옵션 단위 정밀 매칭
+        //  2) `${channelProductNo}` — 상품 전체 매핑 (옵션관리번호 없거나 미입력 시)
+        //  3) 코드 옵션매핑 패턴 (fallback)
+        const optKey = optionManageCode ? `${channelProductNo}|${optionManageCode}` : "";
+        const productRule = (optKey && productRules.get(optKey)) || productRules.get(channelProductNo);
         const matched = productRule
           ? null
           : classify(po.productName, po.productOption ?? "", rules);
@@ -655,11 +717,8 @@ async function processDay(
       }
       const out = new Map<string, MainGroup>();
       for (const list of byOrder.values()) {
-        // 메인/추가 결정:
-        //  - 상품매핑에 「메인」 명시된 행이 있으면 그게 메인 (첫 번째)
-        //  - 「추가」 명시된 행은 추가
-        //  - 아무것도 안 정해진 경우: 매출 큰 게 메인 (휴리스틱)
-        const taggedMain = list.find((r) => productRules.get(r.channelProductNo)?.type === "main");
+        // 메인/추가 결정 — ⭐옵션매핑 의 「메인」/「추가」 태그 우선, 없으면 매출 휴리스틱
+        const taggedMain = list.find((r) => productRules.get(r.channelProductNo)?.type === "메인");
         let mainRow: Row;
         let adds: Row[];
         if (taggedMain) {
@@ -668,7 +727,7 @@ async function processDay(
         } else {
           // 「추가」 태그된 것 제외하고 가장 매출 큰 게 메인
           const notTaggedAsAdd = list.filter(
-            (r) => productRules.get(r.channelProductNo)?.type !== "additional",
+            (r) => productRules.get(r.channelProductNo)?.type !== "추가",
           );
           const pool = notTaggedAsAdd.length > 0 ? notTaggedAsAdd : list;
           pool.sort((a, b) => b.salesAmount - a.salesAmount);
@@ -770,7 +829,7 @@ async function main() {
   const arg2 = process.argv[3];
   const rules = await loadRules();
   console.log(`키워드 룰 ${rules.length}개`);
-  const productRules = await loadProductRules();
+  const productRules = await loadOptionMapping();
 
   // 범위 백필: `npx tsx run.ts 2026-04-01 2026-05-01` → 텔레그램 X, 시트만 갱신
   if (arg1 && arg2) {

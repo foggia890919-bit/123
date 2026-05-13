@@ -236,39 +236,10 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
     "카테고리",
     "가격",
     "상태",
-    "유형 (자동)",
+    "유형 (메인/옵션/추가)",
     "URL",
-    "⭐ 라벨",
-    "⭐ 유형(메인/추가 override)",
-    "⭐ 원가(개당)",
-    "⭐ 물류비(건당)",
     "수집일",
   ]);
-
-  // 기존 시트의 사장님 입력 (L~O = 라벨/유형override/원가/물류비) 보존
-  // 키 = `${store}|${channelProductNo}|${optionManageCode}` (catalog 의 upsert 키와 동일)
-  const userInputMap = new Map<string, [string, string, string, string]>();
-  try {
-    const existing = await readRange(creds, "상품목록!A2:O100000");
-    for (const row of existing) {
-      const store = String(row[0] ?? "").trim();
-      const chNo = String(row[2] ?? "").trim();
-      const optCode = String(row[3] ?? "").trim();
-      const key = `${store}|${chNo}|${optCode}`;
-      const label = String(row[11] ?? "").trim();
-      const typeOver = String(row[12] ?? "").trim();
-      const cost = String(row[13] ?? "").trim();
-      const logi = String(row[14] ?? "").trim();
-      if (label || typeOver || cost || logi) {
-        userInputMap.set(key, [label, typeOver, cost, logi]);
-      }
-    }
-    if (userInputMap.size > 0) {
-      console.log(`  [상품목록] 사장님 입력 ${userInputMap.size}건 보존`);
-    }
-  } catch (e) {
-    console.warn(`[catalog] 기존 시트 read 실패 (무시): ${e instanceof Error ? e.message : e}`);
-  }
 
   // 수집일 — KST 기준 "YYYY-MM-DD HH:mm"
   const nowKst = new Date(Date.now() + 9 * 60 * 60 * 1000)
@@ -277,10 +248,6 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
     .replace("T", " ");
   const today = nowKst;
   const rows: (string | number)[][] = [];
-
-  // 사장님 입력값 lookup 헬퍼 — 각 push 행에 4개 컬럼 (라벨/유형override/원가/물류비) 추가
-  const ui = (store: string, chNo: string, optCode: string): [string, string, string, string] =>
-    userInputMap.get(`${store}|${chNo}|${optCode}`) ?? ["", "", "", ""];
 
   for (const store of STORES) {
     if (filterStore && store.name !== filterStore) continue;
@@ -301,12 +268,10 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
 
         // 채널 행 추가
         if (channels.length === 0) {
-          const u = ui(store.name, "", "");
           rows.push([
-            store.name, originNo, "", "", // 옵션관리번호
+            store.name, originNo, "", "",
             p.name ?? "", "", "", 0, p.statusType ?? "",
-            "메인", "", // URL 없음
-            u[0], u[1], u[2], u[3], // 사장님 입력 4개
+            "메인", "",
             today,
           ]);
           count++;
@@ -315,13 +280,11 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
           const chNo = String(ch.channelProductNo ?? "");
           const url = chNo ? `https://smartstore.naver.com/main/products/${chNo}` : "";
           // 메인 행
-          const uMain = ui(store.name, chNo, "");
           rows.push([
-            store.name, originNo, chNo, "", // 옵션관리번호 (메인 빈 칸)
+            store.name, originNo, chNo, "",
             ch.name ?? p.name ?? "", "", ch.wholeCategoryName ?? "",
             ch.salePrice ?? 0, ch.statusType ?? p.statusType ?? "",
             inferType(ch, p), url,
-            uMain[0], uMain[1], uMain[2], uMain[3], // 사장님 입력
             today,
           ]);
           count++;
@@ -334,13 +297,11 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
               opt.optionName3 ?? opt.option3,
             ].filter(Boolean).join(" / ");
             const optCode = String(opt.optionManageCode ?? opt.id ?? "");
-            const uOpt = ui(store.name, chNo, optCode);
             rows.push([
               store.name, originNo, chNo, optCode,
               ch.name ?? p.name ?? "", optName, ch.wholeCategoryName ?? "",
               opt.price ?? 0, opt.usable === false ? "STOPPED" : "SALE",
               "옵션", url,
-              uOpt[0], uOpt[1], uOpt[2], uOpt[3], // 사장님 입력
               today,
             ]);
             count++;
@@ -349,13 +310,11 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
           // 추가상품 행 (같은 채널상품번호 아래)
           for (const add of detail?.additionals ?? []) {
             const addCode = String(add.sellerManagementCode ?? add.optionManageCode ?? add.id ?? "");
-            const uAdd = ui(store.name, chNo, addCode);
             rows.push([
               store.name, originNo, chNo, addCode,
               add.groupName ?? add.name ?? "", add.name ?? "", ch.wholeCategoryName ?? "",
               add.price ?? 0, add.usable === false ? "STOPPED" : "SALE",
               "추가", url,
-              uAdd[0], uAdd[1], uAdd[2], uAdd[3], // 사장님 입력
               today,
             ]);
             count++;
