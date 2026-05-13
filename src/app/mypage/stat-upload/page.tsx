@@ -259,12 +259,15 @@ export default function StatUploadPage() {
             </div>
 
             {/* 거래가능 제약사 */}
-            {selectedClient && companies.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                <span className="text-xs font-semibold text-gray-500 self-center mr-1">거래가능 제약사</span>
-                {companies.map((c, i) => (
-                  <span key={i} className="text-xs bg-blue-50 text-blue-700 border border-blue-100 rounded-full px-2.5 py-0.5 font-medium">{c}</span>
-                ))}
+            {selectedClient && (
+              <div className="flex flex-wrap gap-1.5 items-center">
+                <span className="text-xs font-semibold text-gray-500 mr-1">거래가능 제약사</span>
+                {companies.length > 0
+                  ? companies.map((c, i) => (
+                      <span key={i} className="text-xs bg-blue-50 text-blue-700 border border-blue-100 rounded-full px-2.5 py-0.5 font-medium">{c}</span>
+                    ))
+                  : <span className="text-xs text-gray-400">승인된 제약사가 없습니다 (필터링 승인 필요)</span>
+                }
               </div>
             )}
 
@@ -339,22 +342,26 @@ export default function StatUploadPage() {
                 </div>
 
                 {/* 제약사 체크박스 (사진별) */}
-                {selectedClient && companies.length > 0 && (
+                {selectedClient && (
                   <div className="bg-gray-50 rounded-lg px-4 py-3">
                     <p className="text-xs font-semibold text-gray-500 mb-2">이 사진의 제약사 선택</p>
-                    <div className="flex flex-wrap gap-2">
-                      {companies.map((c) => (
-                        <label key={c} className="flex items-center gap-1.5 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={curPhotoCompanies.includes(c)}
-                            onChange={() => toggleCompany(c)}
-                            className="w-3.5 h-3.5 accent-orange-500"
-                          />
-                          <span className="text-sm text-gray-700">{c}</span>
-                        </label>
-                      ))}
-                    </div>
+                    {companies.length > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {companies.map((c) => (
+                          <label key={c} className="flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={curPhotoCompanies.includes(c)}
+                              onChange={() => toggleCompany(c)}
+                              className="w-3.5 h-3.5 accent-orange-500"
+                            />
+                            <span className="text-sm text-gray-700">{c}</span>
+                          </label>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-gray-400">이 병원에 승인된 제약사가 없습니다. 비즈관리 &gt; 필터링에서 승인 후 사용하세요.</p>
+                    )}
                   </div>
                 )}
 
