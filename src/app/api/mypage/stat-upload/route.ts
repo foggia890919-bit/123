@@ -40,12 +40,16 @@ export async function GET(req: NextRequest) {
     clientName: imgs[0].client?.clientName ?? "미입력",
     fileCount: imgs.length,
     createdAt: imgs[0].createdAt,
-    files: imgs.map((f) => ({
-      id: f.id,
-      storedName: f.storedName,
-      viewUrl: f.driveViewUrl,
-      downloadUrl: f.driveViewUrl,
-    })),
+    files: imgs.map((f) => {
+      // driveFileId = storage key. DB에 저장된 URL은 구버전일 수 있으므로 항상 재생성
+      const url = publicUrl(BUCKETS.statImage, f.driveFileId);
+      return {
+        id: f.id,
+        storedName: f.storedName,
+        viewUrl: url,
+        downloadUrl: url,
+      };
+    }),
   }));
 
   return NextResponse.json({ batches: result, storageEnabled: storageEnabled() });
