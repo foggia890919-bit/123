@@ -186,11 +186,11 @@ export default function Navbar() {
                     <div className="px-4 pt-2 pb-0.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">업무관리</div>
                     <Link href="/mypage/clients" onClick={() => setUserOpen(false)}
                       className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 pl-6">
-                      <Building2 className="w-4 h-4 text-gray-400" />내 거래처
+                      <Building2 className="w-4 h-4 text-gray-400" />거래처관리(의료기관)
                     </Link>
                     <Link href="/mypage/sub-clients" onClick={() => setUserOpen(false)}
                       className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 pl-6">
-                      <Users className="w-4 h-4 text-gray-400" />상위 하위 법인관리
+                      <Users className="w-4 h-4 text-gray-400" />거래처관리(사업자)
                     </Link>
                     <Link href="/mypage/stat-upload" onClick={() => setUserOpen(false)}
                       className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 pl-6">

@@ -202,7 +202,7 @@ export default function SubClientsPage() {
       <div className="max-w-2xl mx-auto space-y-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Users className="w-6 h-6 text-purple-600" />상위 하위 법인관리
+            <Users className="w-6 h-6 text-purple-600" />거래처관리(사업자)
           </h1>
           <p className="text-gray-500 text-sm mt-1">상위법인·하위법인을 등록하고 관리합니다.</p>
         </div>

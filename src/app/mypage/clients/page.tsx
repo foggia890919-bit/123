@@ -236,7 +236,7 @@ export default function ClientsPage() {
       <div className="max-w-2xl mx-auto space-y-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Building2 className="w-6 h-6 text-blue-600" />내 거래처 관리
+            <Building2 className="w-6 h-6 text-blue-600" />거래처관리(의료기관)
           </h1>
           <p className="text-gray-500 text-sm mt-1">거래처를 등록하면 제약사 필터링·제안서 등 모든 서비스에서 바로 사용할 수 있습니다.</p>
         </div>
