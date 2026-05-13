@@ -85,7 +85,28 @@ export async function GET(req: NextRequest) {
       },
     });
   }
-  return NextResponse.json(rows);
+
+  // 각 거래처의 승인된 제약사 목록 첨부
+  const bizNumbers = rows.map((r) => r.bizNumber).filter(Boolean) as string[];
+  const filters = bizNumbers.length
+    ? await prisma.filterRequest.findMany({
+        where: { bizNumber: { in: bizNumbers }, status: "APPROVED" },
+        select: { bizNumber: true, companyName: true },
+        distinct: ["bizNumber", "companyName"],
+        orderBy: { companyName: "asc" },
+      })
+    : [];
+
+  const companyMap = new Map<string, string[]>();
+  for (const f of filters) {
+    if (!companyMap.has(f.bizNumber)) companyMap.set(f.bizNumber, []);
+    companyMap.get(f.bizNumber)!.push(f.companyName);
+  }
+
+  return NextResponse.json(rows.map((r) => ({
+    ...r,
+    companies: r.bizNumber ? (companyMap.get(r.bizNumber) ?? []) : [],
+  })));
 }
 
 export async function POST(req: NextRequest) {

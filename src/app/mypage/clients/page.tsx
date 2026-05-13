@@ -15,6 +15,7 @@ interface UserClient {
   approved: boolean | null;
   createdAt: string;
   dealerType?: string | null;
+  companies?: string[];
 }
 
 interface BizVerifyResult {
@@ -347,6 +348,18 @@ export default function ClientsPage() {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-800 truncate">{c.clientName}</p>
                     <p className="text-xs text-gray-400 font-mono mt-0.5">{c.bizNumber}</p>
+                    {c.companies && c.companies.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {c.companies.map((co) => (
+                          <span key={co} className="text-[10px] bg-orange-50 text-orange-600 border border-orange-200 rounded-full px-1.5 py-0.5 leading-none">
+                            {co}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {c.companies && c.companies.length === 0 && (
+                      <p className="text-[10px] text-gray-300 mt-1">거래 제약사 없음</p>
+                    )}
                   </div>
                   <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 border ${
                     c.dealerType
