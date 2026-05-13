@@ -160,11 +160,11 @@ async function fetchCategoryTopKeywords(cid: string, count = 500): Promise<Ranke
 // ─────────────────── 검색광고 API: 키워드 도구 (검색량 + 연관 키워드)
 
 interface AdKeywordRow {
-  keyword: string;
-  monthlyPcQcCnt: number;
-  monthlyMobileQcCnt: number;
-  monthlyAvePcCtr: number;
-  monthlyAveMobileCtr: number;
+  relKeyword: string; // 네이버 검색광고 API 실제 필드명
+  monthlyPcQcCnt: number | string;
+  monthlyMobileQcCnt: number | string;
+  monthlyAvePcCtr: number | string;
+  monthlyAveMobileCtr: number | string;
   compIdx: string; // "낮음" | "중간" | "높음"
 }
 
@@ -641,7 +641,7 @@ async function dumpKeywordsForTrackedCategories(creds: SheetCreds): Promise<void
         try {
           const ad = await fetchKeywordTool(batch);
           for (const row of ad) {
-            enrichedMap.set(row.keyword.toLowerCase(), row);
+            enrichedMap.set(row.relKeyword.toLowerCase(), row);
           }
         } catch (err) {
           console.warn(`    ad ${i}: ${err instanceof Error ? err.message : String(err)}`);
