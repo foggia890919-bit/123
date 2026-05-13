@@ -42,6 +42,8 @@ interface TaskDef {
   hint: string; // B열 「실행」 입력 힌트
 }
 
+const STOP_TASK_NAME = "🛑 작업 중단 (실행 중인 작업 강제 종료)";
+
 const TASKS: TaskDef[] = [
   { name: "매출 — 어제 + 7일 롤링 (cron 자동)", cmd: "npx tsx run.ts", hint: "GO" },
   { name: "매출 — 단일 날짜", cmd: "DATE_SINGLE", hint: "YYYY-MM-DD" },
@@ -52,6 +54,7 @@ const TASKS: TaskDef[] = [
   { name: "시장 키워드 (Top500)", cmd: "npx tsx market.ts keywords", hint: "GO" },
   { name: "시장 규모 (Top40 매출)", cmd: "npx tsx market.ts size", hint: "GO" },
   { name: "순위 추적", cmd: "npx tsx market.ts rank", hint: "GO" },
+  { name: STOP_TASK_NAME, cmd: "STOP", hint: "GO" },
 ];
 
 const TRIGGER_VALUES = new Set(["go", "실행", "y", "yes", "ㅇ", "ㅇㅇ", "1", "✓", "true"]);
@@ -116,6 +119,7 @@ async function pollAndRun(): Promise<void> {
 
     const task = TASKS.find((t) => t.name === name);
     if (!task) continue;
+    if (task.cmd === "STOP") continue; // STOP 은 main 의 checkAndHandleStop 에서 처리
 
     const rowNum = i + 2;
 
@@ -174,7 +178,46 @@ async function pollAndRun(): Promise<void> {
   }
 }
 
+/** STOP 트리거 우선 처리 (lock 무관) — 시트의 「작업 중단」 ☑ 면 도는 tsx 프로세스 강제 종료 */
+async function checkAndHandleStop(): Promise<boolean> {
+  try {
+    const rows = await readRange(SHEET_CREDS!, `${TAB}!A2:E100`);
+    for (let i = 0; i < rows.length; i++) {
+      const name = String(rows[i][0] ?? "").trim();
+      const trigger = String(rows[i][1] ?? "").trim();
+      if (name !== STOP_TASK_NAME) continue;
+      if (trigger === "FALSE" || !trigger) return false;
+      if (trigger !== "TRUE" && !TRIGGER_VALUES.has(trigger.toLowerCase())) return false;
+      const rowNum = i + 2;
+      console.log(`[scheduler] 🛑 STOP 트리거 — tsx 프로세스 강제 종료 시도`);
+      try {
+        execSync(`pkill -f "tsx (run|catalog|market|volume)\\.ts" || true`, { stdio: "inherit" });
+      } catch (e) {
+        console.error(`[scheduler] pkill 실패 (무시): ${e instanceof Error ? e.message : e}`);
+      }
+      // stale lock 도 제거 (강제 종료된 프로세스가 lock 남길 수 있음)
+      if (existsSync(LOCK_FILE)) unlinkSync(LOCK_FILE);
+      // 시트에 결과 표시 + 체크박스 해제
+      await writeRange(SHEET_CREDS!, `${TAB}!B${rowNum}:E${rowNum}`, [
+        [false, "OK", nowKst(), `🛑 강제 종료 완료 ${nowKst()}`],
+      ]);
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.error(`[scheduler] STOP 체크 실패 (무시): ${err instanceof Error ? err.message : err}`);
+    return false;
+  }
+}
+
 async function main(): Promise<void> {
+  // STOP 우선 처리 — lock 무관. 사장님이 도는 작업 강제 종료할 때
+  const stopped = await checkAndHandleStop();
+  if (stopped) {
+    console.log(`[scheduler] STOP 처리 완료. 종료.`);
+    return;
+  }
+
   // 중복 실행 방지 — lock file
   if (existsSync(LOCK_FILE)) {
     const age = Date.now() - statSync(LOCK_FILE).mtimeMs;
