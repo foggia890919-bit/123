@@ -1,7 +1,17 @@
 """문서의 네 모서리를 찾아 정면으로 펴는 모듈.
 
-배경이 단순한 경우 Canny + HoughLines, 복잡한 경우 Contour 면적 최댓값으로
-폴백한다. 두 방법이 모두 실패하면 원본을 그대로 반환하고 호출자가 판단한다.
+폴백 체인 — 위에서 실패하면 다음 단계로 내려간다:
+  1. Hough lines          : 배경이 단순한 경우 (직선 4개 교점)
+  2. Contour              : 배경이 약간 복잡 (가장 큰 4각 폴리곤)
+  3. GrabCut polygon      : 배경이 복잡 (전경 마스크 → 폴리곤)
+  4. VLM (옵션)            : 위 셋 다 실패 + adapter 있을 때만
+  5. minAreaRect           : 4 점 못 찾았지만 회전 직사각형으로라도 펴기
+                            (구겨진 종이/모서리 일부 잘림 케이스 안전망)
+  6. deskew                : 마지막 안전망 — Hough 로 텍스트 줄 기울기 추정해 역회전
+                            (perspective 가 다 실패해도 기울기만이라도 제거)
+
+"원본 raw 가 후단으로 통과되는 일은 없다" 가 핵심 — 입력 정규화가 도돌이표의
+가장 큰 원인이므로, 어떤 사진이 들어와도 최소한 deskew 까지는 보장한다.
 """
 
 from __future__ import annotations
@@ -15,7 +25,7 @@ import numpy as np
 @dataclass
 class CornerResult:
     corners: np.ndarray | None
-    method: str  # "hough" | "contour" | "fallback"
+    method: str  # "hough" | "contour" | "grabcut" | "fallback"
 
 
 def _order_corners(pts: np.ndarray) -> np.ndarray:
@@ -35,7 +45,7 @@ def _order_corners(pts: np.ndarray) -> np.ndarray:
 
 
 def _find_corners_by_contour(gray: np.ndarray) -> np.ndarray | None:
-    """배경이 복잡한 경우용 — 면적이 가장 큰 사각형 컨투어를 찾는다."""
+    """배경이 약간 복잡한 경우용 — 면적이 가장 큰 사각형 컨투어를 찾는다."""
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     edged = cv2.Canny(blurred, 50, 180)
     edged = cv2.dilate(edged, np.ones((3, 3), np.uint8), iterations=1)
@@ -61,8 +71,6 @@ def _find_corners_by_hough(gray: np.ndarray) -> np.ndarray | None:
     lines = cv2.HoughLines(edges, 1, np.pi / 180, 150)
     if lines is None or len(lines) < 4:
         return None
-    # 단순 구현: 각도로 클러스터링해 수평/수직 각 2개씩 골라 교점을 만든다.
-    # 실패 시 None을 반환해 contour 폴백으로 넘긴다.
     horizontals: list[tuple[float, float]] = []
     verticals: list[tuple[float, float]] = []
     for rho, theta in lines[:, 0]:
@@ -99,7 +107,98 @@ def _find_corners_by_hough(gray: np.ndarray) -> np.ndarray | None:
     return np.array(pts, dtype=np.float32)
 
 
+def _find_corners_by_grabcut(image: np.ndarray) -> np.ndarray | None:
+    """배경이 복잡한 경우용 — GrabCut 으로 전경 추정 후 폴리곤 근사.
+
+    가장자리 10% 안쪽을 종이 영역 시드로 주고 4번 반복. 결과 마스크의 가장 큰
+    컨투어를 4점 폴리곤으로 근사. 5점 이상 나오면 minAreaRect 폴백은 호출자가.
+    """
+    if image.ndim != 3:
+        return None
+    h, w = image.shape[:2]
+    # 너무 작은 이미지는 GrabCut 이 비싸고 큰 의미도 없으니 스킵
+    if h * w < 200 * 200:
+        return None
+    # 다운샘플로 GrabCut 비용 줄임 (결과 좌표는 다시 원본 스케일로 복원)
+    scale = 600.0 / max(h, w)
+    if scale < 1.0:
+        small = cv2.resize(image, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    else:
+        small = image
+        scale = 1.0
+    sh, sw = small.shape[:2]
+
+    mask = np.zeros((sh, sw), np.uint8)
+    bgd = np.zeros((1, 65), np.float64)
+    fgd = np.zeros((1, 65), np.float64)
+    rect = (sw // 10, sh // 10, sw * 8 // 10, sh * 8 // 10)
+    try:
+        cv2.grabCut(small, mask, rect, bgd, fgd, 3, cv2.GC_INIT_WITH_RECT)
+    except cv2.error:
+        return None
+    fg = ((mask == cv2.GC_PR_FGD) | (mask == cv2.GC_FGD)).astype(np.uint8) * 255
+    # 작은 구멍 메우기
+    fg = cv2.morphologyEx(fg, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+
+    contours, _ = cv2.findContours(fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    biggest = max(contours, key=cv2.contourArea)
+    if cv2.contourArea(biggest) < sh * sw * 0.2:
+        return None
+    peri = cv2.arcLength(biggest, True)
+    # 조금 더 관대한 epsilon — GrabCut 결과는 경계가 들쭉날쭉해서 0.02 로는 5점+ 나오기 쉬움
+    approx = cv2.approxPolyDP(biggest, 0.03 * peri, True)
+    if len(approx) != 4:
+        return None
+    pts = approx.reshape(4, 2).astype(np.float32)
+    # 원본 스케일로 복원
+    return pts / scale
+
+
+def _find_corners_by_min_area_rect(image: np.ndarray) -> np.ndarray | None:
+    """4점 폴리곤 못 찾았을 때의 최후 보루 — GrabCut 마스크의 회전 직사각형.
+
+    구겨진 종이·모서리 잘린 사진처럼 4-각 폴리곤이 안 나오는 경우, 적어도
+    종이가 차지하는 영역의 회전 사각형은 잡을 수 있다. 이걸 펴면 기울기 +
+    바깥 배경 제거는 됨 (구겨짐 자체는 못 펴지만 후단에 일관된 입력 제공).
+    """
+    if image.ndim != 3:
+        return None
+    h, w = image.shape[:2]
+    if h * w < 200 * 200:
+        return None
+    scale = 600.0 / max(h, w)
+    if scale < 1.0:
+        small = cv2.resize(image, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    else:
+        small = image
+        scale = 1.0
+    sh, sw = small.shape[:2]
+
+    mask = np.zeros((sh, sw), np.uint8)
+    bgd = np.zeros((1, 65), np.float64)
+    fgd = np.zeros((1, 65), np.float64)
+    rect = (sw // 10, sh // 10, sw * 8 // 10, sh * 8 // 10)
+    try:
+        cv2.grabCut(small, mask, rect, bgd, fgd, 3, cv2.GC_INIT_WITH_RECT)
+    except cv2.error:
+        return None
+    fg = ((mask == cv2.GC_PR_FGD) | (mask == cv2.GC_FGD)).astype(np.uint8) * 255
+    fg = cv2.morphologyEx(fg, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    contours, _ = cv2.findContours(fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    biggest = max(contours, key=cv2.contourArea)
+    if cv2.contourArea(biggest) < sh * sw * 0.2:
+        return None
+    rot = cv2.minAreaRect(biggest)
+    box = cv2.boxPoints(rot).astype(np.float32)
+    return box / scale
+
+
 def find_document_corners(image: np.ndarray) -> CornerResult:
+    """폴리곤 4점 검출 — Hough → Contour → GrabCut 순. 모두 실패하면 None."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
     corners = _find_corners_by_hough(gray)
     if corners is not None:
@@ -107,11 +206,34 @@ def find_document_corners(image: np.ndarray) -> CornerResult:
     corners = _find_corners_by_contour(gray)
     if corners is not None:
         return CornerResult(corners=_order_corners(corners), method="contour")
+    corners = _find_corners_by_grabcut(image)
+    if corners is not None:
+        return CornerResult(corners=_order_corners(corners), method="grabcut")
     return CornerResult(corners=None, method="fallback")
 
 
-def warp_to_front(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
+def warp_to_front(
+    image: np.ndarray,
+    corners: np.ndarray,
+    outward_margin: float = 0.0,
+) -> np.ndarray:
+    """corners 를 정면 사각형으로 워프. outward_margin > 0 이면 검출 사각형 바깥쪽으로
+    그만큼 비율만큼 확장해서 잘림 위험을 줄임 — 검출 사각형이 표 가장자리를 약간
+    자르는 케이스(특히 min_area_rect 폴백) 안전판."""
     tl, tr, br, bl = corners
+    if outward_margin > 0.0:
+        cx = (tl[0] + tr[0] + br[0] + bl[0]) / 4.0
+        cy = (tl[1] + tr[1] + br[1] + bl[1]) / 4.0
+        f = 1.0 + outward_margin
+        center = np.array([cx, cy], dtype=np.float32)
+        expanded = np.array([
+            center + (tl - center) * f,
+            center + (tr - center) * f,
+            center + (br - center) * f,
+            center + (bl - center) * f,
+        ], dtype=np.float32)
+        corners = expanded
+        tl, tr, br, bl = corners
     width = int(max(np.linalg.norm(br - bl), np.linalg.norm(tr - tl)))
     height = int(max(np.linalg.norm(tr - br), np.linalg.norm(tl - bl)))
     width = max(width, 100)
@@ -121,7 +243,11 @@ def warp_to_front(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
         dtype=np.float32,
     )
     M = cv2.getPerspectiveTransform(corners, dst)
-    return cv2.warpPerspective(image, M, (width, height))
+    return cv2.warpPerspective(
+        image, M, (width, height),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
 
 
 def _quad_area(corners: np.ndarray) -> float:
@@ -137,6 +263,47 @@ def _quad_area(corners: np.ndarray) -> float:
     )
 
 
+def deskew(image: np.ndarray, max_angle: float = 10.0) -> tuple[np.ndarray, float]:
+    """텍스트 줄 기울기 미세 보정 — Hough 로 가장 강한 수평선들의 평균 각도로 역회전.
+
+    perspective 가 완전히 실패한 케이스의 마지막 안전망. ±max_angle 도 이내 기울기만
+    잡고 그 밖이면 손대지 않는다 (큰 기울기는 perspective 단계의 책임).
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    edges = cv2.Canny(gray, 50, 150)
+    lines = cv2.HoughLinesP(
+        edges, 1, np.pi / 180, threshold=100,
+        minLineLength=min(gray.shape) // 4,
+        maxLineGap=10,
+    )
+    if lines is None:
+        return image, 0.0
+    angles: list[float] = []
+    for x1, y1, x2, y2 in lines[:, 0]:
+        dx = x2 - x1
+        dy = y2 - y1
+        if dx == 0:
+            continue
+        ang = np.degrees(np.arctan2(dy, dx))
+        # 수평에 가까운 선만 — ±max_angle 도 이내
+        if abs(ang) < max_angle:
+            angles.append(ang)
+    if len(angles) < 5:
+        return image, 0.0
+    median_angle = float(np.median(angles))
+    if abs(median_angle) < 0.5:
+        return image, 0.0  # 0.5도 미만은 무시 — 워프 보간으로 오히려 화질 손해
+    # 그만큼 반대로 회전
+    h, w = image.shape[:2]
+    M = cv2.getRotationMatrix2D((w / 2, h / 2), median_angle, 1.0)
+    rotated = cv2.warpAffine(
+        image, M, (w, h),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+    return rotated, median_angle
+
+
 def correct_perspective(
     image: np.ndarray,
     min_area_ratio: float = 0.25,
@@ -147,19 +314,17 @@ def correct_perspective(
     """모서리를 찾아 정면으로 편 이미지와 사용된 방법명을 반환.
 
     검출 순서:
-      1. OpenCV (Hough → Contour) 시도
-      2. OpenCV가 실패하거나 가드를 못 통과하면 vlm_adapter가 주어진 경우
-         AI-Assisted Cropping (VLM에게 4 모서리 좌표 직접 물음) 시도
-      3. 그것도 실패하면 fallback (원본 그대로)
+      1. Hough → 2. Contour → 3. GrabCut polygon (find_document_corners 안)
+      4. (옵션) VLM
+      5. minAreaRect — 4점 못 찾았을 때 회전 직사각형으로라도 펴기
+      6. deskew — 마지막 안전망 (기울기만이라도 제거)
 
-    세 단계 신뢰성 가드 — 하나라도 실패하면 다음 방법으로 폴오버:
-      - 사각형 면적 / 원본 면적 >= min_area_ratio
-      - 결과 종횡비가 aspect_range 안
-      - corners의 x 범위와 y 범위가 각각 이미지 W·H의 min_span_ratio 이상
+    "원본 raw 통과 없음" 이 보장됨 — 항상 최소한 deskew 까지는 적용.
     """
     h_img, w_img = image.shape[:2]
     img_area = h_img * w_img
 
+    # 1~3
     cv_result = find_document_corners(image)
     cv_status = _evaluate_corners(
         cv_result.corners, image, img_area, min_area_ratio, aspect_range, min_span_ratio
@@ -167,28 +332,39 @@ def correct_perspective(
     if cv_status == "ok":
         return warp_to_front(image, cv_result.corners), cv_result.method
 
-    # VLM 폴오버 정책: OpenCV가 "완전 실패"(corners=None) 한 케이스에만 발동.
-    # OpenCV 가 4점은 찾았는데 면적·종횡비 가드만 못 통과(fallback_too_small/partial
-    # /bad_aspect)한 경우엔 표 외곽 일부만 인식했다는 신호 — 이때 VLM 에 다시
-    # 묻으면 페이지 헤더(타이틀바) 같은 엉뚱한 영역을 새 사각형으로 짚을 위험이
-    # 더 크다 (실측: 04_paper_watermark 케이스에서 hospital_name 이 페이지
-    # 타이틀로 환각). 그 경우엔 그냥 원본을 쓴다.
-    if vlm_adapter is None or cv_result.corners is not None:
-        return image, cv_status if cv_result.corners is not None else "fallback"
+    # 4: VLM 폴오버 — OpenCV 가 corners=None 인 완전실패 케이스에만.
+    # (4점은 찾았는데 가드만 못 통과한 경우는 표 외곽 일부만 인식했단 신호 →
+    #  이때 VLM 에 다시 묻으면 페이지 헤더 같은 엉뚱한 영역을 새 사각형으로
+    #  짚을 위험이 더 큼. 그땐 minAreaRect 와 deskew 로 넘긴다.)
+    if vlm_adapter is not None and cv_result.corners is None:
+        from .vlm_corners import locate_corners_with_vlm
 
-    from .vlm_corners import locate_corners_with_vlm
+        vlm_res = locate_corners_with_vlm(image, vlm_adapter)
+        if vlm_res.corners is not None:
+            ordered = _order_corners(vlm_res.corners)
+            vlm_status = _evaluate_corners(
+                ordered, image, img_area, min_area_ratio, aspect_range, min_span_ratio
+            )
+            if vlm_status == "ok":
+                return warp_to_front(image, ordered), f"vlm(conf={vlm_res.confidence:.2f})"
 
-    vlm_res = locate_corners_with_vlm(image, vlm_adapter)
-    if vlm_res.corners is None:
-        return image, f"fallback_vlm({vlm_res.note})"
+    # 5: minAreaRect — 회전 직사각형으로라도 펴기 (구겨진 종이 안전망).
+    # 검출 사각형이 표 가장자리(특히 가장 우측 컬럼)를 약간 자르는 일이 잦아
+    # outward_margin=0.08 로 8% 바깥쪽 확장 후 워프 — 검출 오차 안전 마진.
+    rot_corners = _find_corners_by_min_area_rect(image)
+    if rot_corners is not None:
+        ordered = _order_corners(rot_corners)
+        rot_status = _evaluate_corners(
+            ordered, image, img_area, min_area_ratio, aspect_range, min_span_ratio
+        )
+        if rot_status == "ok":
+            return warp_to_front(image, ordered, outward_margin=0.08), "min_area_rect"
 
-    ordered = _order_corners(vlm_res.corners)
-    vlm_status = _evaluate_corners(
-        ordered, image, img_area, min_area_ratio, aspect_range, min_span_ratio
-    )
-    if vlm_status == "ok":
-        return warp_to_front(image, ordered), f"vlm(conf={vlm_res.confidence:.2f})"
-    return image, f"fallback_vlm_{vlm_status}"
+    # 6: deskew — 최후 안전망. 기울기만이라도 제거하고 통과.
+    deskewed, angle = deskew(image)
+    if abs(angle) > 0.5:
+        return deskewed, f"deskew({angle:+.1f}deg)"
+    return image, "fallback"
 
 
 def _evaluate_corners(
@@ -211,7 +387,6 @@ def _evaluate_corners(
     y_span = (pts[:, 1].max() - pts[:, 1].min()) / h_img
     if x_span < min_span_ratio or y_span < min_span_ratio:
         return "fallback_partial"
-    # 종횡비는 워프 후 해상도로 판단 — pre-warp 모의 측정
     width = max(np.linalg.norm(pts[2] - pts[3]), np.linalg.norm(pts[1] - pts[0]))
     height = max(np.linalg.norm(pts[1] - pts[2]), np.linalg.norm(pts[0] - pts[3]))
     if height < 1:
