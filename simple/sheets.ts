@@ -387,13 +387,20 @@ export async function setDateValidation(
       body: JSON.stringify({
         requests: [
           // 1) 데이터 검증 (날짜만 허용 + 달력 picker UI)
+          // DATE_BETWEEN 사용 — 큰 범위로 사실상 모든 날짜 허용 + Google Sheets 가 picker 자동 표시
           {
             setDataValidation: {
               range,
               rule: {
-                condition: { type: "DATE_IS_VALID_DATE" },
+                condition: {
+                  type: "DATE_BETWEEN",
+                  values: [
+                    { userEnteredValue: "1900-01-01" },
+                    { userEnteredValue: "2099-12-31" },
+                  ],
+                },
                 showCustomUi: true,
-                strict: true,
+                strict: false,
               },
             },
           },
