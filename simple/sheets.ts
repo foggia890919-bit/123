@@ -316,6 +316,22 @@ export async function applyCancelRedRule(
   if (!res.ok) throw new Error(`condFormat ${res.status}: ${await res.text()}`);
 }
 
+/** 스프레드시트의 모든 시트(탭) 이름 → gid 매핑 조회 (하이퍼링크용) */
+export async function getSheetIdMap(c: SheetCreds): Promise<Map<string, number>> {
+  const token = await getToken(c);
+  const meta = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}?fields=sheets.properties(title,sheetId)`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!meta.ok) throw new Error(`getSheetIdMap ${meta.status}: ${await meta.text()}`);
+  const json = (await meta.json()) as { sheets?: { properties: { title: string; sheetId: number } }[] };
+  const map = new Map<string, number>();
+  for (const s of json.sheets ?? []) {
+    map.set(s.properties.title, s.properties.sheetId);
+  }
+  return map;
+}
+
 /**
  * 시트 탭의 데이터 영역(헤더 제외) 전체 비우기.
  * 매번 처음부터 새로 채우는 작업(catalog/market 등)에서 컬럼 정렬 어긋남·stale 행을 원천 차단.
