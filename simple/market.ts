@@ -345,21 +345,21 @@ async function dumpMarketSize(creds: SheetCreds, limit = 200): Promise<void> {
     "Top40 판매량(6개월)",
     "Top40 평균가",
   ]);
-  await ensureTab(creds, "시장조사_시장규모_추적", [
+  await ensureTab(creds, "⭐시장조사_시장규모_추적", [
     "키워드 (여기에 시장규모 볼 키워드 입력)",
     "비고",
   ]);
 
   // 입력 시트에서 사장님이 입력한 키워드 읽기
-  const inputRows = await readRange(creds, "시장조사_시장규모_추적!A2:A10000");
+  const inputRows = await readRange(creds, "⭐시장조사_시장규모_추적!A2:A10000");
   const keywords = inputRows
     .map((r) => String(r[0] ?? "").trim())
     .filter(Boolean)
     .slice(0, limit);
 
   if (keywords.length === 0) {
-    console.log("⚠️ 「시장조사_시장규모_추적」 시트의 A열에 키워드를 입력하세요.");
-    throw new Error("「시장조사_시장규모_추적」 비어있음 — A열에 키워드 입력 후 다시 실행");
+    console.log("⚠️ 「⭐시장조사_시장규모_추적」 시트의 A열에 키워드를 입력하세요.");
+    throw new Error("「⭐시장조사_시장규모_추적」 비어있음 — A열에 키워드 입력 후 다시 실행");
   }
 
   console.log(`\n시장규모 수집 — ${keywords.length}개 키워드 (5초 간격, 차단 회피)`);
@@ -457,7 +457,7 @@ async function fetchShoppingSearch(keyword: string, maxRank = 200): Promise<Shop
 
 async function dumpRankTracking(creds: SheetCreds, maxRank = 200): Promise<void> {
   // 입력 시트 + 결과 시트 모두 항상 먼저 만들기
-  await ensureTab(creds, "순위추적_상품", ["productId", "라벨", "추적키워드 (콤마구분)"]);
+  await ensureTab(creds, "⭐순위추적_상품", ["productId", "라벨", "추적키워드 (콤마구분)"]);
   await ensureTab(creds, "순위추적_데이터", [
     "수집일",
     "키워드",
@@ -467,7 +467,7 @@ async function dumpRankTracking(creds: SheetCreds, maxRank = 200): Promise<void>
     "전체결과수",
   ]);
 
-  const productRows = await readRange(creds, "순위추적_상품!A2:C10000");
+  const productRows = await readRange(creds, "⭐순위추적_상품!A2:C10000");
   const targets = productRows
     .filter((r) => r[0] && r[2])
     .map((r) => ({
@@ -476,8 +476,8 @@ async function dumpRankTracking(creds: SheetCreds, maxRank = 200): Promise<void>
       keywords: String(r[2]).split(",").map((k) => k.trim()).filter(Boolean),
     }));
   if (targets.length === 0) {
-    console.log("⚠️ 「순위추적_상품」 비어있음. productId/라벨/추적키워드 입력 후 재실행.");
-    throw new Error("「순위추적_상품」 비어있음 — productId/라벨/추적키워드(콤마구분) 입력 후 다시 실행");
+    console.log("⚠️ 「⭐순위추적_상품」 비어있음. productId/라벨/추적키워드 입력 후 재실행.");
+    throw new Error("「⭐순위추적_상품」 비어있음 — productId/라벨/추적키워드(콤마구분) 입력 후 다시 실행");
   }
 
   // 키워드별로 묶어서 한 번씩만 조회 (효율)
@@ -566,16 +566,16 @@ async function dumpCategoryTree(creds: SheetCreds): Promise<void> {
   console.log(`✅ 「시장조사_카테고리」 ${rows.length}행 (clear 후 새로 작성)`);
 }
 
-/** 입력 시트(시장조사_키워드_추적) 에서 사장님이 입력한 카테고리 코드 읽기 */
+/** 입력 시트(⭐시장조사_키워드_추적) 에서 사장님이 입력한 카테고리 코드 읽기 */
 async function fetchTrackedCategories(creds: SheetCreds): Promise<{ cid: string; name: string }[]> {
   // 입력 시트 자동 생성 (헤더 + 안내문)
-  await ensureTab(creds, "시장조사_키워드_추적", [
+  await ensureTab(creds, "⭐시장조사_키워드_추적", [
     "카테고리코드 (여기에 추적할 코드만 입력)",
     "카테고리명 (자동 채움)",
     "비고",
   ]);
 
-  const inputRows = await readRange(creds, "시장조사_키워드_추적!A2:A10000");
+  const inputRows = await readRange(creds, "⭐시장조사_키워드_추적!A2:A10000");
   const inputCids = inputRows
     .map((r) => String(r[0] ?? "").trim())
     .filter((c) => /^\d+$/.test(c));
@@ -597,7 +597,7 @@ async function fetchTrackedCategories(creds: SheetCreds): Promise<{ cid: string;
     for (let i = 0; i < inputCids.length; i++) {
       const cid = inputCids[i];
       const name = cidToName.get(cid) ?? "(시장조사_카테고리에 없음 — 트리 먼저 실행)";
-      await writeRange(creds, `시장조사_키워드_추적!B${i + 2}`, [[name]]);
+      await writeRange(creds, `⭐시장조사_키워드_추적!B${i + 2}`, [[name]]);
     }
   } catch (e) {
     console.warn(`[키워드_추적 B열 갱신 실패 무시] ${e instanceof Error ? e.message : e}`);
@@ -624,8 +624,8 @@ async function dumpKeywordsForTrackedCategories(creds: SheetCreds): Promise<void
 
   const tracked = await fetchTrackedCategories(creds);
   if (tracked.length === 0) {
-    console.log("\n⚠️ 「시장조사_키워드_추적」 시트의 A열에 카테고리 코드를 입력하세요.");
-    throw new Error("「시장조사_키워드_추적」 비어있음 — A열에 카테고리 코드 입력 후 다시 실행 (시장조사_카테고리 시트 참조)");
+    console.log("\n⚠️ 「⭐시장조사_키워드_추적」 시트의 A열에 카테고리 코드를 입력하세요.");
+    throw new Error("「⭐시장조사_키워드_추적」 비어있음 — A열에 카테고리 코드 입력 후 다시 실행 (시장조사_카테고리 시트 참조)");
   }
   console.log(`\n[2/3] 추적 ${tracked.length}개 카테고리 키워드 수집…`);
 

@@ -41,7 +41,8 @@ interface TaskDef {
   name: string;
   cmd: string; // 「DATE_RANGE」 또는 「DATE_SINGLE」 도 가능
   hint: string; // B열 「실행」 입력 힌트
-  resultSheet?: string; // F열에 하이퍼링크로 표시할 결과 시트
+  resultSheet?: string; // F열 (결과 시트) 하이퍼링크
+  inputSheet?: string; // G열 (입력 필요한 시트) 하이퍼링크 — ⭐ 표시
 }
 
 const STOP_TASK_NAME = "🛑 작업 중단 (실행 중인 작업 강제 종료)";
@@ -51,11 +52,11 @@ const TASKS: TaskDef[] = [
   { name: "매출 — 단일 날짜", cmd: "DATE_SINGLE", hint: "YYYY-MM-DD", resultSheet: "주문원본" },
   { name: "매출 — 날짜 범위 백필", cmd: "DATE_RANGE", hint: "YYYY-MM-DD YYYY-MM-DD", resultSheet: "주문원본" },
   { name: "상품 카탈로그 갱신", cmd: "npx tsx catalog.ts", hint: "GO", resultSheet: "상품목록" },
-  { name: "키워드 검색량 갱신", cmd: "npx tsx volume.ts", hint: "GO", resultSheet: "검색량조회" },
+  { name: "키워드 검색량 갱신", cmd: "npx tsx volume.ts", hint: "GO", resultSheet: "검색량조회", inputSheet: "검색량조회" },
   { name: "시장 카테고리 트리", cmd: "npx tsx market.ts tree", hint: "GO", resultSheet: "시장조사_카테고리" },
-  { name: "시장 키워드 (Top500)", cmd: "npx tsx market.ts keywords", hint: "GO", resultSheet: "시장조사_키워드" },
-  { name: "시장 규모 (Top40 매출)", cmd: "npx tsx market.ts size", hint: "GO", resultSheet: "시장조사_시장규모" },
-  { name: "순위 추적", cmd: "npx tsx market.ts rank", hint: "GO", resultSheet: "순위추적_데이터" },
+  { name: "시장 키워드 (Top500)", cmd: "npx tsx market.ts keywords", hint: "GO", resultSheet: "시장조사_키워드", inputSheet: "⭐시장조사_키워드_추적" },
+  { name: "시장 규모 (Top40 매출)", cmd: "npx tsx market.ts size", hint: "GO", resultSheet: "시장조사_시장규모", inputSheet: "⭐시장조사_시장규모_추적" },
+  { name: "순위 추적", cmd: "npx tsx market.ts rank", hint: "GO", resultSheet: "순위추적_데이터", inputSheet: "⭐순위추적_상품" },
   { name: STOP_TASK_NAME, cmd: "STOP", hint: "GO" },
 ];
 
@@ -74,7 +75,7 @@ function nowKst(): string {
 
 /** 시트에 작업 행이 모두 있도록 보장 (없는 작업 추가) + GO 행에 체크박스 자동 설정 + F열에 결과 시트 하이퍼링크 */
 async function ensureTasks(): Promise<void> {
-  await ensureTab(SHEET_CREDS!, TAB, ["작업", "실행 (트리거)", "상태", "마지막 실행", "결과", "관련 시트"]);
+  await ensureTab(SHEET_CREDS!, TAB, ["작업", "실행 (트리거)", "상태", "마지막 실행", "결과", "결과 시트", "⭐ 입력 시트"]);
   const existing = await readRange(SHEET_CREDS!, `${TAB}!A2:A100`);
   const existingNames = new Set(existing.map((r) => String(r[0] ?? "").trim()).filter(Boolean));
   // 누락된 작업 append — 행 번호도 추적 (체크박스용)
@@ -107,21 +108,25 @@ async function ensureTasks(): Promise<void> {
     }
   }
 
-  // F열에 관련 시트 하이퍼링크 작성 (시트가 존재할 때만)
+  // F (결과 시트) + G (입력 시트 ⭐) 하이퍼링크 작성
   try {
     const sheetIdMap = await getSheetIdMap(SHEET_CREDS!);
     const spreadsheetBase = `https://docs.google.com/spreadsheets/d/${SHEET_CREDS!.sheetId}/edit#gid=`;
+    const makeLink = (name: string): string | null => {
+      const gid = sheetIdMap.get(name);
+      if (gid === undefined) return null;
+      return `=HYPERLINK("${spreadsheetBase}${gid}", "${name}")`;
+    };
     for (const t of TASKS) {
-      if (!t.resultSheet) continue;
       const rowNum = taskRows.get(t.name);
       if (!rowNum) continue;
-      const gid = sheetIdMap.get(t.resultSheet);
-      if (gid === undefined) continue; // 시트 아직 생성 안 됨 — 다음 cron 사이클에 갱신
-      const formula = `=HYPERLINK("${spreadsheetBase}${gid}", "${t.resultSheet}")`;
-      await writeRange(SHEET_CREDS!, `${TAB}!F${rowNum}`, [[formula]]);
+      const fLink = t.resultSheet ? makeLink(t.resultSheet) : null;
+      const gLink = t.inputSheet ? makeLink(t.inputSheet) : null;
+      if (fLink) await writeRange(SHEET_CREDS!, `${TAB}!F${rowNum}`, [[fLink]]);
+      if (gLink) await writeRange(SHEET_CREDS!, `${TAB}!G${rowNum}`, [[gLink]]);
     }
   } catch (e) {
-    console.warn(`[scheduler] F열 하이퍼링크 작성 실패 (무시): ${e instanceof Error ? e.message : String(e)}`);
+    console.warn(`[scheduler] F·G열 하이퍼링크 작성 실패 (무시): ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
