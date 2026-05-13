@@ -500,13 +500,15 @@ async function processDay(
         const logisticsPerOrder = productRule?.logisticsPerOrder ?? matched?.logisticsPerOrder ?? 0;
         const perUnitBottles = extractBottles(po.productOption ?? po.productName);
         const totalUnits = po.quantity * perUnitBottles;
-        const commission =
+        const apiCommission =
           (po.knowledgeShoppingSellingInterlockCommission ?? 0) + (po.payCommissionAmount ?? 0);
         const settlement =
           po.expectedSettlementAmount
           ?? po.settlementAmount
           ?? po.settleAmount
-          ?? (po.totalPaymentAmount - commission);
+          ?? (po.totalPaymentAmount - apiCommission);
+        // 수수료 = 매출 - 정산예정 (네이버 총 차감 — 명시 수수료 외 적립차감/채널 수수료 등 모두 포함)
+        const commission = Math.max(0, po.totalPaymentAmount - settlement);
         const cost = costPerUnit * totalUnits;
         const logistics = logisticsPerOrder;
         const profit = settlement - cost - logistics;

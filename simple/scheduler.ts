@@ -24,6 +24,7 @@ import {
   readRange,
   writeRange,
   setCheckboxValidation,
+  setDateValidation,
   getSheetIdMap,
   loadCredsFromEnv,
   type SheetCreds,
@@ -75,7 +76,17 @@ function nowKst(): string {
 
 /** 시트에 작업 행이 모두 있도록 보장 (없는 작업 추가) + GO 행에 체크박스 자동 설정 + F열에 결과 시트 하이퍼링크 */
 async function ensureTasks(): Promise<void> {
-  await ensureTab(SHEET_CREDS!, TAB, ["작업", "실행 (트리거)", "상태", "클릭 시점", "마지막 실행", "결과", "결과 시트", "⭐ 입력 시트"]);
+  await ensureTab(SHEET_CREDS!, TAB, [
+    "작업",
+    "실행 (트리거)",
+    "상태",
+    "클릭 시점",
+    "마지막 실행",
+    "결과",
+    "결과 시트",
+    "⭐ 입력 시트",
+    "📅 끝 날짜 (범위 백필 전용)",
+  ]);
   // ⭐옵션매핑 시트 미리 생성 (사장님이 매출 작업 안 돌려도 헤더 보이게)
   await ensureTab(SHEET_CREDS!, "⭐옵션매핑", [
     "원본상품번호",
@@ -119,6 +130,24 @@ async function ensureTasks(): Promise<void> {
     }
   }
 
+  // DATE_SINGLE / DATE_RANGE 행에 날짜 picker (달력) 적용
+  // DATE_SINGLE: B 에 단일 달력
+  // DATE_RANGE: B (시작 날짜) + I (끝 날짜) 두 셀 달력
+  try {
+    for (const t of TASKS) {
+      const rowNum = taskRows.get(t.name);
+      if (!rowNum) continue;
+      if (t.cmd === "DATE_SINGLE") {
+        await setDateValidation(SHEET_CREDS!, TAB, rowNum, 1); // B
+      } else if (t.cmd === "DATE_RANGE") {
+        await setDateValidation(SHEET_CREDS!, TAB, rowNum, 1); // B = 시작
+        await setDateValidation(SHEET_CREDS!, TAB, rowNum, 8); // I = 끝
+      }
+    }
+  } catch (e) {
+    console.warn(`[scheduler] 날짜 달력 설정 실패 (무시): ${e instanceof Error ? e.message : String(e)}`);
+  }
+
   // F (결과 시트) + G (입력 시트 ⭐) 하이퍼링크 작성
   try {
     const sheetIdMap = await getSheetIdMap(SHEET_CREDS!);
@@ -141,8 +170,15 @@ async function ensureTasks(): Promise<void> {
   }
 }
 
+/** 다양한 날짜 형식 → "YYYY-MM-DD" 정규화 (달력 입력 / 텍스트 / "2026. 05. 13." 모두 처리) */
+function normalizeDate(s: string): string {
+  const m = String(s).trim().match(/(\d{4})\D+(\d{1,2})\D+(\d{1,2})/);
+  if (!m) return "";
+  return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+}
+
 async function pollAndRun(): Promise<void> {
-  const rows = await readRange(SHEET_CREDS!, `${TAB}!A2:E100`);
+  const rows = await readRange(SHEET_CREDS!, `${TAB}!A2:I100`);
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     const name = String(r[0] ?? "").trim();
@@ -170,18 +206,21 @@ async function pollAndRun(): Promise<void> {
 
     let cmd = task.cmd;
     if (task.cmd === "DATE_RANGE") {
-      const parts = triggerRaw.split(/\s+/);
-      if (parts.length !== 2 || !/^\d{4}-\d{2}-\d{2}$/.test(parts[0]) || !/^\d{4}-\d{2}-\d{2}$/.test(parts[1])) {
-        await writeRow(clearVal, "ERROR", `형식 오류: 「${task.hint}」 형태로 입력`);
+      // B = 시작 날짜 (달력), I = 끝 날짜 (달력)
+      const fromDate = normalizeDate(triggerRaw);
+      const toDate = normalizeDate(String(r[8] ?? "")); // I 컬럼 (0-based 8)
+      if (!fromDate || !toDate) {
+        await writeRow(clearVal, "ERROR", `B(시작) + I(끝) 두 셀 모두 달력으로 날짜 선택해주세요`);
         continue;
       }
-      cmd = `npx tsx run.ts ${parts[0]} ${parts[1]}`;
+      cmd = `npx tsx run.ts ${fromDate} ${toDate}`;
     } else if (task.cmd === "DATE_SINGLE") {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(triggerRaw)) {
-        await writeRow(clearVal, "ERROR", `형식 오류: ${task.hint} 형태로 입력`);
+      const date = normalizeDate(triggerRaw);
+      if (!date) {
+        await writeRow(clearVal, "ERROR", `B 셀에 달력으로 날짜 선택해주세요`);
         continue;
       }
-      cmd = `npx tsx run.ts ${triggerRaw}`;
+      cmd = `npx tsx run.ts ${date}`;
     } else {
       // GO / 실행 / TRUE(체크박스) 등 트리거값 검증
       if (!TRIGGER_VALUES.has(triggerRaw.toLowerCase())) {
@@ -197,10 +236,17 @@ async function pollAndRun(): Promise<void> {
     try {
       execSync(cmd, { cwd: WORKDIR, stdio: "inherit", timeout: 90 * 60 * 1000 });
       await writeRow(clearVal, "OK", `✅ 완료 ${nowKst()}`);
+      // DATE_RANGE 끝나면 I (끝 날짜) 도 비움 — 다음 트리거를 위해
+      if (task.cmd === "DATE_RANGE") {
+        await writeRange(SHEET_CREDS!, `${TAB}!I${rowNum}`, [[""]]);
+      }
       console.log(`[${nowKst()}] ✅ ${name} 완료`);
     } catch (err) {
       const msg = err instanceof Error ? err.message.slice(0, 200) : String(err);
       await writeRow(clearVal, "ERROR", `❌ ${msg}`);
+      if (task.cmd === "DATE_RANGE") {
+        await writeRange(SHEET_CREDS!, `${TAB}!I${rowNum}`, [[""]]);
+      }
       console.error(`[${nowKst()}] ❌ ${name}: ${msg}`);
     }
   }

@@ -352,6 +352,55 @@ export async function clearTabData(
   if (!res.ok) throw new Error(`clearTabData ${res.status}: ${await res.text()}`);
 }
 
+/** 특정 셀에 날짜(DATE_IS_VALID_DATE) 데이터 검증 적용 — 셀에 달력 picker 표시 */
+export async function setDateValidation(
+  c: SheetCreds,
+  tabName: string,
+  rowNum: number, // 1-based
+  colIndex: number, // 0-based
+): Promise<void> {
+  const token = await getToken(c);
+  const meta = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}?fields=sheets.properties(title,sheetId)`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!meta.ok) throw new Error(`meta ${meta.status}: ${await meta.text()}`);
+  const json = (await meta.json()) as {
+    sheets?: { properties: { title: string; sheetId: number } }[];
+  };
+  const sheetId = json.sheets?.find((s) => s.properties.title === tabName)?.properties.sheetId;
+  if (sheetId == null) throw new Error(`날짜 검증 — 탭 「${tabName}」 못 찾음`);
+
+  const res = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}:batchUpdate`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        requests: [
+          {
+            setDataValidation: {
+              range: {
+                sheetId,
+                startRowIndex: rowNum - 1,
+                endRowIndex: rowNum,
+                startColumnIndex: colIndex,
+                endColumnIndex: colIndex + 1,
+              },
+              rule: {
+                condition: { type: "DATE_IS_VALID_DATE" },
+                showCustomUi: true,
+                strict: false,
+              },
+            },
+          },
+        ],
+      }),
+    },
+  );
+  if (!res.ok) throw new Error(`setDateValidation ${res.status}: ${await res.text()}`);
+}
+
 /**
  * 특정 셀들에 체크박스(BOOLEAN) 데이터 검증 적용.
  * 이미 있어도 덮어쓰기(idempotent). 텍스트 입력이 필요한 행은 제외해서 호출할 것.
