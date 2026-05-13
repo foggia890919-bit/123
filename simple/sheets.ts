@@ -352,7 +352,7 @@ export async function clearTabData(
   if (!res.ok) throw new Error(`clearTabData ${res.status}: ${await res.text()}`);
 }
 
-/** 특정 셀에 날짜(DATE_IS_VALID_DATE) 데이터 검증 적용 — 셀에 달력 picker 표시 */
+/** 특정 셀에 날짜 picker 적용 — 데이터 검증 + 셀 형식 「날짜」 둘 다 설정해야 더블클릭 시 달력 뜸 */
 export async function setDateValidation(
   c: SheetCreds,
   tabName: string,
@@ -371,6 +371,14 @@ export async function setDateValidation(
   const sheetId = json.sheets?.find((s) => s.properties.title === tabName)?.properties.sheetId;
   if (sheetId == null) throw new Error(`날짜 검증 — 탭 「${tabName}」 못 찾음`);
 
+  const range = {
+    sheetId,
+    startRowIndex: rowNum - 1,
+    endRowIndex: rowNum,
+    startColumnIndex: colIndex,
+    endColumnIndex: colIndex + 1,
+  };
+
   const res = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}:batchUpdate`,
     {
@@ -378,20 +386,27 @@ export async function setDateValidation(
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         requests: [
+          // 1) 데이터 검증 (날짜만 허용 + 달력 picker UI)
           {
             setDataValidation: {
-              range: {
-                sheetId,
-                startRowIndex: rowNum - 1,
-                endRowIndex: rowNum,
-                startColumnIndex: colIndex,
-                endColumnIndex: colIndex + 1,
-              },
+              range,
               rule: {
                 condition: { type: "DATE_IS_VALID_DATE" },
                 showCustomUi: true,
-                strict: false,
+                strict: true,
               },
+            },
+          },
+          // 2) 셀 형식 = 날짜 (yyyy-mm-dd) — 이걸 같이 설정해야 더블클릭 시 달력 picker 자동 표시
+          {
+            repeatCell: {
+              range,
+              cell: {
+                userEnteredFormat: {
+                  numberFormat: { type: "DATE", pattern: "yyyy-mm-dd" },
+                },
+              },
+              fields: "userEnteredFormat.numberFormat",
             },
           },
         ],
