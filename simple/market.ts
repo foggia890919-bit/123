@@ -78,11 +78,11 @@ async function fetchCategoryTree(): Promise<CategoryNode[]> {
       out.push({ cid: c.cid, name: c.name, parent: parentCid, level, childCount: c.childCount });
       if (level < 4) {
         // childCount 체크 제거 — 응답이 부정확할 수 있어서 일단 호출, 빈 응답이면 자동 중단
-        await sleep(300);
+        await sleep(80);
         await visit(c.cid, level + 1);
       }
     }
-    if (apiCalls % 100 === 0) {
+    if (apiCalls % 200 === 0) {
       console.log(`  [트리 진행] ${apiCalls}회 호출 / ${out.length}개 누적`);
     }
   };
