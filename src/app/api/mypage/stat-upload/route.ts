@@ -93,8 +93,8 @@ export async function POST(req: NextRequest) {
   const items = buffers.map((buffer, i) => {
     const ext = files[i].name.split(".").pop() ?? "jpg";
     const storedName = `${prefix}_${i + 1}.${ext}`;
-    // 경로는 ASCII만 사용 (한글 등 유니코드는 Supabase 경로에서 오류 발생)
-    const storageKey = `${session.id}/${year}/${month}/${batchKey}/${i + 1}.${ext}`;
+    // 경로: 연도/월/병원명/batchKey/파일명 — Supabase Storage는 유니코드 경로 지원
+    const storageKey = `${year}/${month}/${clientName}/${batchKey}/${storedName}`;
     return {
       buffer,
       storedName,
