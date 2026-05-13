@@ -11,6 +11,20 @@ export async function GET(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
 
+  // GET /api/user-clients?publicUpperCorps=true → 공개된 상위법인 목록 (하위법인 등록 시 선택용)
+  if (req.nextUrl.searchParams.get("publicUpperCorps") === "true") {
+    try {
+      const rows = await prisma.userClient.findMany({
+        where: { dealerType: "UPPER_CORP", isPublic: true },
+        select: { id: true, clientName: true, bizNumber: true },
+        orderBy: { clientName: "asc" },
+      });
+      return NextResponse.json(rows);
+    } catch {
+      return NextResponse.json([]);
+    }
+  }
+
   const bizNumberCheck = req.nextUrl.searchParams.get("bizNumber");
   if (bizNumberCheck) {
     const stripped = bizNumberCheck.replace(/\D/g, "");

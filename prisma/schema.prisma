@@ -98,6 +98,8 @@ model UserClient {
   accountFileKey  String?   // 계좌사본
   accountFileName String?
   dealerType   DealerType?
+  isPublic     Boolean    @default(false)  // 상위법인 공개여부 — 공개 시 타인이 하위법인 등록 시 선택 가능
+  parentCorpId String?                     // 하위법인 등록 시 연결된 상위법인 UserClient.id
   address      String?
   managerName  String?
   managerPhone String?

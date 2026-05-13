@@ -7,13 +7,15 @@ const VALID_TYPES = ["CORPORATION", "INDIVIDUAL", "UPPER_CORP", "LOWER_CORP", "S
 
 const FULL_SELECT = {
   id: true, clientName: true, bizNumber: true, dealerType: true, approved: true,
-  address: true,
+  address: true, bizFileName: true, createdAt: true,
   managerName: true, managerPhone: true, managerEmail: true, memo: true, code: true,
   isSettlementTarget: true, isRateTarget: true,
+  isPublic: true, parentCorpId: true,
 } as const;
 
 const SAFE_SELECT = {
   id: true, clientName: true, bizNumber: true, dealerType: true, approved: true,
+  createdAt: true, bizFileName: true,
 } as const;
 
 // GET /api/dealer              → 딜러 목록 (dealerType 있는 UserClient만)
@@ -74,6 +76,7 @@ export async function POST(req: NextRequest) {
     csoDocument, csoFileName,
     accountDocument, accountFileName,
     managerName, managerPhone, managerEmail, memo,
+    isPublic, parentCorpId,
   } = await req.json();
 
   if (!clientName || !bizNumber) {
@@ -112,6 +115,8 @@ export async function POST(req: NextRequest) {
         managerPhone: managerPhone ?? null,
         managerEmail: managerEmail ?? null,
         memo: memo ?? null,
+        isPublic: isPublic === true,
+        parentCorpId: parentCorpId ?? null,
       },
       select: FULL_SELECT,
     });
@@ -180,6 +185,8 @@ export async function PATCH(req: NextRequest) {
   if (memo !== undefined) data.memo = memo ?? null;
   if (body.isSettlementTarget !== undefined) data.isSettlementTarget = Boolean(body.isSettlementTarget);
   if (body.isRateTarget        !== undefined) data.isRateTarget        = Boolean(body.isRateTarget);
+  if (body.isPublic     !== undefined) data.isPublic     = Boolean(body.isPublic);
+  if (body.parentCorpId !== undefined) data.parentCorpId = body.parentCorpId ?? null;
 
   try {
     const updated = await prisma.userClient.update({
