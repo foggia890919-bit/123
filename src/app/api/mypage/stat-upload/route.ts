@@ -69,6 +69,8 @@ export async function POST(req: NextRequest) {
   const month = parseInt(form.get("month") as string);
   const clientId = (form.get("clientId") as string) || null;
   const files = form.getAll("files") as File[];
+  const photoCompaniesRaw = (form.get("photoCompanies") as string) || "{}";
+  const photoCompanies: Record<number, string[]> = JSON.parse(photoCompaniesRaw);
 
   if (!year || !month) return NextResponse.json({ error: "year/month 필수" }, { status: 400 });
   if (!files.length) return NextResponse.json({ error: "파일 없음" }, { status: 400 });
@@ -96,9 +98,11 @@ export async function POST(req: NextRequest) {
   // 업로드 항목 준비
   const items = buffers.map((buffer, i) => {
     const ext = files[i].name.split(".").pop() ?? "jpg";
-    const storedName = `${prefix}_${i + 1}.${ext}`;
+    const companiesPart = (photoCompanies[i] ?? []).length
+      ? `_${(photoCompanies[i] ?? []).join("+")}`
+      : "";
+    const storedName = `${prefix}${companiesPart}_${i + 1}.${ext}`;
     // Supabase Storage는 한글 경로 미지원 → ASCII만 사용
-    // 한글 표시명(storedName)은 DB에만 저장
     const storageKey = `${year}/${month}/${clientId ?? "unknown"}/${batchKey}/${i + 1}.jpg`;
     return {
       buffer,
