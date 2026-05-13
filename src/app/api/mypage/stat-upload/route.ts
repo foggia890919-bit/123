@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
   const items = buffers.map((buffer, i) => {
     const ext = files[i].name.split(".").pop() ?? "jpg";
     const storedName = `${prefix}_${i + 1}.${ext}`;
-    const storageKey = `stat-images/${session.id}/${year}/${month}/${batchKey}/${storedName}`;
+    const storageKey = `${session.id}/${year}/${month}/${batchKey}/${storedName}`;
     return {
       buffer,
       storedName,
