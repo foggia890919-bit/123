@@ -73,17 +73,43 @@ _CONFIDENCE_RULES = (
 )
 
 
+_TEMPLATE_HINTS: dict[str, str] = {
+    "pharmacy_stats_kr": (
+        "[제약사별 처방통계 — 도메인 규칙]\n"
+        "  1. 표의 **데이터 행을 한 행도 빠뜨리지 말고 전부** 추출하라.\n"
+        "     화면이 길어 스크롤된 듯 보여도 보이는 모든 행을 다 옮긴다.\n"
+        "     '합계' / '소계' 같은 요약 행은 제외하고 약품 행만 옮긴다.\n"
+        "  2. 좌측에 트리/메뉴/네비게이션 UI가 있으면 데이터로 절대 오인하지 말라.\n"
+        "     본문 표(약품 코드·약품명·수량·금액 열이 있는 직사각형)만 데이터다.\n"
+        "  3. drugs 각 행은 다음 4개 필드로 추출한다:\n"
+        "     - drug_code  : '보험코드' 또는 '청구코드' 또는 '약품코드' 열의 값\n"
+        "                   (숫자 + 알파벳 혼합, 9~10자리. 그대로 옮긴다)\n"
+        "     - drug_name  : '약품명' 열의 값. 용량 표기(예: '5/5/5mg', '500밀리그램')도\n"
+        "                   포함해 그대로 옮긴다\n"
+        "     - total_qty  : '총사용량' 또는 '총소모량' 또는 '총수량' 열의 정수\n"
+        "     - total_amount : '총금액' 또는 '처방금액' 열의 정수 (콤마 제거)\n"
+        "  4. summary_total_amount 는 표 하단의 **총 합계금액(전체 약품의 처방금액 합)**\n"
+        "     이다. 한 행의 금액과 혼동하지 말라. drugs[*].total_amount 의 총합과 일치\n"
+        "     해야 한다. 만약 두 수가 안 맞으면 행을 빠뜨렸거나 자릿수를 잘못 옮긴 것.\n"
+        "  5. 행 수가 많아도(예: 30+행) 게으르게 1~2행만 옮기는 것은 명확한 오류로\n"
+        "     간주된다. 보이는 모든 행을 옮겨라.\n"
+    ),
+}
+
+
 def _build_prompt(template: TemplateSpec, retry: RetryContext | None = None) -> str:
     field_lines = "\n".join(
         f"  - {f.name} ({f.type}{', 필수' if f.required else ''})"
         for f in template.fields
     )
+    template_hint = _TEMPLATE_HINTS.get(template.id, "")
     head = (
         f"너는 '{template.label}' 양식 전문 추출기다. 이미지에서 아래 필드만 정확히\n"
         "뽑아라.\n\n"
         f"[추출 대상]\n{field_lines}\n\n"
         f"{_ANCHOR_RULES}\n"
         f"{_BASE_RULES}\n"
+        f"{template_hint}\n"
         f"{_CONFIDENCE_RULES}"
     )
     if retry is None:

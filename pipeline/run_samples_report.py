@@ -116,13 +116,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[!] 이미지 로드 실패: {sample_path}", file=sys.stderr)
             continue
         print(f"[run] {sample_path.name} (provider={args.provider})", file=sys.stderr)
+        # 실제 VLM 일 땐 OpenCV 코너 검출 실패 시 AI 코너 검출(vlm_corners)로
+        # 폴오버되도록 adapter 를 전처리 옵션에 주입한다. mock 일 땐 의미 없으므로 None.
+        pre_opts = PreprocessOptions(
+            debug_dir=repo / "debug" / sample_path.stem,
+            vlm_adapter=adapter if args.provider != "mock" else None,
+        )
         result = run_pipeline(
             img,
             registry,
             adapter,
-            preprocess_options=PreprocessOptions(
-                debug_dir=repo / "debug" / sample_path.stem
-            ),
+            preprocess_options=pre_opts,
             max_retries=args.max_retries,
             enable_roi_recrop=enable_roi,
         )

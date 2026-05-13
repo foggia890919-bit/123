@@ -82,7 +82,7 @@
       "label": "제약사별 처방통계",
       "match_keywords": [
         "제약사별", "제약회사별", "처방통계", "통계",
-        "청구코드", "약품코드", "처방횟수",
+        "청구코드", "약품코드", "보험코드", "처방횟수",
         "총사용량", "총소모량", "총금액", "단가", "약품명"
       ],
       "fields": [
@@ -97,20 +97,17 @@
       ],
       "logical_checks": [
         {
-          "rule": "row_arith",
+          "rule": "sum_eq",
           "list_field": "drugs",
-          "operands": ["unit_price", "total_qty"],
-          "operator": "mul",
-          "equals": "total_amount",
-          "tolerance": 1
+          "operand": "total_amount",
+          "equals": "summary_total_amount",
+          "tolerance": 1,
+          "optional": false
         }
       ],
       "line_item_schema": {
         "drug_code": "string",
         "drug_name": "string",
-        "unit": "string",
-        "prescribe_count": "int",
-        "unit_price": "int",
         "total_qty": "int",
         "total_amount": "int"
       }
