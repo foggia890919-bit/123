@@ -22,7 +22,10 @@ export const BUCKETS = {
 
 export function publicUrl(bucket: BucketName, key: string): string {
   if (!process.env.SUPABASE_URL) return "";
-  return `${process.env.SUPABASE_URL.replace(/\/+$/, "")}/storage/v1/object/public/${bucket}/${encodeURI(key)}`;
+  let base: string;
+  try { base = new URL(process.env.SUPABASE_URL).origin; }
+  catch { base = process.env.SUPABASE_URL.replace(/\/+$/, ""); }
+  return `${base}/storage/v1/object/public/${bucket}/${encodeURI(key)}`;
 }
 
 export type BucketName = (typeof BUCKETS)[keyof typeof BUCKETS];

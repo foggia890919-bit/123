@@ -7,6 +7,31 @@ import { Upload, ImageIcon, X, CheckCircle2, Download, ChevronDown, ChevronUp, L
 
 const MONTH_LABELS = ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"];
 
+// 업로드 전 클라이언트 이미지 압축 (최대 1920px, JPEG 85%)
+function compressImage(file: File, maxPx = 1920, quality = 0.85): Promise<File> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const blobUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(blobUrl);
+      const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) { resolve(file); return; }
+          resolve(new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), { type: "image/jpeg" }));
+        },
+        "image/jpeg", quality,
+      );
+    };
+    img.onerror = () => { URL.revokeObjectURL(blobUrl); resolve(file); };
+    img.src = blobUrl;
+  });
+}
+
 interface UserClient { id: string; clientName: string; bizNumber: string; }
 interface Company { companyName: string; }
 interface BatchFile { id: string; storedName: string; viewUrl: string | null; downloadUrl: string; }
@@ -72,9 +97,10 @@ export default function StatUploadPage() {
     if (uid) loadHistory();
   }, [(session as { user?: { id?: string } } | null)?.user?.id, loadHistory]); // eslint-disable-line
 
-  const handleFiles = (incoming: FileList | File[]) => {
+  const handleFiles = async (incoming: FileList | File[]) => {
     const arr = Array.from(incoming).filter((f) => f.type.startsWith("image/"));
-    const next = [...files, ...arr].slice(0, 30);
+    const compressed = await Promise.all(arr.map((f) => compressImage(f)));
+    const next = [...files, ...compressed].slice(0, 30);
     setFiles(next);
     const newPreviews = next.map((f) => URL.createObjectURL(f));
     previews.forEach((p) => URL.revokeObjectURL(p));
@@ -90,7 +116,7 @@ export default function StatUploadPage() {
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
-    handleFiles(e.dataTransfer.files);
+    void handleFiles(e.dataTransfer.files);
   };
 
   const handleSubmit = async () => {
@@ -189,7 +215,7 @@ export default function StatUploadPage() {
           <p className="text-sm font-medium text-gray-500">사진을 드래그하거나 클릭해서 선택</p>
           <p className="text-xs text-gray-400 mt-1">JPG, PNG, HEIC 등 · 최대 30장 · 장당 20MB</p>
           <input ref={fileRef} type="file" accept="image/*" multiple className="hidden"
-            onChange={(e) => e.target.files && handleFiles(e.target.files)} />
+            onChange={(e) => e.target.files && void handleFiles(e.target.files)} />
         </div>
 
         {/* 선택된 파일 미리보기 */}
