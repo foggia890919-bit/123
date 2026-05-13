@@ -87,10 +87,9 @@ export default function SubClientsPage() {
       .finally(() => setListLoading(false));
   }, [session?.user?.id]);
 
-  // 법인구분 변경 시 폼 초기화
+  // 법인구분 변경 시 폼 초기화 (사업자번호는 유지)
   useEffect(() => {
     setName("");
-    setBiz("");
     setAddress("");
     setBizError("");
     setBizLookup("none");
@@ -243,21 +242,7 @@ export default function SubClientsPage() {
           <div className="p-5">
             {tab === "single" ? (
               <form onSubmit={handleRegister} className="space-y-3">
-                {/* ① 법인구분 */}
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-gray-600">법인 구분 <span className="text-red-500">*</span></label>
-                  <select
-                    value={dealerType}
-                    onChange={(e) => setDealerType(e.target.value as "upper" | "lower" | "")}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white"
-                  >
-                    <option value="">선택해주세요</option>
-                    <option value="upper">상위법인</option>
-                    <option value="lower">하위법인</option>
-                  </select>
-                </div>
-
-                {/* ② 사업자등록번호 (조회 트리거) */}
+                {/* ① 사업자등록번호 (조회 트리거) */}
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-600">사업자등록번호 <span className="text-red-500">*</span></label>
                   <div className="relative">
@@ -266,7 +251,6 @@ export default function SubClientsPage() {
                       onChange={(e) => handleBizChange(e.target.value)}
                       placeholder="000-00-00000"
                       maxLength={12}
-                      disabled={!dealerType}
                       className={
                         bizError || bizLookup === "myDup" || bizLookup === "medicalClient"
                           ? "border-red-400 pr-9"
@@ -305,6 +289,20 @@ export default function SubClientsPage() {
                   )}
                 </div>
 
+                {/* ② 법인구분 */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-gray-600">법인 구분 <span className="text-red-500">*</span></label>
+                  <select
+                    value={dealerType}
+                    onChange={(e) => setDealerType(e.target.value as "upper" | "lower" | "")}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white"
+                  >
+                    <option value="">선택해주세요</option>
+                    <option value="upper">상위법인</option>
+                    <option value="lower">하위법인</option>
+                  </select>
+                </div>
+
                 {/* ③ 거래처명 */}
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-600">거래처명 <span className="text-red-500">*</span></label>
@@ -312,14 +310,13 @@ export default function SubClientsPage() {
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="상호명"
-                    disabled={!dealerType}
                   />
                 </div>
 
                 {/* ④ 주소 */}
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-600">주소 <span className="text-gray-400 font-normal">(선택)</span></label>
-                  <Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="예: 서울시 강남구 테헤란로 123" disabled={!dealerType} />
+                  <Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="예: 서울시 강남구 테헤란로 123" />
                 </div>
 
                 {/* ⑤ 사업자등록증 */}

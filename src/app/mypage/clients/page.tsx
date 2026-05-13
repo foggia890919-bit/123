@@ -278,29 +278,27 @@ export default function ClientsPage() {
             {/* ── 거래처 등록 탭 ── */}
             {boxTab === "register" && (
               <form onSubmit={handleRegister} className="space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-gray-600">거래처명 <span className="text-red-500">*</span></label>
-                    <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="상호명" />
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-600">사업자등록번호 <span className="text-red-500">*</span></label>
+                  <div className="relative">
+                    <Input value={biz} onChange={(e) => handleBizChange(e.target.value)} placeholder="000-00-00000" maxLength={12}
+                      className={bizError || dupChecked === "dup" || dupChecked === "corp" ? "border-red-400 pr-9" : dupChecked === "ok" ? "border-green-400 pr-9" : "pr-9"} />
+                    {dupChecked === "checking" && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-gray-400" />}
+                    {dupChecked === "ok" && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-green-500" />}
+                    {(dupChecked === "dup" || dupChecked === "corp") && <XCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-red-500" />}
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-gray-600">사업자등록번호 <span className="text-red-500">*</span></label>
-                    <div className="relative">
-                      <Input value={biz} onChange={(e) => handleBizChange(e.target.value)} placeholder="000-00-00000" maxLength={12}
-                        className={bizError || dupChecked === "dup" || dupChecked === "corp" ? "border-red-400 pr-9" : dupChecked === "ok" ? "border-green-400 pr-9" : "pr-9"} />
-                      {dupChecked === "checking" && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-gray-400" />}
-                      {dupChecked === "ok" && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-green-500" />}
-                      {(dupChecked === "dup" || dupChecked === "corp") && <XCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-red-500" />}
+                  {bizError && <p className="text-xs text-red-500">{bizError}</p>}
+                  {dupChecked === "dup" && !bizError && <p className="text-xs text-red-500">이미 등록된 사업자번호예요.</p>}
+                  {dupChecked === "corp" && !bizError && (
+                    <div className="flex items-center gap-1.5 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+                      사업자(법인)으로 등록된 사업자번호예요. 거래처관리(사업자)에서 확인하세요.
                     </div>
-                    {bizError && <p className="text-xs text-red-500">{bizError}</p>}
-                    {dupChecked === "dup" && !bizError && <p className="text-xs text-red-500">이미 등록된 사업자번호예요.</p>}
-                    {dupChecked === "corp" && !bizError && (
-                      <div className="flex items-center gap-1.5 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
-                        사업자(법인)으로 등록된 사업자번호예요. 거래처관리(사업자)에서 확인하세요.
-                      </div>
-                    )}
-                    {dupChecked === "ok" && <p className="text-xs text-green-600">사용 가능한 사업자번호예요. ✓</p>}
-                  </div>
+                  )}
+                  {dupChecked === "ok" && <p className="text-xs text-green-600">사용 가능한 사업자번호예요. ✓</p>}
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-600">거래처명 <span className="text-red-500">*</span></label>
+                  <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="상호명" />
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-600">주소 <span className="text-gray-400 font-normal">(선택)</span></label>
