@@ -76,6 +76,16 @@ function nowKst(): string {
 /** 시트에 작업 행이 모두 있도록 보장 (없는 작업 추가) + GO 행에 체크박스 자동 설정 + F열에 결과 시트 하이퍼링크 */
 async function ensureTasks(): Promise<void> {
   await ensureTab(SHEET_CREDS!, TAB, ["작업", "실행 (트리거)", "상태", "클릭 시점", "마지막 실행", "결과", "결과 시트", "⭐ 입력 시트"]);
+  // ⭐옵션매핑 시트 미리 생성 (사장님이 매출 작업 안 돌려도 헤더 보이게)
+  await ensureTab(SHEET_CREDS!, "⭐옵션매핑", [
+    "원본상품번호",
+    "채널상품번호",
+    "옵션관리번호",
+    "라벨",
+    "원가(개당)",
+    "물류비(건당)",
+    "유형(메인/추가)",
+  ]);
   const existing = await readRange(SHEET_CREDS!, `${TAB}!A2:A100`);
   const existingNames = new Set(existing.map((r) => String(r[0] ?? "").trim()).filter(Boolean));
   // 누락된 작업 append — 행 번호도 추적 (체크박스용)
