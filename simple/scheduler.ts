@@ -75,7 +75,7 @@ function nowKst(): string {
 
 /** 시트에 작업 행이 모두 있도록 보장 (없는 작업 추가) + GO 행에 체크박스 자동 설정 + F열에 결과 시트 하이퍼링크 */
 async function ensureTasks(): Promise<void> {
-  await ensureTab(SHEET_CREDS!, TAB, ["작업", "실행 (트리거)", "상태", "마지막 실행", "결과", "결과 시트", "⭐ 입력 시트"]);
+  await ensureTab(SHEET_CREDS!, TAB, ["작업", "실행 (트리거)", "상태", "클릭 시점", "마지막 실행", "결과", "결과 시트", "⭐ 입력 시트"]);
   const existing = await readRange(SHEET_CREDS!, `${TAB}!A2:A100`);
   const existingNames = new Set(existing.map((r) => String(r[0] ?? "").trim()).filter(Boolean));
   // 누락된 작업 append — 행 번호도 추적 (체크박스용)
@@ -87,8 +87,9 @@ async function ensureTasks(): Promise<void> {
   let nextRow = existing.length + 2;
   for (const t of TASKS) {
     if (!existingNames.has(t.name)) {
-      await writeRange(SHEET_CREDS!, `${TAB}!A${nextRow}:E${nextRow}`, [
-        [t.name, "", "", "", `힌트: ${t.hint}`],
+      // A: 작업, B: 트리거, C: 상태, D: 클릭 시점(Apps Script 박음), E: 마지막 실행, F: 결과
+      await writeRange(SHEET_CREDS!, `${TAB}!A${nextRow}:F${nextRow}`, [
+        [t.name, "", "", "", "", `힌트: ${t.hint}`],
       ]);
       taskRows.set(t.name, nextRow);
       nextRow++;
@@ -120,10 +121,10 @@ async function ensureTasks(): Promise<void> {
     for (const t of TASKS) {
       const rowNum = taskRows.get(t.name);
       if (!rowNum) continue;
-      const fLink = t.resultSheet ? makeLink(t.resultSheet) : null;
-      const gLink = t.inputSheet ? makeLink(t.inputSheet) : null;
-      if (fLink) await writeRange(SHEET_CREDS!, `${TAB}!F${rowNum}`, [[fLink]]);
+      const gLink = t.resultSheet ? makeLink(t.resultSheet) : null;  // 결과 시트는 G열
+      const hLink = t.inputSheet ? makeLink(t.inputSheet) : null;    // 입력 시트는 H열
       if (gLink) await writeRange(SHEET_CREDS!, `${TAB}!G${rowNum}`, [[gLink]]);
+      if (hLink) await writeRange(SHEET_CREDS!, `${TAB}!H${rowNum}`, [[hLink]]);
     }
   } catch (e) {
     console.warn(`[scheduler] F·G열 하이퍼링크 작성 실패 (무시): ${e instanceof Error ? e.message : String(e)}`);
@@ -151,52 +152,45 @@ async function pollAndRun(): Promise<void> {
     const isCheckbox = triggerRaw === "TRUE";
     const clearVal: string | boolean = isCheckbox ? false : "";
 
-    // 실행 명령 결정
+    // 실행 명령 결정 — B:C (트리거/상태) + E:F (마지막 실행/결과) 별도 write (D 클릭 시점 보존)
+    const writeRow = async (trigger: string | boolean, status: string, result: string) => {
+      await writeRange(SHEET_CREDS!, `${TAB}!B${rowNum}:C${rowNum}`, [[trigger, status]]);
+      await writeRange(SHEET_CREDS!, `${TAB}!E${rowNum}:F${rowNum}`, [[nowKst(), result]]);
+    };
+
     let cmd = task.cmd;
     if (task.cmd === "DATE_RANGE") {
       const parts = triggerRaw.split(/\s+/);
       if (parts.length !== 2 || !/^\d{4}-\d{2}-\d{2}$/.test(parts[0]) || !/^\d{4}-\d{2}-\d{2}$/.test(parts[1])) {
-        await writeRange(SHEET_CREDS!, `${TAB}!B${rowNum}:E${rowNum}`, [
-          [clearVal, "ERROR", nowKst(), `형식 오류: 「${task.hint}」 형태로 입력`],
-        ]);
+        await writeRow(clearVal, "ERROR", `형식 오류: 「${task.hint}」 형태로 입력`);
         continue;
       }
       cmd = `npx tsx run.ts ${parts[0]} ${parts[1]}`;
     } else if (task.cmd === "DATE_SINGLE") {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(triggerRaw)) {
-        await writeRange(SHEET_CREDS!, `${TAB}!B${rowNum}:E${rowNum}`, [
-          [clearVal, "ERROR", nowKst(), `형식 오류: ${task.hint} 형태로 입력`],
-        ]);
+        await writeRow(clearVal, "ERROR", `형식 오류: ${task.hint} 형태로 입력`);
         continue;
       }
       cmd = `npx tsx run.ts ${triggerRaw}`;
     } else {
       // GO / 실행 / TRUE(체크박스) 등 트리거값 검증
       if (!TRIGGER_VALUES.has(triggerRaw.toLowerCase())) {
-        await writeRange(SHEET_CREDS!, `${TAB}!B${rowNum}:E${rowNum}`, [
-          [clearVal, "ERROR", nowKst(), `「GO」 또는 ☑️ 체크박스 입력`],
-        ]);
+        await writeRow(clearVal, "ERROR", `「GO」 또는 ☑️ 체크박스 입력`);
         continue;
       }
     }
 
     // RUNNING 표시
-    await writeRange(SHEET_CREDS!, `${TAB}!B${rowNum}:E${rowNum}`, [
-      [triggerRaw, RUNNING, nowKst(), ""],
-    ]);
+    await writeRow(triggerRaw, RUNNING, "");
 
     console.log(`[${nowKst()}] ▶ ${name}: ${cmd}`);
     try {
       execSync(cmd, { cwd: WORKDIR, stdio: "inherit", timeout: 90 * 60 * 1000 });
-      await writeRange(SHEET_CREDS!, `${TAB}!B${rowNum}:E${rowNum}`, [
-        [clearVal, "OK", nowKst(), `✅ 완료 ${nowKst()}`],
-      ]);
+      await writeRow(clearVal, "OK", `✅ 완료 ${nowKst()}`);
       console.log(`[${nowKst()}] ✅ ${name} 완료`);
     } catch (err) {
       const msg = err instanceof Error ? err.message.slice(0, 200) : String(err);
-      await writeRange(SHEET_CREDS!, `${TAB}!B${rowNum}:E${rowNum}`, [
-        [clearVal, "ERROR", nowKst(), `❌ ${msg}`],
-      ]);
+      await writeRow(clearVal, "ERROR", `❌ ${msg}`);
       console.error(`[${nowKst()}] ❌ ${name}: ${msg}`);
     }
   }
@@ -221,10 +215,9 @@ async function checkAndHandleStop(): Promise<boolean> {
       }
       // stale lock 도 제거 (강제 종료된 프로세스가 lock 남길 수 있음)
       if (existsSync(LOCK_FILE)) unlinkSync(LOCK_FILE);
-      // 시트에 결과 표시 + 체크박스 해제
-      await writeRange(SHEET_CREDS!, `${TAB}!B${rowNum}:E${rowNum}`, [
-        [false, "OK", nowKst(), `🛑 강제 종료 완료 ${nowKst()}`],
-      ]);
+      // 시트에 결과 표시 + 체크박스 해제 (D 클릭 시점 보존)
+      await writeRange(SHEET_CREDS!, `${TAB}!B${rowNum}:C${rowNum}`, [[false, "OK"]]);
+      await writeRange(SHEET_CREDS!, `${TAB}!E${rowNum}:F${rowNum}`, [[nowKst(), `🛑 강제 종료 완료 ${nowKst()}`]]);
       return true;
     }
     return false;

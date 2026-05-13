@@ -512,7 +512,13 @@ async function dumpRankTracking(creds: SheetCreds, maxRank = 200): Promise<void>
       const items = await fetchShoppingSearch(kw, maxRank);
       console.log(`${items.length}개 결과`);
       for (const p of products) {
-        const idx = items.findIndex((it) => it.productId === p.productId);
+        // 매칭 — (1) productId 직접 (카탈로그 ID), (2) link 의 채널상품번호 (단독 스마트스토어)
+        const idx = items.findIndex((it) => {
+          if (it.productId === p.productId) return true;
+          const m = it.link?.match(/\/products\/(\d+)/);
+          if (m && m[1] === p.productId) return true;
+          return false;
+        });
         const rank = idx >= 0 ? idx + 1 : 0;
         collected.push([today, kw, p.productId, p.label, rank, items.length]);
         console.log(`     ${p.label} → 순위 ${rank > 0 ? rank : "❌ 없음 (>" + maxRank + ")"}`);
