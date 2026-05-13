@@ -3,9 +3,35 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { Upload, ImageIcon, X, CheckCircle2, Download, ChevronDown, ChevronUp, Loader2, AlertCircle, FolderOpen, ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { Upload, ImageIcon, X, CheckCircle2, Download, ChevronDown, ChevronUp, Loader2, AlertCircle, FolderOpen, ChevronLeft, ChevronRight, Plus, RotateCcw, RotateCw, ZoomIn, ZoomOut } from "lucide-react";
 
 const MONTH_LABELS = ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"];
+
+// 업로드 전 회전 적용 (캔버스에서 실제 픽셀 회전)
+function applyRotation(file: File, degrees: number): Promise<File> {
+  if (!degrees) return Promise.resolve(file);
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const swap = degrees === 90 || degrees === 270;
+      const canvas = document.createElement("canvas");
+      canvas.width = swap ? img.height : img.width;
+      canvas.height = swap ? img.width : img.height;
+      const ctx = canvas.getContext("2d")!;
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate((degrees * Math.PI) / 180);
+      ctx.drawImage(img, -img.width / 2, -img.height / 2);
+      canvas.toBlob(
+        (blob) => resolve(blob ? new File([blob], file.name, { type: "image/jpeg" }) : file),
+        "image/jpeg", 0.92,
+      );
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+}
 
 function compressImage(file: File, maxPx = 1920, quality = 0.85): Promise<File> {
   return new Promise((resolve) => {
@@ -54,9 +80,12 @@ export default function StatUploadPage() {
   const [companies, setCompanies] = useState<string[]>([]);
   const [files, setFiles] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
-  // per-photo selected companies: index → string[]
   const [photoCompanies, setPhotoCompanies] = useState<Record<number, string[]>>({});
+  const [photoRotations, setPhotoRotations] = useState<Record<number, number>>({});
   const [currentIdx, setCurrentIdx] = useState(0);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const dragRef = useRef<{ sx: number; sy: number; px: number; py: number } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -147,6 +176,27 @@ export default function StatUploadPage() {
     setCurrentIdx(Math.min(currentIdx, Math.max(0, newFiles.length - 1)));
   };
 
+  const goTo = (idx: number) => { setCurrentIdx(idx); setZoom(1); setPan({ x: 0, y: 0 }); };
+
+  const rotatePhoto = (delta: number) => {
+    const cur = photoRotations[currentIdx] ?? 0;
+    setPhotoRotations({ ...photoRotations, [currentIdx]: (cur + delta + 360) % 360 });
+  };
+
+  const onWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    setZoom((z) => Math.min(5, Math.max(0.5, z - e.deltaY * 0.002)));
+  };
+
+  const onMouseDown = (e: React.MouseEvent) => {
+    dragRef.current = { sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y };
+  };
+  const onMouseMove = (e: React.MouseEvent) => {
+    if (!dragRef.current) return;
+    setPan({ x: dragRef.current.px + e.clientX - dragRef.current.sx, y: dragRef.current.py + e.clientY - dragRef.current.sy });
+  };
+  const onMouseUp = () => { dragRef.current = null; };
+
   const toggleCompany = (company: string) => {
     const cur = photoCompanies[currentIdx] ?? [];
     const next = cur.includes(company) ? cur.filter((c) => c !== company) : [...cur, company];
@@ -159,12 +209,17 @@ export default function StatUploadPage() {
     if (!files.length) { setError("사진을 선택해주세요"); return; }
     setUploading(true); setError(null); setSuccess(null);
 
+    // 회전값 있는 사진은 실제 픽셀 회전 후 업로드
+    const finalFiles = await Promise.all(
+      files.map((f, i) => applyRotation(f, photoRotations[i] ?? 0))
+    );
+
     const form = new FormData();
     form.append("year", String(year));
     form.append("month", String(month));
     if (selectedClient) form.append("clientId", selectedClient);
     form.append("photoCompanies", JSON.stringify(photoCompanies));
-    files.forEach((f) => form.append("files", f));
+    finalFiles.forEach((f) => form.append("files", f));
 
     const res = await fetch("/api/mypage/stat-upload", { method: "POST", body: form });
     const data = await res.json();
@@ -172,7 +227,7 @@ export default function StatUploadPage() {
     if (!res.ok) { setError(data.error ?? "업로드 실패"); return; }
     setSuccess(`${data.count}개 파일이 저장됐습니다.`);
     previews.forEach((p) => URL.revokeObjectURL(p));
-    setFiles([]); setPreviews([]); setPhotoCompanies({}); setCurrentIdx(0);
+    setFiles([]); setPreviews([]); setPhotoCompanies({}); setPhotoRotations({}); setCurrentIdx(0); setZoom(1); setPan({ x: 0, y: 0 });
     loadHistory(); loadStatus(year, month);
   };
 
@@ -293,47 +348,82 @@ export default function StatUploadPage() {
             {/* 사진 캐러셀 뷰어 */}
             {files.length > 0 && (
               <div className="space-y-3">
-                {/* 대형 사진 + 네비게이션 */}
-                <div className="relative bg-gray-900 rounded-xl overflow-hidden" style={{ height: "360px" }}>
+                {/* 대형 사진 뷰어 (회전 + 줌 + 패닝) */}
+                <div
+                  className="relative bg-gray-900 rounded-xl overflow-hidden select-none"
+                  style={{ height: "380px", cursor: dragRef.current ? "grabbing" : zoom > 1 ? "grab" : "default" }}
+                  onWheel={onWheel}
+                  onMouseDown={onMouseDown}
+                  onMouseMove={onMouseMove}
+                  onMouseUp={onMouseUp}
+                  onMouseLeave={onMouseUp}
+                >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={previews[currentIdx]}
                     alt=""
-                    className="w-full h-full object-contain"
+                    draggable={false}
+                    style={{
+                      position: "absolute", inset: 0,
+                      width: "100%", height: "100%",
+                      objectFit: "contain",
+                      transform: `translate(${pan.x}px,${pan.y}px) scale(${zoom}) rotate(${photoRotations[currentIdx] ?? 0}deg)`,
+                      transformOrigin: "center",
+                      transition: dragRef.current ? "none" : "transform 0.15s",
+                      pointerEvents: "none",
+                    }}
                   />
-                  {/* 이전 버튼 */}
-                  {currentIdx > 0 && (
-                    <button
-                      onClick={() => setCurrentIdx(currentIdx - 1)}
-                      className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 transition-colors"
-                    >
-                      <ChevronLeft className="w-5 h-5" />
-                    </button>
-                  )}
-                  {/* 다음 버튼 */}
-                  {currentIdx < files.length - 1 && (
-                    <button
-                      onClick={() => setCurrentIdx(currentIdx + 1)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 transition-colors"
-                    >
-                      <ChevronRight className="w-5 h-5" />
-                    </button>
-                  )}
-                  {/* 카운터 + 삭제 */}
+                  {/* 상단: 카운터 + 삭제 */}
                   <div className="absolute top-2 left-0 right-0 flex justify-between px-3">
                     <span className="text-xs bg-black/50 text-white px-2 py-1 rounded-full tabular-nums">
                       {currentIdx + 1} / {files.length}
                     </span>
-                    <button
-                      onClick={() => removeFile(currentIdx)}
-                      className="bg-black/50 hover:bg-red-600 text-white rounded-full p-1 transition-colors"
-                    >
+                    <button onClick={() => removeFile(currentIdx)}
+                      className="bg-black/60 hover:bg-red-600 text-white rounded-full p-1 transition-colors">
                       <X className="w-4 h-4" />
                     </button>
                   </div>
-                  {/* 현재 사진의 선택된 제약사 표시 */}
+                  {/* 좌우 이동 */}
+                  {currentIdx > 0 && (
+                    <button onClick={() => goTo(currentIdx - 1)}
+                      className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 transition-colors">
+                      <ChevronLeft className="w-5 h-5" />
+                    </button>
+                  )}
+                  {currentIdx < files.length - 1 && (
+                    <button onClick={() => goTo(currentIdx + 1)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 transition-colors">
+                      <ChevronRight className="w-5 h-5" />
+                    </button>
+                  )}
+                  {/* 하단: 회전 + 줌 컨트롤 */}
+                  <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1">
+                    <button onClick={() => rotatePhoto(-90)} title="왼쪽 90° 회전"
+                      className="bg-black/60 hover:bg-black/80 text-white rounded-full p-1.5 transition-colors">
+                      <RotateCcw className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => rotatePhoto(90)} title="오른쪽 90° 회전"
+                      className="bg-black/60 hover:bg-black/80 text-white rounded-full p-1.5 transition-colors">
+                      <RotateCw className="w-4 h-4" />
+                    </button>
+                    <span className="w-px h-4 bg-white/30 mx-0.5" />
+                    <button onClick={() => setZoom((z) => Math.min(5, z + 0.5))}
+                      className="bg-black/60 hover:bg-black/80 text-white rounded-full p-1.5 transition-colors">
+                      <ZoomIn className="w-4 h-4" />
+                    </button>
+                    <span className="text-[11px] text-white/80 tabular-nums w-10 text-center">{Math.round(zoom * 100)}%</span>
+                    <button onClick={() => { setZoom((z) => Math.max(0.5, z - 0.5)); setPan({ x: 0, y: 0 }); }}
+                      className="bg-black/60 hover:bg-black/80 text-white rounded-full p-1.5 transition-colors">
+                      <ZoomOut className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}
+                      className="text-[10px] bg-black/60 hover:bg-black/80 text-white/70 rounded px-1.5 py-1 transition-colors">
+                      1:1
+                    </button>
+                  </div>
+                  {/* 제약사 태그 */}
                   {curPhotoCompanies.length > 0 && (
-                    <div className="absolute bottom-2 left-2 flex flex-wrap gap-1">
+                    <div className="absolute bottom-10 left-2 flex flex-wrap gap-1 pointer-events-none">
                       {curPhotoCompanies.map((c, i) => (
                         <span key={i} className="text-[10px] bg-orange-500 text-white rounded-full px-2 py-0.5 font-medium">{c}</span>
                       ))}
@@ -374,7 +464,8 @@ export default function StatUploadPage() {
                       className={`relative shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-colors ${i === currentIdx ? "border-orange-500" : "border-transparent"}`}
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={src} alt="" className="w-full h-full object-cover" />
+                      <img src={src} alt="" className="w-full h-full object-cover"
+                        style={{ transform: `rotate(${photoRotations[i] ?? 0}deg)` }} />
                       {(photoCompanies[i] ?? []).length > 0 && (
                         <span className="absolute bottom-0.5 right-0.5 w-2 h-2 rounded-full bg-orange-500" />
                       )}
