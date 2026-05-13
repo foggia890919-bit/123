@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, Fragment } from "react";
+import { useState, useEffect, useRef, Fragment, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import { Building2, Plus, Trash2, FileText, CheckCircle2, XCircle, Loader2, AlertCircle,
   Stethoscope, Briefcase, Pencil, MapPin, Filter, Send, Search, ChevronDown, X } from "lucide-react";
@@ -95,6 +95,7 @@ export default function ClientsPage() {
   const [showProposalMenu, setShowProposalMenu] = useState(false);
   const [companyStatuses, setCompanyStatuses] = useState<Record<string, string>>({});
   const [myRequests, setMyRequests] = useState<MyRequest[]>([]);
+  const [requestFilter, setRequestFilter] = useState<string>("all");
 
   /* ── 초기 로드 ── */
   useEffect(() => {
@@ -151,6 +152,30 @@ export default function ClientsPage() {
 
   const filteredCompanies = companies.filter((c) => !companySearch.trim() || c.name.toLowerCase().includes(companySearch.toLowerCase()));
   const displayClients = clientQuery.trim() ? clientResults : myClients;
+
+  // 선택된 거래처의 제약사별 필터링 요청 맵
+  const clientRequestMap = useMemo(() => {
+    if (!selectedFilterClient) return {} as Record<string, MyRequest>;
+    const biz = selectedFilterClient.bizNumber.replace(/\D/g, "");
+    const map: Record<string, MyRequest> = {};
+    for (const r of myRequests) {
+      if (r.bizNumber.replace(/\D/g, "") === biz) map[r.companyName] = r;
+    }
+    return map;
+  }, [myRequests, selectedFilterClient]);
+
+  // 필터된 요청 내역
+  const filteredRequests = useMemo(() =>
+    requestFilter === "all" ? myRequests : myRequests.filter((r) => r.bizNumber.replace(/\D/g, "") === requestFilter),
+    [myRequests, requestFilter]
+  );
+
+  // 요청 내역에 나타나는 거래처 목록
+  const requestClients = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of myRequests) map.set(r.bizNumber.replace(/\D/g, ""), r.clientName);
+    return Array.from(map.entries());
+  }, [myRequests]);
 
   function toggleCompany(name: string) {
     setSelected((prev) => { const n = new Set(prev); n.has(name) ? n.delete(name) : n.add(name); return n; });
@@ -388,7 +413,17 @@ export default function ClientsPage() {
                                 <label key={company.name} className="flex items-center gap-2.5 px-3 py-2.5 hover:bg-gray-50 cursor-pointer">
                                   <input type="checkbox" checked={selected.has(company.name)} onChange={() => toggleCompany(company.name)} className="w-4 h-4 rounded border-gray-300 text-blue-600 shrink-0" />
                                   <span className="flex-1 text-sm text-gray-800 truncate">{company.name}</span>
-                                  {companyStatuses[company.name] && <StatusBadge status={companyStatuses[company.name]} />}
+                                  {(() => {
+                                    const req = clientRequestMap[company.name];
+                                    if (!req) return null;
+                                    const date = req.repliedAt || req.createdAt;
+                                    return (
+                                      <div className="flex items-center gap-1.5 shrink-0">
+                                        <StatusBadge status={req.status} />
+                                        <span className="text-[10px] text-gray-400">{new Date(date).toLocaleDateString("ko-KR")}</span>
+                                      </div>
+                                    );
+                                  })()}
                                 </label>
                               ))}
                           </div>
@@ -428,35 +463,56 @@ export default function ClientsPage() {
         {/* 내 조회 요청 내역 (필터링 탭 활성 시) */}
         {boxTab === "filter" && (
           <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-            <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
-              <h2 className="font-semibold text-gray-800 text-sm">내 조회 요청 내역 ({myRequests.length}건)</h2>
-              <button type="button" onClick={() => session?.user?.id && loadMyRequests(session.user.id)} className="text-xs text-gray-500 hover:text-gray-700">새로고침</button>
+            <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between gap-3">
+              <h2 className="font-semibold text-gray-800 text-sm shrink-0">내 조회 요청 내역 ({filteredRequests.length}건)</h2>
+              <div className="flex items-center gap-2 ml-auto">
+                <select
+                  value={requestFilter}
+                  onChange={(e) => setRequestFilter(e.target.value)}
+                  className="text-xs border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+                >
+                  <option value="all">전체 거래처</option>
+                  {requestClients.map(([biz, name]) => (
+                    <option key={biz} value={biz}>{name}</option>
+                  ))}
+                </select>
+                <button type="button" onClick={() => session?.user?.id && loadMyRequests(session.user.id)} className="text-xs text-gray-500 hover:text-gray-700 shrink-0">새로고침</button>
+              </div>
             </div>
-            {myRequests.length === 0 ? (
+            {filteredRequests.length === 0 ? (
               <p className="text-center text-xs text-gray-400 py-8">아직 등록된 요청이 없어요</p>
             ) : (
               <div className="max-h-[420px] overflow-y-auto">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-gray-50 border-b border-gray-100">
                     <tr className="text-xs text-gray-500 font-semibold">
-                      <th className="px-4 py-2.5 text-left">요청일</th>
-                      <th className="px-4 py-2.5 text-left">제약사</th>
-                      <th className="px-4 py-2.5 text-left">거래처</th>
-                      <th className="px-4 py-2.5 text-center">상태</th>
+                      <th className="px-4 py-2.5 text-left">거래처명</th>
+                      <th className="px-4 py-2.5 text-left">제약사명</th>
+                      <th className="px-4 py-2.5 text-center">거래가능</th>
+                      <th className="px-4 py-2.5 text-center">거래불가</th>
+                      <th className="px-4 py-2.5 text-left">날짜</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {myRequests.map((r) => (
+                    {filteredRequests.map((r) => (
                       <Fragment key={r.id}>
                         <tr className="hover:bg-gray-50">
-                          <td className="px-4 py-2.5 text-xs text-gray-400 whitespace-nowrap">{new Date(r.createdAt).toLocaleDateString("ko-KR")}</td>
+                          <td className="px-4 py-2.5 text-gray-700 text-xs">{r.clientName}</td>
                           <td className="px-4 py-2.5 text-gray-800 text-xs">{r.companyName}</td>
-                          <td className="px-4 py-2.5 text-gray-600 text-xs">{r.clientName}</td>
-                          <td className="px-4 py-2.5 text-center"><StatusBadge status={r.status} /></td>
+                          <td className="px-4 py-2.5 text-center">
+                            {r.status === "APPROVED" && <span className="text-green-600 font-bold text-sm">✓</span>}
+                          </td>
+                          <td className="px-4 py-2.5 text-center">
+                            {r.status === "REJECTED" && <span className="text-red-500 font-bold text-sm">✗</span>}
+                            {(r.status === "REVIEWING" || r.status === "PENDING") && <StatusBadge status={r.status} />}
+                          </td>
+                          <td className="px-4 py-2.5 text-xs text-gray-400 whitespace-nowrap">
+                            {new Date(r.repliedAt || r.createdAt).toLocaleDateString("ko-KR")}
+                          </td>
                         </tr>
                         {r.replyText && (
                           <tr className="bg-blue-50/40">
-                            <td colSpan={4} className="px-4 py-2">
+                            <td colSpan={5} className="px-4 py-2">
                               <div className="text-xs text-blue-800"><span className="font-semibold">관리자 회신</span>{r.repliedAt && <span className="text-blue-400 ml-2">({new Date(r.repliedAt).toLocaleString("ko-KR")})</span>}</div>
                               <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap">{r.replyText}</p>
                             </td>
