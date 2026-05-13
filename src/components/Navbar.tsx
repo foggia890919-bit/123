@@ -183,7 +183,11 @@ export default function Navbar() {
                       className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
                       <User className="w-4 h-4 text-gray-400" />마이페이지
                     </Link>
-                    <div className="px-4 pt-2 pb-0.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">통계등록</div>
+                    <div className="px-4 pt-2 pb-0.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">업무관리</div>
+                    <Link href="/mypage/clients" onClick={() => setUserOpen(false)}
+                      className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 pl-6">
+                      <Building2 className="w-4 h-4 text-gray-400" />내 거래처
+                    </Link>
                     <Link href="/mypage/stat-upload" onClick={() => setUserOpen(false)}
                       className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 pl-6">
                       <Upload className="w-4 h-4 text-gray-400" />통계업로드
@@ -203,10 +207,6 @@ export default function Navbar() {
                     <Link href="/mypage/settlement" onClick={() => setUserOpen(false)}
                       className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
                       <Wallet className="w-4 h-4 text-gray-400" />정산관리(구)
-                    </Link>
-                    <Link href="/mypage/clients" onClick={() => setUserOpen(false)}
-                      className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
-                      <Building2 className="w-4 h-4 text-gray-400" />내 거래처
                     </Link>
                     <div className="border-t border-gray-100">
                       <button onClick={() => { signOut({ callbackUrl: "/" }); setUserOpen(false); }}
