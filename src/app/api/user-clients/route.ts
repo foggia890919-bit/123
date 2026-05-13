@@ -35,14 +35,18 @@ export async function GET(req: NextRequest) {
       const [myRecord, anyRecord] = await Promise.all([
         prisma.userClient.findFirst({
           where: { userId: user.id, OR: [{ bizNumber: stripped }, { bizNumber: fmt }] },
-          select: { id: true },
+          select: { id: true, dealerType: true },
         }),
         prisma.userClient.findFirst({
           where: { OR: [{ bizNumber: stripped }, { bizNumber: fmt }] },
-          select: { clientName: true, address: true },
+          select: { clientName: true, address: true, dealerType: true },
           orderBy: { createdAt: "desc" },
         }),
       ]);
+      const isMedical = myRecord?.dealerType === null || anyRecord?.dealerType === null;
+      if (isMedical) {
+        return NextResponse.json({ medicalClient: true, myDuplicate: !!myRecord });
+      }
       return NextResponse.json({
         myDuplicate: !!myRecord,
         existing: anyRecord

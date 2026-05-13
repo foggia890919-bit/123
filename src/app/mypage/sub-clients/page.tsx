@@ -19,7 +19,7 @@ interface UserClient {
   dealerType?: string | null;
 }
 
-type BizLookup = "none" | "checking" | "myDup" | "found" | "notFound";
+type BizLookup = "none" | "checking" | "myDup" | "medicalClient" | "found" | "notFound";
 
 function validateBizNumber(biz: string): boolean {
   const d = biz.replace(/\D/g, "");
@@ -112,6 +112,7 @@ export default function SubClientsPage() {
         const res = await fetch(`/api/user-clients?lookup=${digits}`);
         if (!res.ok) { setBizLookup("none"); setBizError("조회 중 오류가 발생했어요."); return; }
         const data = await res.json();
+        if (data.medicalClient) { setBizLookup("medicalClient"); return; }
         if (data.myDuplicate) { setBizLookup("myDup"); return; }
         if (data.existing) {
           setName(data.existing.clientName || "");
@@ -267,16 +268,16 @@ export default function SubClientsPage() {
                       maxLength={12}
                       disabled={!dealerType}
                       className={
-                        bizError || bizLookup === "myDup"
+                        bizError || bizLookup === "myDup" || bizLookup === "medicalClient"
                           ? "border-red-400 pr-9"
                           : bizLookup === "found"
                           ? "border-green-400 pr-9"
                           : "pr-9"
                       }
                     />
-                    {bizLookup === "checking" && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-gray-400" />}
-                    {bizLookup === "found"    && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-green-500" />}
-                    {bizLookup === "myDup"   && <XCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-red-500" />}
+                    {bizLookup === "checking"      && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-gray-400" />}
+                    {bizLookup === "found"         && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-green-500" />}
+                    {(bizLookup === "myDup" || bizLookup === "medicalClient") && <XCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-red-500" />}
                   </div>
                   {bizError && <p className="text-xs text-red-500">{bizError}</p>}
                   {!bizError && bizLookup === "checking" && (
@@ -285,6 +286,11 @@ export default function SubClientsPage() {
                   {!bizError && bizLookup === "myDup" && (
                     <div className="flex items-center gap-1.5 text-xs text-orange-700 bg-orange-50 border border-orange-200 rounded px-2 py-1">
                       이미 내 거래처에 있어요
+                    </div>
+                  )}
+                  {!bizError && bizLookup === "medicalClient" && (
+                    <div className="flex items-center gap-1.5 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+                      의료기관으로 등록된 사업자번호예요. 거래처관리(의료기관)에서 확인하세요.
                     </div>
                   )}
                   {!bizError && bizLookup === "found" && (
