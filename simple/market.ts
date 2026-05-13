@@ -19,7 +19,7 @@
 
 import "dotenv/config";
 import { createHmac } from "node:crypto";
-import { ensureTab, appendRows, clearTabData, readRange, loadCredsFromEnv, type SheetCreds } from "./sheets";
+import { ensureTab, appendRows, clearTabData, readRange, writeRange, loadCredsFromEnv, type SheetCreds } from "./sheets";
 
 const SHEET_CREDS: SheetCreds | null = loadCredsFromEnv();
 const AD_API_KEY = process.env.NAVER_AD_API_KEY;
@@ -560,18 +560,48 @@ async function dumpCategoryTree(creds: SheetCreds): Promise<void> {
   console.log(`✅ 「시장조사_카테고리」 ${rows.length}행 (clear 후 새로 작성)`);
 }
 
+/** 입력 시트(시장조사_키워드_추적) 에서 사장님이 입력한 카테고리 코드 읽기 */
 async function fetchTrackedCategories(creds: SheetCreds): Promise<{ cid: string; name: string }[]> {
-  const rows = await readRange(creds, "시장조사_카테고리!A2:F10000");
-  return rows
-    .filter((r) => r[5] && /^(o|O|ㅇ|y|Y|✓|true|1)$/i.test(String(r[5]).trim()))
-    .map((r) => ({
-      cid: String(r[0]),
-      name: [r[4], r[3], r[2], r[1]].find((x) => x) || "",
-    }));
+  // 입력 시트 자동 생성 (헤더 + 안내문)
+  await ensureTab(creds, "시장조사_키워드_추적", [
+    "카테고리코드 (여기에 추적할 코드만 입력)",
+    "카테고리명 (자동 채움)",
+    "비고",
+  ]);
+
+  const inputRows = await readRange(creds, "시장조사_키워드_추적!A2:A10000");
+  const inputCids = inputRows
+    .map((r) => String(r[0] ?? "").trim())
+    .filter((c) => /^\d+$/.test(c));
+
+  if (inputCids.length === 0) return [];
+
+  // 카테고리명 매핑 — 「시장조사_카테고리」 시트 참조
+  const catRows = await readRange(creds, "시장조사_카테고리!A2:E100000");
+  const cidToName = new Map<string, string>();
+  for (const row of catRows) {
+    const cid = String(row[0] ?? "").trim();
+    // 가장 깊은 (4차) 부터 우선
+    const name = [row[4], row[3], row[2], row[1]].find((x) => x && String(x).trim()) || "";
+    if (cid && name) cidToName.set(cid, String(name).trim());
+  }
+
+  // 입력 시트의 B열 (카테고리명 자동 채움) 갱신 — 사장님 편의
+  try {
+    for (let i = 0; i < inputCids.length; i++) {
+      const cid = inputCids[i];
+      const name = cidToName.get(cid) ?? "(시장조사_카테고리에 없음 — 트리 먼저 실행)";
+      await writeRange(creds, `시장조사_키워드_추적!B${i + 2}`, [[name]]);
+    }
+  } catch (e) {
+    console.warn(`[키워드_추적 B열 갱신 실패 무시] ${e instanceof Error ? e.message : e}`);
+  }
+
+  return inputCids.map((cid) => ({ cid, name: cidToName.get(cid) ?? cid }));
 }
 
 async function dumpKeywordsForTrackedCategories(creds: SheetCreds): Promise<void> {
-  // 결과 시트 항상 먼저 만들기 (데이터 없어도 헤더는 보이게)
+  // 결과 시트 + 입력 시트 모두 먼저 만들기
   await ensureTab(creds, "시장조사_키워드", [
     "카테고리코드",
     "카테고리명",
@@ -588,8 +618,8 @@ async function dumpKeywordsForTrackedCategories(creds: SheetCreds): Promise<void
 
   const tracked = await fetchTrackedCategories(creds);
   if (tracked.length === 0) {
-    console.log("\n⚠️ 추적 카테고리 없음 — 시트 「시장조사_카테고리」 의 F열(추적) 에 'o' 표시한 행만 처리됩니다.");
-    throw new Error("추적 카테고리 없음 — 「시장조사_카테고리」 F열(추적) 에 모니터링할 카테고리에 'o' 표시 후 다시 실행");
+    console.log("\n⚠️ 「시장조사_키워드_추적」 시트의 A열에 카테고리 코드를 입력하세요.");
+    throw new Error("「시장조사_키워드_추적」 비어있음 — A열에 카테고리 코드 입력 후 다시 실행 (시장조사_카테고리 시트 참조)");
   }
   console.log(`\n[2/3] 추적 ${tracked.length}개 카테고리 키워드 수집…`);
 
