@@ -25,6 +25,35 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  const lookup = req.nextUrl.searchParams.get("lookup");
+  if (lookup) {
+    const stripped = lookup.replace(/\D/g, "");
+    const fmt = stripped.length === 10
+      ? `${stripped.slice(0, 3)}-${stripped.slice(3, 5)}-${stripped.slice(5)}`
+      : stripped;
+    try {
+      const [myRecord, anyRecord] = await Promise.all([
+        prisma.userClient.findFirst({
+          where: { userId: user.id, OR: [{ bizNumber: stripped }, { bizNumber: fmt }] },
+          select: { id: true },
+        }),
+        prisma.userClient.findFirst({
+          where: { OR: [{ bizNumber: stripped }, { bizNumber: fmt }] },
+          select: { clientName: true, address: true },
+          orderBy: { createdAt: "desc" },
+        }),
+      ]);
+      return NextResponse.json({
+        myDuplicate: !!myRecord,
+        existing: anyRecord
+          ? { clientName: anyRecord.clientName, address: anyRecord.address ?? null }
+          : null,
+      });
+    } catch {
+      return NextResponse.json({ myDuplicate: false, existing: null, dbError: true }, { status: 500 });
+    }
+  }
+
   const bizNumberCheck = req.nextUrl.searchParams.get("bizNumber");
   if (bizNumberCheck) {
     const stripped = bizNumberCheck.replace(/\D/g, "");

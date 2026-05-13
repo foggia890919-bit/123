@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { Building2, Plus, Trash2, FileText, CheckCircle2, XCircle, Loader2, MapPin, Download, Upload, Users, ChevronDown, AlertCircle } from "lucide-react";
+import { Building2, Plus, Trash2, FileText, CheckCircle2, XCircle, Loader2, MapPin, Download, Upload, Users } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import RequireRole from "@/components/RequireRole";
@@ -17,16 +17,9 @@ interface UserClient {
   approved: boolean | null;
   createdAt: string;
   dealerType?: string | null;
-  isPublic?: boolean;
-  parentCorpId?: string | null;
-  companies?: string[];
 }
 
-interface CorpItem {
-  id: string;
-  clientName: string;
-  bizNumber: string;
-}
+type BizLookup = "none" | "checking" | "myDup" | "found" | "notFound";
 
 function validateBizNumber(biz: string): boolean {
   const d = biz.replace(/\D/g, "");
@@ -69,21 +62,16 @@ export default function SubClientsPage() {
   // 탭
   const [tab, setTab] = useState<"single" | "bulk">("single");
 
-  // 단일 등록 — 법인구분 + 상대방 법인 선택
+  // 단일 등록
   const [dealerType, setDealerType] = useState<"upper" | "lower" | "">("");
-  const [counterpartId, setCounterpartId] = useState<string>("");  // 선택된 상대방 법인 ID
-  const [isPublic, setIsPublic] = useState<boolean>(true);
+  const [bizLookup, setBizLookup] = useState<BizLookup>("none");
   const [name, setName] = useState("");
   const [biz, setBiz] = useState("");
   const [address, setAddress] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [bizError, setBizError] = useState("");
   const [registering, setRegistering] = useState(false);
   const [error, setError] = useState("");
-  const [bizError, setBizError] = useState("");
-  const [dupChecked, setDupChecked] = useState<"none" | "checking" | "ok" | "dup">("none");
-
-  // 공개 상위법인 목록 (하위법인 등록 시 부모 선택용)
-  const [publicUpperCorps, setPublicUpperCorps] = useState<CorpItem[]>([]);
 
   // 대량 등록
   const [bulkFile, setBulkFile] = useState<File | null>(null);
@@ -97,76 +85,44 @@ export default function SubClientsPage() {
       .then((r) => r.json())
       .then((data) => setClients(Array.isArray(data) ? data : []))
       .finally(() => setListLoading(false));
-    fetch("/api/user-clients?publicUpperCorps=true")
-      .then((r) => r.json())
-      .then((data) => setPublicUpperCorps(Array.isArray(data) ? data : []));
   }, [session?.user?.id]);
 
-  // 법인구분 변경 시 상대방 선택·폼 초기화
+  // 법인구분 변경 시 폼 초기화
   useEffect(() => {
-    setCounterpartId("");
     setName("");
     setBiz("");
     setAddress("");
     setBizError("");
-    setDupChecked("none");
+    setBizLookup("none");
     setError("");
-    // 상위법인은 검색가능(공개) 기본 ON
-    setIsPublic(dealerType === "upper");
   }, [dealerType]);
-
-  // 상대방 법인 목록
-  // · 하위법인 등록 시 → 공개된 상위법인 목록
-  // · 상위법인 등록 시 → 내가 등록한 하위법인 목록
-  const counterpartList: CorpItem[] =
-    dealerType === "lower"
-      ? publicUpperCorps
-      : dealerType === "upper"
-      ? clients
-          .filter((c) => c.dealerType === "LOWER_CORP")
-          .map((c) => ({ id: c.id, clientName: c.clientName, bizNumber: c.bizNumber }))
-      : [];
-
-  const counterpartLabel = dealerType === "lower" ? "상위법인 선택" : "하위법인 선택";
-
-  // 상대방 드롭다운에서 선택 시 → 폼 자동완성
-  async function handleCounterpartSelect(id: string) {
-    setCounterpartId(id);
-    if (!id) {
-      setName("");
-      setBiz("");
-      setBizError("");
-      setDupChecked("none");
-      return;
-    }
-    const corp = counterpartList.find((c) => c.id === id);
-    if (!corp) return;
-    setName(corp.clientName);
-    await handleBizChange(corp.bizNumber);
-  }
 
   async function handleBizChange(val: string) {
     const formatted = formatBizNumber(val);
     setBiz(formatted);
     setBizError("");
-    setDupChecked("none");
+    setBizLookup("none");
+    setName("");
+    setAddress("");
     const digits = formatted.replace(/\D/g, "");
     if (digits.length === 10) {
       if (!validateBizNumber(formatted)) { setBizError("유효하지 않은 사업자등록번호예요."); return; }
-      setDupChecked("checking");
+      setBizLookup("checking");
       try {
-        const res = await fetch(`/api/user-clients?bizNumber=${digits}`);
-        if (!res.ok) {
-          setDupChecked("none");
-          setBizError("중복 확인 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
+        const res = await fetch(`/api/user-clients?lookup=${digits}`);
+        if (!res.ok) { setBizLookup("none"); setBizError("조회 중 오류가 발생했어요."); return; }
+        const data = await res.json();
+        if (data.myDuplicate) { setBizLookup("myDup"); return; }
+        if (data.existing) {
+          setName(data.existing.clientName || "");
+          setAddress(data.existing.address || "");
+          setBizLookup("found");
           return;
         }
-        const data = await res.json();
-        if (data.found) { setDupChecked("dup"); return; }
-        setDupChecked("ok");
+        setBizLookup("notFound");
       } catch {
-        setDupChecked("none");
-        setBizError("중복 확인 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
+        setBizLookup("none");
+        setBizError("조회 중 오류가 발생했어요.");
       }
     }
   }
@@ -177,7 +133,6 @@ export default function SubClientsPage() {
     if (!dealerType) { setError("법인 구분을 선택해주세요."); return; }
     if (!name.trim() || !biz.trim()) { setError("거래처명과 사업자번호를 입력해주세요."); return; }
     if (bizError) { setError(bizError); return; }
-    if (dupChecked === "dup") { setError("이미 등록된 사업자번호예요."); return; }
     const digits = biz.replace(/\D/g, "");
     if (!validateBizNumber(digits)) { setError("유효하지 않은 사업자등록번호예요."); return; }
     setRegistering(true);
@@ -195,26 +150,18 @@ export default function SubClientsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         clientName: name.trim(),
-        bizNumber: digits,
+        bizNumber: biz.replace(/\D/g, ""),
         address: address.trim() || null,
         bizDocument,
         bizFileName,
         dealerType: dealerType === "upper" ? "UPPER_CORP" : "LOWER_CORP",
-        isPublic: dealerType === "upper" ? isPublic : false,
-        parentCorpId: dealerType === "lower" && counterpartId ? counterpartId : null,
       }),
     });
     if (res.ok) {
       const created: UserClient = await res.json();
       setClients((prev) => [created, ...prev]);
       setName(""); setBiz(""); setAddress(""); setFile(null);
-      setDupChecked("none"); setDealerType(""); setCounterpartId(""); setIsPublic(true);
-      // 공개 상위법인 목록 갱신
-      if (dealerType === "upper" && isPublic) {
-        fetch("/api/user-clients?publicUpperCorps=true")
-          .then((r) => r.json())
-          .then((data) => setPublicUpperCorps(Array.isArray(data) ? data : []));
-      }
+      setBizLookup("none"); setDealerType(""); setBizError(""); setError("");
     } else {
       const d = await res.json();
       setError(d.error || "등록 중 오류가 발생했어요.");
@@ -244,20 +191,6 @@ export default function SubClientsPage() {
     if (res.ok) setClients((prev) => prev.filter((c) => c.id !== id));
   }
 
-  async function handleTogglePublic(id: string, current: boolean) {
-    const res = await fetch(`/api/dealer?id=${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ isPublic: !current }),
-    });
-    if (res.ok) {
-      setClients((prev) => prev.map((c) => c.id === id ? { ...c, isPublic: !current } : c));
-      fetch("/api/user-clients?publicUpperCorps=true")
-        .then((r) => r.json())
-        .then((data) => setPublicUpperCorps(Array.isArray(data) ? data : []));
-    }
-  }
-
   async function handleSaveAddress(id: string) {
     const res = await fetch(`/api/user-clients?id=${id}`, {
       method: "PATCH",
@@ -276,7 +209,8 @@ export default function SubClientsPage() {
     c.dealerType === "LOWER_CORP"
   );
 
-  const canRegister = !!dealerType && !!name.trim() && !!biz.trim() && !bizError && dupChecked === "ok" && !registering;
+  const canRegister = !!dealerType && !!name.trim() && !!biz.trim() && !bizError
+    && (bizLookup === "found" || bizLookup === "notFound") && !registering;
 
   return (
     <RequireRole minRole="BASIC">
@@ -308,111 +242,81 @@ export default function SubClientsPage() {
           <div className="p-5">
             {tab === "single" ? (
               <form onSubmit={handleRegister} className="space-y-3">
-                {/* ① 법인구분 + 상대방 법인 선택 (항상 최상단) */}
+                {/* ① 법인구분 */}
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium text-gray-600">법인 구분 <span className="text-red-500">*</span></label>
-                  <div className="flex gap-2">
-                    {/* 법인 유형 */}
-                    <div className="relative flex-1">
-                      <select
-                        value={dealerType}
-                        onChange={(e) => setDealerType(e.target.value as "upper" | "lower" | "")}
-                        className="w-full appearance-none border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white pr-8"
-                      >
-                        <option value="">선택해주세요</option>
-                        <option value="upper">상위법인</option>
-                        <option value="lower">하위법인</option>
-                      </select>
-                      <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                    </div>
-
-                    {/* 상대방 법인 선택 (하위법인 → 상위법인 선택 / 상위법인 → 하위법인 선택) */}
-                    {dealerType && (
-                      <div className="relative flex-1">
-                        <select
-                          value={counterpartId}
-                          onChange={(e) => handleCounterpartSelect(e.target.value)}
-                          className="w-full appearance-none border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white pr-8"
-                        >
-                          <option value="">신규등록</option>
-                          {counterpartList.map((c) => (
-                            <option key={c.id} value={c.id}>{c.clientName}</option>
-                          ))}
-                        </select>
-                        <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                        <p className="text-[10px] text-gray-400 mt-0.5">
-                          {counterpartLabel}
-                          {counterpartList.length === 0 && " — 없음"}
-                        </p>
-                      </div>
-                    )}
-                  </div>
+                  <select
+                    value={dealerType}
+                    onChange={(e) => setDealerType(e.target.value as "upper" | "lower" | "")}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white"
+                  >
+                    <option value="">선택해주세요</option>
+                    <option value="upper">상위법인</option>
+                    <option value="lower">하위법인</option>
+                  </select>
                 </div>
 
-                {/* 상위법인 공개 여부 토글 */}
-                {dealerType === "upper" && (
-                  <div className="flex items-center justify-between bg-purple-50 border border-purple-100 rounded-lg px-3 py-2.5">
-                    <div>
-                      <p className="text-xs font-medium text-purple-800">상위법인 공개여부 (검색가능)</p>
-                      <p className="text-[10px] text-purple-500 mt-0.5">공개 시 타 담당자가 하위법인 등록 시 선택 가능합니다</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setIsPublic((v) => !v)}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${isPublic ? "bg-purple-500" : "bg-gray-300"}`}
-                    >
-                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${isPublic ? "translate-x-6" : "translate-x-1"}`} />
-                    </button>
-                  </div>
-                )}
-
-                {/* ② 거래처 정보 입력 */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-gray-600">거래처명 <span className="text-red-500">*</span></label>
+                {/* ② 사업자등록번호 (조회 트리거) */}
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-600">사업자등록번호 <span className="text-red-500">*</span></label>
+                  <div className="relative">
                     <Input
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="상호명"
+                      value={biz}
+                      onChange={(e) => handleBizChange(e.target.value)}
+                      placeholder="000-00-00000"
+                      maxLength={12}
                       disabled={!dealerType}
+                      className={
+                        bizError || bizLookup === "myDup"
+                          ? "border-red-400 pr-9"
+                          : bizLookup === "found"
+                          ? "border-green-400 pr-9"
+                          : "pr-9"
+                      }
                     />
+                    {bizLookup === "checking" && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-gray-400" />}
+                    {bizLookup === "found"    && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-green-500" />}
+                    {bizLookup === "myDup"   && <XCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-red-500" />}
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-gray-600">사업자등록번호 <span className="text-red-500">*</span></label>
-                    <div className="relative">
-                      <Input
-                        value={biz}
-                        onChange={(e) => handleBizChange(e.target.value)}
-                        placeholder="000-00-00000"
-                        maxLength={12}
-                        disabled={!dealerType}
-                        className={
-                          bizError || dupChecked === "dup"
-                            ? "border-red-400 pr-9"
-                            : dupChecked === "ok"
-                            ? "border-green-400 pr-9"
-                            : "pr-9"
-                        }
-                      />
-                      {dupChecked === "checking" && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-gray-400" />}
-                      {dupChecked === "ok"  && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-green-500" />}
-                      {dupChecked === "dup" && <XCircle     className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-red-500" />}
+                  {bizError && <p className="text-xs text-red-500">{bizError}</p>}
+                  {!bizError && bizLookup === "checking" && (
+                    <p className="text-xs text-gray-400">조회 중...</p>
+                  )}
+                  {!bizError && bizLookup === "myDup" && (
+                    <div className="flex items-center gap-1.5 text-xs text-orange-700 bg-orange-50 border border-orange-200 rounded px-2 py-1">
+                      이미 내 거래처에 있어요
                     </div>
-                    {bizError && <p className="text-xs text-red-500">{bizError}</p>}
-                    {dupChecked === "dup" && !bizError && (
-                      <div className="flex items-center gap-1.5 text-xs text-orange-700 bg-orange-50 border border-orange-200 rounded px-2 py-1">
-                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />기존처 — 이미 등록된 거래처예요
-                      </div>
-                    )}
-                    {dupChecked === "ok" && <p className="text-xs text-green-600">신규 등록 가능 ✓</p>}
-                  </div>
+                  )}
+                  {!bizError && bizLookup === "found" && (
+                    <div className="flex items-center gap-1.5 text-xs text-green-700 bg-green-50 border border-green-200 rounded px-2 py-1">
+                      거래처 정보를 자동으로 가져왔어요 ✓
+                    </div>
+                  )}
+                  {!bizError && bizLookup === "notFound" && (
+                    <div className="flex items-center gap-1.5 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-1">
+                      신규 거래처 — 거래처명을 직접 입력해주세요
+                    </div>
+                  )}
                 </div>
 
+                {/* ③ 거래처명 */}
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-600">거래처명 <span className="text-red-500">*</span></label>
+                  <Input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="상호명"
+                    disabled={!dealerType}
+                  />
+                </div>
+
+                {/* ④ 주소 */}
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-600">주소 <span className="text-gray-400 font-normal">(선택)</span></label>
                   <Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="예: 서울시 강남구 테헤란로 123" disabled={!dealerType} />
                 </div>
 
+                {/* ⑤ 사업자등록증 */}
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-600">사업자등록증 <span className="text-gray-400 font-normal">(선택)</span></label>
                   <label className="flex items-center gap-2 border border-dashed border-gray-300 rounded-lg p-3 cursor-pointer hover:bg-gray-50 transition-colors">
@@ -429,7 +333,7 @@ export default function SubClientsPage() {
                   {registering ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />등록 중...</> : <><Plus className="w-4 h-4 mr-2" />거래처 등록</>}
                 </Button>
                 {!dealerType && <p className="text-xs text-center text-gray-400">법인 구분을 선택해야 등록할 수 있어요.</p>}
-                {dupChecked === "dup" && <p className="text-xs text-center text-gray-400">기존처는 중복 등록할 수 없어요.</p>}
+                {bizLookup === "myDup" && <p className="text-xs text-center text-gray-400">이미 내 거래처에 있어요. 중복 등록할 수 없어요.</p>}
               </form>
             ) : (
               <div className="space-y-4">
@@ -515,58 +419,39 @@ export default function SubClientsPage() {
             </div>
           ) : (
             <div className="divide-y divide-gray-100">
-              {filteredClients.map((c) => {
-                const parentCorp = c.parentCorpId
-                  ? (publicUpperCorps.find((u) => u.id === c.parentCorpId) ?? clients.find((u) => u.id === c.parentCorpId))
-                  : null;
-                return (
-                  <div key={c.id} className="flex items-center gap-3 px-5 py-3.5 hover:bg-gray-50">
-                    {c.dealerType === "UPPER_CORP" ? <Building2 className="w-4 h-4 text-purple-300 shrink-0" /> : <Users className="w-4 h-4 text-blue-300 shrink-0" />}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-800 truncate">{c.clientName}</p>
-                      <p className="text-xs text-gray-400 font-mono mt-0.5">{c.bizNumber}</p>
-                      {parentCorp && (
-                        <p className="text-[10px] text-purple-500 mt-0.5 flex items-center gap-0.5">
-                          <Building2 className="w-2.5 h-2.5" />{parentCorp.clientName}
-                        </p>
-                      )}
-                      {editingAddressId === c.id ? (
-                        <div className="flex items-center gap-1 mt-1" onClick={(e) => e.stopPropagation()}>
-                          <Input autoFocus value={editingAddressVal} onChange={(e) => setEditingAddressVal(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === "Enter") handleSaveAddress(c.id); if (e.key === "Escape") setEditingAddressId(null); }}
-                            placeholder="주소 입력" className="h-6 text-xs py-0 px-2" />
-                          <button onClick={() => handleSaveAddress(c.id)} className="text-[10px] text-white bg-orange-500 hover:bg-orange-600 rounded px-1.5 py-0.5 shrink-0">저장</button>
-                          <button onClick={() => setEditingAddressId(null)} className="text-[10px] text-gray-400 hover:text-gray-600 shrink-0">취소</button>
-                        </div>
-                      ) : (
-                        <button onClick={() => { setEditingAddressId(c.id); setEditingAddressVal(c.address ?? ""); }} className="flex items-center gap-1 mt-0.5 group">
-                          <MapPin className="w-3 h-3 text-gray-300 group-hover:text-orange-400 shrink-0" />
-                          <span className="text-xs text-gray-500 group-hover:text-orange-500 truncate">
-                            {c.address || <span className="text-gray-300">주소 추가</span>}
-                          </span>
-                        </button>
-                      )}
-                    </div>
-                    <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 border ${c.dealerType === "UPPER_CORP" ? "text-purple-600 bg-purple-50 border-purple-100" : "text-blue-600 bg-blue-50 border-blue-100"}`}>
-                      {c.dealerType === "UPPER_CORP" ? "상위법인" : "하위법인"}
-                    </span>
-                    {c.dealerType === "UPPER_CORP" && (
-                      <button
-                        onClick={() => handleTogglePublic(c.id, !!c.isPublic)}
-                        title={c.isPublic ? "공개 중 — 클릭하면 비공개 전환" : "비공개 — 클릭하면 공개 전환"}
-                        className={`text-[10px] px-1.5 py-0.5 rounded border shrink-0 transition-colors ${c.isPublic ? "text-green-600 bg-green-50 border-green-200 hover:bg-green-100" : "text-gray-400 bg-gray-50 border-gray-200 hover:bg-gray-100"}`}
-                      >
-                        {c.isPublic ? "공개 ON" : "공개 OFF"}
+              {filteredClients.map((c) => (
+                <div key={c.id} className="flex items-center gap-3 px-5 py-3.5 hover:bg-gray-50">
+                  {c.dealerType === "UPPER_CORP" ? <Building2 className="w-4 h-4 text-purple-300 shrink-0" /> : <Users className="w-4 h-4 text-blue-300 shrink-0" />}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-800 truncate">{c.clientName}</p>
+                    <p className="text-xs text-gray-400 font-mono mt-0.5">{c.bizNumber}</p>
+                    {editingAddressId === c.id ? (
+                      <div className="flex items-center gap-1 mt-1" onClick={(e) => e.stopPropagation()}>
+                        <Input autoFocus value={editingAddressVal} onChange={(e) => setEditingAddressVal(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") handleSaveAddress(c.id); if (e.key === "Escape") setEditingAddressId(null); }}
+                          placeholder="주소 입력" className="h-6 text-xs py-0 px-2" />
+                        <button onClick={() => handleSaveAddress(c.id)} className="text-[10px] text-white bg-orange-500 hover:bg-orange-600 rounded px-1.5 py-0.5 shrink-0">저장</button>
+                        <button onClick={() => setEditingAddressId(null)} className="text-[10px] text-gray-400 hover:text-gray-600 shrink-0">취소</button>
+                      </div>
+                    ) : (
+                      <button onClick={() => { setEditingAddressId(c.id); setEditingAddressVal(c.address ?? ""); }} className="flex items-center gap-1 mt-0.5 group">
+                        <MapPin className="w-3 h-3 text-gray-300 group-hover:text-orange-400 shrink-0" />
+                        <span className="text-xs text-gray-500 group-hover:text-orange-500 truncate">
+                          {c.address || <span className="text-gray-300">주소 추가</span>}
+                        </span>
                       </button>
                     )}
-                    {c.bizFileName && <span className="text-xs text-gray-500 bg-gray-50 border border-gray-100 px-1.5 py-0.5 rounded shrink-0">서류첨부</span>}
-                    <span className="text-xs text-gray-400 shrink-0">{new Date(c.createdAt).toLocaleDateString("ko-KR")}</span>
-                    <button onClick={() => handleDelete(c.id, c.clientName)} className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
                   </div>
-                );
-              })}
+                  <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 border ${c.dealerType === "UPPER_CORP" ? "text-purple-600 bg-purple-50 border-purple-100" : "text-blue-600 bg-blue-50 border-blue-100"}`}>
+                    {c.dealerType === "UPPER_CORP" ? "상위법인" : "하위법인"}
+                  </span>
+                  {c.bizFileName && <span className="text-xs text-gray-500 bg-gray-50 border border-gray-100 px-1.5 py-0.5 rounded shrink-0">서류첨부</span>}
+                  <span className="text-xs text-gray-400 shrink-0">{new Date(c.createdAt).toLocaleDateString("ko-KR")}</span>
+                  <button onClick={() => handleDelete(c.id, c.clientName)} className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </div>
