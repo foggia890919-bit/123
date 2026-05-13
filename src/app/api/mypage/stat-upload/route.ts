@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
         id: f.id,
         storedName: f.storedName,
         viewUrl: url,
-        downloadUrl: url,
+        downloadUrl: `${url}?download=${encodeURIComponent(f.storedName)}`,
       };
     }),
   }));
