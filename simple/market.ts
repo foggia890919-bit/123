@@ -69,17 +69,25 @@ async function fetchCategoryChildren(parentCid: string): Promise<{ cid: string; 
 
 async function fetchCategoryTree(): Promise<CategoryNode[]> {
   const out: CategoryNode[] = [];
+  let apiCalls = 0;
   const visit = async (parentCid: string, level: number): Promise<void> => {
     const children = await fetchCategoryChildren(parentCid);
+    apiCalls++;
+    if (children.length === 0) return; // 빈 응답 = 더 이상 자식 없음 (자동 중단)
     for (const c of children) {
       out.push({ cid: c.cid, name: c.name, parent: parentCid, level, childCount: c.childCount });
-      if (c.childCount > 0 && level < 4) {
-        await sleep(500);
+      if (level < 4) {
+        // childCount 체크 제거 — 응답이 부정확할 수 있어서 일단 호출, 빈 응답이면 자동 중단
+        await sleep(300);
         await visit(c.cid, level + 1);
       }
     }
+    if (apiCalls % 100 === 0) {
+      console.log(`  [트리 진행] ${apiCalls}회 호출 / ${out.length}개 누적`);
+    }
   };
   await visit("0", 1); // root
+  console.log(`  [트리 완료] 총 API ${apiCalls}회 / ${out.length}개 카테고리 (level 1~4)`);
   return out;
 }
 
