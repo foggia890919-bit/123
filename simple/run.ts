@@ -25,8 +25,46 @@ import {
   readRange,
   loadCredsFromEnv,
   upsertRows,
+  getSheetIdMap,
   type SheetCreds,
 } from "./sheets";
+
+// ─────────────────── 여기명품 사입관리 시트 (별도 스프레드시트)
+// 사장님이 매번 사입 정보 수동 입력. AD = 상품주문번호, AB = 도매가+배송비+박스비 통합 (총비용)
+const YEOGI_WHOLESALE_SPREADSHEET_ID = "10DgfEqudeXOBmFFm8vyOHHuHJp6nZXKaxv4ecpbVhno";
+const YEOGI_WHOLESALE_GID = 30917428;
+
+async function loadYeogiWholesaleMap(): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  if (!SHEET_CREDS) return map;
+  try {
+    const altCreds: SheetCreds = { ...SHEET_CREDS, sheetId: YEOGI_WHOLESALE_SPREADSHEET_ID };
+    // gid → 탭 이름 자동 조회
+    const sheetIdMap = await getSheetIdMap(altCreds);
+    let tabName: string | undefined;
+    for (const [name, gid] of sheetIdMap.entries()) {
+      if (gid === YEOGI_WHOLESALE_GID) { tabName = name; break; }
+    }
+    if (!tabName) {
+      console.warn(`[여기명품 사입관리] gid=${YEOGI_WHOLESALE_GID} 탭 못 찾음 (시트 공유 권한 확인)`);
+      return map;
+    }
+    const rows = await readRange(altCreds, `${tabName}!A2:AD100000`);
+    for (const r of rows) {
+      // AB = index 27 (도매가+배송비+박스비 통합 = 총비용), AD = index 29 (상품주문번호)
+      const wholesale = Number(String(r[27] ?? "").replace(/,/g, "")) || 0;
+      const productOrderId = String(r[29] ?? "").trim();
+      if (productOrderId && wholesale > 0) {
+        map.set(productOrderId, wholesale);
+      }
+    }
+    if (map.size > 0) console.log(`여기명품 사입관리 ${map.size}건 매핑 로드`);
+    else console.log(`여기명품 사입관리 매핑 0건 — AD열 상품주문번호 입력 확인`);
+  } catch (err) {
+    console.warn(`[여기명품 사입관리] 시트 읽기 실패 (권한·공유 확인): ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return map;
+}
 
 // ─────────────────── 설정
 interface StoreConfig {
@@ -455,6 +493,7 @@ async function processDay(
   range: { fromIso: string; toIso: string; dateStr: string },
   rules: Rule[],
   productRules: Map<string, OptionMapRule>,
+  yeogiMap: Map<string, number>,
   options: ProcessOptions,
 ): Promise<void> {
   console.log(`\n[${range.dateStr}] ${options.sendTelegram ? '메인 보고' : '시트 동기화 only'}`);
@@ -509,8 +548,14 @@ async function processDay(
           ?? (po.totalPaymentAmount - apiCommission);
         // 수수료 = 매출 - 정산예정 (네이버 총 차감 — 명시 수수료 외 적립차감/채널 수수료 등 모두 포함)
         const commission = Math.max(0, po.totalPaymentAmount - settlement);
-        const cost = costPerUnit * totalUnits;
-        const logistics = logisticsPerOrder;
+        // 여기명품은 사입관리 시트 매칭 우선 — AB열 = 총비용 (도매가+배송비+박스비 통합)
+        const yeogiWholesale = store.name === "여기명품" ? yeogiMap.get(po.productOrderId) : undefined;
+        const cost = yeogiWholesale != null && yeogiWholesale > 0
+          ? yeogiWholesale // 사장님이 입력한 총비용 그대로 (수량 곱 X)
+          : costPerUnit * totalUnits;
+        const logistics = yeogiWholesale != null && yeogiWholesale > 0
+          ? 0 // AB 에 다 녹아있어서 별도 물류비 X
+          : logisticsPerOrder;
         const profit = settlement - cost - logistics;
         allRows.push({
           paymentDate: po.paymentDate ?? o.order?.paymentDate ?? "",
@@ -841,13 +886,13 @@ async function main() {
   const rules = await loadRules();
   console.log(`키워드 룰 ${rules.length}개`);
   const productRules = await loadOptionMapping();
+  const yeogiMap = await loadYeogiWholesaleMap();
 
   // 범위 백필: `npx tsx run.ts 2026-04-01 2026-05-01` → 텔레그램 X, 시트만 갱신
   if (arg1 && arg2) {
     const m1 = arg1.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     const m2 = arg2.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (!m1 || !m2) throw new Error("날짜 형식 오류 (YYYY-MM-DD 두 개)");
-    // UTC 기준으로 날짜 ms 계산 — 타임존 영향 없이 일자 +1 가능
     const fromMs = Date.UTC(+m1[1], +m1[2] - 1, +m1[3]);
     const toMs = Date.UTC(+m2[1], +m2[2] - 1, +m2[3]);
     if (fromMs > toMs) throw new Error("시작일이 종료일보다 늦음");
@@ -860,7 +905,7 @@ async function main() {
     for (let i = 0; i < days.length; i++) {
       console.log(`\n[${i + 1}/${days.length}] ${days[i]}`);
       try {
-        await processDay(dateKstRange(days[i]), rules, productRules, { sendTelegram: false });
+        await processDay(dateKstRange(days[i]), rules, productRules, yeogiMap, { sendTelegram: false });
       } catch (err) {
         console.error(`[${days[i]}] 실패:`, err instanceof Error ? err.message : String(err));
       }
@@ -871,18 +916,17 @@ async function main() {
 
   // 단일 날짜 백필: 텔레그램 발송
   if (arg1) {
-    await processDay(dateKstRange(arg1), rules, productRules, { sendTelegram: true });
+    await processDay(dateKstRange(arg1), rules, productRules, yeogiMap, { sendTelegram: true });
     return;
   }
 
   // 일상 cron: 7일 롤링
-  // 1일째(어제) = 텔레그램 + 시트, 2~7일째 = 시트만 (취소/반품 상태변경 캐치)
   const ranges = previousDaysKstRanges(7);
   for (let i = 0; i < ranges.length; i++) {
     const range = ranges[i];
     const sendTg = (i === 0);
     try {
-      await processDay(range, rules, productRules, { sendTelegram: sendTg });
+      await processDay(range, rules, productRules, yeogiMap, { sendTelegram: sendTg });
     } catch (err) {
       console.error(`[${range.dateStr}] 실패:`, err instanceof Error ? err.message : String(err));
     }

@@ -404,16 +404,18 @@ export async function setDateValidation(
               },
             },
           },
-          // 2) 셀 형식 = 날짜 (yyyy-mm-dd) — 이걸 같이 설정해야 더블클릭 시 달력 picker 자동 표시
+          // 2) 셀 형식 = 날짜 + 노란 배경 + 메모 (사장님이 쉽게 인식하게)
           {
             repeatCell: {
               range,
               cell: {
+                note: "📅 셀 더블클릭 → 달력 picker 표시",
                 userEnteredFormat: {
                   numberFormat: { type: "DATE", pattern: "yyyy-mm-dd" },
+                  backgroundColor: { red: 1, green: 0.95, blue: 0.7 }, // 연한 노란색
                 },
               },
-              fields: "userEnteredFormat.numberFormat",
+              fields: "note,userEnteredFormat.numberFormat,userEnteredFormat.backgroundColor",
             },
           },
         ],
