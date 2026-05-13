@@ -121,6 +121,7 @@ export async function uploadBuffer(
     method: "POST",
     headers: {
       Authorization: `Bearer ${serviceKey()}`,
+      apikey: serviceKey(),
       "Content-Type": contentType,
       "x-upsert": "true",
     },
