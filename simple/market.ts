@@ -31,6 +31,11 @@ const DEV_CLIENT_SECRET = process.env.NAVER_DEVELOPER_CLIENT_SECRET;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36";
 
+/** KST 기준 오늘 날짜 "YYYY-MM-DD" — UTC 새벽 시간에 전날로 박히는 사고 방지 */
+function todayKst(): string {
+  return new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 // ─────────────────── DataLab 카테고리 트리 (스크래핑)
 
 interface CategoryNode {
@@ -364,7 +369,7 @@ async function dumpMarketSize(creds: SheetCreds, limit = 200): Promise<void> {
 
   console.log(`\n시장규모 수집 — ${keywords.length}개 키워드 (5초 간격, 차단 회피)`);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayKst();
   const collected: (string | number)[][] = [];
   let success = 0;
   let failed = 0;
@@ -503,7 +508,7 @@ async function dumpRankTracking(creds: SheetCreds, maxRank = 200): Promise<void>
     }
   }
   console.log(`\n순위추적 — ${keywordToProducts.size}개 키워드, ${targets.length}개 상품`);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayKst();
   const collected: (string | number)[][] = [];
 
   for (const [kw, products] of keywordToProducts) {
@@ -648,7 +653,7 @@ async function dumpKeywordsForTrackedCategories(creds: SheetCreds): Promise<void
   }
   console.log(`\n[2/3] 추적 ${tracked.length}개 카테고리 키워드 수집…`);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayKst();
   const allRows: (string | number)[][] = []; // 모든 카테고리 결과 누적 (마지막에 한 번 clear+append)
 
   for (const cat of tracked) {
