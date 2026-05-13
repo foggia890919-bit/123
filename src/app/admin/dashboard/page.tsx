@@ -24,7 +24,7 @@ declare global {
   }
 }
 
-type Tab = "upload" | "members" | "rates" | "filterReqs" | "userClients" | "apiSources" | "notices" | "companySubmissions" | "bulkSubmit" | "loginLogs" | "fileMigration" | "banners" | "boards";
+type Tab = "upload" | "members" | "rates" | "filterReqs" | "userClients" | "bizManagement" | "apiSources" | "notices" | "companySubmissions" | "bulkSubmit" | "loginLogs" | "fileMigration" | "banners" | "boards";
 
 interface MenuItem { key: Tab; label: string; icon: React.ElementType }
 interface MenuGroup { title: string; items: MenuItem[] }
@@ -43,6 +43,7 @@ const MENU_GROUPS: MenuGroup[] = [
       { key: "members", label: "회원관리", icon: Users },
       { key: "rates", label: "추가수수료 관리", icon: Percent },
       { key: "userClients", label: "담당자별 거래처", icon: Building2 },
+      { key: "bizManagement", label: "사업자관리", icon: Building2 },
     ],
   },
   {
@@ -155,6 +156,7 @@ export default function AdminDashboardPage() {
         {tab === "bulkSubmit" && <BulkSubmissionTab />}
         {tab === "companySubmissions" && <CompanySubmissionsTab />}
         {tab === "userClients" && <UserClientsTab />}
+        {tab === "bizManagement" && <BizManagementTab />}
         {tab === "apiSources" && <ApiSourcesTab />}
         {tab === "loginLogs" && <LoginLogsTab />}
         {tab === "fileMigration" && <FileMigrationTab />}
@@ -3239,6 +3241,143 @@ interface AdminUserClient {
   userId: string;
   dealerType?: string | null;
   user: { name: string | null; email: string };
+}
+
+type BizSubTab = "all" | "hospital" | "upper-corp" | "lower-corp";
+
+function BizManagementTab() {
+  const [rows, setRows] = useState<AdminUserClient[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  const [subTab, setSubTab] = useState<BizSubTab>("all");
+
+  useEffect(() => {
+    setLoading(true);
+    fetch("/api/user-clients?all=true")
+      .then((r) => r.json())
+      .then((d) => setRows(Array.isArray(d) ? d : []))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const SUB_TABS: { key: BizSubTab; label: string }[] = [
+    { key: "all", label: "전체" },
+    { key: "hospital", label: "병의원(원외)" },
+    { key: "upper-corp", label: "상위법인" },
+    { key: "lower-corp", label: "하위법인" },
+  ];
+
+  const typeFiltered = rows.filter((r) => {
+    if (subTab === "hospital") return !r.dealerType;
+    if (subTab === "upper-corp") return r.dealerType === "UPPER_CORP";
+    if (subTab === "lower-corp") return r.dealerType === "LOWER_CORP";
+    return true;
+  });
+
+  const filtered = typeFiltered.filter((r) => {
+    if (!query.trim()) return true;
+    const q = query.toLowerCase();
+    return (
+      (r.user.name || "").toLowerCase().includes(q) ||
+      r.user.email.toLowerCase().includes(q) ||
+      r.clientName.toLowerCase().includes(q) ||
+      r.bizNumber.includes(query)
+    );
+  });
+
+  const dealerLabel = (type?: string | null) => {
+    if (!type) return "병의원(원외)";
+    if (type === "UPPER_CORP") return "상위법인";
+    if (type === "LOWER_CORP") return "하위법인";
+    if (type === "CORPORATION") return "법인";
+    if (type === "INDIVIDUAL") return "개인사업자";
+    return type;
+  };
+  const dealerColor = (type?: string | null) => {
+    if (!type) return "bg-green-100 text-green-700";
+    if (type === "UPPER_CORP") return "bg-indigo-100 text-indigo-700";
+    if (type === "LOWER_CORP") return "bg-cyan-100 text-cyan-700";
+    return "bg-gray-100 text-gray-600";
+  };
+
+  const counts = {
+    all: rows.length,
+    hospital: rows.filter((r) => !r.dealerType).length,
+    "upper-corp": rows.filter((r) => r.dealerType === "UPPER_CORP").length,
+    "lower-corp": rows.filter((r) => r.dealerType === "LOWER_CORP").length,
+  };
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-800">사업자관리 ({rows.length}건)</h2>
+          <p className="text-xs text-gray-400 mt-0.5">전체 등록 사업자 정보를 유형별로 확인할 수 있어요.</p>
+        </div>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="담당자 / 거래처명 / 사업자번호 검색"
+          className="h-9 w-64 border border-gray-200 rounded px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+        />
+      </div>
+
+      <div className="flex border-b border-gray-100">
+        {SUB_TABS.map((t) => (
+          <button key={t.key} onClick={() => setSubTab(t.key)}
+            className={`text-sm px-5 py-2.5 border-b-2 font-medium transition-colors ${
+              subTab === t.key ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-800"
+            }`}>
+            {t.label} <span className="text-xs opacity-60">({counts[t.key]})</span>
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div className="py-16 text-center text-gray-400 text-sm">불러오는 중...</div>
+      ) : filtered.length === 0 ? (
+        <p className="py-12 text-center text-gray-400 text-sm">해당하는 사업자가 없어요.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 text-xs text-gray-500 font-semibold">
+                <th className="px-4 py-3 text-left">거래처명</th>
+                <th className="px-4 py-3 text-left">사업자번호</th>
+                <th className="px-4 py-3 text-left">유형</th>
+                <th className="px-4 py-3 text-left">담당자</th>
+                <th className="px-4 py-3 text-left">이메일</th>
+                <th className="px-4 py-3 text-center">승인</th>
+                <th className="px-4 py-3 text-center">등록일</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {filtered.map((c) => (
+                <tr key={c.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3 font-medium text-gray-900">{c.clientName}</td>
+                  <td className="px-4 py-3 text-gray-600 text-xs font-mono">{c.bizNumber}</td>
+                  <td className="px-4 py-3">
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${dealerColor(c.dealerType)}`}>
+                      {dealerLabel(c.dealerType)}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-gray-700">{c.user.name || "-"}</td>
+                  <td className="px-4 py-3 text-gray-500 text-xs">{c.user.email}</td>
+                  <td className="px-4 py-3 text-center">
+                    {c.approved
+                      ? <span className="text-xs text-green-600 font-medium">승인</span>
+                      : <span className="text-xs text-amber-500">미승인</span>}
+                  </td>
+                  <td className="px-4 py-3 text-center text-xs text-gray-400">
+                    {new Date(c.createdAt).toLocaleDateString("ko-KR")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function UserClientsTab() {
