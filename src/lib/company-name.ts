@@ -2,9 +2,11 @@
 export function normalizeCompanyName(name: string): string {
   return name
     .replace(/^\(주\)\s*/g, "")
+    .replace(/\s*\(주\)$/g, "")
     .replace(/^주식회사\s+/g, "")
     .replace(/\s+주식회사$/g, "")
     .replace(/^\(유\)\s*/g, "")
+    .replace(/\s*\(유\)$/g, "")
     .replace(/^유한회사\s+/g, "")
     .replace(/\s+유한회사$/g, "")
     .replace(/^\(재\)\s*/g, "")

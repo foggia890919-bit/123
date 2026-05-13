@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { normalizeCompanyName } from "@/lib/company-name";
 
 export async function GET(req: NextRequest) {
   const session = await requireSession();
@@ -44,9 +45,13 @@ export async function GET(req: NextRequest) {
   ]);
 
   const result = userClients.flatMap((client) => {
-    const clientCompanies = filters
-      .filter((f) => f.bizNumber === client.bizNumber)
-      .map((f) => f.companyName);
+    const clientCompanies = [
+      ...new Set(
+        filters
+          .filter((f) => f.bizNumber === client.bizNumber)
+          .map((f) => normalizeCompanyName(f.companyName))
+      ),
+    ].sort();
 
     const companies = clientCompanies.length ? clientCompanies : ["(미매핑)"];
     const curUploaded = uploads.some((u) => u.clientId === client.id && u.year === year && u.month === month);

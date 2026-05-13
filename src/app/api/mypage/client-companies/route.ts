@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { normalizeCompanyName } from "@/lib/company-name";
 
 // GET /api/mypage/client-companies?clientId=xxx
 // 해당 거래처의 거래가능(APPROVED) 제약사 목록 반환
@@ -24,5 +25,6 @@ export async function GET(req: NextRequest) {
     orderBy: { companyName: "asc" },
   });
 
-  return NextResponse.json(filters.map((f) => f.companyName));
+  const names = [...new Set(filters.map((f) => normalizeCompanyName(f.companyName)))].sort();
+  return NextResponse.json(names);
 }

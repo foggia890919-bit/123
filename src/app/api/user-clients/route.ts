@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 import { BUCKETS, persistDataUri } from "@/lib/storage";
+import { normalizeCompanyName } from "@/lib/company-name";
 
 // GET /api/user-clients → 본인 거래처
 // GET /api/user-clients?all=true → 관리자 전용, 모든 담당자의 거래처
@@ -100,7 +101,9 @@ export async function GET(req: NextRequest) {
   const companyMap = new Map<string, string[]>();
   for (const f of filters) {
     if (!companyMap.has(f.bizNumber)) companyMap.set(f.bizNumber, []);
-    companyMap.get(f.bizNumber)!.push(f.companyName);
+    const normalized = normalizeCompanyName(f.companyName);
+    if (!companyMap.get(f.bizNumber)!.includes(normalized))
+      companyMap.get(f.bizNumber)!.push(normalized);
   }
 
   return NextResponse.json(rows.map((r) => ({
