@@ -7,7 +7,6 @@ import { Upload, ImageIcon, X, CheckCircle2, Download, ChevronDown, ChevronUp, L
 
 const MONTH_LABELS = ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"];
 
-// 업로드 전 클라이언트 이미지 압축 (최대 1920px, JPEG 85%)
 function compressImage(file: File, maxPx = 1920, quality = 0.85): Promise<File> {
   return new Promise((resolve) => {
     const img = new Image();
@@ -36,6 +35,13 @@ interface UserClient { id: string; clientName: string; bizNumber: string; }
 interface Company { companyName: string; }
 interface BatchFile { id: string; storedName: string; viewUrl: string | null; downloadUrl: string; }
 interface Batch { batchKey: string; year: number; month: number; clientName: string; fileCount: number; createdAt: string; files: BatchFile[]; }
+interface StatusRow { clientId: string; clientName: string; companyName: string; prevMonthUploaded: boolean; curMonthUploaded: boolean; }
+
+function Circle({ filled }: { filled: boolean }) {
+  return filled
+    ? <span className="inline-block w-3.5 h-3.5 rounded-full bg-green-500" />
+    : <span className="inline-block w-3.5 h-3.5 rounded-full border-2 border-gray-300" />;
+}
 
 export default function StatUploadPage() {
   const { data: session, status } = useSession();
@@ -56,13 +62,14 @@ export default function StatUploadPage() {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [openBatch, setOpenBatch] = useState<string | null>(null);
   const [storageReady, setStorageReady] = useState(true);
+  const [statusRows, setStatusRows] = useState<StatusRow[]>([]);
+  const [loadingStatus, setLoadingStatus] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (status === "unauthenticated") router.push("/login");
   }, [status, router]);
 
-  // 등록 거래처 로드
   useEffect(() => {
     fetch("/api/user-clients")
       .then((r) => r.json())
@@ -70,7 +77,6 @@ export default function StatUploadPage() {
       .catch(() => {});
   }, []);
 
-  // 선택 거래처의 거래가능 제약사 로드
   useEffect(() => {
     if (!selectedClient) { setCompanies([]); return; }
     fetch(`/api/mypage/client-companies?clientId=${selectedClient}`)
@@ -79,7 +85,6 @@ export default function StatUploadPage() {
       .catch(() => setCompanies([]));
   }, [selectedClient]);
 
-  // 업로드 이력 로드
   const loadHistory = useCallback(() => {
     setLoadingHistory(true);
     fetch("/api/mypage/stat-upload")
@@ -92,10 +97,24 @@ export default function StatUploadPage() {
       .finally(() => setLoadingHistory(false));
   }, []);
 
+  const loadStatus = useCallback((y: number, m: number) => {
+    setLoadingStatus(true);
+    fetch(`/api/mypage/stat-status?year=${y}&month=${m}`)
+      .then((r) => r.json())
+      .then((data) => setStatusRows(Array.isArray(data) ? data : []))
+      .catch(() => {})
+      .finally(() => setLoadingStatus(false));
+  }, []);
+
   useEffect(() => {
     const uid = (session as { user?: { id?: string } } | null)?.user?.id;
-    if (uid) loadHistory();
-  }, [(session as { user?: { id?: string } } | null)?.user?.id, loadHistory]); // eslint-disable-line
+    if (uid) { loadHistory(); loadStatus(year, month); }
+  }, [(session as { user?: { id?: string } } | null)?.user?.id]); // eslint-disable-line
+
+  useEffect(() => {
+    const uid = (session as { user?: { id?: string } } | null)?.user?.id;
+    if (uid) loadStatus(year, month);
+  }, [year, month, loadStatus]); // eslint-disable-line
 
   const handleFiles = async (incoming: FileList | File[]) => {
     const arr = Array.from(incoming).filter((f) => f.type.startsWith("image/"));
@@ -137,12 +156,15 @@ export default function StatUploadPage() {
     setSuccess(`${data.count}개 파일이 저장됐습니다.`);
     setFiles([]); previews.forEach((p) => URL.revokeObjectURL(p)); setPreviews([]);
     loadHistory();
+    loadStatus(year, month);
   };
 
   const clientName = clients.find((c) => c.id === selectedClient)?.clientName ?? "";
+  const prevMonth = month === 1 ? 12 : month - 1;
+  const prevYear = month === 1 ? year - 1 : year;
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <div className="max-w-6xl mx-auto space-y-4">
       {/* 헤더 */}
       <div className="flex items-center gap-3">
         <div className="p-2 bg-orange-50 rounded-lg"><Upload className="w-5 h-5 text-orange-600" /></div>
@@ -159,169 +181,204 @@ export default function StatUploadPage() {
         </div>
       )}
 
-      {/* 업로드 폼 */}
-      <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-5">
-        {/* 통계월 + 병원 선택 */}
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="text-xs font-semibold text-gray-500 mb-1.5 block">통계월</label>
-            <div className="flex gap-2">
-              <select value={year} onChange={(e) => setYear(Number(e.target.value))}
-                className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400">
-                {[2024,2025,2026,2027].map((y) => <option key={y} value={y}>{y}년</option>)}
-              </select>
-              <select value={month} onChange={(e) => setMonth(Number(e.target.value))}
-                className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400">
-                {MONTH_LABELS.map((l, i) => <option key={i} value={i + 1}>{l}</option>)}
-              </select>
+      <div className="flex gap-4 items-start">
+        {/* 왼쪽: 제출현황 */}
+        <div className="w-72 shrink-0 bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-gray-800">제출현황</h2>
+            {loadingStatus && <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400" />}
+          </div>
+          {/* 헤더 행 */}
+          <div className="grid grid-cols-[1fr_1fr_auto_auto] gap-x-2 px-3 py-2 bg-gray-50 border-b border-gray-100">
+            <span className="text-[10px] font-semibold text-gray-500">병원명</span>
+            <span className="text-[10px] font-semibold text-gray-500">제약사명</span>
+            <span className="text-[10px] font-semibold text-gray-500 text-center w-8">{prevYear}년{prevMonth}월</span>
+            <span className="text-[10px] font-semibold text-gray-500 text-center w-8">{year}년{month}월</span>
+          </div>
+          {statusRows.length === 0 ? (
+            <div className="px-4 py-8 text-center text-xs text-gray-400">
+              {loadingStatus ? "불러오는 중..." : "거래처가 없습니다"}
             </div>
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-500 mb-1.5 block">병원 (거래처)</label>
-            <select value={selectedClient} onChange={(e) => setSelectedClient(e.target.value)}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400">
-              <option value="">병원 선택</option>
-              {clients.map((c) => <option key={c.id} value={c.id}>{c.clientName}</option>)}
-            </select>
-          </div>
-        </div>
-
-        {/* 거래가능 제약사 표시 */}
-        {selectedClient && (
-          <div>
-            <p className="text-xs font-semibold text-gray-500 mb-1.5">거래가능 제약사</p>
-            {companies.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5">
-                {companies.map((c, i) => (
-                  <span key={i} className="text-xs bg-blue-50 text-blue-700 border border-blue-100 rounded-full px-2.5 py-0.5 font-medium">
-                    {c.companyName}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-gray-400">거래가능 승인된 제약사가 없습니다</p>
-            )}
-          </div>
-        )}
-
-        {/* 파일 드롭존 */}
-        <div
-          onDrop={onDrop}
-          onDragOver={(e) => e.preventDefault()}
-          onClick={() => fileRef.current?.click()}
-          className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center cursor-pointer hover:border-orange-300 hover:bg-orange-50 transition-colors"
-        >
-          <ImageIcon className="w-8 h-8 text-gray-300 mx-auto mb-2" />
-          <p className="text-sm font-medium text-gray-500">사진을 드래그하거나 클릭해서 선택</p>
-          <p className="text-xs text-gray-400 mt-1">JPG, PNG, HEIC 등 · 최대 30장 · 장당 20MB</p>
-          <input ref={fileRef} type="file" accept="image/*" multiple className="hidden"
-            onChange={(e) => e.target.files && void handleFiles(e.target.files)} />
-        </div>
-
-        {/* 선택된 파일 미리보기 */}
-        {files.length > 0 && (
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-gray-500">{files.length}장 선택됨</p>
-              <button onClick={() => { files.forEach((_, i) => URL.revokeObjectURL(previews[i])); setFiles([]); setPreviews([]); }}
-                className="text-xs text-gray-400 hover:text-red-500">전체 제거</button>
-            </div>
-            <div className="grid grid-cols-5 gap-2">
-              {previews.map((src, i) => (
-                <div key={i} className="relative group aspect-square">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={src} alt="" className="w-full h-full object-cover rounded-lg border border-gray-100" />
-                  <button onClick={(e) => { e.stopPropagation(); removeFile(i); }}
-                    className="absolute top-1 right-1 bg-black/60 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <X className="w-3 h-3" />
-                  </button>
-                  <span className="absolute bottom-1 left-1 text-[9px] bg-black/50 text-white px-1 rounded">{i + 1}</span>
+          ) : (
+            <div className="divide-y divide-gray-50 max-h-[520px] overflow-y-auto">
+              {statusRows.map((row, i) => (
+                <div key={i} className="grid grid-cols-[1fr_1fr_auto_auto] gap-x-2 items-center px-3 py-2 hover:bg-gray-50">
+                  <span className="text-xs text-gray-700 truncate">{row.clientName}</span>
+                  <span className="text-xs text-gray-500 truncate">{row.companyName}</span>
+                  <span className="flex justify-center w-8"><Circle filled={row.prevMonthUploaded} /></span>
+                  <span className="flex justify-center w-8"><Circle filled={row.curMonthUploaded} /></span>
                 </div>
               ))}
             </div>
+          )}
+          <div className="px-3 py-2 border-t border-gray-100 flex items-center gap-3 text-[10px] text-gray-400">
+            <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500" />제출</span>
+            <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full border-2 border-gray-300" />미제출</span>
           </div>
-        )}
-
-        {/* 저장명 미리보기 */}
-        {files.length > 0 && (
-          <div className="bg-gray-50 rounded-lg px-4 py-2.5 text-xs text-gray-500">
-            저장명 예시: <span className="font-mono text-gray-700">{year}년{month}월_{clientName || "병원명"}_1.jpg ~ {files.length}.jpg</span>
-          </div>
-        )}
-
-        {error && (
-          <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 rounded-lg px-4 py-2.5">
-            <AlertCircle className="w-4 h-4 shrink-0" />{error}
-          </div>
-        )}
-        {success && (
-          <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 rounded-lg px-4 py-2.5">
-            <CheckCircle2 className="w-4 h-4 shrink-0" />{success}
-          </div>
-        )}
-
-        <button onClick={handleSubmit} disabled={uploading || !storageReady || !files.length}
-          className="w-full py-2.5 rounded-lg bg-orange-500 text-white text-sm font-semibold hover:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-colors">
-          {uploading ? <><Loader2 className="w-4 h-4 animate-spin" />업로드 중...</> : <><Upload className="w-4 h-4" />사진 업로드</>}
-        </button>
-      </div>
-
-      {/* 업로드 이력 */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <FolderOpen className="w-4 h-4 text-gray-400" />
-            <h2 className="text-sm font-semibold text-gray-800">업로드 이력</h2>
-          </div>
-          {loadingHistory && <Loader2 className="w-4 h-4 animate-spin text-gray-400" />}
         </div>
-        {batches.length === 0 ? (
-          <div className="px-5 py-10 text-center text-xs text-gray-400">업로드 이력이 없습니다</div>
-        ) : (
-          <div className="divide-y divide-gray-100">
-            {batches.map((b) => (
-              <div key={b.batchKey}>
-                <button
-                  onClick={() => setOpenBatch(openBatch === b.batchKey ? null : b.batchKey)}
-                  className="w-full flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors text-left"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="text-xs font-semibold text-gray-400 tabular-nums w-14">{b.year}년{b.month}월</div>
-                    <div className="text-sm font-medium text-gray-700">{b.clientName}</div>
-                    <span className="text-[10px] bg-gray-100 text-gray-500 rounded-full px-2 py-0.5">{b.fileCount}장</span>
+
+        {/* 오른쪽: 업로드 폼 + 이력 */}
+        <div className="flex-1 min-w-0 space-y-4">
+          {/* 업로드 폼 */}
+          <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-5">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-semibold text-gray-500 mb-1.5 block">통계월</label>
+                <div className="flex gap-2">
+                  <select value={year} onChange={(e) => setYear(Number(e.target.value))}
+                    className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400">
+                    {[2024,2025,2026,2027].map((y) => <option key={y} value={y}>{y}년</option>)}
+                  </select>
+                  <select value={month} onChange={(e) => setMonth(Number(e.target.value))}
+                    className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400">
+                    {MONTH_LABELS.map((l, i) => <option key={i} value={i + 1}>{l}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-gray-500 mb-1.5 block">병원 (거래처)</label>
+                <select value={selectedClient} onChange={(e) => setSelectedClient(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400">
+                  <option value="">병원 선택</option>
+                  {clients.map((c) => <option key={c.id} value={c.id}>{c.clientName}</option>)}
+                </select>
+              </div>
+            </div>
+
+            {selectedClient && (
+              <div>
+                <p className="text-xs font-semibold text-gray-500 mb-1.5">거래가능 제약사</p>
+                {companies.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {companies.map((c, i) => (
+                      <span key={i} className="text-xs bg-blue-50 text-blue-700 border border-blue-100 rounded-full px-2.5 py-0.5 font-medium">
+                        {c.companyName}
+                      </span>
+                    ))}
                   </div>
-                  <div className="flex items-center gap-2 text-xs text-gray-400">
-                    {new Date(b.createdAt).toLocaleDateString("ko-KR")}
-                    {openBatch === b.batchKey ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                  </div>
-                </button>
-                {openBatch === b.batchKey && (
-                  <div className="px-5 pb-3 bg-gray-50">
-                    <div className="grid grid-cols-1 gap-1.5">
-                      {b.files.map((f) => (
-                        <div key={f.id} className="flex items-center justify-between bg-white rounded-lg border border-gray-100 px-3 py-2">
-                          <span className="text-xs text-gray-600 truncate max-w-[60%]">{f.storedName}</span>
-                          <div className="flex items-center gap-2">
-                            {f.viewUrl && (
-                              <a href={f.viewUrl} target="_blank" rel="noopener noreferrer"
-                                className="text-xs text-blue-600 hover:underline">보기</a>
-                            )}
-                            {f.downloadUrl && (
-                              <a href={f.downloadUrl} target="_blank" rel="noopener noreferrer"
-                                className="flex items-center gap-1 text-xs text-green-700 hover:underline">
-                                <Download className="w-3 h-3" />내려받기
-                              </a>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                ) : (
+                  <p className="text-xs text-gray-400">거래가능 승인된 제약사가 없습니다</p>
                 )}
               </div>
-            ))}
+            )}
+
+            <div
+              onDrop={onDrop}
+              onDragOver={(e) => e.preventDefault()}
+              onClick={() => fileRef.current?.click()}
+              className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center cursor-pointer hover:border-orange-300 hover:bg-orange-50 transition-colors"
+            >
+              <ImageIcon className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+              <p className="text-sm font-medium text-gray-500">사진을 드래그하거나 클릭해서 선택</p>
+              <p className="text-xs text-gray-400 mt-1">JPG, PNG, HEIC 등 · 최대 30장 · 장당 20MB</p>
+              <input ref={fileRef} type="file" accept="image/*" multiple className="hidden"
+                onChange={(e) => e.target.files && void handleFiles(e.target.files)} />
+            </div>
+
+            {files.length > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold text-gray-500">{files.length}장 선택됨</p>
+                  <button onClick={() => { files.forEach((_, i) => URL.revokeObjectURL(previews[i])); setFiles([]); setPreviews([]); }}
+                    className="text-xs text-gray-400 hover:text-red-500">전체 제거</button>
+                </div>
+                <div className="grid grid-cols-5 gap-2">
+                  {previews.map((src, i) => (
+                    <div key={i} className="relative group aspect-square">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={src} alt="" className="w-full h-full object-cover rounded-lg border border-gray-100" />
+                      <button onClick={(e) => { e.stopPropagation(); removeFile(i); }}
+                        className="absolute top-1 right-1 bg-black/60 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <X className="w-3 h-3" />
+                      </button>
+                      <span className="absolute bottom-1 left-1 text-[9px] bg-black/50 text-white px-1 rounded">{i + 1}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {files.length > 0 && (
+              <div className="bg-gray-50 rounded-lg px-4 py-2.5 text-xs text-gray-500">
+                저장명 예시: <span className="font-mono text-gray-700">{year}년{month}월_{clientName || "병원명"}_1.jpg ~ {files.length}.jpg</span>
+              </div>
+            )}
+
+            {error && (
+              <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 rounded-lg px-4 py-2.5">
+                <AlertCircle className="w-4 h-4 shrink-0" />{error}
+              </div>
+            )}
+            {success && (
+              <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 rounded-lg px-4 py-2.5">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />{success}
+              </div>
+            )}
+
+            <button onClick={handleSubmit} disabled={uploading || !storageReady || !files.length}
+              className="w-full py-2.5 rounded-lg bg-orange-500 text-white text-sm font-semibold hover:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-colors">
+              {uploading ? <><Loader2 className="w-4 h-4 animate-spin" />업로드 중...</> : <><Upload className="w-4 h-4" />사진 업로드</>}
+            </button>
           </div>
-        )}
+
+          {/* 업로드 이력 */}
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FolderOpen className="w-4 h-4 text-gray-400" />
+                <h2 className="text-sm font-semibold text-gray-800">업로드 이력</h2>
+              </div>
+              {loadingHistory && <Loader2 className="w-4 h-4 animate-spin text-gray-400" />}
+            </div>
+            {batches.length === 0 ? (
+              <div className="px-5 py-10 text-center text-xs text-gray-400">업로드 이력이 없습니다</div>
+            ) : (
+              <div className="divide-y divide-gray-100">
+                {batches.map((b) => (
+                  <div key={b.batchKey}>
+                    <button
+                      onClick={() => setOpenBatch(openBatch === b.batchKey ? null : b.batchKey)}
+                      className="w-full flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors text-left"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="text-xs font-semibold text-gray-400 tabular-nums w-14">{b.year}년{b.month}월</div>
+                        <div className="text-sm font-medium text-gray-700">{b.clientName}</div>
+                        <span className="text-[10px] bg-gray-100 text-gray-500 rounded-full px-2 py-0.5">{b.fileCount}장</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-gray-400">
+                        {new Date(b.createdAt).toLocaleDateString("ko-KR")}
+                        {openBatch === b.batchKey ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                      </div>
+                    </button>
+                    {openBatch === b.batchKey && (
+                      <div className="px-5 pb-3 bg-gray-50">
+                        <div className="grid grid-cols-1 gap-1.5">
+                          {b.files.map((f) => (
+                            <div key={f.id} className="flex items-center justify-between bg-white rounded-lg border border-gray-100 px-3 py-2">
+                              <span className="text-xs text-gray-600 truncate max-w-[60%]">{f.storedName}</span>
+                              <div className="flex items-center gap-2">
+                                {f.viewUrl && (
+                                  <a href={f.viewUrl} target="_blank" rel="noopener noreferrer"
+                                    className="text-xs text-blue-600 hover:underline">보기</a>
+                                )}
+                                {f.downloadUrl && (
+                                  <a href={f.downloadUrl} target="_blank" rel="noopener noreferrer"
+                                    className="flex items-center gap-1 text-xs text-green-700 hover:underline">
+                                    <Download className="w-3 h-3" />내려받기
+                                  </a>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
