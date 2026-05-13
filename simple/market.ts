@@ -428,6 +428,8 @@ interface ShopItem {
   category4: string;
 }
 
+let shopSearchDebugLogged = false;
+
 async function fetchShoppingSearch(keyword: string, maxRank = 200): Promise<ShopItem[]> {
   if (!DEV_CLIENT_ID || !DEV_CLIENT_SECRET) {
     throw new Error("NAVER_DEVELOPER_CLIENT_ID/SECRET 없음");
@@ -448,6 +450,17 @@ async function fetchShoppingSearch(keyword: string, maxRank = 200): Promise<Shop
     }
     const data = (await res.json()) as { items?: ShopItem[]; total?: number };
     const items = data.items ?? [];
+    // 진단: 첫 검색의 상위 5개 raw 출력 (productId 매칭 확인용)
+    if (!shopSearchDebugLogged && items.length > 0) {
+      shopSearchDebugLogged = true;
+      console.log(`\n[진단6] 「${keyword}」 검색 상위 5개 raw:`);
+      for (let i = 0; i < Math.min(5, items.length); i++) {
+        const it = items[i];
+        console.log(`  ${i + 1}. productId=${it.productId} | productType=${it.productType} | mall=${it.mallName} | title=${it.title?.replace(/<[^>]+>/g, "").slice(0, 60)}`);
+        console.log(`     link=${it.link}`);
+      }
+      console.log(`[진단6] 끝\n`);
+    }
     all.push(...items);
     if (items.length < 100) break;
     await sleep(200);
