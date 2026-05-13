@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
-import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck, ShoppingCart, ClipboardList, MessageCircle, TrendingUp, Wallet } from "lucide-react";
+import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck, ShoppingCart, ClipboardList, MessageCircle, TrendingUp, Wallet, Users } from "lucide-react";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
 interface NavLeaf {
@@ -187,6 +187,10 @@ export default function Navbar() {
                     <Link href="/mypage/clients" onClick={() => setUserOpen(false)}
                       className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 pl-6">
                       <Building2 className="w-4 h-4 text-gray-400" />내 거래처
+                    </Link>
+                    <Link href="/mypage/sub-clients" onClick={() => setUserOpen(false)}
+                      className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 pl-6">
+                      <Users className="w-4 h-4 text-gray-400" />거래처 관리 (하위법인)
                     </Link>
                     <Link href="/mypage/stat-upload" onClick={() => setUserOpen(false)}
                       className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 pl-6">
