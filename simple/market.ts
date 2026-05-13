@@ -43,28 +43,42 @@ interface CategoryNode {
 
 let categoryDebugLogged = false;
 
-async function fetchCategoryChildren(parentCid: string): Promise<{ cid: string; name: string; childCount: number }[]> {
-  const res = await fetch("https://datalab.naver.com/shoppingInsight/getCategory.naver", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-      "User-Agent": UA,
-      Referer: "https://datalab.naver.com/shoppingInsight/sCategory.naver",
-      Accept: "application/json, text/plain, */*",
-    },
-    body: `cid=${encodeURIComponent(parentCid)}`,
-  });
-  if (!res.ok) throw new Error(`category ${parentCid}: ${res.status}: ${await res.text().then((t) => t.slice(0, 200))}`);
-  const data = (await res.json()) as Record<string, unknown>;
-  // 진단: 첫 응답(cid=0) raw 출력 — childCount 필드명 + 응답 구조 확인용
-  if (!categoryDebugLogged) {
-    categoryDebugLogged = true;
-    console.log(`\n[진단3] DataLab category cid=${parentCid} 응답 raw (3000자):`);
-    console.log(JSON.stringify(data, null, 2).slice(0, 3000));
-    console.log(`[진단3] 끝\n`);
+async function fetchCategoryChildren(parentCid: string): Promise<{ cid: string; name: string; childCount: number; leaf?: boolean }[]> {
+  // 429 (Too Many Requests) 시 백오프 retry — DataLab 차단 회피
+  const maxAttempts = 5;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const res = await fetch("https://datalab.naver.com/shoppingInsight/getCategory.naver", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "User-Agent": UA,
+        Referer: "https://datalab.naver.com/shoppingInsight/sCategory.naver",
+        Accept: "application/json, text/plain, */*",
+      },
+      body: `cid=${encodeURIComponent(parentCid)}`,
+    });
+    if (res.status === 429) {
+      if (attempt === maxAttempts) {
+        throw new Error(`category ${parentCid}: 429 (${maxAttempts}회 retry 후 포기)`);
+      }
+      const wait = 10000 * attempt; // 10s, 20s, 30s, 40s
+      console.warn(`  [DataLab 429] cid=${parentCid} — ${wait / 1000}s 대기 후 재시도 ${attempt}/${maxAttempts}`);
+      await sleep(wait);
+      continue;
+    }
+    if (!res.ok) throw new Error(`category ${parentCid}: ${res.status}: ${await res.text().then((t) => t.slice(0, 200))}`);
+    const data = (await res.json()) as Record<string, unknown>;
+    // 진단: 첫 응답(cid=0) raw 출력 — 1회만
+    if (!categoryDebugLogged) {
+      categoryDebugLogged = true;
+      console.log(`\n[진단3] DataLab category cid=${parentCid} 응답 raw (3000자):`);
+      console.log(JSON.stringify(data, null, 2).slice(0, 3000));
+      console.log(`[진단3] 끝\n`);
+    }
+    const childList = (data.childList as { cid: string; name: string; childCount: number; leaf?: boolean }[] | undefined) ?? [];
+    return childList;
   }
-  const childList = (data.childList as { cid: string; name: string; childCount: number }[] | undefined) ?? [];
-  return childList;
+  return []; // unreachable
 }
 
 async function fetchCategoryTree(): Promise<CategoryNode[]> {
@@ -76,9 +90,9 @@ async function fetchCategoryTree(): Promise<CategoryNode[]> {
     if (children.length === 0) return; // 빈 응답 = 더 이상 자식 없음 (자동 중단)
     for (const c of children) {
       out.push({ cid: c.cid, name: c.name, parent: parentCid, level, childCount: c.childCount });
-      if (level < 4) {
-        // childCount 체크 제거 — 응답이 부정확할 수 있어서 일단 호출, 빈 응답이면 자동 중단
-        await sleep(80);
+      // leaf === true 면 더 이상 자식 없음 → 재귀 skip (호출 수 감소)
+      if (level < 4 && c.leaf !== true) {
+        await sleep(250); // DataLab 차단 회피
         await visit(c.cid, level + 1);
       }
     }
