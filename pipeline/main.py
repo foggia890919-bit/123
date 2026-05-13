@@ -7,6 +7,7 @@
 
 --template를 명시하면 분류 단계를 건너뛴다 (이미 양식을 아는 일괄 처리용).
 --max-retries는 self-correction 루프 한도. 검증이 실패하면 그만큼 재추출한다.
+기본 1 — Gemini 분당 요청/토큰 한도 보호용. 호출량을 더 늘리려면 키 티어 먼저 올릴 것.
 """
 
 from __future__ import annotations
@@ -57,8 +58,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--debug", action="store_true", help="전처리 중간 산출물 저장")
     parser.add_argument("--boost-table", action="store_true", help="복잡한 표 양식 격자 강화")
     parser.add_argument(
-        "--max-retries", type=int, default=3,
-        help="self-correction 재추출 한도 (기본 3, 0이면 비활성)",
+        "--max-retries", type=int, default=1,
+        help="self-correction 재추출 한도 (기본 1, 0이면 비활성)",
     )
     parser.add_argument(
         "--no-roi-recrop", action="store_true",

@@ -3,7 +3,8 @@
   Stage 1  preprocess     OpenCV + (옵션) AI-Assisted Cropping
   Stage 2  classify       VLM 1-pass 분류 → unknown 시 generic_document 폴백
   Stage 3  extract        VLM 2-pass 추출 (앵커 기반 + 필드별 confidence)
-  Stage 4  self-correct   validate 결과를 피드백으로 재추출 (max_retries=3)
+  Stage 4  self-correct   validate 결과를 피드백으로 재추출 (max_retries=1, 분당
+                            요청 한도 보호용으로 호출량을 베이스라인 가까이로 회귀)
   Stage 5  ROI re-crop    행 단위 산술이 실패한 행만 잘라 VLM 재호출
 
 99% 신뢰도 추구: 결정적 검증(산술/형식) → 자가수정 → 잘라서 재추출의 3겹.
@@ -100,7 +101,7 @@ def run_pipeline(
     *,
     forced_template_id: str | None = None,
     preprocess_options: PreprocessOptions | None = None,
-    max_retries: int = 3,
+    max_retries: int = 1,
     enable_roi_recrop: bool = True,
 ) -> PipelineResult:
     notes: list[str] = []

@@ -81,12 +81,16 @@ def main(argv: list[str] | None = None) -> int:
         help="mock | claude | gemini (기본 mock — 키 없어도 동작)",
     )
     parser.add_argument(
-        "--max-retries", type=int, default=3,
-        help="self-correction 재추출 한도",
+        "--max-retries", type=int, default=1,
+        help="self-correction 재추출 한도 (기본 1 — Gemini 분당 한도 보호용)",
     )
     parser.add_argument(
         "--no-roi-recrop", action="store_true",
         help="Stage 5 ROI 재추출 비활성 (mock 일 땐 기본 비활성)",
+    )
+    parser.add_argument(
+        "--only", default=None,
+        help="이 파일명(예: 01_normal.jpg) 한 장만 실행. 503/쿼터 디버깅용.",
     )
     parser.add_argument(
         "--out", type=Path, default=None,
@@ -100,6 +104,11 @@ def main(argv: list[str] | None = None) -> int:
 
     samples_dir = repo / "samples"
     sample_files = sorted(p for p in samples_dir.glob("*.jpg"))
+    if args.only:
+        sample_files = [p for p in sample_files if p.name == args.only]
+        if not sample_files:
+            print(f"[!] --only {args.only}: 해당 파일 없음", file=sys.stderr)
+            return 2
     if not sample_files:
         print(f"[!] 샘플이 없습니다: {samples_dir}", file=sys.stderr)
         return 2
