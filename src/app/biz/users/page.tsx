@@ -459,7 +459,7 @@ function TypeDropdown({ clientId, current, onUpdated }: {
   );
 }
 
-function DealersTab() {
+function DealersTab({ fixedType }: { fixedType?: string } = {}) {
   const [clients, setClients] = useState<DealerClient[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
@@ -469,7 +469,7 @@ function DealersTab() {
   const [bizNumberInput, setBizNumberInput] = useState("");
   const [foundClient, setFoundClient] = useState<DealerClient | null>(null);
   const [clientName, setClientName] = useState("");
-  const [dealerType, setDealerType] = useState<string>("CORPORATION");
+  const [dealerType, setDealerType] = useState<string>(fixedType ?? "CORPORATION");
   const [managerName, setManagerName] = useState("");
   const [managerPhone, setManagerPhone] = useState("");
   const [managerEmail, setManagerEmail] = useState("");
@@ -503,7 +503,7 @@ function DealersTab() {
 
   function openModal() {
     setStep("biz"); setBizNumberInput(""); setFoundClient(null); setClientName("");
-    setDealerType("CORPORATION"); setManagerName(""); setManagerPhone(""); setManagerEmail("");
+    setDealerType(fixedType ?? "CORPORATION"); setManagerName(""); setManagerPhone(""); setManagerEmail("");
     setMemo(""); setBizFile(null); setCsoFile(null); setAccountFile(null); setFormError(null); setModal(true);
   }
   function openEdit(c: DealerClient) {
@@ -588,6 +588,7 @@ function DealersTab() {
   }
 
   const filtered = clients.filter((c) => {
+    if (fixedType !== undefined && c.dealerType !== fixedType) return false;
     const matchQ = !query || c.clientName.includes(query) || c.bizNumber.includes(query);
     const matchT = filterType === "ALL" || c.dealerType === filterType;
     return matchQ && matchT;
@@ -634,11 +635,13 @@ function DealersTab() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <Input placeholder="거래처명 또는 사업자번호 검색" value={query} onChange={(e) => setQuery(e.target.value)} className="pl-9 text-sm" />
         </div>
-        <select value={filterType} onChange={(e) => setFilterType(e.target.value)}
-          className="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
-          <option value="ALL">전체 유형</option>
-          {TYPE_ORDER.map((t) => <option key={t} value={t}>{DEALER_LABELS[t]}</option>)}
-        </select>
+        {fixedType === undefined && (
+          <select value={filterType} onChange={(e) => setFilterType(e.target.value)}
+            className="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <option value="ALL">전체 유형</option>
+            {TYPE_ORDER.map((t) => <option key={t} value={t}>{DEALER_LABELS[t]}</option>)}
+          </select>
+        )}
         <button onClick={openModal}
           className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg">
           <Plus className="w-3.5 h-3.5" />법인 추가
@@ -649,7 +652,7 @@ function DealersTab() {
         <div className="flex justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>
       ) : filtered.length === 0 ? (
         <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-sm text-gray-400">
-          {query || filterType !== "ALL" ? "검색 결과가 없습니다" : "등록된 법인이 없습니다"}
+          {query || (fixedType === undefined && filterType !== "ALL") ? "검색 결과가 없습니다" : `등록된 ${fixedType ? (DEALER_LABELS[fixedType] ?? "법인") : "법인"}이 없습니다`}
         </div>
       ) : (
         <div className="bg-white border border-gray-200 rounded-xl">
@@ -721,7 +724,7 @@ function DealersTab() {
           </div>
         </div>
       )}
-      <p className="text-xs text-gray-400 text-right">총 {filtered.length}개{(query || filterType !== "ALL") && ` (전체 ${clients.length}개 중)`}</p>
+      <p className="text-xs text-gray-400 text-right">총 {filtered.length}개{(query || (fixedType === undefined && filterType !== "ALL")) && ` (전체 ${fixedType !== undefined ? clients.filter((c) => c.dealerType === fixedType).length : clients.length}개 중)`}</p>
 
       {/* 등록 모달 */}
       {modal && (
@@ -2086,14 +2089,112 @@ function InhouseClientsTab() {
   );
 }
 
+// ─── 전체 탭 ──────────────────────────────────────────────────────────────────
+
+function AllTab() {
+  const [hospClients, setHospClients] = useState<HospClient[]>([]);
+  const [dealerClients, setDealerClients] = useState<DealerClient[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    Promise.all([
+      fetch("/api/user-clients").then((r) => r.json()),
+      fetch("/api/dealer").then((r) => r.json()),
+    ]).then(([hosp, dealers]) => {
+      setHospClients(Array.isArray(hosp) ? hosp : []);
+      setDealerClients(Array.isArray(dealers) ? dealers : []);
+    }).finally(() => setLoading(false));
+  }, []);
+
+  type CombinedItem =
+    | { kind: "hosp"; id: string; clientName: string; bizNumber: string }
+    | { kind: "dealer"; id: string; clientName: string; bizNumber: string; dealerType: DealerType };
+
+  const combined: CombinedItem[] = useMemo(() => {
+    const hosp: CombinedItem[] = hospClients.map((c) => ({
+      kind: "hosp", id: c.id, clientName: c.clientName, bizNumber: c.bizNumber,
+    }));
+    const dealers: CombinedItem[] = dealerClients.map((c) => ({
+      kind: "dealer", id: c.id, clientName: c.clientName, bizNumber: c.bizNumber, dealerType: c.dealerType,
+    }));
+    return [...hosp, ...dealers];
+  }, [hospClients, dealerClients]);
+
+  const filtered = useMemo(() => {
+    if (!query) return combined;
+    const q = query.toLowerCase();
+    return combined.filter((c) => c.clientName.toLowerCase().includes(q) || c.bizNumber.includes(q));
+  }, [combined, query]);
+
+  const countHosp = hospClients.length;
+  const countUpper = dealerClients.filter((c) => c.dealerType === "UPPER_CORP").length;
+  const countLower = dealerClients.filter((c) => c.dealerType === "LOWER_CORP").length;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3 flex-wrap text-xs text-gray-500">
+        <span className="bg-gray-100 rounded-full px-3 py-1">전체 <strong className="text-gray-700">{combined.length}</strong></span>
+        <span className="bg-blue-50 text-blue-700 rounded-full px-3 py-1">병의원 <strong>{countHosp}</strong></span>
+        <span className="bg-indigo-50 text-indigo-700 rounded-full px-3 py-1">상위법인 <strong>{countUpper}</strong></span>
+        <span className="bg-cyan-50 text-cyan-700 rounded-full px-3 py-1">하위법인 <strong>{countLower}</strong></span>
+      </div>
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+        <Input placeholder="거래처명 또는 사업자번호 검색" value={query} onChange={(e) => setQuery(e.target.value)} className="pl-9 text-sm" />
+      </div>
+      {loading ? (
+        <div className="flex justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>
+      ) : filtered.length === 0 ? (
+        <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-sm text-gray-400">
+          {query ? "검색 결과가 없습니다" : "등록된 거래처가 없습니다"}
+        </div>
+      ) : (
+        <div className="bg-white border border-gray-200 rounded-xl">
+          <div className="grid grid-cols-[1fr_auto_auto] text-xs font-semibold text-gray-500 px-4 py-2.5 bg-gray-50 border-b border-gray-100 rounded-t-xl">
+            <span>거래처명</span>
+            <span className="text-center w-32">사업자번호</span>
+            <span className="text-center w-24">유형</span>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {filtered.map((c) => (
+              <div key={`${c.kind}-${c.id}`} className="grid grid-cols-[1fr_auto_auto] items-center px-4 py-3">
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${c.kind === "hosp" ? "bg-blue-50" : "bg-purple-50"}`}>
+                    {c.kind === "hosp"
+                      ? <Hospital className="w-4 h-4 text-blue-500" />
+                      : <Building2 className="w-4 h-4 text-purple-500" />}
+                  </div>
+                  <p className="text-sm font-medium text-gray-800">{c.clientName}</p>
+                </div>
+                <span className="text-sm text-gray-500 w-32 text-center font-mono">{formatBiz(c.bizNumber)}</span>
+                <div className="w-24 flex justify-center">
+                  {c.kind === "hosp" ? (
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">병의원</span>
+                  ) : (
+                    <TypeBadge type={(c as { kind: "dealer"; dealerType: DealerType }).dealerType} />
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <p className="text-xs text-gray-400 text-right">총 {filtered.length}개{query && ` (전체 ${combined.length}개 중)`}</p>
+    </div>
+  );
+}
+
 // ─── 메인 페이지 ──────────────────────────────────────────────────────────────
 
-type Tab = "clients" | "dealers" | "sales-reps" | "inhouse-clients";
+type Tab = "all" | "clients" | "inhouse-clients" | "upper-corp" | "lower-corp" | "sales-reps";
 
 const TABS: { key: Tab; label: string; icon: React.ElementType; desc: string }[] = [
-  { key: "clients",         label: "병·의원(원외)",  icon: Hospital,   desc: "병의원 등록·승인·H-코드 생성" },
-  { key: "inhouse-clients", label: "병·의원(원내)",  icon: Hospital,   desc: "원내 병·의원 이팜스 계정 관리 (사업자번호·이팜스ID/PW·담당자 연결)" },
-  { key: "dealers",         label: "법인",           icon: Building2,  desc: "법인·딜러 계층 등록·C-코드 생성" },
+  { key: "all",             label: "전체",           icon: Users,      desc: "등록된 모든 거래처" },
+  { key: "clients",         label: "병의원(원외)",   icon: Hospital,   desc: "병의원 등록·승인·H-코드 생성" },
+  { key: "inhouse-clients", label: "병의원(원내)",   icon: Hospital,   desc: "원내 병·의원 이팜스 계정 관리" },
+  { key: "upper-corp",      label: "상위법인",       icon: Building2,  desc: "상위법인 등록·C-코드 생성" },
+  { key: "lower-corp",      label: "하위법인",       icon: Building2,  desc: "하위법인 등록·C-코드 생성" },
   { key: "sales-reps",      label: "영업사원",       icon: UserCheck,  desc: "영업사원 승인·S-코드 생성" },
 ];
 
@@ -2103,7 +2204,7 @@ function UsersPageInner() {
   const searchParams = useSearchParams();
   const [tab, setTab] = useState<Tab>(() => {
     const t = searchParams.get("tab");
-    return (t === "dealers" || t === "sales-reps" || t === "inhouse-clients") ? t : "clients";
+    return (t === "sales-reps" || t === "inhouse-clients" || t === "upper-corp" || t === "lower-corp") ? t as Tab : "all";
   });
 
   useEffect(() => {
@@ -2151,9 +2252,11 @@ function UsersPageInner() {
         </div>
 
         {/* 탭 콘텐츠 */}
+        {tab === "all"             && <AllTab />}
         {tab === "clients"         && <ClientsTab />}
         {tab === "inhouse-clients" && <InhouseClientsTab />}
-        {tab === "dealers"         && <DealersTab />}
+        {tab === "upper-corp"      && <DealersTab fixedType="UPPER_CORP" />}
+        {tab === "lower-corp"      && <DealersTab fixedType="LOWER_CORP" />}
         {tab === "sales-reps"      && <SalesRepsTab />}
       </div>
     </BizLayout>
