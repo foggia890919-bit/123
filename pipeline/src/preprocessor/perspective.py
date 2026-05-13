@@ -167,7 +167,13 @@ def correct_perspective(
     if cv_status == "ok":
         return warp_to_front(image, cv_result.corners), cv_result.method
 
-    if vlm_adapter is None:
+    # VLM 폴오버 정책: OpenCV가 "완전 실패"(corners=None) 한 케이스에만 발동.
+    # OpenCV 가 4점은 찾았는데 면적·종횡비 가드만 못 통과(fallback_too_small/partial
+    # /bad_aspect)한 경우엔 표 외곽 일부만 인식했다는 신호 — 이때 VLM 에 다시
+    # 묻으면 페이지 헤더(타이틀바) 같은 엉뚱한 영역을 새 사각형으로 짚을 위험이
+    # 더 크다 (실측: 04_paper_watermark 케이스에서 hospital_name 이 페이지
+    # 타이틀로 환각). 그 경우엔 그냥 원본을 쓴다.
+    if vlm_adapter is None or cv_result.corners is not None:
         return image, cv_status if cv_result.corners is not None else "fallback"
 
     from .vlm_corners import locate_corners_with_vlm

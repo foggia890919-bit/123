@@ -44,9 +44,32 @@ def build_pydantic_model(template: TemplateSpec) -> type[BaseModel]:
     return create_model(name, **fields)  # type: ignore[arg-type]
 
 
-def field_to_json_schema(spec: FieldSpec) -> dict[str, Any]:
+_ROW_TYPE_MAP: dict[str, dict[str, Any]] = {
+    "string": {"type": "string"},
+    "int": {"type": "integer"},
+    "number": {"type": "number"},
+    "amount": {"type": "string"},  # amount 도 콤마/원기호 들어올 수 있어 string 으로 받음
+}
+
+
+def _row_schema_for(field_name: str, template: TemplateSpec) -> dict[str, Any]:
+    """line_items 필드의 행 객체 스키마. 템플릿이 row 키 목록을 명시했으면 강제."""
+    row_spec = (template.line_item_schemas or {}).get(field_name)
+    if not row_spec:
+        return {"type": "object"}
+    properties = {
+        k: _ROW_TYPE_MAP.get(v, {"type": "string"}) for k, v in row_spec.items()
+    }
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(row_spec.keys()),
+    }
+
+
+def field_to_json_schema(spec: FieldSpec, template: TemplateSpec) -> dict[str, Any]:
     if spec.type == "line_items":
-        return {"type": "array", "items": {"type": "object"}}
+        return {"type": "array", "items": _row_schema_for(spec.name, template)}
     return {"type": "string"}
 
 
@@ -54,7 +77,7 @@ def template_to_json_schema(template: TemplateSpec) -> dict[str, Any]:
     """VLM에게 줄 응답 스키마. 모델이 키 누락하지 않도록 모든 필드를 required로 둔다.
     null 허용 — 누락 시 모델은 null을 명시적으로 채워야 한다.
     """
-    properties = {f.name: field_to_json_schema(f) for f in template.fields}
+    properties = {f.name: field_to_json_schema(f, template) for f in template.fields}
     return {
         "type": "object",
         "properties": properties,

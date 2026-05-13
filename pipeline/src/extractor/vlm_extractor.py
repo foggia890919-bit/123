@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import re as _re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -116,6 +117,7 @@ def _build_prompt(template: TemplateSpec, retry: RetryContext | None = None) -> 
         return head
 
     issues = "\n".join(f"  - {msg}" for msg in retry.issues) or "  - (사유 미기재)"
+    failing_fields = _failing_field_names(retry.issues)
     prior = (
         "{\n"
         + "\n".join(f"  {k!r}: {v!r}," for k, v in (retry.prior_fields or {}).items())
@@ -123,13 +125,35 @@ def _build_prompt(template: TemplateSpec, retry: RetryContext | None = None) -> 
     )
     return (
         head
-        + "\n\n[이전 추출 결과 — 검증 실패]\n"
+        + "\n\n[이전 추출 결과 — 일부 필드만 검증 실패]\n"
         + prior
         + "\n\n[검증 실패 사유 — 이번에는 반드시 해결하라]\n"
         + issues
-        + "\n\n위 실패 필드에 특히 집중해 다시 한번 이미지에서 앵커 키워드를 찾아"
-        " 값을 재추출하라. 다른 필드도 함께 다시 채워서 완전한 JSON을 반환하라."
+        + "\n\n[재추출 규칙 — 엄격히 지켜라]\n"
+        + "  R1. 위 [이전 추출 결과]의 값 중 **검증을 통과한 필드는 그대로 유지하라.**\n"
+        + "      검증 실패 사유에 명시된 필드만 다시 보고 수정한다.\n"
+        + "  R2. 특히 헤더 필드(period_*, hospital_name, hospital_biz_no,\n"
+        + "      prescriber_name, pharma_company)는 이전 값이 그럴듯하면 그대로 둔다.\n"
+        + "      이전 값을 마음대로 다른 값으로 바꾸는 것을 금지한다.\n"
+        + "  R3. drugs 합계가 안 맞다는 사유라면 → drugs 배열의 누락된 행을 찾아\n"
+        + "      배열을 늘려라. 행 안의 total_amount 키가 비어 있다면 다시 옮긴다.\n"
+        + "      summary_total_amount 자체는 표 하단의 합계 숫자를 그대로 둔다.\n"
+        + (f"  R4. 이번 재추출에서 손볼 필드 목록: {sorted(failing_fields)}\n" if failing_fields else "")
+        + "\n위 규칙대로, 통과한 필드는 보존하고 실패 필드만 보강한 완전한 JSON을 반환."
     )
+
+
+_FIELD_NAME_RE = _re.compile(r"^\s*(\w+):")
+
+
+def _failing_field_names(issues: list[str]) -> set[str]:
+    """검증 실패 메시지에서 '필드명:' 패턴을 추려 어디만 손봐야 하는지 알려준다."""
+    names: set[str] = set()
+    for msg in issues:
+        m = _FIELD_NAME_RE.match(msg)
+        if m:
+            names.add(m.group(1))
+    return names
 
 
 def extract(
