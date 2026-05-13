@@ -8,7 +8,7 @@ from .base import VLMAdapter
 
 
 def get_adapter(provider: str | None = None) -> VLMAdapter:
-    chosen = (provider or os.environ.get("VLM_PROVIDER") or "claude").lower()
+    chosen = (provider or os.environ.get("VLM_PROVIDER") or "openrouter").lower()
     if chosen == "gemini":
         from .gemini import GeminiAdapter
 
@@ -17,4 +17,8 @@ def get_adapter(provider: str | None = None) -> VLMAdapter:
         from .anthropic_claude import ClaudeAdapter
 
         return ClaudeAdapter()
+    if chosen in ("openrouter", "open_router", "or"):
+        from .openrouter import OpenRouterAdapter
+
+        return OpenRouterAdapter()
     raise ValueError(f"알 수 없는 VLM provider: {provider}")
