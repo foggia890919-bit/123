@@ -93,8 +93,9 @@ export async function POST(req: NextRequest) {
   const items = buffers.map((buffer, i) => {
     const ext = files[i].name.split(".").pop() ?? "jpg";
     const storedName = `${prefix}_${i + 1}.${ext}`;
-    // 경로: 연도/월/병원명/batchKey/파일명 — Supabase Storage는 유니코드 경로 지원
-    const storageKey = `${year}/${month}/${clientName}/${batchKey}/${storedName}`;
+    // Supabase Storage는 한글 경로 미지원 → ASCII만 사용
+    // 한글 표시명(storedName)은 DB에만 저장
+    const storageKey = `${year}/${month}/${clientId ?? "unknown"}/${batchKey}/${i + 1}.jpg`;
     return {
       buffer,
       storedName,
