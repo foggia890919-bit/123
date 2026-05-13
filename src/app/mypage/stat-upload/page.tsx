@@ -9,7 +9,7 @@ const MONTH_LABELS = ["1월","2월","3월","4월","5월","6월","7월","8월","9
 
 interface UserClient { id: string; clientName: string; bizNumber: string; }
 interface Company { companyName: string; }
-interface BatchFile { id: string; storedName: string; driveFileId: string; driveViewUrl: string | null; downloadUrl: string; }
+interface BatchFile { id: string; storedName: string; viewUrl: string | null; downloadUrl: string; }
 interface Batch { batchKey: string; year: number; month: number; clientName: string; fileCount: number; createdAt: string; files: BatchFile[]; }
 
 export default function StatUploadPage() {
@@ -30,7 +30,7 @@ export default function StatUploadPage() {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [openBatch, setOpenBatch] = useState<string | null>(null);
-  const [driveEnabled, setDriveEnabled] = useState(true);
+  const [storageReady, setStorageReady] = useState(true);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -61,7 +61,7 @@ export default function StatUploadPage() {
       .then((r) => r.json())
       .then((data) => {
         setBatches(data.batches ?? []);
-        setDriveEnabled(data.driveEnabled ?? false);
+        setStorageReady(data.storageEnabled ?? false);
       })
       .catch(() => {})
       .finally(() => setLoadingHistory(false));
@@ -108,7 +108,7 @@ export default function StatUploadPage() {
     const data = await res.json();
     setUploading(false);
     if (!res.ok) { setError(data.error ?? "업로드 실패"); return; }
-    setSuccess(`${data.count}개 파일이 Google Drive에 저장됐습니다.`);
+    setSuccess(`${data.count}개 파일이 저장됐습니다.`);
     setFiles([]); previews.forEach((p) => URL.revokeObjectURL(p)); setPreviews([]);
     loadHistory();
   };
@@ -126,10 +126,10 @@ export default function StatUploadPage() {
         </div>
       </div>
 
-      {!driveEnabled && (
+      {!storageReady && (
         <div className="flex items-start gap-2 bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm text-yellow-800">
           <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-          Google Drive 연결이 설정되지 않았습니다. 관리자에게 문의하세요.
+          스토리지가 설정되지 않았습니다. 관리자에게 문의하세요.
         </div>
       )}
 
@@ -219,7 +219,7 @@ export default function StatUploadPage() {
         {/* 저장명 미리보기 */}
         {files.length > 0 && (
           <div className="bg-gray-50 rounded-lg px-4 py-2.5 text-xs text-gray-500">
-            Drive 저장명 예시: <span className="font-mono text-gray-700">{year}년{month}월_{clientName || "병원명"}_1.jpg ~ {files.length}.jpg</span>
+            저장명 예시: <span className="font-mono text-gray-700">{year}년{month}월_{clientName || "병원명"}_1.jpg ~ {files.length}.jpg</span>
           </div>
         )}
 
@@ -234,9 +234,9 @@ export default function StatUploadPage() {
           </div>
         )}
 
-        <button onClick={handleSubmit} disabled={uploading || !driveEnabled || !files.length}
+        <button onClick={handleSubmit} disabled={uploading || !storageReady || !files.length}
           className="w-full py-2.5 rounded-lg bg-orange-500 text-white text-sm font-semibold hover:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-colors">
-          {uploading ? <><Loader2 className="w-4 h-4 animate-spin" />업로드 중...</> : <><Upload className="w-4 h-4" />Google Drive에 업로드</>}
+          {uploading ? <><Loader2 className="w-4 h-4 animate-spin" />업로드 중...</> : <><Upload className="w-4 h-4" />사진 업로드</>}
         </button>
       </div>
 
@@ -276,14 +276,16 @@ export default function StatUploadPage() {
                         <div key={f.id} className="flex items-center justify-between bg-white rounded-lg border border-gray-100 px-3 py-2">
                           <span className="text-xs text-gray-600 truncate max-w-[60%]">{f.storedName}</span>
                           <div className="flex items-center gap-2">
-                            {f.driveViewUrl && (
-                              <a href={f.driveViewUrl} target="_blank" rel="noopener noreferrer"
+                            {f.viewUrl && (
+                              <a href={f.viewUrl} target="_blank" rel="noopener noreferrer"
                                 className="text-xs text-blue-600 hover:underline">보기</a>
                             )}
-                            <a href={f.downloadUrl} target="_blank" rel="noopener noreferrer"
-                              className="flex items-center gap-1 text-xs text-green-700 hover:underline">
-                              <Download className="w-3 h-3" />내려받기
-                            </a>
+                            {f.downloadUrl && (
+                              <a href={f.downloadUrl} target="_blank" rel="noopener noreferrer"
+                                className="flex items-center gap-1 text-xs text-green-700 hover:underline">
+                                <Download className="w-3 h-3" />내려받기
+                              </a>
+                            )}
                           </div>
                         </div>
                       ))}

@@ -17,6 +17,7 @@ export const BUCKETS = {
   settlementDocument: "settlement-documents",
   bizRateFile: "biz-rate-files",
   incomingEmail: "incoming-emails",
+  statImage: "stat-images",
 } as const;
 
 export function publicUrl(bucket: BucketName, key: string): string {
@@ -106,6 +107,29 @@ export async function downloadAsDataUri(bucket: BucketName, key: string): Promis
   const buf = Buffer.from(await res.arrayBuffer());
   const ct = res.headers.get("content-type") ?? "application/octet-stream";
   return `data:${ct};base64,${buf.toString("base64")}`;
+}
+
+export async function uploadBuffer(
+  bucket: BucketName,
+  key: string,
+  buffer: Buffer,
+  contentType: string,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!storageEnabled()) return { ok: false, error: "STORAGE_DISABLED" };
+  const url = `${baseUrl()}/storage/v1/object/${bucket}/${encodeURI(key)}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${serviceKey()}`,
+      "Content-Type": contentType,
+      "x-upsert": "true",
+    },
+    body: new Uint8Array(buffer),
+  });
+  if (!res.ok) {
+    return { ok: false, error: `${res.status} ${await res.text().catch(() => "")}` };
+  }
+  return { ok: true };
 }
 
 export async function deleteObject(bucket: BucketName, key: string): Promise<boolean> {

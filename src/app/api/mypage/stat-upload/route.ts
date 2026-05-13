@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
-import { uploadFilesBatch, driveEnabled } from "@/lib/google-drive";
+import { uploadBuffer, publicUrl, storageEnabled, BUCKETS } from "@/lib/storage";
 import { randomUUID } from "crypto";
 
 export const maxDuration = 60;
@@ -43,13 +43,12 @@ export async function GET(req: NextRequest) {
     files: imgs.map((f) => ({
       id: f.id,
       storedName: f.storedName,
-      driveFileId: f.driveFileId,
-      driveViewUrl: f.driveViewUrl,
-      downloadUrl: `https://drive.google.com/uc?export=download&id=${f.driveFileId}`,
+      viewUrl: f.driveViewUrl,
+      downloadUrl: f.driveViewUrl,
     })),
   }));
 
-  return NextResponse.json({ batches: result, driveEnabled: driveEnabled() });
+  return NextResponse.json({ batches: result, storageEnabled: storageEnabled() });
 }
 
 // POST — 파일 업로드 (전체 병렬)
@@ -57,8 +56,8 @@ export async function POST(req: NextRequest) {
   const session = await requireSession();
   if (isNextResponse(session)) return session;
 
-  if (!driveEnabled()) {
-    return NextResponse.json({ error: "Google Drive 미설정" }, { status: 503 });
+  if (!storageEnabled()) {
+    return NextResponse.json({ error: "스토리지 미설정 (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)" }, { status: 503 });
   }
 
   const form = await req.formData();
@@ -90,36 +89,41 @@ export async function POST(req: NextRequest) {
   // 모든 파일 버퍼 병렬 로드
   const buffers = await Promise.all(files.map((f) => f.arrayBuffer().then(Buffer.from)));
 
-  // Drive에 전체 병렬 업로드 (인증 클라이언트 1회 공유)
+  // 업로드 항목 준비
   const items = buffers.map((buffer, i) => {
     const ext = files[i].name.split(".").pop() ?? "jpg";
+    const storedName = `${prefix}_${i + 1}.${ext}`;
+    const storageKey = `stat-images/${session.id}/${year}/${month}/${batchKey}/${storedName}`;
     return {
       buffer,
-      storedName: `${prefix}_${i + 1}.${ext}`,
+      storedName,
+      storageKey,
       mimeType: files[i].type || "image/jpeg",
     };
   });
 
-  let driveResults;
-  try {
-    driveResults = await uploadFilesBatch(items);
-  } catch (e) {
-    console.error("Drive upload error:", e);
-    return NextResponse.json({ error: `Drive 업로드 실패: ${(e as Error).message}` }, { status: 500 });
+  // Supabase Storage에 전체 병렬 업로드
+  const uploadResults = await Promise.all(
+    items.map((item) => uploadBuffer(BUCKETS.statImage, item.storageKey, item.buffer, item.mimeType)),
+  );
+
+  const failed = uploadResults.findIndex((r) => !r.ok);
+  if (failed !== -1) {
+    return NextResponse.json({ error: `업로드 실패: ${uploadResults[failed].error}` }, { status: 500 });
   }
 
   // DB 저장 (한 번에)
   await prisma.statImage.createMany({
-    data: driveResults.map(({ fileId, viewUrl }, i) => ({
+    data: items.map((item, i) => ({
       userId: session.id,
       clientId,
       year,
       month,
-      driveFileId: fileId,
-      driveViewUrl: viewUrl,
+      driveFileId: item.storageKey,
+      driveViewUrl: publicUrl(BUCKETS.statImage, item.storageKey),
       fileName: files[i].name,
-      storedName: items[i].storedName,
-      mimeType: items[i].mimeType,
+      storedName: item.storedName,
+      mimeType: item.mimeType,
       batchKey,
     })),
   });
@@ -127,11 +131,10 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     ok: true,
     batchKey,
-    count: driveResults.length,
-    files: driveResults.map(({ fileId, viewUrl }, i) => ({
-      storedName: items[i].storedName,
-      driveFileId: fileId,
-      driveViewUrl: viewUrl,
+    count: items.length,
+    files: items.map((item) => ({
+      storedName: item.storedName,
+      viewUrl: publicUrl(BUCKETS.statImage, item.storageKey),
     })),
   });
 }
