@@ -19,7 +19,7 @@
 
 import "dotenv/config";
 import { createHmac } from "node:crypto";
-import { ensureTab, upsertRows, readRange, loadCredsFromEnv, type SheetCreds } from "./sheets";
+import { ensureTab, appendRows, clearTabData, readRange, loadCredsFromEnv, type SheetCreds } from "./sheets";
 
 const SHEET_CREDS: SheetCreds | null = loadCredsFromEnv();
 const AD_API_KEY = process.env.NAVER_AD_API_KEY;
@@ -379,9 +379,11 @@ async function dumpMarketSize(creds: SheetCreds, limit = 100): Promise<void> {
   }
 
   if (collected.length > 0) {
-    await upsertRows(creds, "시장조사_시장규모", collected, (r) => `${r[0]}|${r[1]}`);
+    // 매번 clear + 새로 작성 — 중복/잔존 데이터 차단
+    await clearTabData(creds, "시장조사_시장규모", 2);
+    await appendRows(creds, "시장조사_시장규모!A2", collected);
   }
-  console.log(`\n✅ 시장규모: 성공 ${success} / 실패 ${failed} / 시트 갱신 ${collected.length}`);
+  console.log(`\n✅ 시장규모: 성공 ${success} / 실패 ${failed} / 시트 ${collected.length}행 (clear 후 새로)`);
   if (failed > success) {
     console.log("⚠️ 실패가 많아요. Naver 페이지 구조가 바뀌었을 수 있음. 로그 확인 + 코드 업데이트 필요.");
   }
@@ -489,14 +491,11 @@ async function dumpRankTracking(creds: SheetCreds, maxRank = 200): Promise<void>
   }
 
   if (collected.length > 0) {
-    await upsertRows(
-      creds,
-      "순위추적_데이터",
-      collected,
-      (r) => `${r[0]}|${r[1]}|${r[2]}`,
-    );
+    // 매번 clear + 새로 작성 — 중복/잔존 데이터 차단
+    await clearTabData(creds, "순위추적_데이터", 2);
+    await appendRows(creds, "순위추적_데이터!A2", collected);
   }
-  console.log(`\n✅ 순위추적: ${collected.length}건`);
+  console.log(`\n✅ 순위추적: ${collected.length}건 (clear 후 새로 작성)`);
 }
 
 // ─────────────────── 메인
@@ -541,8 +540,10 @@ async function dumpCategoryTree(creds: SheetCreds): Promise<void> {
       cidToTracked.get(n.cid) ?? "", // 추적 — 기존 값 보존 (없으면 빈 칸)
     ];
   });
-  await upsertRows(creds, "시장조사_카테고리", rows, (r) => String(r[0] ?? ""));
-  console.log(`✅ 「시장조사_카테고리」 ${rows.length}행`);
+  // 매번 시트 클리어 후 새로 작성 — 중복/잔존 데이터 차단 (추적 F열은 위에서 보존)
+  await clearTabData(creds, "시장조사_카테고리", 2);
+  await appendRows(creds, "시장조사_카테고리!A2", rows);
+  console.log(`✅ 「시장조사_카테고리」 ${rows.length}행 (clear 후 새로 작성)`);
 }
 
 async function fetchTrackedCategories(creds: SheetCreds): Promise<{ cid: string; name: string }[]> {
@@ -579,6 +580,7 @@ async function dumpKeywordsForTrackedCategories(creds: SheetCreds): Promise<void
   console.log(`\n[2/3] 추적 ${tracked.length}개 카테고리 키워드 수집…`);
 
   const today = new Date().toISOString().slice(0, 10);
+  const allRows: (string | number)[][] = []; // 모든 카테고리 결과 누적 (마지막에 한 번 clear+append)
 
   for (const cat of tracked) {
     console.log(`  [${cat.name}] (${cat.cid}) Top500 수집…`);
@@ -604,11 +606,11 @@ async function dumpKeywordsForTrackedCategories(creds: SheetCreds): Promise<void
       }
     }
 
-    const rows: (string | number)[][] = ranked.map((rk) => {
+    for (const rk of ranked) {
       const ad = enrichedMap.get(rk.keyword.toLowerCase());
       const pc = num(ad?.monthlyPcQcCnt);
       const mb = num(ad?.monthlyMobileQcCnt);
-      return [
+      allRows.push([
         cat.cid,
         cat.name,
         rk.keyword,
@@ -620,11 +622,17 @@ async function dumpKeywordsForTrackedCategories(creds: SheetCreds): Promise<void
         num(ad?.monthlyAveMobileCtr),
         ad?.compIdx ?? "",
         today,
-      ];
-    });
-    await upsertRows(creds, "시장조사_키워드", rows, (r) => `${r[0]}|${r[2]}`);
-    console.log(`    ✅ 「시장조사_키워드」 ${rows.length}행 추가/갱신`);
+      ]);
+    }
+    console.log(`    [${cat.name}] ${ranked.length}개 누적 (총 ${allRows.length})`);
     await sleep(1500);
+  }
+
+  // 모든 카테고리 처리 끝 — 한 번에 clear + append (중복/잔존 데이터 차단)
+  if (allRows.length > 0) {
+    await clearTabData(creds, "시장조사_키워드", 2);
+    await appendRows(creds, "시장조사_키워드!A2", allRows);
+    console.log(`✅ 「시장조사_키워드」 ${allRows.length}행 (clear 후 새로 작성)`);
   }
 }
 
