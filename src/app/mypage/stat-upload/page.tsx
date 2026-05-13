@@ -7,6 +7,19 @@ import { Upload, ImageIcon, X, CheckCircle2, Download, ChevronDown, ChevronUp, L
 
 const MONTH_LABELS = ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"];
 
+// storedName에서 제약사 목록 파싱
+// 형식: {year}년{month}월_{clientName}[_{company1+company2}]_{index}.{ext}
+function parseCompanies(storedName: string, year: number, month: number, clientName: string): string[] {
+  const prefix = `${year}년${month}월_${clientName}`;
+  if (!storedName.startsWith(prefix)) return [];
+  const after = storedName.slice(prefix.length); // e.g. "_CMG제약+CTC바이오_1.jpg" or "_1.jpg"
+  if (!after.startsWith("_")) return [];
+  const inner = after.slice(1); // "CMG제약+CTC바이오_1.jpg" or "1.jpg"
+  const lastU = inner.lastIndexOf("_");
+  if (lastU === -1) return []; // just "1.jpg" → 제약사 없음
+  return inner.slice(0, lastU).split("+").filter(Boolean);
+}
+
 // 업로드 전 회전 적용 (캔버스에서 실제 픽셀 회전)
 function applyRotation(file: File, degrees: number): Promise<File> {
   if (!degrees) return Promise.resolve(file);
@@ -521,10 +534,13 @@ export default function StatUploadPage() {
                       onClick={() => setOpenBatch(openBatch === b.batchKey ? null : b.batchKey)}
                       className="w-full flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors text-left"
                     >
-                      <div className="flex items-center gap-3">
-                        <div className="text-xs font-semibold text-gray-400 tabular-nums w-14">{b.year}년{b.month}월</div>
-                        <div className="text-sm font-medium text-gray-700">{b.clientName}</div>
-                        <span className="text-[10px] bg-gray-100 text-gray-500 rounded-full px-2 py-0.5">{b.fileCount}장</span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <div className="text-xs font-semibold text-gray-400 tabular-nums w-14 shrink-0">{b.year}년{b.month}월</div>
+                        <div className="text-sm font-medium text-gray-700 shrink-0">{b.clientName}</div>
+                        <span className="text-[10px] bg-gray-100 text-gray-500 rounded-full px-2 py-0.5 shrink-0">{b.fileCount}장</span>
+                        {[...new Set(b.files.flatMap((f) => parseCompanies(f.storedName, b.year, b.month, b.clientName)))].map((c) => (
+                          <span key={c} className="text-[10px] bg-orange-50 text-orange-600 border border-orange-200 rounded-full px-2 py-0.5 shrink-0">{c}</span>
+                        ))}
                       </div>
                       <div className="flex items-center gap-2 text-xs text-gray-400">
                         {new Date(b.createdAt).toLocaleDateString("ko-KR")}
@@ -547,6 +563,14 @@ export default function StatUploadPage() {
                               ) : (
                                 <div className="w-full h-full bg-gray-100 flex items-center justify-center">
                                   <ImageIcon className="w-5 h-5 text-gray-300" />
+                                </div>
+                              )}
+                              {/* 제약사 태그 오버레이 */}
+                              {parseCompanies(f.storedName, b.year, b.month, b.clientName).length > 0 && (
+                                <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5 flex flex-wrap gap-0.5 justify-center">
+                                  {parseCompanies(f.storedName, b.year, b.month, b.clientName).map((c) => (
+                                    <span key={c} className="text-[8px] leading-tight text-white bg-orange-500/80 rounded px-1">{c}</span>
+                                  ))}
                                 </div>
                               )}
                               <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
