@@ -196,31 +196,54 @@ async function pollAndRun(): Promise<void> {
   }
 }
 
-/** STOP 트리거 우선 처리 (lock 무관) — 시트의 「작업 중단」 ☑ 면 도는 tsx 프로세스 강제 종료 */
+/** STOP 트리거 우선 처리 (lock 무관) — 도는 tsx 프로세스 강제 종료 + 다른 ☑/RUNNING 행 모두 정리 */
 async function checkAndHandleStop(): Promise<boolean> {
   try {
-    const rows = await readRange(SHEET_CREDS!, `${TAB}!A2:E100`);
+    const rows = await readRange(SHEET_CREDS!, `${TAB}!A2:F100`);
+    let stopRowNum = 0;
     for (let i = 0; i < rows.length; i++) {
       const name = String(rows[i][0] ?? "").trim();
       const trigger = String(rows[i][1] ?? "").trim();
       if (name !== STOP_TASK_NAME) continue;
       if (trigger === "FALSE" || !trigger) return false;
       if (trigger !== "TRUE" && !TRIGGER_VALUES.has(trigger.toLowerCase())) return false;
-      const rowNum = i + 2;
-      console.log(`[scheduler] 🛑 STOP 트리거 — tsx 프로세스 강제 종료 시도`);
-      try {
-        execSync(`pkill -f "tsx (run|catalog|market|volume)\\.ts" || true`, { stdio: "inherit" });
-      } catch (e) {
-        console.error(`[scheduler] pkill 실패 (무시): ${e instanceof Error ? e.message : e}`);
-      }
-      // stale lock 도 제거 (강제 종료된 프로세스가 lock 남길 수 있음)
-      if (existsSync(LOCK_FILE)) unlinkSync(LOCK_FILE);
-      // 시트에 결과 표시 + 체크박스 해제 (D 클릭 시점 보존)
-      await writeRange(SHEET_CREDS!, `${TAB}!B${rowNum}:C${rowNum}`, [[false, "OK"]]);
-      await writeRange(SHEET_CREDS!, `${TAB}!E${rowNum}:F${rowNum}`, [[nowKst(), `🛑 강제 종료 완료 ${nowKst()}`]]);
-      return true;
+      stopRowNum = i + 2;
+      break;
     }
-    return false;
+    if (!stopRowNum) return false;
+
+    console.log(`[scheduler] 🛑 STOP 트리거 — tsx 프로세스 강제 종료 시도`);
+    try {
+      execSync(`pkill -f "tsx (run|catalog|market|volume)\\.ts" || true`, { stdio: "inherit" });
+    } catch (e) {
+      console.error(`[scheduler] pkill 실패 (무시): ${e instanceof Error ? e.message : e}`);
+    }
+    if (existsSync(LOCK_FILE)) unlinkSync(LOCK_FILE);
+
+    // 다른 행 정리 — 트리거 ☑/텍스트 있거나 RUNNING 상태인 행 모두 ERROR 로 마킹 + 체크박스 해제
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}/;
+    for (let i = 0; i < rows.length; i++) {
+      const name = String(rows[i][0] ?? "").trim();
+      if (!name || name === STOP_TASK_NAME) continue;
+      const trigger = String(rows[i][1] ?? "").trim();
+      const status = String(rows[i][2] ?? "").trim();
+      const rowNum = i + 2;
+      const isCheckbox = trigger === "TRUE";
+      const isTriggered =
+        trigger === "TRUE" ||
+        TRIGGER_VALUES.has(trigger.toLowerCase()) ||
+        DATE_RE.test(trigger);
+      if (isTriggered || status === RUNNING) {
+        const clearVal: string | boolean = isCheckbox ? false : "";
+        await writeRange(SHEET_CREDS!, `${TAB}!B${rowNum}:C${rowNum}`, [[clearVal, "ERROR"]]);
+        await writeRange(SHEET_CREDS!, `${TAB}!E${rowNum}:F${rowNum}`, [[nowKst(), `🛑 STOP 으로 중단됨 ${nowKst()}`]]);
+      }
+    }
+
+    // STOP 행 자체 정리
+    await writeRange(SHEET_CREDS!, `${TAB}!B${stopRowNum}:C${stopRowNum}`, [[false, "OK"]]);
+    await writeRange(SHEET_CREDS!, `${TAB}!E${stopRowNum}:F${stopRowNum}`, [[nowKst(), `🛑 강제 종료 완료 ${nowKst()}`]]);
+    return true;
   } catch (err) {
     console.error(`[scheduler] STOP 체크 실패 (무시): ${err instanceof Error ? err.message : err}`);
     return false;
