@@ -72,7 +72,7 @@ export default function ClientsPage() {
   const [registering, setRegistering] = useState(false);
   const [regError, setRegError] = useState("");
   const [bizError, setBizError] = useState("");
-  const [dupChecked, setDupChecked] = useState<"none" | "checking" | "ok" | "dup">("none");
+  const [dupChecked, setDupChecked] = useState<"none" | "checking" | "ok" | "dup" | "corp">("none");
 
   /* ── 제약사 필터링 state ── */
   const proposalMenuRef = useRef<HTMLDivElement>(null);
@@ -190,10 +190,11 @@ export default function ClientsPage() {
       if (!validateBizNumber(formatted)) { setBizError("유효하지 않은 사업자등록번호예요."); return; }
       setDupChecked("checking");
       try {
-        const res = await fetch(`/api/user-clients?bizNumber=${digits}`);
+        const res = await fetch(`/api/user-clients?lookup=${digits}`);
         if (!res.ok) { setDupChecked("none"); setBizError("중복 확인 중 오류가 발생했어요."); return; }
         const data = await res.json();
-        if (data.found) { setDupChecked("dup"); return; }
+        if (data.corporateClient) { setDupChecked("corp"); return; }
+        if (data.myDuplicate) { setDupChecked("dup"); return; }
         setDupChecked("ok");
       } catch {
         setDupChecked("none");
@@ -286,13 +287,18 @@ export default function ClientsPage() {
                     <label className="text-xs font-medium text-gray-600">사업자등록번호 <span className="text-red-500">*</span></label>
                     <div className="relative">
                       <Input value={biz} onChange={(e) => handleBizChange(e.target.value)} placeholder="000-00-00000" maxLength={12}
-                        className={bizError || dupChecked === "dup" ? "border-red-400 pr-9" : dupChecked === "ok" ? "border-green-400 pr-9" : "pr-9"} />
+                        className={bizError || dupChecked === "dup" || dupChecked === "corp" ? "border-red-400 pr-9" : dupChecked === "ok" ? "border-green-400 pr-9" : "pr-9"} />
                       {dupChecked === "checking" && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-gray-400" />}
                       {dupChecked === "ok" && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-green-500" />}
-                      {dupChecked === "dup" && <XCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-red-500" />}
+                      {(dupChecked === "dup" || dupChecked === "corp") && <XCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-red-500" />}
                     </div>
                     {bizError && <p className="text-xs text-red-500">{bizError}</p>}
                     {dupChecked === "dup" && !bizError && <p className="text-xs text-red-500">이미 등록된 사업자번호예요.</p>}
+                    {dupChecked === "corp" && !bizError && (
+                      <div className="flex items-center gap-1.5 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+                        사업자(법인)으로 등록된 사업자번호예요. 거래처관리(사업자)에서 확인하세요.
+                      </div>
+                    )}
                     {dupChecked === "ok" && <p className="text-xs text-green-600">사용 가능한 사업자번호예요. ✓</p>}
                   </div>
                 </div>
@@ -310,7 +316,7 @@ export default function ClientsPage() {
                   </label>
                 </div>
                 {regError && <p className="text-sm text-red-600 bg-red-50 p-3 rounded-lg">{regError}</p>}
-                <Button type="submit" disabled={registering || dupChecked === "dup" || !!bizError || dupChecked !== "ok"} className="w-full">
+                <Button type="submit" disabled={registering || dupChecked === "dup" || dupChecked === "corp" || !!bizError || dupChecked !== "ok"} className="w-full">
                   {registering ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />등록 중...</> : <><Plus className="w-4 h-4 mr-2" />거래처 등록</>}
                 </Button>
               </form>

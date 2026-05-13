@@ -43,9 +43,21 @@ export async function GET(req: NextRequest) {
           orderBy: { createdAt: "desc" },
         }),
       ]);
-      const isMedical = myRecord?.dealerType === null || anyRecord?.dealerType === null;
+      const isMedical = (myRecord !== null && myRecord.dealerType === null) ||
+                        (anyRecord !== null && anyRecord.dealerType === null);
       if (isMedical) {
         return NextResponse.json({ medicalClient: true, myDuplicate: !!myRecord });
+      }
+      const isCorporate = (myRecord !== null && myRecord.dealerType !== null) ||
+                          (anyRecord !== null && anyRecord.dealerType !== null);
+      if (isCorporate) {
+        return NextResponse.json({
+          corporateClient: true,
+          myDuplicate: !!myRecord,
+          existing: !myRecord && anyRecord
+            ? { clientName: anyRecord.clientName, address: anyRecord.address ?? null }
+            : null,
+        });
       }
       return NextResponse.json({
         myDuplicate: !!myRecord,
