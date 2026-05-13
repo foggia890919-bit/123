@@ -4,6 +4,8 @@ import { requireSession, isNextResponse } from "@/lib/auth-guard";
 import { uploadFileToDrive, driveEnabled } from "@/lib/google-drive";
 import { randomUUID } from "crypto";
 
+export const maxDuration = 60; // Vercel 최대 60초
+
 const MAX_FILES = 30;
 const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20MB per file
 
@@ -81,18 +83,31 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Google Drive 미설정 (GOOGLE_DRIVE_CLIENT_EMAIL, GOOGLE_DRIVE_PRIVATE_KEY, GOOGLE_DRIVE_FOLDER_ID 환경변수 필요)" }, { status: 503 });
   }
 
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
+  // 크기 검사 먼저
+  for (const file of files) {
     if (file.size > MAX_FILE_BYTES) {
       return NextResponse.json({ error: `파일 크기 초과: ${file.name} (최대 20MB)` }, { status: 400 });
     }
-    const ext = file.name.split(".").pop() ?? "jpg";
-    const storedName = `${prefix}_${i + 1}.${ext}`;
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const { fileId, viewUrl } = await uploadFileToDrive(buffer, storedName, file.type || "image/jpeg");
+  }
 
-    await prisma.statImage.create({
-      data: {
+  // 파일을 5개씩 병렬 업로드
+  const BATCH = 5;
+  for (let start = 0; start < files.length; start += BATCH) {
+    const chunk = files.slice(start, start + BATCH);
+    const results = await Promise.all(
+      chunk.map(async (file, j) => {
+        const i = start + j;
+        const ext = file.name.split(".").pop() ?? "jpg";
+        const storedName = `${prefix}_${i + 1}.${ext}`;
+        const buffer = Buffer.from(await file.arrayBuffer());
+        const { fileId, viewUrl } = await uploadFileToDrive(buffer, storedName, file.type || "image/jpeg");
+        return { file, storedName, fileId, viewUrl };
+      })
+    );
+
+    // DB는 배치 단위로 한 번에
+    await prisma.statImage.createMany({
+      data: results.map(({ file, storedName, fileId, viewUrl }) => ({
         userId: session.id,
         clientId,
         year,
@@ -103,9 +118,10 @@ export async function POST(req: NextRequest) {
         storedName,
         mimeType: file.type || "image/jpeg",
         batchKey,
-      },
+      })),
     });
-    created.push({ storedName, driveFileId: fileId, driveViewUrl: viewUrl });
+
+    created.push(...results.map(({ storedName, fileId, viewUrl }) => ({ storedName, driveFileId: fileId, driveViewUrl: viewUrl })));
   }
 
   return NextResponse.json({ ok: true, batchKey, count: created.length, files: created });
