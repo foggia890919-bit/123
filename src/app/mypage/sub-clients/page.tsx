@@ -91,7 +91,7 @@ export default function SubClientsPage() {
 
   useEffect(() => {
     if (!session?.user?.id) return;
-    fetch("/api/user-clients")
+    fetch("/api/dealer")
       .then((r) => r.json())
       .then((data) => setClients(Array.isArray(data) ? data : []))
       .finally(() => setListLoading(false));
@@ -168,7 +168,7 @@ export default function SubClientsPage() {
       setBulkResult(data);
       setBulkFile(null);
       // 목록 새로고침
-      fetch("/api/user-clients").then((r) => r.json()).then((d) => setClients(Array.isArray(d) ? d : []));
+      fetch("/api/dealer").then((r) => r.json()).then((d) => setClients(Array.isArray(d) ? d : []));
     }
     setBulkUploading(false);
   }

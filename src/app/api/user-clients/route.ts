@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
   const all = req.nextUrl.searchParams.get("all") === "true";
 
   if (all) {
-    if (user.role !== "ADMIN") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+    if (user.role !== "ADMIN" && user.role !== "BIZ") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
     // Exclude heavy bizDocument (base64) from list; download via /api/files/user-client-biz/[id]
     let rows;
     try {
@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
           id: true, userId: true, clientName: true, bizNumber: true,
           bizFileName: true, bizFileKey: true, approved: true, createdAt: true,
           dealerType: true,
-          user: { select: { name: true, email: true } },
+          user: { select: { name: true, email: true, phone: true } },
         },
       });
     } catch {

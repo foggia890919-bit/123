@@ -7,6 +7,7 @@ const VALID_TYPES = ["CORPORATION", "INDIVIDUAL", "UPPER_CORP", "LOWER_CORP", "S
 
 const FULL_SELECT = {
   id: true, clientName: true, bizNumber: true, dealerType: true, approved: true,
+  address: true,
   managerName: true, managerPhone: true, managerEmail: true, memo: true, code: true,
   isSettlementTarget: true, isRateTarget: true,
 } as const;

@@ -63,7 +63,6 @@ export default function ClientsPage() {
   /* ── 거래처 등록 state ── */
   const [clients, setClients] = useState<UserClient[]>([]);
   const [listLoading, setListLoading] = useState(true);
-  const [clientFilter, setClientFilter] = useState<"all" | "medical" | "business">("all");
   const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
   const [editingAddressVal, setEditingAddressVal] = useState("");
   const [name, setName] = useState("");
@@ -219,7 +218,6 @@ export default function ClientsPage() {
     setFilterLoading(false);
   }
 
-  const filteredList = clients.filter((c) => clientFilter === "all" ? true : clientFilter === "business" ? !!c.dealerType : !c.dealerType);
 
   return (
     <RequireRole minRole="BASIC">
@@ -232,9 +230,9 @@ export default function ClientsPage() {
         </div>
 
         {/* 등록 + 필터링 박스 */}
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="bg-white rounded-xl border border-gray-200">
           {/* 탭 */}
-          <div className="flex border-b border-gray-100">
+          <div className="flex border-b border-gray-100 rounded-t-xl overflow-hidden">
             {([["register", Building2, "거래처 등록"], ["filter", Filter, "제약사 필터링"]] as const).map(([t, Icon, label]) => (
               <button key={t} onClick={() => setBoxTab(t)}
                 className={`flex-1 flex items-center justify-center gap-1.5 py-3 text-sm font-medium transition-colors ${boxTab === t ? "text-orange-600 border-b-2 border-orange-500 bg-orange-50/30" : "text-gray-500 hover:text-gray-700"}`}>
@@ -477,24 +475,16 @@ export default function ClientsPage() {
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
             <h2 className="font-semibold text-gray-800">등록된 거래처<span className="ml-2 text-sm font-normal text-gray-400">({clients.length}개)</span></h2>
-            <div className="flex gap-1">
-              {(["all", "medical", "business"] as const).map((f) => (
-                <button key={f} onClick={() => setClientFilter(f)}
-                  className={`text-xs px-2.5 py-1 rounded-full transition-colors ${clientFilter === f ? "bg-orange-500 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}>
-                  {f === "all" ? "전체" : f === "medical" ? "의료기관" : "사업자"}
-                </button>
-              ))}
-            </div>
           </div>
           {listLoading ? (
             <div className="flex justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>
-          ) : filteredList.length === 0 ? (
+          ) : clients.length === 0 ? (
             <div className="text-center py-12"><Building2 className="w-8 h-8 text-gray-200 mx-auto mb-2" /><p className="text-sm text-gray-400">아직 등록된 거래처가 없어요</p></div>
           ) : (
             <div className="divide-y divide-gray-100">
-              {filteredList.map((c) => (
+              {clients.map((c) => (
                 <div key={c.id} className="flex items-center gap-3 px-5 py-3.5 hover:bg-gray-50">
-                  {c.dealerType ? <Briefcase className="w-4 h-4 text-gray-300 shrink-0" /> : <Stethoscope className="w-4 h-4 text-gray-300 shrink-0" />}
+                  <Stethoscope className="w-4 h-4 text-gray-300 shrink-0" />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-800 truncate">{c.clientName}</p>
                     <p className="text-xs text-gray-400 font-mono mt-0.5">{c.bizNumber}</p>
@@ -519,9 +509,6 @@ export default function ClientsPage() {
                     )}
                     {c.companies && c.companies.length === 0 && <p className="text-[10px] text-gray-300 mt-1">거래 제약사 없음</p>}
                   </div>
-                  <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 border ${c.dealerType ? "text-purple-600 bg-purple-50 border-purple-100" : "text-blue-600 bg-blue-50 border-blue-100"}`}>
-                    {c.dealerType ? "사업자" : "의료기관"}
-                  </span>
                   {c.bizFileName && <span className="text-xs text-gray-500 bg-gray-50 border border-gray-100 px-1.5 py-0.5 rounded shrink-0">서류첨부</span>}
                   <span className="text-xs text-gray-400 shrink-0">{new Date(c.createdAt).toLocaleDateString("ko-KR")}</span>
                   <button onClick={() => handleDelete(c.id, c.clientName)} className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors"><Trash2 className="w-4 h-4" /></button>

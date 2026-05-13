@@ -3240,7 +3240,7 @@ interface AdminUserClient {
   createdAt: string;
   userId: string;
   dealerType?: string | null;
-  user: { name: string | null; email: string };
+  user: { name: string | null; email: string; phone?: string | null };
 }
 
 type BizSubTab = "all" | "hospital" | "upper-corp" | "lower-corp";
@@ -3360,7 +3360,10 @@ function BizManagementTab() {
                       {dealerLabel(c.dealerType)}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-gray-700">{c.user.name || "-"}</td>
+                  <td className="px-4 py-3 text-gray-700">
+                    <p>{c.user.name || "-"}</p>
+                    {c.user.phone && <p className="text-xs text-gray-400 mt-0.5">{c.user.phone}</p>}
+                  </td>
                   <td className="px-4 py-3 text-gray-500 text-xs">{c.user.email}</td>
                   <td className="px-4 py-3 text-center">
                     {c.approved
