@@ -333,8 +333,8 @@ async function fetchKeywordMarketSize(keyword: string): Promise<MarketSize | nul
   };
 }
 
-async function dumpMarketSize(creds: SheetCreds, limit = 100): Promise<void> {
-  // 결과 시트 항상 먼저 만들기 (데이터 없어도 헤더 보이게)
+async function dumpMarketSize(creds: SheetCreds, limit = 200): Promise<void> {
+  // 결과 시트 + 입력 시트 모두 먼저 만들기
   await ensureTab(creds, "시장조사_시장규모", [
     "수집일",
     "키워드",
@@ -345,15 +345,21 @@ async function dumpMarketSize(creds: SheetCreds, limit = 100): Promise<void> {
     "Top40 판매량(6개월)",
     "Top40 평균가",
   ]);
+  await ensureTab(creds, "시장조사_시장규모_추적", [
+    "키워드 (여기에 시장규모 볼 키워드 입력)",
+    "비고",
+  ]);
 
-  // 추적 키워드 가져오기 (시장조사_키워드 탭에서 키워드 칼럼만)
-  const rows = await readRange(creds, "시장조사_키워드!C2:C100000");
-  const allKeywords = Array.from(new Set(rows.map((r) => r[0]).filter(Boolean)));
-  const keywords = allKeywords.slice(0, limit);
+  // 입력 시트에서 사장님이 입력한 키워드 읽기
+  const inputRows = await readRange(creds, "시장조사_시장규모_추적!A2:A10000");
+  const keywords = inputRows
+    .map((r) => String(r[0] ?? "").trim())
+    .filter(Boolean)
+    .slice(0, limit);
 
   if (keywords.length === 0) {
-    console.log("⚠️ 「시장조사_키워드」 가 비어있음. 먼저 「시장 키워드 (Top500)」 실행.");
-    throw new Error("「시장조사_키워드」 비어있음 — 먼저 「시장 키워드 (Top500)」 작업 실행");
+    console.log("⚠️ 「시장조사_시장규모_추적」 시트의 A열에 키워드를 입력하세요.");
+    throw new Error("「시장조사_시장규모_추적」 비어있음 — A열에 키워드 입력 후 다시 실행");
   }
 
   console.log(`\n시장규모 수집 — ${keywords.length}개 키워드 (5초 간격, 차단 회피)`);
