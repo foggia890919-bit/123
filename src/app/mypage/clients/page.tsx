@@ -51,6 +51,7 @@ export default function ClientsPage() {
   const { data: session } = useSession();
   const [clients, setClients] = useState<UserClient[]>([]);
   const [listLoading, setListLoading] = useState(true);
+  const [clientFilter, setClientFilter] = useState<"all" | "medical" | "business">("all");
   const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
   const [editingAddressVal, setEditingAddressVal] = useState("");
 
@@ -350,6 +351,21 @@ export default function ClientsPage() {
             <h2 className="font-semibold text-gray-800">등록된 거래처
               <span className="ml-2 text-sm font-normal text-gray-400">({clients.length}개)</span>
             </h2>
+            <div className="flex gap-1">
+              {(["all", "medical", "business"] as const).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setClientFilter(f)}
+                  className={`text-xs px-2.5 py-1 rounded-full transition-colors ${
+                    clientFilter === f
+                      ? "bg-orange-500 text-white"
+                      : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                  }`}
+                >
+                  {f === "all" ? "전체" : f === "medical" ? "의료기관" : "사업자"}
+                </button>
+              ))}
+            </div>
           </div>
 
           {listLoading ? (
@@ -363,7 +379,11 @@ export default function ClientsPage() {
             </div>
           ) : (
             <div className="divide-y divide-gray-100">
-              {clients.map((c) => (
+              {clients.filter((c) =>
+                clientFilter === "all" ? true :
+                clientFilter === "business" ? !!c.dealerType :
+                !c.dealerType
+              ).map((c) => (
                 <div key={c.id} className="flex items-center gap-3 px-5 py-3.5 hover:bg-gray-50">
                   {c.dealerType ? (
                     <Briefcase className="w-4 h-4 text-gray-300 shrink-0" />
