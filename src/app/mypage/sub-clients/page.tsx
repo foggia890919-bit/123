@@ -103,7 +103,6 @@ export default function SubClientsPage() {
     setBizError("");
     setDupChecked("none");
     setNtsResult(null);
-    setDealerType(null);
     const digits = formatted.replace(/\D/g, "");
     if (digits.length === 10) {
       if (!validateBizNumber(formatted)) { setBizError("유효하지 않은 사업자등록번호예요."); return; }
@@ -266,19 +265,17 @@ export default function SubClientsPage() {
                   </div>
                 )}
 
-                {dupChecked === "ok" && !bizError && (
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-gray-600">법인 구분 <span className="text-red-500">*</span></label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button type="button" onClick={() => setDealerType("upper")} className={`flex items-center gap-2 p-3 rounded-lg border-2 text-left transition-colors ${dealerType === "upper" ? "border-purple-500 bg-purple-50 text-purple-700" : "border-gray-200 hover:border-gray-300 text-gray-600"}`}>
-                        <Building2 className="w-4 h-4 shrink-0" /><div><p className="text-sm font-medium">상위법인</p><p className="text-xs opacity-70">본사·모법인</p></div>
-                      </button>
-                      <button type="button" onClick={() => setDealerType("lower")} className={`flex items-center gap-2 p-3 rounded-lg border-2 text-left transition-colors ${dealerType === "lower" ? "border-purple-500 bg-purple-50 text-purple-700" : "border-gray-200 hover:border-gray-300 text-gray-600"}`}>
-                        <Users className="w-4 h-4 shrink-0" /><div><p className="text-sm font-medium">하위법인</p><p className="text-xs opacity-70">지사·하위딜러</p></div>
-                      </button>
-                    </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-gray-600">법인 구분 <span className="text-red-500">*</span></label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button type="button" onClick={() => setDealerType("upper")} className={`flex items-center gap-2 p-3 rounded-lg border-2 text-left transition-colors ${dealerType === "upper" ? "border-purple-500 bg-purple-50 text-purple-700" : "border-gray-200 hover:border-gray-300 text-gray-600"}`}>
+                      <Building2 className="w-4 h-4 shrink-0" /><div><p className="text-sm font-medium">상위법인</p><p className="text-xs opacity-70">본사·모법인</p></div>
+                    </button>
+                    <button type="button" onClick={() => setDealerType("lower")} className={`flex items-center gap-2 p-3 rounded-lg border-2 text-left transition-colors ${dealerType === "lower" ? "border-purple-500 bg-purple-50 text-purple-700" : "border-gray-200 hover:border-gray-300 text-gray-600"}`}>
+                      <Users className="w-4 h-4 shrink-0" /><div><p className="text-sm font-medium">하위법인</p><p className="text-xs opacity-70">지사·하위딜러</p></div>
+                    </button>
                   </div>
-                )}
+                </div>
 
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-600">사업자등록증 <span className="text-gray-400 font-normal">(선택)</span></label>
@@ -294,7 +291,7 @@ export default function SubClientsPage() {
                 <Button type="submit" disabled={registering || dupChecked === "dup" || !!bizError || !dealerType} className="w-full">
                   {registering ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />등록 중...</> : <><Plus className="w-4 h-4 mr-2" />거래처 등록</>}
                 </Button>
-                {dupChecked === "ok" && !dealerType && <p className="text-xs text-center text-gray-400">법인 구분을 선택해야 등록할 수 있어요.</p>}
+                {!dealerType && <p className="text-xs text-center text-gray-400">법인 구분을 선택해야 등록할 수 있어요.</p>}
               </form>
             ) : (
               <div className="space-y-4">
