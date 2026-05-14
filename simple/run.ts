@@ -478,9 +478,11 @@ interface Row {
   orderId: string;
   productOrderId: string;
   channelProductNo: string;
+  optionManageCode: string;
   productName: string;
   optionName: string;
   keyword: string;
+  type: "메인" | "추가" | ""; // ⭐옵션매핑 G열 태그
   quantity: number;
   bottles: number;
   salesAmount: number;
@@ -657,9 +659,11 @@ async function processDay(
           orderId: o.order?.orderId ?? po.orderId ?? "",
           productOrderId: po.productOrderId,
           channelProductNo,
+          optionManageCode,
           productName: po.productName,
           optionName: po.productOption ?? "",
           keyword,
+          type: productRule?.type ?? "",
           quantity: po.quantity,
           bottles: totalUnits,
           salesAmount: po.totalPaymentAmount,
@@ -777,7 +781,7 @@ async function processDay(
     }
   }
 
-  // 텔레그램
+  // 텔레그램 — 전체 요약 + 사업자별 상세 (말풍선 분리)
   const liveSales = live.reduce((s, r) => s + r.salesAmount, 0);
   const canceledSales = canceled.reduce((s, r) => s + r.salesAmount, 0);
   const grossSales = liveSales + canceledSales;
@@ -785,19 +789,6 @@ async function processDay(
   const totalCost = live.reduce((s, r) => s + r.cost, 0);
   const totalLogistics = live.reduce((s, r) => s + r.logistics, 0);
   const totalProfit = live.reduce((s, r) => s + r.profit, 0);
-
-  const lines: string[] = [];
-  lines.push(`<b>📊 ${range.dateStr} 매출 보고</b>`);
-  lines.push("");
-  lines.push(`💰 총매출 ${won(grossSales)} (${allRows.length}건)`);
-  if (canceled.length > 0) {
-    lines.push(`❌ 취소매출 -${won(canceledSales)} (${canceled.length}건)`);
-  }
-  lines.push(`✅ <b>최종매출 ${won(liveSales)}</b> (${live.length}건)`);
-  lines.push(`💵 정산예정 ${won(liveSettlement)} (수수료 차감 후)`);
-  lines.push(`📦 원가 ${won(totalCost)} · 🚚 물류비 ${won(totalLogistics)}`);
-  lines.push(`💎 <b>이익 ${won(totalProfit)}</b>`);
-  lines.push("");
 
   // 스토어별 그룹화
   const byStore = new Map<string, { live: Row[]; canceled: Row[] }>();
@@ -808,10 +799,139 @@ async function processDay(
     byStore.set(r.store, cur);
   }
 
+  // 옵션 단위 sub-agg
+  interface OptionAgg {
+    optionName: string;
+    optionManageCode: string;
+    bottles: number;
+    sales: number;
+    cost: number;
+    profit: number;
+    orderIds: Set<string>;
+  }
+  interface ProductAgg {
+    productKey: string;
+    label: string;
+    productName: string;
+    bottles: number;
+    sales: number;
+    cost: number;
+    logistics: number;
+    profit: number;
+    orderIds: Set<string>;
+    options: Map<string, OptionAgg>;
+  }
+  interface MainGroup {
+    main: ProductAgg;
+    additional: Map<string, ProductAgg>;
+  }
+  const makeAgg = (r: Row): ProductAgg => ({
+    productKey: r.channelProductNo || r.productName,
+    label: r.keyword || `(미분류)${r.productName.slice(0, 15)}`,
+    productName: r.productName,
+    bottles: 0, sales: 0, cost: 0, logistics: 0, profit: 0,
+    orderIds: new Set<string>(),
+    options: new Map<string, OptionAgg>(),
+  });
+  const accumulateOption = (agg: ProductAgg, r: Row) => {
+    const optKey = r.optionManageCode || r.optionName || "(no-option)";
+    let o = agg.options.get(optKey);
+    if (!o) {
+      o = {
+        optionName: r.optionName || "(옵션 없음)",
+        optionManageCode: r.optionManageCode,
+        bottles: 0, sales: 0, cost: 0, profit: 0,
+        orderIds: new Set<string>(),
+      };
+      agg.options.set(optKey, o);
+    }
+    o.bottles += r.bottles;
+    o.sales += r.salesAmount;
+    o.cost += r.cost;
+    o.profit += r.profit;
+    o.orderIds.add(r.orderId);
+  };
+  const accumulateAgg = (agg: ProductAgg, r: Row) => {
+    agg.bottles += r.bottles;
+    agg.sales += r.salesAmount;
+    agg.cost += r.cost;
+    agg.logistics += r.logistics;
+    agg.profit += r.profit;
+    agg.orderIds.add(r.orderId);
+    accumulateOption(agg, r);
+  };
+  const groupByMain = (rows: Row[]): Map<string, MainGroup> => {
+    const byOrder = new Map<string, Row[]>();
+    for (const r of rows) {
+      const list = byOrder.get(r.orderId) ?? [];
+      list.push(r);
+      byOrder.set(r.orderId, list);
+    }
+    const out = new Map<string, MainGroup>();
+    for (const list of byOrder.values()) {
+      const taggedMain = list.find((r) => r.type === "메인");
+      let mainRow: Row;
+      let adds: Row[];
+      if (taggedMain) {
+        mainRow = taggedMain;
+        adds = list.filter((r) => r !== taggedMain);
+      } else {
+        const notTaggedAsAdd = list.filter((r) => r.type !== "추가");
+        const pool = notTaggedAsAdd.length > 0 ? notTaggedAsAdd : list;
+        pool.sort((a, b) => b.salesAmount - a.salesAmount);
+        mainRow = pool[0];
+        adds = list.filter((r) => r !== mainRow);
+      }
+      const mainKey = mainRow.channelProductNo || mainRow.productName;
+      let g = out.get(mainKey);
+      if (!g) {
+        g = { main: makeAgg(mainRow), additional: new Map() };
+        out.set(mainKey, g);
+      }
+      accumulateAgg(g.main, mainRow);
+      for (const ar of adds) {
+        const aKey = ar.channelProductNo || ar.productName;
+        const isAddon = ar.type === "추가" || ar.productName !== mainRow.productName;
+        if (aKey === mainKey && !isAddon) {
+          accumulateAgg(g.main, ar);
+          continue;
+        }
+        let aAgg = g.additional.get(aKey);
+        if (!aAgg) {
+          aAgg = makeAgg(ar);
+          g.additional.set(aKey, aAgg);
+        }
+        accumulateAgg(aAgg, ar);
+      }
+    }
+    return out;
+  };
+
+  // ─── 메시지 1: 전체 요약 ───
+  const summaryLines: string[] = [];
+  summaryLines.push(`<b>📊 ${range.dateStr} 매출 요약</b>`);
+  summaryLines.push("");
+  summaryLines.push(`💰 총매출 ${won(grossSales)} (${allRows.length}건)`);
+  if (canceled.length > 0) summaryLines.push(`❌ 취소 -${won(canceledSales)} (${canceled.length}건)`);
+  summaryLines.push(`✅ <b>최종 ${won(liveSales)}</b> (${live.length}건) · 정산 ${won(liveSettlement)}`);
+  summaryLines.push(`📦 원가 ${won(totalCost)} · 🚚 ${won(totalLogistics)} → 💎 <b>이익 ${won(totalProfit)}</b>`);
+  summaryLines.push("");
+  summaryLines.push(`<b>━ 사업자별 ━</b>`);
   for (const store of STORES) {
     const data = byStore.get(store.name);
     if (!data || (data.live.length === 0 && data.canceled.length === 0)) continue;
+    const sLiveSales = data.live.reduce((s, r) => s + r.salesAmount, 0);
+    const sProfit = data.live.reduce((s, r) => s + r.profit, 0);
+    summaryLines.push(`• ${store.name}: ${won(sLiveSales)} (${data.live.length}건) · 이익 ${won(sProfit)}`);
+  }
+  if (errors.length > 0) {
+    summaryLines.push("");
+    summaryLines.push("⚠️ <b>오류:</b>");
+    for (const e of errors) summaryLines.push(`• ${e.slice(0, 250)}`);
+  }
 
+  // ─── 메시지 2~N: 사업자별 상세 (상품 → 옵션 sub-line) ───
+  const buildStoreMessage = (storeName: string, data: { live: Row[]; canceled: Row[] }): string => {
     const sLive = data.live;
     const sCancel = data.canceled;
     const sLiveSales = sLive.reduce((s, r) => s + r.salesAmount, 0);
@@ -824,160 +944,62 @@ async function processDay(
     const sLogistics = sLive.reduce((s, r) => s + r.logistics, 0);
     const sProfit = sLive.reduce((s, r) => s + r.profit, 0);
 
-    const sGrossSales = sLiveSales + sCancelSales;
-    const sTotalCount = sLive.length + sCancel.length;
-
-    lines.push(`<b>━━ ${store.name} ━━</b>`);
-    lines.push(`💰 총매출 ${won(sGrossSales)} (${sTotalCount}건)`);
-    if (sCancel.length > 0) lines.push(`❌ 취소매출 -${won(sCancelSales)} (${sCancel.length}건)`);
-    lines.push(`✅ 최종매출 ${won(sLiveSales)} (${sLive.length}건)`);
-    lines.push(`📦 ${sShipments}건 배송 / 출고 ${sBottles}개`);
-    lines.push(`💳 수수료 ${won(sCommission)} / 💵 정산예정 ${won(sSettlement)}`);
-    lines.push(`📦 원가 ${won(sCost)} · 🚚 물류비 ${won(sLogistics)} → 💎 이익 ${won(sProfit)}`);
-
-    // 상품별 — 결제완료 (orderId 기준 메인 + 추가상품 계층)
-    // 같은 orderId 내에서 가장 매출 큰 productOrder = 메인, 나머지 = 추가상품
-    interface ProductAgg {
-      productKey: string;
-      label: string;
-      productName: string;
-      bottles: number;
-      sales: number;
-      cost: number;
-      logistics: number;
-      profit: number;
-      orderIds: Set<string>;
-    }
-    interface MainGroup {
-      main: ProductAgg;
-      additional: Map<string, ProductAgg>;
-    }
-    const makeAgg = (r: Row): ProductAgg => ({
-      productKey: r.channelProductNo || r.productName,
-      label: r.keyword || `(미분류)${r.productName.slice(0, 15)}`,
-      productName: r.productName,
-      bottles: 0,
-      sales: 0,
-      cost: 0,
-      logistics: 0,
-      profit: 0,
-      orderIds: new Set<string>(),
-    });
-    const groupByMain = (rows: Row[]): Map<string, MainGroup> => {
-      // 1) orderId 별로 묶기
-      const byOrder = new Map<string, Row[]>();
-      for (const r of rows) {
-        const list = byOrder.get(r.orderId) ?? [];
-        list.push(r);
-        byOrder.set(r.orderId, list);
-      }
-      const out = new Map<string, MainGroup>();
-      for (const list of byOrder.values()) {
-        // 메인/추가 결정 — ⭐옵션매핑 의 「메인」/「추가」 태그 우선, 없으면 매출 휴리스틱
-        const taggedMain = list.find((r) => productRules.get(r.channelProductNo)?.type === "메인");
-        let mainRow: Row;
-        let adds: Row[];
-        if (taggedMain) {
-          mainRow = taggedMain;
-          adds = list.filter((r) => r !== taggedMain);
-        } else {
-          // 「추가」 태그된 것 제외하고 가장 매출 큰 게 메인
-          const notTaggedAsAdd = list.filter(
-            (r) => productRules.get(r.channelProductNo)?.type !== "추가",
-          );
-          const pool = notTaggedAsAdd.length > 0 ? notTaggedAsAdd : list;
-          pool.sort((a, b) => b.salesAmount - a.salesAmount);
-          mainRow = pool[0];
-          adds = list.filter((r) => r !== mainRow);
-        }
-        const mainKey = mainRow.channelProductNo || mainRow.productName;
-        let g = out.get(mainKey);
-        if (!g) {
-          g = { main: makeAgg(mainRow), additional: new Map() };
-          out.set(mainKey, g);
-        }
-        g.main.bottles += mainRow.bottles;
-        g.main.sales += mainRow.salesAmount;
-        g.main.cost += mainRow.cost;
-        g.main.logistics += mainRow.logistics;
-        g.main.profit += mainRow.profit;
-        g.main.orderIds.add(mainRow.orderId);
-        for (const ar of adds) {
-          const aKey = ar.channelProductNo || ar.productName;
-          // 같은 채널상품번호 + 같은 상품명 = 다중 옵션 구매 → 메인에 합치기
-          // (예: 압박스타킹 한 주문에 종아리형+허벅지형 → 둘 다 같은 chNo, 같은 productName)
-          // 다른 상품명이면 추가상품 (예: 피쿠알의 추가 레몬즙 — 같은 chNo, 다른 productName) → 분리
-          if (aKey === mainKey && ar.productName === mainRow.productName) {
-            g.main.bottles += ar.bottles;
-            g.main.sales += ar.salesAmount;
-            g.main.cost += ar.cost;
-            g.main.logistics += ar.logistics;
-            g.main.profit += ar.profit;
-            g.main.orderIds.add(ar.orderId);
-            continue;
-          }
-          let aAgg = g.additional.get(aKey);
-          if (!aAgg) {
-            aAgg = makeAgg(ar);
-            g.additional.set(aKey, aAgg);
-          }
-          aAgg.bottles += ar.bottles;
-          aAgg.sales += ar.salesAmount;
-          aAgg.cost += ar.cost;
-          aAgg.logistics += ar.logistics;
-          aAgg.profit += ar.profit;
-          aAgg.orderIds.add(ar.orderId);
-        }
-      }
-      return out;
-    };
+    const l: string[] = [];
+    l.push(`<b>━━ ${storeName} (${range.dateStr}) ━━</b>`);
+    l.push(`💰 매출 ${won(sLiveSales)} (${sLive.length}건) · 출고 ${sBottles}개 · 배송 ${sShipments}건`);
+    if (sCancel.length > 0) l.push(`❌ 취소 -${won(sCancelSales)} (${sCancel.length}건)`);
+    l.push(`💳 수수료 ${won(sCommission)} / 💵 정산 ${won(sSettlement)}`);
+    l.push(`📦 원가 ${won(sCost)} · 🚚 ${won(sLogistics)} → 💎 <b>이익 ${won(sProfit)}</b>`);
+    l.push("");
 
     const sMains = groupByMain(sLive);
-    const sortedMains = Array.from(sMains.values()).sort((a, b) => b.main.sales - a.main.sales);
-    for (const g of sortedMains) {
-      lines.push(`• <b>${g.main.label}</b> <code>${g.main.productKey}</code>`);
-      lines.push(`   ${g.main.bottles}개 · ${g.main.orderIds.size}건 · 매출 ${won(g.main.sales)}`);
-      lines.push(`   📦 원가 ${won(g.main.cost)} · 🚚 ${won(g.main.logistics)} → 💎 이익 ${won(g.main.profit)}`);
+    const sorted = Array.from(sMains.values()).sort((a, b) => b.main.sales - a.main.sales);
+    for (const g of sorted) {
+      l.push(`<b>• ${g.main.label}</b> <code>${g.main.productKey}</code>`);
+      l.push(`   ${g.main.bottles}개·${g.main.orderIds.size}건 · ${won(g.main.sales)} · 원가 ${won(g.main.cost)} · <b>이익 ${won(g.main.profit)}</b>`);
+      // 옵션이 2개 이상이면 옵션별 sub-line (옵션 1개면 본 라인과 중복이라 생략)
+      if (g.main.options.size >= 2) {
+        const opts = Array.from(g.main.options.values()).sort((a, b) => b.sales - a.sales);
+        for (const o of opts) {
+          l.push(`   ↳ ${o.optionName}: ${o.bottles}개·${o.orderIds.size}건 · ${won(o.sales)} · 이익 ${won(o.profit)}`);
+        }
+      }
+      // 추가상품
       if (g.additional.size > 0) {
         const adds = Array.from(g.additional.values()).sort((a, b) => b.sales - a.sales);
         for (const a of adds) {
-          lines.push(`   ↳ 추가: <b>${a.label}</b> <code>${a.productKey}</code>`);
-          lines.push(`      ${a.bottles}개 · ${a.orderIds.size}건 · 매출 ${won(a.sales)} · 원가 ${won(a.cost)} · 이익 ${won(a.profit)}`);
+          l.push(`   ↳ 추가: <b>${a.label}</b> ${a.bottles}개·${a.orderIds.size}건 · ${won(a.sales)} · 원가 ${won(a.cost)} · 이익 ${won(a.profit)}`);
         }
       }
     }
 
-    // 상품별 — 취소 (같은 메인+추가 계층)
     if (sCancel.length > 0) {
+      l.push("");
+      l.push(`<b>❌ 취소</b>`);
       const sMainsC = groupByMain(sCancel);
       const sortedC = Array.from(sMainsC.values()).sort((a, b) => b.main.sales - a.main.sales);
       for (const g of sortedC) {
-        lines.push(`• <s><b>${g.main.label}</b> <code>${g.main.productKey}</code></s>`);
-        lines.push(`   ${g.main.bottles}개 · ${g.main.orderIds.size}건 · -${won(g.main.sales)}`);
-        if (g.additional.size > 0) {
-          const adds = Array.from(g.additional.values()).sort((a, b) => b.sales - a.sales);
-          for (const a of adds) {
-            lines.push(`   ↳ 추가: <s>${a.label}</s>  ${a.bottles}개 · ${a.orderIds.size}건 · -${won(a.sales)}`);
-          }
-        }
+        l.push(`• <s>${g.main.label} ${g.main.bottles}개·${g.main.orderIds.size}건 · -${won(g.main.sales)}</s>`);
       }
     }
-
-    lines.push("");
-  }
-
-  if (allRows.length === 0) {
-    lines.push("매출 없음.");
-  }
-
-  if (errors.length > 0) {
-    lines.push("⚠️ <b>오류:</b>");
-    for (const e of errors) lines.push(`• ${e.slice(0, 250)}`);
-  }
+    return l.join("\n");
+  };
 
   if (options.sendTelegram) {
-    console.log("\n=== 미리보기 ===\n" + lines.join("\n").replace(/<[^>]+>/g, ""));
-    await sendTelegram(lines.join("\n"));
+    console.log("\n=== 미리보기 (요약) ===\n" + summaryLines.join("\n").replace(/<[^>]+>/g, ""));
+    if (allRows.length === 0) {
+      summaryLines.push("");
+      summaryLines.push("매출 없음.");
+    }
+    await sendTelegram(summaryLines.join("\n"));
+    // 사업자별 분리 발송
+    for (const store of STORES) {
+      const data = byStore.get(store.name);
+      if (!data || (data.live.length === 0 && data.canceled.length === 0)) continue;
+      const msg = buildStoreMessage(store.name, data);
+      console.log(`\n=== 미리보기 (${store.name}) ===\n` + msg.replace(/<[^>]+>/g, ""));
+      await sendTelegram(msg);
+    }
   }
   console.log(`[${range.dateStr}] ✅ 완료`);
 }

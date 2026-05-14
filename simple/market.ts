@@ -535,11 +535,176 @@ async function dumpRankTracking(creds: SheetCreds, maxRank = 200): Promise<void>
   }
 
   if (collected.length > 0) {
-    // 매번 clear + 새로 작성 — 중복/잔존 데이터 차단
+    // 매번 clear + 새로 작성 — 중복/잔존 데이터 차단 (raw 시트)
     await clearTabData(creds, "순위추적_데이터", 2);
     await appendRows(creds, "순위추적_데이터!A2", collected);
+    // 누적 시트 (가로 컬럼 누적) + 텔레그램 보고
+    await dumpRankCumulativeAndNotify(creds, today, collected);
   }
-  console.log(`\n✅ 순위추적: ${collected.length}건 (clear 후 새로 작성)`);
+  console.log(`\n✅ 순위추적: ${collected.length}건`);
+}
+
+/**
+ * 「⭐순위추적_누적」 — 가로 컬럼 누적 시트 갱신 + 텔레그램 전일 비교 발송.
+ *
+ * 시트 구조:
+ *   A: productId, B: 라벨, C: 키워드, D~: 날짜별 순위 (최신이 왼쪽 = D열)
+ *
+ * 동작:
+ *   1. 시트 read → 헤더에서 오늘 날짜 컬럼 위치 결정 (없으면 D열에 삽입, 기존 날짜는 오른쪽으로 밀림)
+ *   2. (productId, 키워드) 별로 행 매핑 → 오늘 컬럼에 순위 채우기
+ *   3. 누적 데이터 통째로 쓰기
+ *   4. 전일 컬럼(오늘 바로 오른쪽)과 비교해서 텔레그램 메시지 발송
+ */
+async function dumpRankCumulativeAndNotify(
+  creds: SheetCreds,
+  today: string,
+  collected: (string | number)[][],
+): Promise<void> {
+  const TAB = "⭐순위추적_누적";
+  await ensureTab(creds, TAB, ["productId", "라벨", "키워드"]);
+
+  // 1) 시트 read
+  const all = await readRange(creds, `${TAB}!A1:ZZ10000`);
+  if (all.length === 0) all.push(["productId", "라벨", "키워드"]);
+  const header = all[0].map((v) => String(v ?? ""));
+
+  // 2) 오늘 컬럼 위치 결정 — 일단 끝에 추가 (뒤에서 날짜 desc 정렬로 D쪽으로 옴)
+  let todayCol = header.indexOf(today);
+  if (todayCol < 0) {
+    todayCol = header.length;
+    header.push(today);
+  }
+  all[0] = header;
+
+  // 3) (productId|키워드) → 행 인덱스 매핑
+  const rowMap = new Map<string, number>();
+  for (let i = 1; i < all.length; i++) {
+    const r = all[i];
+    const key = `${String(r[0] ?? "")}|${String(r[2] ?? "")}`;
+    rowMap.set(key, i);
+  }
+
+  // 4) collected = [today, kw, productId, label, rank, totalCount] 순서
+  for (const c of collected) {
+    const [, kw, productId, label, rank] = c as [string, string, string, string, number, number];
+    const key = `${productId}|${kw}`;
+    let rowIdx = rowMap.get(key);
+    if (rowIdx == null) {
+      rowIdx = all.length;
+      const newRow: (string | number)[] = new Array(header.length).fill("");
+      newRow[0] = productId;
+      newRow[1] = label;
+      newRow[2] = kw;
+      all.push(newRow);
+      rowMap.set(key, rowIdx);
+    }
+    while (all[rowIdx].length <= todayCol) all[rowIdx].push("");
+    all[rowIdx][todayCol] = rank > 0 ? rank : "-";
+  }
+
+  // 5) 모든 행 길이 통일 (sparse 방지)
+  const maxCols = header.length;
+  for (const row of all) while (row.length < maxCols) row.push("");
+
+  // 5.5) D열부터 날짜 컬럼들을 내림차순 정렬 (최신이 왼쪽)
+  //      YYYY-MM-DD 문자열은 사전순=날짜순이므로 그대로 string desc
+  //      비날짜(잘못 들어간 헤더) 는 맨 오른쪽으로 밀어둠
+  const dateColCount = header.length - 3;
+  if (dateColCount > 1) {
+    const isoDate = /^\d{4}-\d{2}-\d{2}$/;
+    const idx = Array.from({ length: dateColCount }, (_, i) => i + 3);
+    idx.sort((a, b) => {
+      const va = String(header[a] ?? "");
+      const vb = String(header[b] ?? "");
+      const ad = isoDate.test(va);
+      const bd = isoDate.test(vb);
+      if (ad && bd) return vb.localeCompare(va); // 내림차순: 최신 먼저
+      if (ad) return -1;
+      if (bd) return 1;
+      return 0;
+    });
+    // 정렬된 인덱스 순서로 헤더/각 행 재구성
+    const reorderRow = (row: (string | number)[]) => {
+      const head = row.slice(0, 3);
+      const tail = idx.map((i) => row[i] ?? "");
+      return [...head, ...tail];
+    };
+    for (let i = 0; i < all.length; i++) all[i] = reorderRow(all[i]);
+    // 정렬 후 오늘 컬럼의 새 위치 갱신
+    todayCol = all[0].indexOf(today);
+  }
+
+  // 6) 시트 전체 다시 쓰기
+  await clearTabData(creds, TAB, 1);
+  await appendRows(creds, `${TAB}!A1`, all);
+  console.log(`✅ 「${TAB}」 ${all.length - 1}행 · ${all[0].length - 3}일치 누적 (최신이 D열)`);
+
+  // 7) 전일 컬럼 — 정렬 후 오늘 바로 오른쪽이 전일
+  const prevCol = todayCol >= 0 && todayCol + 1 < all[0].length ? todayCol + 1 : -1;
+  const prevDate = prevCol > 0 ? String(all[0][prevCol] ?? "") : "";
+
+  // 8) 텔레그램 메시지
+  const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+  const TG_CHAT = process.env.TELEGRAM_CHAT_ID;
+  if (!TG_TOKEN || !TG_CHAT) {
+    console.warn("Telegram 환경변수 없음 — 순위 보고 발송 skip");
+    return;
+  }
+
+  const lines: string[] = [];
+  lines.push(`<b>📈 ${today} 순위 보고</b>`);
+  if (prevDate) lines.push(`<i>(전일 ${prevDate} 대비)</i>`);
+  lines.push("");
+
+  // 데이터 행만 (1행 제외) — 매출 큰 순? 일단 입력 순서대로
+  for (let i = 1; i < all.length; i++) {
+    const r = all[i];
+    const label = String(r[1] ?? "");
+    const kw = String(r[2] ?? "");
+    const todayRankRaw = r[todayCol];
+    const prevRankRaw = prevCol > 0 ? r[prevCol] : "";
+    if (todayRankRaw === "" || todayRankRaw == null) continue;
+
+    const todayRank = Number(todayRankRaw);
+    const prevRank = Number(prevRankRaw);
+    const todayValid = Number.isFinite(todayRank) && todayRank > 0;
+    const prevValid = Number.isFinite(prevRank) && prevRank > 0;
+
+    let arrow = "";
+    if (todayValid && prevValid) {
+      const diff = prevRank - todayRank;
+      if (diff > 0) arrow = ` 🔼${diff}`;
+      else if (diff < 0) arrow = ` 🔽${-diff}`;
+      else arrow = " →";
+    } else if (todayValid && !prevValid && prevDate) {
+      arrow = " 🆕 진입";
+    } else if (!todayValid && prevValid) {
+      arrow = " ❌ 이탈";
+    }
+
+    const rankStr = todayValid ? `<b>${todayRank}위</b>` : "<i>없음 (>200)</i>";
+    const prevStr = prevValid ? ` <i>(전일 ${prevRank}위)</i>` : "";
+    lines.push(`• ${label} <i>(${kw})</i>: ${rankStr}${arrow}${prevStr}`);
+  }
+
+  // 텔레그램 발송 (retry)
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: TG_CHAT, text: lines.join("\n"), parse_mode: "HTML", disable_web_page_preview: true }),
+      });
+      if (!res.ok) throw new Error(`telegram ${res.status}: ${await res.text()}`);
+      console.log("✅ 순위 보고 텔레그램 발송 완료");
+      return;
+    } catch (err) {
+      console.warn(`[telegram] 재시도 ${attempt}/3: ${err instanceof Error ? err.message.slice(0, 100) : String(err)}`);
+      if (attempt === 3) throw err;
+      await sleep(1500 * attempt);
+    }
+  }
 }
 
 // ─────────────────── 메인
