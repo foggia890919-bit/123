@@ -414,8 +414,19 @@ function classify(productName: string, option: string, rules: Rule[]): Rule | nu
 }
 
 function extractBottles(text: string): number {
+  if (!text) return 1;
+  // 1순위: 명시적 단위 (3병, 5개, 1세트, 2팩)
   const m = text.match(/(\d+)\s*(?:병|개|입|set|세트|팩)/i);
-  return m ? parseInt(m[1], 10) : 1;
+  if (m) return parseInt(m[1], 10);
+  // 2순위: "1+1", "2+1" 같은 숫자 더하기 패턴
+  const plus = text.match(/(\d+)\s*\+\s*(\d+)/);
+  if (plus) return parseInt(plus[1], 10) + parseInt(plus[2], 10);
+  // 3순위: "종아리형+무릎형" 같은 + 로 묶인 조합 (개수만큼)
+  // 단, 옵션명 일부만 추출하기 위해 첫 "/" 앞까지만 검사
+  const firstPart = text.split("/")[0];
+  const compounds = firstPart.split(/\s*\+\s*/).filter((s) => s.trim().length > 0);
+  if (compounds.length >= 2) return compounds.length;
+  return 1;
 }
 
 function isCanceled(status: string): boolean {
@@ -489,12 +500,31 @@ interface ProcessOptions {
 
 let orderDebugLogged = false;
 
+/** 상품목록 시트의 옵션관리번호 → 옵션명 매핑 (자동 합산 시 부위 매칭용) */
+async function loadCatalogOptionNames(): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (!SHEET_CREDS) return map;
+  try {
+    const rows = await readRange(SHEET_CREDS, "상품목록!A2:L100000");
+    for (const r of rows) {
+      const optCode = String(r[3] ?? "").trim(); // D = 옵션관리번호
+      const optName = String(r[5] ?? "").trim(); // F = 옵션명
+      if (optCode && optName) map.set(optCode, optName);
+    }
+    if (map.size > 0) console.log(`상품목록 옵션명 ${map.size}건 로드`);
+  } catch (e) {
+    console.warn(`상품목록 옵션명 로드 실패 (자동 합산 안 됨): ${e instanceof Error ? e.message : e}`);
+  }
+  return map;
+}
+
 async function processDay(
   range: { fromIso: string; toIso: string; dateStr: string },
   rules: Rule[],
   productRules: Map<string, OptionMapRule>,
   yeogiMap: Map<string, number>,
   options: ProcessOptions,
+  catalogOptNames?: Map<string, string>,
 ): Promise<void> {
   console.log(`\n[${range.dateStr}] ${options.sendTelegram ? '메인 보고' : '시트 동기화 only'}`);
   const allRows: Row[] = [];
@@ -531,6 +561,47 @@ async function processDay(
         //  3) 코드 옵션매핑 패턴 (fallback)
         const optKey = optionManageCode ? `${channelProductNo}|${optionManageCode}` : "";
         const productRule = (optKey && productRules.get(optKey)) || productRules.get(channelProductNo);
+
+        // 자동 합산 — 옵션관리번호 매칭 실패 또는 원가 비어있을 때, 같은 채널상품번호의 단품 행 참조
+        let computedCost = -1;
+        let computedLogistics = -1;
+        if ((!productRule || productRule.costPerUnit === 0) && catalogOptNames && channelProductNo) {
+          const orderOpt = po.productOption ?? "";
+          const orderParts = orderOpt.split("/").map((s) => s.trim());
+          const orderFirstPart = orderParts[0] ?? "";
+          const orderSize = orderParts.length > 1 ? orderParts[orderParts.length - 1] : "";
+          // 1+1, 2+1 같은 단품 multiplier 인식
+          const plusMatch = orderFirstPart.match(/(\d+)\s*\+\s*(\d+)/);
+          const multiplier = plusMatch ? parseInt(plusMatch[1], 10) + parseInt(plusMatch[2], 10) : 1;
+          // 같은 채널상품번호의 단품 행들 (원가 있는 행만)
+          const sameChannel = [...productRules.values()].filter(
+            (r) => r.channelProductNo === channelProductNo && r.optionManageCode && r.costPerUnit > 0
+          );
+          let totalCost = 0;
+          let firstLogistics = 0;
+          let matchedCount = 0;
+          for (const rule of sameChannel) {
+            const catName = catalogOptNames.get(rule.optionManageCode);
+            if (!catName) continue;
+            const catParts = catName.split("/").map((s) => s.trim());
+            const catFirstPart = catParts[0] ?? "";
+            const catSize = catParts.length > 1 ? catParts[catParts.length - 1] : "";
+            // 사이즈 같고 + 부위명이 주문 옵션명에 포함되면 매칭
+            if (catSize === orderSize && catFirstPart && orderFirstPart.includes(catFirstPart)) {
+              totalCost += rule.costPerUnit;
+              if (firstLogistics === 0) firstLogistics = rule.logisticsPerOrder;
+              matchedCount++;
+            }
+          }
+          if (matchedCount > 0) {
+            // 1개 부위만 매칭 + 1+1 패턴 = 단품 × multiplier (예: 종아리 1+1 = 8040 × 2)
+            // 여러 부위 매칭 = 합산 그대로 (예: 종아리+무릎 = 8040 + 9710, ×2 X)
+            if (matchedCount === 1 && multiplier > 1) totalCost *= multiplier;
+            computedCost = totalCost;
+            computedLogistics = firstLogistics;
+          }
+        }
+
         const matched = productRule
           ? null
           : classify(po.productName, po.productOption ?? "", rules);
@@ -548,14 +619,21 @@ async function processDay(
           ?? (po.totalPaymentAmount - apiCommission);
         // 수수료 = 매출 - 정산예정 (네이버 총 차감 — 명시 수수료 외 적립차감/채널 수수료 등 모두 포함)
         const commission = Math.max(0, po.totalPaymentAmount - settlement);
-        // 여기명품은 사입관리 시트 매칭 우선 — AB열 = 총비용 (도매가+배송비+박스비 통합)
+        // 비용 계산 우선순위:
+        //   1) 여기명품 사입관리 시트 매칭 → AB(총비용) 그대로
+        //   2) 자동 합산 (computedCost) → 단품 부위별 합산
+        //   3) ⭐옵션매핑 단가 × 수량
         const yeogiWholesale = store.name === "여기명품" ? yeogiMap.get(po.productOrderId) : undefined;
         const cost = yeogiWholesale != null && yeogiWholesale > 0
-          ? yeogiWholesale // 사장님이 입력한 총비용 그대로 (수량 곱 X)
-          : costPerUnit * totalUnits;
+          ? yeogiWholesale
+          : computedCost >= 0
+            ? computedCost * po.quantity // 자동 합산: 완성 원가 × 주문 수량 (extractBottles X)
+            : costPerUnit * totalUnits;
         const logistics = yeogiWholesale != null && yeogiWholesale > 0
-          ? 0 // AB 에 다 녹아있어서 별도 물류비 X
-          : logisticsPerOrder;
+          ? 0
+          : computedLogistics >= 0
+            ? computedLogistics
+            : logisticsPerOrder;
         const profit = settlement - cost - logistics;
         allRows.push({
           paymentDate: po.paymentDate ?? o.order?.paymentDate ?? "",
@@ -887,6 +965,7 @@ async function main() {
   console.log(`키워드 룰 ${rules.length}개`);
   const productRules = await loadOptionMapping();
   const yeogiMap = await loadYeogiWholesaleMap();
+  const catalogOptNames = await loadCatalogOptionNames();
 
   // 범위 백필: `npx tsx run.ts 2026-04-01 2026-05-01` → 텔레그램 X, 시트만 갱신
   if (arg1 && arg2) {
@@ -905,7 +984,7 @@ async function main() {
     for (let i = 0; i < days.length; i++) {
       console.log(`\n[${i + 1}/${days.length}] ${days[i]}`);
       try {
-        await processDay(dateKstRange(days[i]), rules, productRules, yeogiMap, { sendTelegram: false });
+        await processDay(dateKstRange(days[i]), rules, productRules, yeogiMap, { sendTelegram: false }, catalogOptNames);
       } catch (err) {
         console.error(`[${days[i]}] 실패:`, err instanceof Error ? err.message : String(err));
       }
@@ -916,7 +995,7 @@ async function main() {
 
   // 단일 날짜 백필: 텔레그램 발송
   if (arg1) {
-    await processDay(dateKstRange(arg1), rules, productRules, yeogiMap, { sendTelegram: true });
+    await processDay(dateKstRange(arg1), rules, productRules, yeogiMap, { sendTelegram: true }, catalogOptNames);
     return;
   }
 
@@ -926,7 +1005,7 @@ async function main() {
     const range = ranges[i];
     const sendTg = (i === 0);
     try {
-      await processDay(range, rules, productRules, yeogiMap, { sendTelegram: sendTg });
+      await processDay(range, rules, productRules, yeogiMap, { sendTelegram: sendTg }, catalogOptNames);
     } catch (err) {
       console.error(`[${range.dateStr}] 실패:`, err instanceof Error ? err.message : String(err));
     }
