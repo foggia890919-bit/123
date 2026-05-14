@@ -4920,14 +4920,13 @@ function CorpRelationTab() {
   const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/user-clients?corps=true")
+    fetch("/api/user-clients?all=true")
       .then((r) => r.json())
       .then((data) => setAllClients(data as CorpClient[]))
       .catch(() => setAllClients([]))
       .finally(() => setLoading(false));
   }, []);
 
-  // API에서 이미 의료기관 제외하므로 별도 프론트 필터 불필요
   const corps = allClients;
 
   const filtered = corps.filter((c) => {
@@ -4962,17 +4961,12 @@ function CorpRelationTab() {
   }
 
   const dealerLabel: Record<string, string> = {
-    UPPER_CORP: "상위법인",
-    LOWER_CORP: "하위법인",
-    CORPORATION: "법인",
-    INDIVIDUAL: "개인사업자",
-    SELF: "자사",
+    UPPER_CORP: "상위법인", LOWER_CORP: "하위법인", CORPORATION: "법인",
+    INDIVIDUAL: "개인사업자", SELF: "자사",
   };
   const dealerColor: Record<string, string> = {
-    UPPER_CORP: "bg-purple-100 text-purple-700",
-    LOWER_CORP: "bg-blue-100 text-blue-700",
-    CORPORATION: "bg-indigo-100 text-indigo-700",
-    INDIVIDUAL: "bg-orange-100 text-orange-700",
+    UPPER_CORP: "bg-purple-100 text-purple-700", LOWER_CORP: "bg-blue-100 text-blue-700",
+    CORPORATION: "bg-indigo-100 text-indigo-700", INDIVIDUAL: "bg-orange-100 text-orange-700",
     SELF: "bg-gray-100 text-gray-600",
   };
 
@@ -4984,7 +4978,7 @@ function CorpRelationTab() {
             상위 하위법인 지정{" "}
             <span className="text-base font-normal text-gray-400">({corps.length}건)</span>
           </h2>
-          <p className="text-sm text-gray-500 mt-0.5">법인 간 상위/하위 관계를 지정해요. 의료기관은 표시되지 않아요.</p>
+          <p className="text-sm text-gray-500 mt-0.5">등록된 전체 사업자의 상위/하위 법인 관계를 지정해요.</p>
         </div>
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -5003,61 +4997,70 @@ function CorpRelationTab() {
         </div>
       )}
 
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
+        <table className="w-full text-sm" style={{ minWidth: "1100px" }}>
           <thead>
-            <tr className="border-b border-gray-100 bg-gray-50">
-              <th className="text-left px-4 py-3 font-medium text-gray-600">거래처명</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">사업자번호</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">유형</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600 w-60">상위법인</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600 w-72">하위법인</th>
+            <tr className="border-b border-gray-200 bg-gray-50">
+              <th className="text-left px-4 py-3 font-medium text-gray-600" rowSpan={2}>거래처명</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-600" rowSpan={2}>사업자번호</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-600" rowSpan={2}>유형</th>
+              <th className="text-center px-4 py-2 font-medium text-gray-700 border-l border-gray-200" colSpan={2}>상위법인</th>
+              <th className="text-center px-4 py-2 font-medium text-gray-700 border-l border-gray-200" colSpan={2}>하위법인</th>
+            </tr>
+            <tr className="border-b border-gray-200 bg-gray-50">
+              <th className="text-left px-4 py-2 font-medium text-gray-500 text-xs border-l border-gray-200 w-36">현황</th>
+              <th className="text-left px-4 py-2 font-medium text-gray-500 text-xs w-44">지정 변경</th>
+              <th className="text-left px-4 py-2 font-medium text-gray-500 text-xs border-l border-gray-200 w-40">현황</th>
+              <th className="text-left px-4 py-2 font-medium text-gray-500 text-xs w-44">지정 추가</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
             {loading ? (
               <tr>
-                <td colSpan={5} className="text-center py-16 text-gray-400">
+                <td colSpan={7} className="text-center py-16 text-gray-400">
                   <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />
                   불러오는 중...
                 </td>
               </tr>
             ) : filtered.length === 0 ? (
               <tr>
-                <td colSpan={5} className="text-center py-16 text-gray-400">
-                  {query ? "검색 결과가 없어요." : "등록된 법인이 없어요."}
+                <td colSpan={7} className="text-center py-16 text-gray-400">
+                  {query ? "검색 결과가 없어요." : "등록된 사업자가 없어요."}
                 </td>
               </tr>
             ) : (
               filtered.map((c) => {
+                const parent = corps.find((x) => x.id === c.parentCorpId);
                 const children = corps.filter((x) => x.parentCorpId === c.id);
-                // 하위법인 추가 드롭다운: 이미 자녀이거나 자기 자신인 항목 제외
-                const addableChildren = corps.filter(
-                  (x) => x.id !== c.id && x.parentCorpId !== c.id
-                );
+                const addableChildren = corps.filter((x) => x.id !== c.id && x.parentCorpId !== c.id);
                 const isSaving = saving === c.id;
                 const isChildSaving = children.some((ch) => saving === ch.id);
 
                 return (
-                  <tr key={c.id} className="hover:bg-gray-50 transition-colors align-top">
+                  <tr key={c.id} className="hover:bg-gray-50 transition-colors align-middle">
+                    {/* 거래처명 */}
                     <td className="px-4 py-3">
                       <div className="font-medium text-gray-900">{c.clientName}</div>
-                      <div className="text-xs text-gray-400 mt-0.5">
-                        {c.user.name} · {c.user.phone ?? c.user.email}
-                      </div>
+                      <div className="text-xs text-gray-400 mt-0.5">{c.user.name} · {c.user.phone ?? c.user.email}</div>
                     </td>
+                    {/* 사업자번호 */}
                     <td className="px-4 py-3 font-mono text-xs text-gray-600">{c.bizNumber}</td>
+                    {/* 유형 */}
                     <td className="px-4 py-3">
-                      <span
-                        className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                          dealerColor[c.dealerType ?? ""] ?? "bg-gray-100 text-gray-600"
-                        }`}
-                      >
-                        {dealerLabel[c.dealerType ?? ""] ?? c.dealerType ?? "기타"}
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${dealerColor[c.dealerType ?? ""] ?? "bg-green-100 text-green-700"}`}>
+                        {dealerLabel[c.dealerType ?? ""] ?? "병의원(원외)"}
                       </span>
                     </td>
 
-                    {/* 상위법인 드롭다운 */}
+                    {/* 상위법인 현황 */}
+                    <td className="px-4 py-3 border-l border-gray-100">
+                      {parent ? (
+                        <span className="text-sm font-medium text-purple-700">{parent.clientName}</span>
+                      ) : (
+                        <span className="text-xs text-gray-400">없음</span>
+                      )}
+                    </td>
+                    {/* 상위법인 지정 변경 */}
                     <td className="px-4 py-3">
                       <select
                         value={c.parentCorpId ?? ""}
@@ -5066,55 +5069,47 @@ function CorpRelationTab() {
                         className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-wait"
                       >
                         <option value="">없음</option>
-                        {corps
-                          .filter((x) => x.id !== c.id)
-                          .map((x) => (
-                            <option key={x.id} value={x.id}>
-                              {x.clientName}
-                            </option>
-                          ))}
+                        {corps.filter((x) => x.id !== c.id).map((x) => (
+                          <option key={x.id} value={x.id}>{x.clientName}</option>
+                        ))}
                       </select>
                     </td>
 
-                    {/* 하위법인: 현재 지정된 칩 + 추가 드롭다운 */}
-                    <td className="px-4 py-3">
-                      <div className="space-y-1.5">
-                        {children.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            {children.map((ch) => (
-                              <span
-                                key={ch.id}
-                                className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium"
+                    {/* 하위법인 현황 */}
+                    <td className="px-4 py-3 border-l border-gray-100">
+                      {children.length === 0 ? (
+                        <span className="text-xs text-gray-400">없음</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {children.map((ch) => (
+                            <span key={ch.id} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
+                              {ch.clientName}
+                              <button
+                                onClick={() => patchParent(ch.id, null)}
+                                disabled={saving === ch.id}
+                                className="text-blue-400 hover:text-red-500 disabled:opacity-50"
+                                title="하위법인 해제"
                               >
-                                {ch.clientName}
-                                <button
-                                  onClick={() => patchParent(ch.id, null)}
-                                  disabled={saving === ch.id}
-                                  className="ml-0.5 text-blue-400 hover:text-red-500 disabled:opacity-50"
-                                  title="하위법인 해제"
-                                >
-                                  <X className="w-3 h-3" />
-                                </button>
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                        <select
-                          value=""
-                          onChange={(e) => {
-                            if (e.target.value) patchParent(e.target.value, c.id);
-                          }}
-                          disabled={isChildSaving || addableChildren.length === 0}
-                          className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-wait text-gray-400"
-                        >
-                          <option value="">+ 하위법인 추가</option>
-                          {addableChildren.map((x) => (
-                            <option key={x.id} value={x.id}>
-                              {x.clientName}
-                            </option>
+                                <X className="w-3 h-3" />
+                              </button>
+                            </span>
                           ))}
-                        </select>
-                      </div>
+                        </div>
+                      )}
+                    </td>
+                    {/* 하위법인 지정 추가 */}
+                    <td className="px-4 py-3">
+                      <select
+                        value=""
+                        onChange={(e) => { if (e.target.value) patchParent(e.target.value, c.id); }}
+                        disabled={isChildSaving || addableChildren.length === 0}
+                        className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-wait"
+                      >
+                        <option value="">+ 추가</option>
+                        {addableChildren.map((x) => (
+                          <option key={x.id} value={x.id}>{x.clientName}</option>
+                        ))}
+                      </select>
                     </td>
                   </tr>
                 );
