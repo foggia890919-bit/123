@@ -111,17 +111,60 @@ export async function GET(req: NextRequest) {
   }
 
   const all = req.nextUrl.searchParams.get("all") === "true";
-  // corps=true: 의료기관(dealerType IS NULL) 제외한 법인 목록 (상위하위법인 지정용)
+  // corps=true: 의료기관(dealerType IS NULL) 제외 — 상위하위법인 지정 전용
   const corpsOnly = req.nextUrl.searchParams.get("corps") === "true";
 
-  if (all || corpsOnly) {
+  if (corpsOnly) {
+    if (user.role !== "ADMIN" && user.role !== "BIZ") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+    let rows;
+    // Level 1: WHERE dealerType NOT NULL + SELECT with parentCorpId
+    try {
+      rows = await prisma.userClient.findMany({
+        where: { dealerType: { not: null } } as Parameters<typeof prisma.userClient.findMany>[0]["where"],
+        orderBy: { clientName: "asc" },
+        select: {
+          id: true, userId: true, clientName: true, bizNumber: true,
+          approved: true, createdAt: true, dealerType: true, parentCorpId: true,
+          user: { select: { name: true, email: true, phone: true } },
+        },
+      });
+      return NextResponse.json(rows);
+    } catch { /* parentCorpId column missing — try without it */ }
+    // Level 2: WHERE dealerType NOT NULL, no parentCorpId in select
+    try {
+      rows = await prisma.userClient.findMany({
+        where: { dealerType: { not: null } } as Parameters<typeof prisma.userClient.findMany>[0]["where"],
+        orderBy: { clientName: "asc" },
+        select: {
+          id: true, userId: true, clientName: true, bizNumber: true,
+          approved: true, createdAt: true, dealerType: true,
+          user: { select: { name: true, email: true, phone: true } },
+        },
+      });
+      return NextResponse.json(rows.map((r) => ({ ...r, parentCorpId: null })));
+    } catch { /* dealerType column also missing — get all, filter in JS */ }
+    // Level 3: no WHERE, filter in JS (dealerType column not in DB)
+    try {
+      const allRows = await prisma.userClient.findMany({
+        orderBy: { clientName: "asc" },
+        select: {
+          id: true, userId: true, clientName: true, bizNumber: true,
+          approved: true, createdAt: true,
+          user: { select: { name: true, email: true, phone: true } },
+        },
+      });
+      return NextResponse.json(allRows.map((r) => ({ ...r, dealerType: null, parentCorpId: null })));
+    } catch {
+      return NextResponse.json([]);
+    }
+  }
+
+  if (all) {
     if (user.role !== "ADMIN" && user.role !== "BIZ") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
     // Exclude heavy bizDocument (base64) from list; download via /api/files/user-client-biz/[id]
-    const whereClause = corpsOnly ? { dealerType: { not: null } } : {};
     let rows;
     try {
       rows = await prisma.userClient.findMany({
-        where: whereClause as Parameters<typeof prisma.userClient.findMany>[0]["where"],
         orderBy: { createdAt: "desc" },
         select: {
           id: true, userId: true, clientName: true, bizNumber: true,
@@ -133,7 +176,6 @@ export async function GET(req: NextRequest) {
     } catch {
       try {
         rows = await prisma.userClient.findMany({
-          where: corpsOnly ? {} : {},
           orderBy: { createdAt: "desc" },
           select: {
             id: true, userId: true, clientName: true, bizNumber: true,
@@ -142,8 +184,6 @@ export async function GET(req: NextRequest) {
             user: { select: { name: true, email: true, phone: true } },
           },
         });
-        // filter corps in JS when WHERE clause not available
-        if (corpsOnly) rows = rows.filter((r: { dealerType?: string | null }) => r.dealerType != null);
       } catch {
         rows = await prisma.userClient.findMany({
           orderBy: { createdAt: "desc" },

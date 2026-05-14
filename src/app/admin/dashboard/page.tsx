@@ -4920,14 +4920,14 @@ function CorpRelationTab() {
   const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/user-clients?all=true")
+    fetch("/api/user-clients?corps=true")
       .then((r) => r.json())
       .then((data) => setAllClients(data as CorpClient[]))
       .catch(() => setAllClients([]))
       .finally(() => setLoading(false));
   }, []);
 
-  const corps = allClients;
+  const corps = allClients; // server already excluded 의료기관
 
   const filtered = corps.filter((c) => {
     if (!query) return true;
@@ -4978,7 +4978,7 @@ function CorpRelationTab() {
             상위 하위법인 지정{" "}
             <span className="text-base font-normal text-gray-400">({corps.length}건)</span>
           </h2>
-          <p className="text-sm text-gray-500 mt-0.5">등록된 전체 사업자의 상위/하위 법인 관계를 지정해요.</p>
+          <p className="text-sm text-gray-500 mt-0.5">의료기관을 제외한 등록 사업자의 상위/하위 법인 관계를 지정해요.</p>
         </div>
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
