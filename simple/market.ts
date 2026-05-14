@@ -564,8 +564,9 @@ async function dumpRankCumulativeAndNotify(
   const TAB = "⭐순위추적_누적";
   await ensureTab(creds, TAB, ["productId", "라벨", "키워드"]);
 
-  // 1) 시트 read
-  const all = await readRange(creds, `${TAB}!A1:ZZ10000`);
+  // 1) 시트 read — readRange 는 string[][] 반환이지만 우리는 순위(number) 도 넣어야 해서 union 으로 변환
+  const raw = await readRange(creds, `${TAB}!A1:ZZ10000`);
+  const all: (string | number)[][] = raw.map((r) => [...r]);
   if (all.length === 0) all.push(["productId", "라벨", "키워드"]);
   const header = all[0].map((v) => String(v ?? ""));
 
