@@ -8,27 +8,47 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
   User, KeyRound, CheckCircle, ArrowUpCircle, ChevronRight,
-  Building2, FileSpreadsheet, FileText, Upload, Pencil, Loader2,
+  Building2, FileSpreadsheet, FileText, Upload, Pencil, Loader2, Briefcase,
 } from "lucide-react";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
 const KAKAO_URL = "https://open.kakao.com/me/ykmedi";
 
-const carriers = ["SKT", "KT", "LG U+", "SKT 알뜰폰", "KT 알뜰폰", "LG 알뜰폰"];
 const editableRoles = [
-  { value: "SALES_REP", label: "영업사원 (CSO)" },
-  { value: "DOCTOR",    label: "의사" },
-  { value: "PHARMACIST",label: "약사" },
-  { value: "BASIC",     label: "일반회원" },
+  { value: "SALES_REP",  label: "영업사원 (CSO)" },
+  { value: "DOCTOR",     label: "의사" },
+  { value: "PHARMACIST", label: "약사" },
+  { value: "BASIC",      label: "일반회원" },
 ];
 const docTypes = ["CSO 신고증", "의사 면허증", "약사 면허증", "사업자등록증", "기타"];
 
+interface BizClient {
+  id: string; clientName: string; bizNumber: string;
+  address: string | null; bizFileName: string | null;
+}
 interface ProfileInfo {
   name: string; email: string; phone: string | null;
   carrier: string | null; role: string;
   documents: { id: string; docType: string; fileName: string; createdAt: string }[];
+  bizClient: BizClient | null;
 }
 
+function formatBizNumber(v: string) {
+  const d = v.replace(/\D/g, "");
+  if (d.length <= 3) return d;
+  if (d.length <= 5) return `${d.slice(0, 3)}-${d.slice(3)}`;
+  return `${d.slice(0, 3)}-${d.slice(3, 5)}-${d.slice(5, 10)}`;
+}
+function validateBizNumber(biz: string): boolean {
+  const d = biz.replace(/\D/g, "");
+  if (d.length !== 10) return false;
+  const n = d.split("").map(Number);
+  const w = [1, 3, 7, 1, 3, 7, 1, 3, 5];
+  let sum = 0;
+  for (let i = 0; i < 9; i++) sum += n[i] * w[i];
+  sum += Math.floor(n[8] * 5 / 10);
+  return (10 - (sum % 10)) % 10 === n[9];
+}
 function compressImage(dataUri: string): Promise<string> {
   return new Promise((resolve) => {
     const img = new Image();
@@ -53,17 +73,28 @@ export default function MyPage() {
   const { data: session, status, update: updateSession } = useSession();
   const router = useRouter();
 
-  // Profile info
   const [profileInfo, setProfileInfo] = useState<ProfileInfo | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
+
+  // 프로필 수정
   const [editName, setEditName] = useState("");
-  const [editCarrier, setEditCarrier] = useState("");
   const [editRole, setEditRole] = useState("");
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileError, setProfileError] = useState("");
   const [profileSuccess, setProfileSuccess] = useState(false);
 
-  // Password change
+  // 사업자 정보
+  const bizDocFileRef = useRef<HTMLInputElement>(null);
+  const [editBizNumber, setEditBizNumber] = useState("");
+  const [editBizName, setEditBizName] = useState("");
+  const [editBizAddress, setEditBizAddress] = useState("");
+  const [bizNumberError, setBizNumberError] = useState("");
+  const [bizDocFile, setBizDocFile] = useState<File | null>(null);
+  const [bizSaving, setBizSaving] = useState(false);
+  const [bizError, setBizError] = useState("");
+  const [bizSuccess, setBizSuccess] = useState(false);
+
+  // 비밀번호 변경
   const [currentPw, setCurrentPw] = useState("");
   const [newPw, setNewPw] = useState("");
   const [confirmPw, setConfirmPw] = useState("");
@@ -71,7 +102,7 @@ export default function MyPage() {
   const [pwError, setPwError] = useState("");
   const [pwSuccess, setPwSuccess] = useState(false);
 
-  // Document upload
+  // 서류 첨부
   const docFileRef = useRef<HTMLInputElement>(null);
   const [docType, setDocType] = useState("CSO 신고증");
   const [docFile, setDocFile] = useState<File | null>(null);
@@ -91,8 +122,13 @@ export default function MyPage() {
         const data: ProfileInfo = await res.json();
         setProfileInfo(data);
         setEditName(data.name);
-        setEditCarrier(data.carrier ?? "");
         setEditRole(data.role);
+        if (data.bizClient) {
+          const fmt = formatBizNumber(data.bizClient.bizNumber);
+          setEditBizNumber(fmt);
+          setEditBizName(data.bizClient.clientName);
+          setEditBizAddress(data.bizClient.address ?? "");
+        }
       }
     } finally {
       setProfileLoading(false);
@@ -106,6 +142,17 @@ export default function MyPage() {
 
   const isBiz = session.user.role === "BIZ" || session.user.role === "ADMIN";
 
+  function handleBizNumberChange(val: string) {
+    const fmt = formatBizNumber(val);
+    setEditBizNumber(fmt);
+    const digits = fmt.replace(/\D/g, "");
+    if (digits.length === 10 && !validateBizNumber(fmt)) {
+      setBizNumberError("유효하지 않은 사업자등록번호예요.");
+    } else {
+      setBizNumberError("");
+    }
+  }
+
   async function handleProfileSave() {
     setProfileError(""); setProfileSuccess(false);
     if (!editName.trim()) { setProfileError("이름을 입력해주세요."); return; }
@@ -113,16 +160,55 @@ export default function MyPage() {
     const res = await fetch("/api/mypage", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: editName.trim(), carrier: editCarrier || null, role: editRole }),
+      body: JSON.stringify({ name: editName.trim(), role: editRole }),
     });
     const data = await res.json();
     if (!res.ok) { setProfileError(data.error || "저장 실패"); }
-    else {
-      setProfileSuccess(true);
-      await updateSession();
-      await loadProfile();
-    }
+    else { setProfileSuccess(true); await updateSession(); await loadProfile(); }
     setProfileSaving(false);
+  }
+
+  async function handleBizSave() {
+    setBizError(""); setBizSuccess(false);
+    if (!editBizNumber.trim()) { setBizError("사업자등록번호를 입력해주세요."); return; }
+    if (bizNumberError) { setBizError(bizNumberError); return; }
+    const digits = editBizNumber.replace(/\D/g, "");
+    if (digits.length !== 10) { setBizError("사업자등록번호 10자리를 입력해주세요."); return; }
+    if (!editBizName.trim()) { setBizError("상호명을 입력해주세요."); return; }
+    setBizSaving(true);
+    try {
+      let bizDocument: { fileName: string; fileData: string } | null = null;
+      if (bizDocFile) {
+        const fileData: string = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.readAsDataURL(bizDocFile);
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+        });
+        const compressed = bizDocFile.type.startsWith("image/") ? await compressImage(fileData) : fileData;
+        bizDocument = { fileName: bizDocFile.name, fileData: compressed };
+      }
+      const res = await fetch("/api/mypage", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          biz: {
+            id: profileInfo?.bizClient?.id ?? undefined,
+            clientName: editBizName.trim(),
+            bizNumber: digits,
+            address: editBizAddress.trim() || null,
+            bizDocument,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setBizError(data.error || "저장 실패"); }
+      else { setBizSuccess(true); setBizDocFile(null); await loadProfile(); }
+    } catch {
+      setBizError("저장 중 오류가 발생했어요.");
+    } finally {
+      setBizSaving(false);
+    }
   }
 
   async function handlePasswordChange(e: React.FormEvent) {
@@ -162,17 +248,11 @@ export default function MyPage() {
       const data = await res.json();
       if (!res.ok) { setDocError(data.error || "업로드 실패"); }
       else {
-        setDocSuccess(true);
-        setDocFile(null);
-        setProfileInfo((prev) =>
-          prev ? { ...prev, documents: [{ ...data }, ...prev.documents] } : prev
-        );
+        setDocSuccess(true); setDocFile(null);
+        setProfileInfo((prev) => prev ? { ...prev, documents: [{ ...data }, ...prev.documents] } : prev);
       }
-    } catch {
-      setDocError("업로드 중 오류가 발생했어요.");
-    } finally {
-      setDocUploading(false);
-    }
+    } catch { setDocError("업로드 중 오류가 발생했어요."); }
+    finally { setDocUploading(false); }
   }
 
   return (
@@ -193,19 +273,15 @@ export default function MyPage() {
             </div>
           </div>
         </div>
-        <div className="mt-4 pt-4 border-t border-gray-100">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs text-gray-400 mb-0.5">현재 이용 등급</p>
-              <p className="text-sm font-semibold text-gray-800">
-                {ROLE_LABELS[session.user.role as UserRole] ?? session.user.role}
-              </p>
-            </div>
-            <a href={KAKAO_URL} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 text-xs font-medium bg-[#FEE500] hover:bg-[#FFCF00] text-[#3C1E1E] px-3 py-2 rounded-lg transition-colors">
-              <ArrowUpCircle className="w-3.5 h-3.5" />등급 변경 문의
-            </a>
+        <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between">
+          <div>
+            <p className="text-xs text-gray-400 mb-0.5">현재 이용 등급</p>
+            <p className="text-sm font-semibold text-gray-800">{ROLE_LABELS[session.user.role as UserRole] ?? session.user.role}</p>
           </div>
+          <a href={KAKAO_URL} target="_blank" rel="noopener noreferrer"
+            className="flex items-center gap-1.5 text-xs font-medium bg-[#FEE500] hover:bg-[#FFCF00] text-[#3C1E1E] px-3 py-2 rounded-lg transition-colors">
+            <ArrowUpCircle className="w-3.5 h-3.5" />등급 변경 문의
+          </a>
         </div>
       </div>
 
@@ -218,30 +294,18 @@ export default function MyPage() {
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-sm font-medium text-gray-700">
-                이메일 <span className="text-xs text-gray-400">(변경 불가)</span>
-              </label>
+              <label className="text-sm font-medium text-gray-700">이메일 <span className="text-xs text-gray-400">(변경 불가)</span></label>
               <Input value={profileInfo?.email ?? ""} disabled className="bg-gray-50 text-gray-400" />
             </div>
             <div className="space-y-1">
-              <label className="text-sm font-medium text-gray-700">
-                전화번호 <span className="text-xs text-gray-400">(변경 불가)</span>
-              </label>
+              <label className="text-sm font-medium text-gray-700">전화번호 <span className="text-xs text-gray-400">(변경 불가)</span></label>
               <Input value={profileInfo?.phone ?? ""} disabled className="bg-gray-50 text-gray-400" />
             </div>
           </div>
-          <div className="space-y-1">
-            <label className="text-sm font-medium text-gray-700">이름</label>
-            <Input value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="이름" />
-          </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-sm font-medium text-gray-700">통신사</label>
-              <select value={editCarrier} onChange={(e) => setEditCarrier(e.target.value)}
-                className="flex h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="">선택 안함</option>
-                {carriers.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+              <label className="text-sm font-medium text-gray-700">통신사 <span className="text-xs text-gray-400">(변경 불가)</span></label>
+              <Input value={profileInfo?.carrier ?? ""} disabled className="bg-gray-50 text-gray-400" />
             </div>
             <div className="space-y-1">
               <label className="text-sm font-medium text-gray-700">직업</label>
@@ -250,6 +314,10 @@ export default function MyPage() {
                 {editableRoles.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
               </select>
             </div>
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-gray-700">이름</label>
+            <Input value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="이름" />
           </div>
           {profileError && <p className="text-sm text-red-600 bg-red-50 p-3 rounded-lg">{profileError}</p>}
           {profileSuccess && (
@@ -263,14 +331,69 @@ export default function MyPage() {
         </div>
       </div>
 
+      {/* 사업자 정보 */}
+      <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
+        <div className="flex items-center gap-2">
+          <Briefcase className="w-5 h-5 text-gray-600" />
+          <h2 className="text-lg font-semibold text-gray-800">사업자 정보</h2>
+          {profileInfo?.bizClient && (
+            <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">등록됨</span>
+          )}
+        </div>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-gray-700">사업자등록번호 <span className="text-red-500">*</span></label>
+            <Input
+              value={editBizNumber}
+              onChange={(e) => handleBizNumberChange(e.target.value)}
+              placeholder="000-00-00000"
+              maxLength={12}
+              className={bizNumberError ? "border-red-400" : ""}
+            />
+            {bizNumberError && <p className="text-xs text-red-500">{bizNumberError}</p>}
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-gray-700">상호명 <span className="text-red-500">*</span></label>
+            <Input value={editBizName} onChange={(e) => setEditBizName(e.target.value)} placeholder="병원명 / 상호명" />
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-gray-700">주소 <span className="text-gray-400 font-normal text-xs">(선택)</span></label>
+            <Input value={editBizAddress} onChange={(e) => setEditBizAddress(e.target.value)} placeholder="예: 서울시 강남구 테헤란로 123" />
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-gray-700">
+              사업자등록증 <span className="text-gray-400 font-normal text-xs">
+                {profileInfo?.bizClient?.bizFileName ? `(현재: ${profileInfo.bizClient.bizFileName})` : "(선택)"}
+              </span>
+            </label>
+            <div onClick={() => bizDocFileRef.current?.click()}
+              className={`border-2 border-dashed rounded-lg p-3 text-center cursor-pointer transition-colors ${bizDocFile ? "border-blue-400 bg-blue-50" : "border-gray-300 hover:border-blue-400"}`}>
+              <Upload className="w-4 h-4 text-gray-400 mx-auto mb-0.5" />
+              <p className="text-sm text-gray-500">
+                {bizDocFile ? <span className="font-medium text-gray-800">{bizDocFile.name}</span> : "클릭해서 파일 선택 (JPG, PNG, PDF)"}
+              </p>
+              <input ref={bizDocFileRef} type="file" accept=".jpg,.jpeg,.png,.pdf" className="hidden"
+                onChange={(e) => { setBizDocFile(e.target.files?.[0] || null); setBizSuccess(false); }} />
+            </div>
+          </div>
+          {bizError && <p className="text-sm text-red-600 bg-red-50 p-3 rounded-lg">{bizError}</p>}
+          {bizSuccess && (
+            <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 p-3 rounded-lg">
+              <CheckCircle className="w-4 h-4" /> 사업자 정보가 저장됐어요!
+            </div>
+          )}
+          <Button onClick={handleBizSave} disabled={bizSaving} className="w-full">
+            {bizSaving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />저장 중...</> : profileInfo?.bizClient ? "사업자 정보 수정" : "사업자 정보 등록"}
+          </Button>
+        </div>
+      </div>
+
       {/* 서류 관리 */}
       <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
         <div className="flex items-center gap-2">
           <FileText className="w-5 h-5 text-gray-600" />
           <h2 className="text-lg font-semibold text-gray-800">서류 관리</h2>
         </div>
-
-        {/* 기존 서류 목록 */}
         {profileInfo && profileInfo.documents.length > 0 ? (
           <div className="space-y-2">
             <p className="text-xs font-medium text-gray-500">등록된 서류</p>
@@ -290,8 +413,6 @@ export default function MyPage() {
         ) : (
           <p className="text-sm text-gray-400">등록된 서류가 없어요.</p>
         )}
-
-        {/* 새 서류 추가 */}
         <div className="border-t border-gray-100 pt-4 space-y-3">
           <p className="text-sm font-medium text-gray-700">서류 추가 첨부</p>
           <select value={docType} onChange={(e) => setDocType(e.target.value)}

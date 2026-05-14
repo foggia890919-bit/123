@@ -24,11 +24,19 @@ export async function GET(_req: NextRequest) {
       orderBy: { createdAt: "desc" },
     });
     documents = docs.map((d) => ({ ...d, createdAt: d.createdAt.toISOString() }));
-  } catch {
-    // userDocument table may not exist yet
-  }
+  } catch { }
 
-  return NextResponse.json({ ...user, documents });
+  // 사업자 정보 (dealerType: null = 의료기관, 본인 대표 사업자)
+  let bizClient: { id: string; clientName: string; bizNumber: string; address: string | null; bizFileName: string | null } | null = null;
+  try {
+    bizClient = await prisma.userClient.findFirst({
+      where: { userId: session.id, dealerType: null },
+      select: { id: true, clientName: true, bizNumber: true, address: true, bizFileName: true },
+      orderBy: { createdAt: "asc" },
+    });
+  } catch { }
+
+  return NextResponse.json({ ...user, documents, bizClient });
 }
 
 export async function PATCH(req: NextRequest) {
@@ -36,9 +44,9 @@ export async function PATCH(req: NextRequest) {
   if (isNextResponse(session)) return session;
 
   const body = await req.json();
-  const { currentPassword, newPassword, name, carrier, role } = body;
+  const { currentPassword, newPassword, name, role, biz } = body;
 
-  // Password change
+  // 비밀번호 변경
   if (currentPassword !== undefined || newPassword !== undefined) {
     if (!currentPassword || !newPassword) {
       return NextResponse.json({ error: "필수 항목 누락" }, { status: 400 });
@@ -55,10 +63,76 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ success: true });
   }
 
-  // Profile update
+  // 사업자 정보 저장
+  if (biz !== undefined) {
+    const { id: bizId, clientName, bizNumber, address, bizDocument } = biz as {
+      id?: string; clientName: string; bizNumber: string; address?: string;
+      bizDocument?: { fileName: string; fileData: string } | null;
+    };
+    if (!clientName?.trim() || !bizNumber?.trim()) {
+      return NextResponse.json({ error: "상호명과 사업자번호는 필수예요." }, { status: 400 });
+    }
+    const digits = String(bizNumber).replace(/\D/g, "");
+
+    let bizFileKey: string | null = null;
+    let bizDocFallback: string | null = null;
+    let bizFileName: string | null = null;
+    if (bizDocument?.fileData) {
+      const result = await persistDataUri(BUCKETS.userClientBiz, session.id, bizDocument.fileData);
+      bizFileKey = result.fileKey;
+      bizDocFallback = result.fileData;
+      bizFileName = bizDocument.fileName;
+    }
+
+    if (bizId) {
+      // 기존 레코드 수정
+      const existing = await prisma.userClient.findUnique({ where: { id: bizId }, select: { userId: true } });
+      if (!existing || existing.userId !== session.id) {
+        return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+      }
+      const data: Record<string, unknown> = {
+        clientName: clientName.trim(),
+        address: address?.trim() || null,
+      };
+      if (bizFileKey) { data.bizFileKey = bizFileKey; data.bizDocument = bizDocFallback; data.bizFileName = bizFileName; }
+      try {
+        await prisma.userClient.update({ where: { id: bizId }, data });
+      } catch {
+        await prisma.userClient.update({ where: { id: bizId }, data: { clientName: clientName.trim() } });
+      }
+    } else {
+      // 신규 생성
+      const createData: Record<string, unknown> = {
+        userId: session.id,
+        clientName: clientName.trim(),
+        bizNumber: digits,
+        address: address?.trim() || null,
+        bizFileKey,
+        bizDocument: bizDocFallback,
+        bizFileName,
+        dealerType: null,
+        approved: true,
+      };
+      try {
+        await prisma.userClient.create({ data: createData as Parameters<typeof prisma.userClient.create>[0]["data"] });
+      } catch {
+        try {
+          await prisma.userClient.create({
+            data: { userId: session.id, clientName: clientName.trim(), bizNumber: digits, dealerType: null, approved: true } as Parameters<typeof prisma.userClient.create>[0]["data"],
+          });
+        } catch (e2) {
+          const msg = e2 instanceof Error ? e2.message : String(e2);
+          if (msg.includes("Unique constraint")) return NextResponse.json({ error: "이미 등록된 사업자번호예요." }, { status: 409 });
+          return NextResponse.json({ error: msg }, { status: 500 });
+        }
+      }
+    }
+    return NextResponse.json({ success: true });
+  }
+
+  // 프로필 수정 (이름, 직업)
   const data: Record<string, unknown> = {};
   if (name !== undefined) data.name = String(name).trim();
-  if (carrier !== undefined) data.carrier = carrier || null;
   if (role !== undefined && VALID_ROLES.includes(role)) data.role = role;
 
   if (Object.keys(data).length === 0) {
@@ -82,13 +156,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const doc = await prisma.userDocument.create({
-      data: {
-        userId: session.id,
-        docType: docType || "기타",
-        fileName,
-        fileKey,
-        fileData: fileDataFallback,
-      },
+      data: { userId: session.id, docType: docType || "기타", fileName, fileKey, fileData: fileDataFallback },
       select: { id: true, docType: true, fileName: true, createdAt: true },
     });
     return NextResponse.json({ ...doc, createdAt: doc.createdAt.toISOString() }, { status: 201 });
