@@ -568,10 +568,16 @@ async function processDay(
         let computedLogistics = -1;
         let aggDebug = "";
         if ((!productRule || productRule.costPerUnit === 0) && channelProductNo) {
+          // 콜론 키 제거 — "사이즈: S" → "S", "압박스타킹: 종아리형" → "종아리형"
+          // 네이버 주문 옵션은 "키: 값 / 키: 값" 형식, ⭐옵션매핑 label 은 "값 / 값" 형식이라 정규화 필요
+          const stripKey = (s: string): string => {
+            const c = s.indexOf(":");
+            return c >= 0 ? s.slice(c + 1).trim() : s.trim();
+          };
           const orderOpt = po.productOption ?? "";
           const orderParts = orderOpt.split("/").map((s) => s.trim());
-          const orderFirstPart = orderParts[0] ?? "";
-          const orderSize = orderParts.length > 1 ? orderParts[orderParts.length - 1] : "";
+          const orderFirstPart = stripKey(orderParts[0] ?? "");
+          const orderSize = orderParts.length > 1 ? stripKey(orderParts[orderParts.length - 1]) : "";
           // 1+1, 2+1 같은 단품 multiplier 인식
           const plusMatch = orderFirstPart.match(/(\d+)\s*\+\s*(\d+)/);
           const multiplier = plusMatch ? parseInt(plusMatch[1], 10) + parseInt(plusMatch[2], 10) : 1;
@@ -588,8 +594,8 @@ async function processDay(
             const catName = rule.label || catalogOptNames?.get(rule.optionManageCode) || "";
             if (!catName) continue;
             const catParts = catName.split("/").map((s) => s.trim());
-            const catFirstPart = catParts[0] ?? "";
-            const catSize = catParts.length > 1 ? catParts[catParts.length - 1] : "";
+            const catFirstPart = stripKey(catParts[0] ?? "");
+            const catSize = catParts.length > 1 ? stripKey(catParts[catParts.length - 1]) : "";
             // 사이즈 같고 + 부위명이 주문 옵션명에 포함되면 매칭
             if (catSize === orderSize && catFirstPart && orderFirstPart.includes(catFirstPart)) {
               totalCost += rule.costPerUnit;
