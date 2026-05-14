@@ -33,13 +33,32 @@ async function uploadFileToStorage(file: File, prefix: string): Promise<{ fileKe
   return { fileKey: key };
 }
 
-// PATCH /api/biz-rates/[id] — multipart/form-data: file
+// PATCH /api/biz-rates/[id]
+//  - multipart/form-data {file}: 파일 교체
+//  - application/json {columnMap}: 컬럼 매핑만 업데이트 (파일 교체 없음)
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
   if (!bizOrAdmin(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
   const { id } = await params;
+  const contentType = req.headers.get("content-type") ?? "";
+
+  // JSON 본문 → 컬럼 매핑만 업데이트
+  if (contentType.includes("application/json")) {
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== "object" || !("columnMap" in body)) {
+      return NextResponse.json({ error: "columnMap 필수" }, { status: 400 });
+    }
+    const existing = await prisma.corpRateFile.findUnique({ where: { id }, select: { id: true } });
+    if (!existing) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+    const updated = await prisma.corpRateFile.update({
+      where: { id },
+      data: { columnMap: body.columnMap ?? undefined },
+    });
+    return NextResponse.json(updated);
+  }
+
   const formData = await req.formData();
   const file = formData.get("file") as File | null;
 

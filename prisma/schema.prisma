@@ -597,10 +597,13 @@ model CorpRateFile {
   id            String     @id @default(cuid())
   corpClientId  String
   corpClient    UserClient @relation(fields: [corpClientId], references: [id], onDelete: Cascade)
-  companyName   String
+  companyName   String     @default("")
   applyMonth    String     // "YYYY-MM"
   fileName      String
   fileKey       String
+  // 컬럼 매핑: 요율표 파일의 몇 번째 컬럼이 어느 헤더에 해당하는지
+  // 예: { "보험코드": 1, "제약사": 2, "상품명": 3, "수수료율": 4, "특이사항": 5 }
+  columnMap     Json?
   uploadedById  String
   uploadedBy    User       @relation("CorpRateFileUploader", fields: [uploadedById], references: [id])
   createdAt     DateTime   @default(now())

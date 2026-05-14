@@ -70,6 +70,7 @@ export async function GET(req: NextRequest) {
         applyMonth: true,
         fileName: true,
         fileKey: true,
+        columnMap: true,
         createdAt: true,
         updatedAt: true,
         corpClient: { select: { clientName: true } },
@@ -90,11 +91,12 @@ export async function POST(req: NextRequest) {
   const formData = await req.formData();
   const file = formData.get("file") as File | null;
   const corpClientId = (formData.get("corpClientId") as string | null)?.trim();
-  const companyName = (formData.get("companyName") as string | null)?.trim();
+  // 신규 플로우에서는 제약사가 파일 내 컬럼으로 들어오므로 companyName은 선택값
+  const companyName = (formData.get("companyName") as string | null)?.trim() ?? "";
   const applyMonth = (formData.get("applyMonth") as string | null)?.trim();
 
-  if (!file || !corpClientId || !companyName || !applyMonth) {
-    return NextResponse.json({ error: "file, corpClientId, companyName, applyMonth 필수" }, { status: 400 });
+  if (!file || !corpClientId || !applyMonth) {
+    return NextResponse.json({ error: "file, corpClientId, applyMonth 필수" }, { status: 400 });
   }
 
   const MAX_BYTES = 50 * 1024 * 1024;
