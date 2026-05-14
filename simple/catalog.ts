@@ -8,13 +8,17 @@
  * 결과 시트 「상품목록」:
  *   A 스토어
  *   B 원본상품번호 (originProductNo)
- *   C 채널상품번호 (channelProductNo)  ← 「상품매핑」 의 상품번호와 동일
- *   D 상품명
- *   E 카테고리
- *   F 가격
- *   G 상태 (SALE/OUTOFSTOCK/SUSPENSION/CLOSED 등)
- *   H 유형 추정 (메인/추가)
- *   I 수집일
+ *   C 채널상품번호 (channelProductNo)
+ *   D 옵션관리번호
+ *   E 상품명
+ *   F 옵션명
+ *   G 카테고리
+ *   H 정가          (메인=salePrice / 옵션=부모 salePrice / 추가상품=add.price)
+ *   I 실제 판매가   (메인=discountedPrice / 옵션=부모 discountedPrice + opt.price 추가금 / 추가상품=add.price)
+ *   J 상태 (SALE/OUTOFSTOCK/STOPPED 등)
+ *   K 유형 (메인/옵션/추가)
+ *   L URL
+ *   M 수집일
  *
  * 「상품매핑」 으로 복붙 활용:
  *   1. 「상품목록」 에서 추적할 상품들 골라서 (C/D/H 칼럼)
@@ -62,7 +66,9 @@ interface ChannelProduct {
   statusType?: string;
   saleType?: string;
   name?: string;
-  salePrice?: number;
+  salePrice?: number;           // 정가
+  discountedPrice?: number;     // 할인 후 가격 (즉시할인 적용)
+  mobileDiscountedPrice?: number; // 모바일 할인 후 가격
   stockQuantity?: number;
   categoryId?: string;
   wholeCategoryName?: string;
@@ -234,7 +240,8 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
     "상품명",
     "옵션명",
     "카테고리",
-    "가격",
+    "정가",              // H — 메인=salePrice, 옵션=부모 salePrice, 추가상품=add.price
+    "실제 판매가",        // I — 메인=discountedPrice / 옵션=부모 discountedPrice + opt.price (추가금) / 추가상품=add.price
     "상태",
     "유형 (메인/옵션/추가)",
     "URL",
@@ -270,7 +277,7 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
         if (channels.length === 0) {
           rows.push([
             store.name, originNo, "", "",
-            p.name ?? "", "", "", 0, p.statusType ?? "",
+            p.name ?? "", "", "", 0, 0, p.statusType ?? "",
             "메인", "",
             today,
           ]);
@@ -279,17 +286,20 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
         for (const ch of channels) {
           const chNo = String(ch.channelProductNo ?? "");
           const url = chNo ? `https://smartstore.naver.com/main/products/${chNo}` : "";
+          const chSale = ch.salePrice ?? 0;                                     // 정가
+          const chReal = ch.discountedPrice ?? ch.mobileDiscountedPrice ?? chSale; // 할인후가 (없으면 정가)
           // 메인 행
           rows.push([
             store.name, originNo, chNo, "",
             ch.name ?? p.name ?? "", "", ch.wholeCategoryName ?? "",
-            ch.salePrice ?? 0, ch.statusType ?? p.statusType ?? "",
+            chSale, chReal, ch.statusType ?? p.statusType ?? "",
             inferType(ch, p), url,
             today,
           ]);
           count++;
 
           // 옵션 행 (같은 채널상품번호 아래, 옵션관리번호로 구별)
+          // 옵션 API price 는 "추가금" — 실제 판매가 = 부모 할인후가 + 추가금
           for (const opt of detail?.options ?? []) {
             const optName = [
               opt.optionName1 ?? opt.option1,
@@ -297,23 +307,26 @@ async function dumpCatalog(creds: SheetCreds, filterStore?: string): Promise<voi
               opt.optionName3 ?? opt.option3,
             ].filter(Boolean).join(" / ");
             const optCode = String(opt.optionManageCode ?? opt.id ?? "");
+            const optAdd = opt.price ?? 0;
+            const optReal = chReal + optAdd;
             rows.push([
               store.name, originNo, chNo, optCode,
               ch.name ?? p.name ?? "", optName, ch.wholeCategoryName ?? "",
-              opt.price ?? 0, opt.usable === false ? "STOPPED" : "SALE",
+              chSale, optReal, opt.usable === false ? "STOPPED" : "SALE",
               "옵션", url,
               today,
             ]);
             count++;
           }
 
-          // 추가상품 행 (같은 채널상품번호 아래)
+          // 추가상품 행 (같은 채널상품번호 아래) — add.price 는 절대가
           for (const add of detail?.additionals ?? []) {
             const addCode = String(add.sellerManagementCode ?? add.optionManageCode ?? add.id ?? "");
+            const addPrice = add.price ?? 0;
             rows.push([
               store.name, originNo, chNo, addCode,
               add.groupName ?? add.name ?? "", add.name ?? "", ch.wholeCategoryName ?? "",
-              add.price ?? 0, add.usable === false ? "STOPPED" : "SALE",
+              addPrice, addPrice, add.usable === false ? "STOPPED" : "SALE",
               "추가", url,
               today,
             ]);

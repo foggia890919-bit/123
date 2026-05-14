@@ -29,7 +29,27 @@ const DEV_CLIENT_ID = process.env.NAVER_DEVELOPER_CLIENT_ID;
 const DEV_CLIENT_SECRET = process.env.NAVER_DEVELOPER_CLIENT_SECRET;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36";
+// 최신 Chrome UA — 너무 옛 UA 는 봇 차단 (HTTP 418) 빈도 높음
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+/** 네이버 쇼핑 페이지 스크래핑용 — 실제 Chrome 흉내 (sec-ch-* 등 필수) */
+const SHOPPING_HEADERS: Record<string, string> = {
+  "User-Agent": UA,
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+  "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+  "Accept-Encoding": "gzip, deflate, br",
+  "Cache-Control": "no-cache",
+  Pragma: "no-cache",
+  "sec-ch-ua": "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"",
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": "\"Windows\"",
+  "sec-fetch-dest": "document",
+  "sec-fetch-mode": "navigate",
+  "sec-fetch-site": "same-origin",
+  "sec-fetch-user": "?1",
+  "upgrade-insecure-requests": "1",
+};
+let marketSize418DumpLogged = false; // 418 응답 body 1회만 dump
 
 /** KST 기준 오늘 날짜 "YYYY-MM-DD" — UTC 새벽 시간에 전날로 박히는 사고 방지 */
 function todayKst(): string {
@@ -259,13 +279,19 @@ async function fetchKeywordMarketSize(keyword: string): Promise<MarketSize | nul
   const url = `https://search.shopping.naver.com/search/all?query=${encodeURIComponent(keyword)}&pagingSize=40`;
   const res = await fetch(url, {
     headers: {
-      "User-Agent": UA,
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
-      Referer: "https://shopping.naver.com/",
+      ...SHOPPING_HEADERS,
+      Referer: "https://search.shopping.naver.com/",
     },
   });
   if (!res.ok) {
+    // 418 은 봇 차단 — 첫 1회만 body 일부 dump (다음 진단 단서)
+    if (res.status === 418 && !marketSize418DumpLogged) {
+      marketSize418DumpLogged = true;
+      try {
+        const body = await res.text();
+        console.warn(`\n[진단8] HTTP 418 응답 body 첫 800자 (차단 형태 확인용):\n${body.slice(0, 800)}\n[진단8] 끝\n`);
+      } catch { /* body 못 읽어도 무시 */ }
+    }
     console.warn(`  [${keyword}] HTTP ${res.status}`);
     return null;
   }
