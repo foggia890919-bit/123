@@ -4922,13 +4922,13 @@ function CorpRelationTab() {
   useEffect(() => {
     fetch("/api/user-clients?all=true")
       .then((r) => r.json())
-      .then((data) => {
-        const all = data as CorpClient[];
-        setClients(all.filter((c) => c.dealerType !== null));
-      })
+      .then((data) => setClients(data as CorpClient[]))
       .catch(() => setClients([]))
       .finally(() => setLoading(false));
   }, []);
+
+  // 드롭다운 선택지: 의료기관(dealerType: null) 제외
+  const corpOptions = clients.filter((c) => c.dealerType !== null);
 
   const filtered = clients.filter((c) => {
     if (!query) return true;
@@ -4962,6 +4962,7 @@ function CorpRelationTab() {
   }
 
   const dealerLabel: Record<string, string> = {
+    "": "병의원(원외)",
     UPPER_CORP: "상위법인",
     LOWER_CORP: "하위법인",
     CORPORATION: "법인",
@@ -4969,6 +4970,7 @@ function CorpRelationTab() {
     SELF: "자사",
   };
   const dealerColor: Record<string, string> = {
+    "": "bg-green-100 text-green-700",
     UPPER_CORP: "bg-purple-100 text-purple-700",
     LOWER_CORP: "bg-blue-100 text-blue-700",
     CORPORATION: "bg-indigo-100 text-indigo-700",
@@ -5049,7 +5051,7 @@ function CorpRelationTab() {
                         className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-wait"
                       >
                         <option value="">없음</option>
-                        {clients
+                        {corpOptions
                           .filter((x) => x.id !== c.id)
                           .map((x) => (
                             <option key={x.id} value={x.id}>
