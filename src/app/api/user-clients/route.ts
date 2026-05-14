@@ -199,7 +199,6 @@ export async function GET(req: NextRequest) {
     // Level 1: dealerType WHERE + parentCorpId in select
     try {
       const users = await prisma.user.findMany({
-        where: { role: { not: "ADMIN" } },
         select: {
           id: true, name: true, email: true, phone: true, createdAt: true,
           userClients: {
@@ -218,7 +217,6 @@ export async function GET(req: NextRequest) {
     // Level 2: dealerType WHERE, no parentCorpId
     try {
       const users = await prisma.user.findMany({
-        where: { role: { not: "ADMIN" } },
         select: {
           id: true, name: true, email: true, phone: true, createdAt: true,
           userClients: {
@@ -237,7 +235,6 @@ export async function GET(req: NextRequest) {
     // Level 3: no WHERE, all UserClients included
     try {
       const users = await prisma.user.findMany({
-        where: { role: { not: "ADMIN" } },
         select: {
           id: true, name: true, email: true, phone: true, createdAt: true,
           userClients: {
