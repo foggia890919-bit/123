@@ -23,6 +23,8 @@ cat >> /tmp/cron.clean <<EOF
 PATH=/usr/local/bin:/usr/bin:/bin
 # 매일 KST 8시 — 매출 보고 (어제 + 7일 롤링)
 0 8 * * * cd ${WORKDIR} && ${NPX} tsx run.ts >> ${LOG_DIR}/sales.log 2>&1
+# 매일 KST 8시 1분 — 재고 보고 (B2C 재고장 → 텔레그램 + ⭐재고이력 누적)
+1 8 * * * cd ${WORKDIR} && ${NPX} tsx inventory-report.ts >> ${LOG_DIR}/sales.log 2>&1
 # 매분 — 시트 「자동화」 폴링 (사장님이 GO 입력하면 실행)
 * * * * * cd ${WORKDIR} && ${NPX} tsx scheduler.ts >> ${LOG_DIR}/scheduler.log 2>&1
 EOF
