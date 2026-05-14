@@ -7,7 +7,7 @@ import { BUCKETS, persistDataUri } from "@/lib/storage";
 export async function POST(req: NextRequest) {
   try {
     await ensureSmsOtpTable();
-    const { email, password, name, role, phone, carrier, document } = await req.json();
+    const { email, password, name, role, phone, carrier, document, biz, bizDocument } = await req.json();
 
     if (!email || !password || !name) {
       return NextResponse.json({ error: "필수 항목을 입력해주세요." }, { status: 400 });
@@ -68,6 +68,46 @@ export async function POST(req: NextRequest) {
           fileData,
         },
       });
+    }
+
+    if (biz?.bizNumber && biz?.clientName) {
+      const { fileKey: bizFileKey, fileData: bizDocFallback } = await persistDataUri(
+        BUCKETS.userClientBiz,
+        user.id,
+        bizDocument?.fileData ?? null
+      );
+      try {
+        await prisma.userClient.create({
+          data: {
+            userId: user.id,
+            clientName: biz.clientName,
+            bizNumber: biz.bizNumber,
+            address: biz.address ?? null,
+            bizDocument: bizDocFallback,
+            bizFileKey: bizFileKey ?? null,
+            bizFileName: bizDocument?.fileName ?? null,
+            dealerType: null,
+            approved: true,
+          },
+        });
+      } catch {
+        try {
+          await prisma.userClient.create({
+            data: {
+              userId: user.id,
+              clientName: biz.clientName,
+              bizNumber: biz.bizNumber,
+              bizDocument: bizDocFallback,
+              bizFileKey: bizFileKey ?? null,
+              bizFileName: bizDocument?.fileName ?? null,
+              dealerType: null,
+              approved: true,
+            },
+          });
+        } catch {
+          // silently skip — don't fail registration if UserClient creation fails
+        }
+      }
     }
 
     await prisma.$executeRawUnsafe(`DELETE FROM "SmsOtp" WHERE "phone"=$1`, digits);

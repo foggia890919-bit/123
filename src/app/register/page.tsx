@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Upload, CheckCircle2, Loader2 } from "lucide-react";
+import { Upload, CheckCircle2, Loader2, FileText } from "lucide-react";
 
 const roles = [
   { value: "SALES_REP", label: "영업사원 (CSO)", docLabel: "CSO 신고증" },
@@ -18,10 +18,18 @@ const carriers = ["SKT", "KT", "LG U+", "SKT 알뜰폰", "KT 알뜰폰", "LG 알
 export default function RegisterPage() {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
+  const bizFileRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState({ email: "", password: "", name: "", role: "SALES_REP", phone: "", carrier: "" });
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // 사업자 정보 상태
+  const [bizNumber, setBizNumber] = useState("");
+  const [bizName, setBizName] = useState("");
+  const [bizAddress, setBizAddress] = useState("");
+  const [bizFile, setBizFile] = useState<File | null>(null);
+  const [bizNumberError, setBizNumberError] = useState("");
 
   // SMS 인증 상태
   const [otpCode, setOtpCode] = useState("");
@@ -52,6 +60,35 @@ export default function RegisterPage() {
 
   function isValidPhone(phone: string) {
     return /^010-\d{4}-\d{4}$/.test(phone);
+  }
+
+  function formatBizNumber(v: string) {
+    const d = v.replace(/\D/g, "");
+    if (d.length <= 3) return d;
+    if (d.length <= 5) return `${d.slice(0, 3)}-${d.slice(3)}`;
+    return `${d.slice(0, 3)}-${d.slice(3, 5)}-${d.slice(5, 10)}`;
+  }
+
+  function validateBizNumber(biz: string): boolean {
+    const d = biz.replace(/\D/g, "");
+    if (d.length !== 10) return false;
+    const n = d.split("").map(Number);
+    const w = [1, 3, 7, 1, 3, 7, 1, 3, 5];
+    let sum = 0;
+    for (let i = 0; i < 9; i++) sum += n[i] * w[i];
+    sum += Math.floor(n[8] * 5 / 10);
+    return (10 - (sum % 10)) % 10 === n[9];
+  }
+
+  function handleBizNumberChange(val: string) {
+    const formatted = formatBizNumber(val);
+    setBizNumber(formatted);
+    const digits = formatted.replace(/\D/g, "");
+    if (digits.length === 10 && !validateBizNumber(formatted)) {
+      setBizNumberError("유효하지 않은 사업자등록번호예요.");
+    } else {
+      setBizNumberError("");
+    }
   }
 
   async function sendOtp() {
@@ -137,57 +174,79 @@ export default function RegisterPage() {
     if (!phoneVerified) { setError("휴대폰 본인인증을 완료해주세요."); return; }
     if (!file) { setError("첨부파일을 업로드해주세요."); return; }
     if (file.size > 10 * 1024 * 1024) { setError("파일 크기는 10MB 이하여야 합니다."); return; }
+    if (bizNumberError) { setError("사업자등록번호를 확인해주세요."); return; }
+    if (bizNumber && !bizName.trim()) { setError("상호명을 입력해주세요."); return; }
 
     setLoading(true);
     setError("");
 
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onerror = () => {
-      setError("파일을 읽을 수 없어요. 다시 시도해주세요.");
-      setLoading(false);
-    };
-    reader.onload = async () => {
-      try {
-        let fileData = reader.result as string;
-        // 이미지면 압축, PDF는 그대로
-        if (file.type.startsWith("image/")) {
-          fileData = await compressImage(fileData);
-        }
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 30_000);
-        let res: Response;
-        try {
-          res = await fetch("/api/auth/register", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              ...form,
-              document: { fileName: file.name, fileData, docType: selectedRole?.docLabel },
-            }),
-            signal: controller.signal,
-          });
-        } finally {
-          clearTimeout(timeout);
-        }
-        let data: { error?: string } = {};
-        try { data = await res.json(); } catch { /* non-JSON response */ }
-        if (!res.ok) {
-          setError(data.error || "회원가입에 실패했어요. 잠시 후 다시 시도해주세요.");
-        } else {
-          router.push("/login?registered=1");
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "";
-        if (msg.includes("abort") || msg.includes("signal")) {
-          setError("요청 시간이 초과됐어요. 잠시 후 다시 시도해주세요.");
-        } else {
-          setError("네트워크 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
-        }
-      } finally {
-        setLoading(false);
+    // Read the professional doc and optional biz doc together
+    const readFile = (f: File): Promise<string> =>
+      new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result as string);
+        r.onerror = reject;
+        r.readAsDataURL(f);
+      });
+
+    try {
+      let fileData = await readFile(file).catch(() => {
+        throw new Error("파일을 읽을 수 없어요. 다시 시도해주세요.");
+      });
+      if (file.type.startsWith("image/")) {
+        fileData = await compressImage(fileData);
       }
-    };
+
+      let bizDocumentPayload: { fileName: string; fileData: string } | null = null;
+      if (bizFile) {
+        let bizData = await readFile(bizFile).catch(() => {
+          throw new Error("사업자등록증 파일을 읽을 수 없어요. 다시 시도해주세요.");
+        });
+        if (bizFile.type.startsWith("image/")) {
+          bizData = await compressImage(bizData);
+        }
+        bizDocumentPayload = { fileName: bizFile.name, fileData: bizData };
+      }
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30_000);
+      let res: Response;
+      try {
+        res = await fetch("/api/auth/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...form,
+            document: { fileName: file.name, fileData, docType: selectedRole?.docLabel },
+            biz: bizNumber ? {
+              bizNumber: bizNumber.replace(/\D/g, ""),
+              clientName: bizName.trim(),
+              address: bizAddress.trim() || null,
+            } : null,
+            bizDocument: bizDocumentPayload,
+          }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+      let data: { error?: string } = {};
+      try { data = await res.json(); } catch { /* non-JSON response */ }
+      if (!res.ok) {
+        setError(data.error || "회원가입에 실패했어요. 잠시 후 다시 시도해주세요.");
+      } else {
+        router.push("/login?registered=1");
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes("abort") || msg.includes("signal")) {
+        setError("요청 시간이 초과됐어요. 잠시 후 다시 시도해주세요.");
+      } else {
+        setError(msg || "네트워크 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
+      }
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -305,6 +364,65 @@ export default function RegisterPage() {
             >
               {roles.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
             </select>
+          </div>
+
+          {/* 사업자 정보 (선택) */}
+          <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 space-y-3">
+            <p className="text-sm font-semibold text-gray-700">사업자 정보 (선택)</p>
+
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-gray-700">사업자등록번호</label>
+              <Input
+                value={bizNumber}
+                onChange={(e) => handleBizNumberChange(e.target.value)}
+                placeholder="000-00-00000"
+                maxLength={12}
+              />
+              {bizNumberError && (
+                <p className="text-xs text-red-600">{bizNumberError}</p>
+              )}
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-gray-700">
+                상호명{bizNumber ? <span className="text-red-500 ml-0.5">*</span> : ""}
+              </label>
+              <Input
+                value={bizName}
+                onChange={(e) => setBizName(e.target.value)}
+                placeholder="상호명"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-gray-700">주소</label>
+              <Input
+                value={bizAddress}
+                onChange={(e) => setBizAddress(e.target.value)}
+                placeholder="사업장 주소"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-gray-700">사업자등록증</label>
+              <div
+                onClick={() => bizFileRef.current?.click()}
+                className={`border-2 border-dashed rounded-lg p-5 text-center cursor-pointer transition-colors ${bizFile ? "border-blue-400 bg-blue-50" : "border-gray-300 hover:border-blue-400"}`}
+              >
+                <FileText className="w-5 h-5 text-gray-400 mx-auto mb-1" />
+                <p className="text-sm text-gray-500">
+                  {bizFile ? <span className="font-medium text-gray-800">{bizFile.name}</span> : "클릭해서 파일 첨부"}
+                </p>
+                <p className="text-xs text-gray-400 mt-1">JPG, PNG, PDF 지원</p>
+                <input
+                  ref={bizFileRef}
+                  type="file"
+                  accept=".jpg,.jpeg,.png,.pdf"
+                  className="hidden"
+                  onChange={(e) => setBizFile(e.target.files?.[0] || null)}
+                />
+              </div>
+            </div>
           </div>
 
           <div className="space-y-1">
