@@ -1,127 +1,229 @@
 # HANDOVER — 네이버 매출 자동화 (claude/naver-sales-automation-VKAMr)
 
-> **세션 시작 시 첫 액션**: 이 파일을 끝까지 읽고 → 「현재 상태」 검증 → 「다음 액션」 시작.
-> **세션 종료 시 의무**: 이 파일을 갱신하고 커밋·푸시한 뒤 종료.
+> **세션 시작 시 첫 액션**: 이 파일 끝까지 읽고 → 「현재 상태」 검증 → 「다음 액션」 진행.
+> **세션 종료 시 의무**: 이 파일 갱신·커밋·푸시 후 종료.
 
 ---
 
-## 어디서 무엇이 돌고 있나
+## 인프라
 
 | 항목 | 값 |
 |---|---|
 | 리포 | `https://github.com/foggia890919-bit/123` |
 | 브랜치 | `claude/naver-sales-automation-VKAMr` |
-| 실행 호스트 | AWS Lightsail 인스턴스 `Ubuntu-1` (2GB RAM, 2 vCPU, 60GB SSD, Seoul Zone A, **정적 IP `52.79.198.61`** `StaticIp-2`) — 2026-05-12 업그레이드·정적 IP 설정 완료 |
-| cron | 매일 08:00 `run.ts` + 매분 `scheduler.ts` |
-| 시트 | Google Sheets (탭: 주문원본, 옵션매핑, 일일집계, 자동화, 검색량조회, …) |
+| 실행 호스트 | AWS Lightsail `Ubuntu-1` (2GB RAM, 2 vCPU, 60GB SSD, Seoul Zone A, **정적 IP `52.79.198.61`**) |
+| cron | 매일 08:00 `run.ts` (매출) / 08:01 `inventory-report.ts` (재고) / 매분 `scheduler.ts` (자동화 폴링) |
+| 시트 | Google Sheets (「매출보고_네이버」, 「여기명품 사입관리」, 「B2C 재고장」) |
 | 알림 | 텔레그램 |
-| 마지막 커밋 | `90eb05a` feat(simple): 체크박스 트리거 지원 |
 
-`simple/` 가 라이브 시스템 본체. `src/app/...` 는 별개 Next.js 프로젝트(이 브랜치 무관).
+`simple/` = 라이브 본체. `src/app/...` Next.js 는 무관.
 
-## 핵심 파일 위치
+## 핵심 파일
 
-- `simple/run.ts` — 매출 보고 (어제 + 7일 롤링, 백필)
-- `simple/scheduler.ts` — 시트 「자동화」 탭 1분 폴링 + lock file
-- `simple/catalog.ts` — 상품 카탈로그 (Lightsail 512MB 에서 OOM 위험)
-- `simple/volume.ts` — 키워드 검색량 (시트 「검색량조회」 탭)
-- `simple/market.ts` — 시장 카테고리/Top500/규모/순위
-- `simple/audit.ts` — 정산 차감 추적
-- `simple/sheets.ts` — Google Sheets 헬퍼
-- `simple/scripts/install-cron.sh` — cron 자동 등록 + 중복 정리
+| 파일 | 역할 |
+|---|---|
+| `simple/run.ts` | 매출 보고 + 이익 계산 (텔레그램 + 시트 갱신) |
+| `simple/scheduler.ts` | 시트 「자동화」 탭 매분 폴링 + lock + STOP 트리거 |
+| `simple/catalog.ts` | 상품 카탈로그 수집 (네이버 커머스 API → 「상품목록」) |
+| `simple/volume.ts` | 키워드 검색량 (네이버 검색광고 API → 「검색량조회」) |
+| `simple/market.ts` | 시장조사: 카테고리 트리/Top500/규모/순위 |
+| `simple/inventory-report.ts` | 재고 보고 (B2C 재고장 → 「⭐재고이력」 + 텔레그램) |
+| `simple/audit.ts` | 정산 차감 추적 |
+| `simple/sheets.ts` | Google Sheets API 헬퍼 (write retry, 체크박스/날짜 picker, ...) |
+| `simple/scripts/install-cron.sh` | cron 자동 등록 |
+
+## 외부 의존 시트 (별도 스프레드시트, 서비스 계정 공유 필요)
+
+| 시트 | 용도 | 컬럼 |
+|---|---|---|
+| 「여기명품 사입관리」 (`10DgfEqudeXOBmFFm8vyOHHuHJp6nZXKaxv4ecpbVhno`, gid=30917428) | 여기명품 매입원가 매핑 | AD=상품주문번호, AB=도매가+배송비+박스비 통합 |
+| 「B2C 재고장」 (`1TT4w04Etabf1C499icyItbfilWSUGPBlZIBRY76Urf0`, gid=303888745) | 재고 보고 데이터 | D=SEASON("반품" 포함 행 분리), AA=현재고수량, AF=현재고금액 |
+
+→ 두 시트 모두 `.env` 의 `GOOGLE_SERVICE_ACCOUNT_EMAIL` 에 *편집자(또는 뷰어)* 권한 공유 필요.
+
+## 환경변수 (`.env` 주요)
+
+- `GOOGLE_SHEETS_ID`, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY`
+- `NAVER_STORES_JSON` (3개 스토어: 비타앤오리진, 여기명품, 와이케이팜)
+- `NAVER_AD_API_KEY`, `NAVER_AD_SECRET`, `NAVER_AD_CUSTOMER_ID` (검색광고 — 검색량/시장 키워드)
+- `NAVER_DEVELOPER_CLIENT_ID`, `NAVER_DEVELOPER_CLIENT_SECRET` (검색 API — 순위 추적)
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
 
 ---
 
-## 현재 상태 (2026-05-11)
+## 시트 구조 — 「매출보고_네이버」
 
-### ✅ 작동 확인
-- 검색량 조회 (`volume.ts`) — 헬렌카민스키 107,600회 등 시트에 박힘
-- scheduler.ts 트리거 인식 — GO/실행/TRUE(체크박스) 다 처리
-- 체크박스 자동 생성 검증 완료 (B열 7개, DATE_* 행 제외) ✓
+| 시트 탭 | 역할 | 비고 |
+|---|---|---|
+| **자동화** | 작업 트리거 + 상태 (A 작업/B 트리거/C 상태/**D 클릭시점**/E 마지막실행/F 결과/G 결과시트/H ⭐입력시트/**I 끝날짜(범위백필)**) | 사장님 ☑ 클릭으로 작업 실행 |
+| 주문원본 | 매출 raw (행별 매출/원가/물류비/이익) | run.ts 갱신 |
+| 일일집계 | 키워드별 일일 합산 | run.ts 갱신 |
+| 상품목록 | catalog 자동 수집 (12컬럼) | catalog.ts 매번 clear+append |
+| **⭐옵션매핑** | 사장님 입력 — 옵션관리번호별 매핑 (A 원본/B 채널/C 옵션관리번호/D 라벨/E 원가/F 물류비/G 유형) | run.ts 가 매칭 |
+| 검색량조회 | A4~ 사장님 키워드 입력 → B~F 검색량 자동 | volume.ts |
+| 시장조사_카테고리 | DataLab 카테고리 트리 (F열 추적 'o' 표시) | market.ts tree |
+| 시장조사_키워드 | Top500 + 검색량 | market.ts keywords (결과) |
+| **⭐시장조사_키워드_추적** | A열에 카테고리 코드 입력 | market.ts keywords (입력) |
+| 시장조사_시장규모 | Top10/Top40 매출·판매량 | market.ts size (결과) |
+| **⭐시장조사_시장규모_추적** | A열에 키워드 입력 | market.ts size (입력) |
+| 순위추적_데이터 | 키워드 검색결과 내 순위 시계열 | market.ts rank (결과) |
+| **⭐순위추적_상품** | A productId / B 라벨 / C 추적키워드 | market.ts rank (입력) |
+| **⭐재고이력** | 날짜별 총재고/반품 누적 (시각화용) | inventory-report.ts |
 
-### ✅ 해결된 사고 (2026-05-11 → 2026-05-12)
-- catalog OOM: 512MB 인스턴스에서 catalog.ts 가 메모리 부족으로 SIGKILL → 2GB 인스턴스 업그레이드로 해결
-- 2026-05-12 19:49 catalog.ts OK 완주 확인
-- 부수적으로 발견·수정한 버그: scheduler.ts 의 RUNNING 칼럼 오인식 + FALSE 트리거 차단 (c51dce1 까지 푸시)
+⭐ 표시 시트 = 사장님 입력 시트.
 
-### ❌ 막힌 곳
+---
 
-**1. 검색량 조회 중 ~1분 시점에 멈춤 (의심: 타임아웃)** ← 유일하게 남은 코드 이슈
-- 증상: `volume.ts` 일부 키워드 처리 후 에러로 종료
-- 원인 *미확인*. 가설(검증 전):
-  - (a) scheduler.ts 가 1분 cron 인데 작업이 1분 넘으면 lock 충돌? — `execSync` timeout 은 90분(scheduler.ts:141) 이라 모순
-  - (b) 네이버 검색광고 API 자체 rate limit / per-request timeout
-  - (c) Lightsail 512MB OOM
-- **금지**: 추측만으로 코드 수정 X. 다음 세션에서 정확한 에러 메시지·스택·실행 시각·메모리 상태 먼저 확보.
+## 작업 규칙 (확정 합의)
+
+- **추측 기반 코드 변경 금지** — 진단·로그·데이터 먼저, 팩트 위에서만 작업
+- **자율 진행** — 큰 방향 합의되면 세부 단계 묻지 말고 실행
+- **git push 는 사장님 본인 cmd.exe 에서** — Claude 는 add/스테이징까지만
+- **`cd` 금지** — `git -C "<path>"` 사용
+- **세션 끊김 대응**: 작업 단위 작게 (작업→검증→커밋·푸시 한 사이클), 종료 시 HANDOVER 갱신
+
+---
+
+## 현재 상태 (2026-05-14)
+
+### ✅ 운영 안정 — 모두 작동
+- **매출 자동화** (매일 8시 cron): 3개 스토어 (비타앤오리진/여기명품/와이케이팜) 매출 보고 + 7일 롤링 + 시트 누적
+- **catalog**: 옵션명/추가상품 매핑 완료, OOM 해결, 매번 clear+append
+- **검색량 조회**: batchUpdate fix (429 해결)
+- **시장 작업 4개** (카테고리 트리/Top500/규모/순위): 입력 시트 분리 + 자동 생성
+- **순위 추적**: 네이버 검색 API + link 에서 채널상품번호 추출 매칭
+- **재고 보고** (매일 8:01 cron): B2C 재고장 → ⭐재고이력 누적 + 텔레그램
+- **여기명품 사입관리 매칭**: 상품주문번호(AD) → 매입원가(AB) 자동 적용
+- **자동화 시트 UX**: 체크박스 자동, ⭐ 입력 시트 하이퍼링크, 날짜 picker, STOP 트리거 (모든 ☑/RUNNING 정리)
+
+### 🟡 마지막 푸시 미완료 (사장님이 cmd.exe push 필요)
+- `feat(simple): 옵션매핑 자동 합산 - 단품 행만 입력시 1+1/조합 자동 계산`
+- 변경 내용:
+  - `extractBottles` 가 "1+1", "종아리+무릎" 패턴 자동 인식
+  - `run.ts` 의 매핑 로직: ⭐옵션매핑 정확 매칭 실패 시 → 같은 채널상품번호의 단품 행 + 상품목록 옵션명 lookup → 부위 키워드 매칭 → 합산
+  - 사장님이 ⭐옵션매핑에 **단품 옵션관리번호별 원가만 입력**하면 1+1/조합 자동 계산
 
 ### ⏸ 사장님 액션 대기
 
-**A. 체크박스 자동 생성 검증** (이번 세션 산출물)
-1. `cd ~/sales/simple && git pull` (Lightsail)
-2. 1분 안에 scheduler 가 한 번 돌아감 — 시트 「자동화」 탭 B열 (GO 행들) 체크박스 자동 생성 확인
-3. 안 보이면 콘솔 로그 `/home/ubuntu/scheduler.log` 에서 `[scheduler] 체크박스 설정 실패` 메시지 확인
+**1. 마지막 푸시 + Lightsail pull**
+```
+cd C:\Users\김성준\sales
+git commit -m "feat(simple): 옵션매핑 자동 합산 - 단품 행만 입력시 1+1/조합 자동 계산"
+git push
+```
+```
+cd ~/sales/simple && git pull
+```
 
-**B. `bash scripts/install-cron.sh` 결과** (이전 세션부터 미확인)
-- 한 줄: `cd ~/sales/simple && git pull && bash scripts/install-cron.sh && crontab -l`
-- cron 2줄(매일 8시 run + 매분 scheduler) 다 등록됐는지 확인
+**2. Apps Script onEdit 설치 (자동화 D열 클릭시점 기록용)**
+- 시트 → 확장 프로그램 → Apps Script → 코드 입력 + 권한 승인
+- 코드: B열 체크박스 클릭 시 D열에 KST 시각 자동 박힘
+```javascript
+function onEdit(e) {
+  if (!e || !e.range) return;
+  const sheet = e.range.getSheet();
+  if (sheet.getName() !== "자동화") return;
+  const col = e.range.getColumn();
+  const row = e.range.getRow();
+  if (col !== 2 || row < 2) return;
+  const value = e.range.getValue();
+  if (value === true || (typeof value === "string" && value.trim() !== "" && value !== "FALSE")) {
+    const now = Utilities.formatDate(new Date(), "Asia/Seoul", "yyyy-MM-dd HH:mm:ss");
+    sheet.getRange(row, 4).setValue(now);
+  }
+}
+```
 
-**C. 검색량 타임아웃 — 다음 실행 시 수집할 데이터**
-- 에러 메시지 전문 + 스택
-- `volume.ts` 처리 키워드 번호/시각 (현재 console.log 부족하면 임시 추가)
-- 실행 중 `free -m` 출력
+**3. ⭐옵션매핑 시트 사장님 입력**
+- 비타앤오리진: 단품 옵션관리번호별 원가 (사장님이 어느 정도 입력함)
+- 와이케이팜 압박스타킹: 종아리/무릎/허벅지 사이즈별 단품 행만 (1+1/조합은 자동 합산)
+- 매입가 (와이케이팜 압박스타킹):
+  - 종아리 8,040원
+  - 무릎 9,710원
+  - 허벅지 12,650원
+  - 물류비 4,000원 (건당)
 
----
+**4. 「B2C 재고장」 시트 공유 (재고 보고용)**
+- URL: `https://docs.google.com/spreadsheets/d/1TT4w04Etabf1C499icyItbfilWSUGPBlZIBRY76Urf0/edit?gid=303888745`
+- 서비스 계정 (`GOOGLE_SERVICE_ACCOUNT_EMAIL`) 에 공유 확인 필요
 
-## 사용자 결정사항 (변경 시 여기 업데이트)
-
-- GO 텍스트 입력 대신 **체크박스 UX** 로 전환 (확정)
-- catalog OOM 은 별도 트랙 — 인스턴스 업그레이드 또는 catalog 분할 (보류)
-- `simple/` 디렉터리가 라이브 본체 — `src/app/...` Next.js 와 분리
-
-## 작업 규칙 (사용자 합의)
-
-- **추측 기반 코드 변경 금지** — 가설로 수정 누적 X, 진단·로그·데이터 먼저
-- **자율 진행** — 큰 방향 합의되면 세부 단계는 묻지 말고 실행
-- **git push 는 사용자 본인 터미널에서** — Claude 는 add/스테이징까지만, commit·push 는 사장님이 cmd.exe 에서
-- **`cd` 금지** — `git -C "<path>"` 로 직접 실행
-
----
-
-## 다음 액션 (우선순위 순)
-
-### ✅ 완료된 액션 (2026-05-11 ~ 12)
-- ~~catalog OOM 사고 정리~~ (시트 정리 + lock 제거 + 코드 fix 푸시)
-- ~~Lightsail 512MB → 2GB 업그레이드~~ — 스냅샷 → 새 `Ubuntu-1` 생성 (3.35.13.72) → 기존 `naver-sales` 삭제
-- ~~catalog.ts 작동 검증~~ — 2GB 에서 OOM 없이 OK 완주 확인
-
-### ✅ 추가로 해결된 사고 (2026-05-12)
-- ~~검색량 429~~ — volume.ts 의 150개 단건 PUT → `values:batchUpdate` 1회로 묶어 해결, 검증 완료
-- ~~catalog 일부 스토어 IP 막힘~~ — 정적 IP `52.79.198.61` 설정 + 3개 스토어 (여기명품/비타앤오리진/와이케이팜) 화이트리스트 등록 완료
-- ~~catalog upsert 컬럼 정렬 어긋남~~ — 어제 9열 데이터(여기명품/와이케이팜) + 오늘 11열 데이터(비타앤오리진 803행~) 가 같은 시트에 섞여서 upsert 키 매칭 실패. **사장님 제안: 매번 시트 싹 지우고 새로 작성** → `sheets.ts:clearTabData` 헬퍼 추가 + `catalog.ts` 가 `upsertRows` → `clearTabData + appendRows` 패턴으로 변경. 안전장치: rows.length === 0 일 땐 기존 데이터 보존
-
-### 🟡 진행 중
-- **시장 카테고리 트리** 실행 중 — 네이버 DataLab 카테고리 스크래핑 (수만 행). 끝나면 「시장조사_카테고리」 시트 자동 생성
-- **시장 작업 4개 시트 자동 생성·구동가능 fix** (이번 세션) — `market.ts` 의 4개 함수가 시작 시 결과 시트를 항상 ensureTab 으로 미리 만들도록 변경. 의존 데이터 없으면 ERROR 처리해서 사장님에게 명확한 안내 메시지 전달. dumpCategoryTree 의 F열(추적) 보존 버그도 fix (재실행 시 'o' 표시 안 지워지게)
-
-### 다음 작업 (사장님 액션 필요)
-1. **시장 카테고리 트리 완료 대기** → 「시장조사_카테고리」 시트 생성 확인 → F열 「추적」 에 모니터링할 카테고리에 'o' 표시
-2. **시장 키워드 (Top500)** ☑ → 추적 카테고리만 Top500 키워드 → 「시장조사_키워드」 생성
-3. **시장 규모** ☑ → 「시장조사_시장규모」 생성 (5초/키워드, 100개 = 8분)
-4. **순위 추적** ☑ → 「순위추적_상품」 빈 시트 생성 → 사장님이 productId/라벨/추적키워드 입력 → 다시 ☑ → 「순위추적_데이터」 생성
-
-### 정리할 거 (여유 있을 때)
-- **install-cron.sh 정리** — `crontab -l` 헤더 주석 8중 중복 (동작 무관)
-- **스냅샷 정리** — `naver-sales-1778469786` 며칠 후 삭제 (월 $0.5 절약)
-- **시트 stale ERROR 정리** — 「자동화」 탭 2,6~10행의 11:56 ERROR 텍스트 셀 수동 삭제 (선택)
-- **catalog 재검증** — 화이트리스트 등록 후 catalog ☑ 1번 더 클릭해서 scheduler.log 에 「여기명품」「비타앤오리진」「와이케이팜」 모두 OK 인지 확인
+**5. 「여기명품 사입관리」 시트 공유 + AD열 상품주문번호 입력 (사입 후 매번)**
+- URL: `https://docs.google.com/spreadsheets/d/10DgfEqudeXOBmFFm8vyOHHuHJp6nZXKaxv4ecpbVhno/edit?gid=30917428`
+- 사장님이 사입 끝낼 때마다 AD열에 *해당 주문의 상품주문번호* 입력 + AB열 도매가+배송비+박스비 통합 입력
 
 ---
 
-## 작업 흐름 (세션 끊김 대응)
+## 매출 보고 메시지 구조 (현재)
 
-이 브랜치는 **claude.ai 원격 에이전트**가 돌리고 있어서 `--resume` 이 없습니다. 세션 끊기면 컨텍스트 통째로 날아갑니다. 그래서:
+```
+📊 YYYY-MM-DD 매출 보고
 
-1. **세션 시작 시**: 이 HANDOVER.md 를 먼저 읽고 `git log --oneline -10` 으로 최근 커밋 확인
-2. **작업 단위는 작게**: 한 사이클(작업 → 검증 → 커밋·푸시) 안에 끝낼 수 있는 크기로
-3. **세션 종료 시**: 이 HANDOVER.md 의 「현재 상태」, 「다음 액션」 업데이트 후 푸시
-4. **연속성 중요 작업**은 로컬 Claude Code (`C:\Users\김성준\sales`) 로 — `claude --resume` 가능
+💰 총매출 X원 (X건)
+❌ 취소매출 -X원 (X건)
+✅ 최종매출 X원 (X건)
+💵 정산예정 X원 (수수료 차감 후)
+📦 원가 X원 · 🚚 물류비 X원
+💎 이익 X원
+
+━━ 비타앤오리진 ━━
+💰 총매출 ...
+✅ 최종매출 ...
+📦 N건 배송 / 출고 N개
+💳 수수료 X원 / 💵 정산예정 X원
+📦 원가 X원 · 🚚 물류비 X원 → 💎 이익 X원
+• 라벨 N
+   N병 · N건 · X원
+   ↳ 추가: 라벨 ...
+
+━━ 여기명품 ━━ ...
+━━ 와이케이팜 ━━ ...
+```
+
+수수료 = 매출 - 정산예정 (네이버 총 차감, 명시 수수료 + 적립 차감 등 모두 포함).
+이익 = 정산예정 - 원가 - 물류비.
+
+---
+
+## 자주 발생하는 이슈 + 해결
+
+| 증상 | 원인 | 해결 |
+|---|---|---|
+| 시트 「자동화」 행 RUNNING 멈춤 | 작업 중 process 죽음 + lock 파일 남음 | 11행 「🛑 작업 중단」 ☑ → 자동 정리 |
+| 검색량 429 RATE_LIMIT | (해결됨) batchUpdate 1회로 처리 | — |
+| catalog OOM | (해결됨) 2GB 인스턴스 + 정적 IP | — |
+| 매출 보고에 일부 스토어 누락 | IP 화이트리스트 차단 | 네이버 커머스 API 콘솔 화이트리스트에 `52.79.198.61` 등록 확인 |
+| 텔레그램 fetch failed | (해결됨) sendTelegram + writeRange 3회 retry | — |
+| 옵션명 빈칸 / 추가상품 0건 | 네이버 API 응답 필드 (option1→optionName1, supplementProducts) | (해결됨) catalog.ts 매핑 fix |
+| 시장 카테고리 트리 1차만 12개 | (해결됨) childCount 조건 제거 + leaf 활용 + 429 retry | — |
+| 수수료 % 다르게 보임 | (해결됨) 매출-정산예정 = 진짜 수수료 | — |
+
+---
+
+## 다음 우선순위 작업 (사장님이 시작할 때)
+
+1. **마지막 푸시 + Lightsail pull + 매출 작업 테스트** (위 「1번 액션」)
+2. **압박스타킹 자동 합산 검증** — 와이케이팜 「압박스타킹」 주문 있는 날짜로 매출 보고 → 텔레그램 이익 표시 확인
+3. **여기명품 사입관리 매칭 검증** — 사장님이 AD열 상품주문번호 입력한 주문 있는 날짜로 매출 보고 → 그 행의 cost 가 AB값과 일치하는지
+4. **재고 보고 매일 자동 발송 확인** — 첫 보고 후 다음달부터 전월/당월초 비교 정상 표시
+5. **검색량 timeout 진단** (보류 중) — 1분 시점 ERROR 재발하면 OOM 가능성 (지금은 안 나는 듯)
+6. **순위 추적 자동화** — ⭐순위추적_상품 시트에 사장님 추적할 상품 입력 후 매일/주간 cron 추가
+
+---
+
+## 세션 끊김 대응 (재발 시)
+
+이 브랜치는 **claude.ai 원격 에이전트** 가 돌리고 있어서 `--resume` 없음. 끊기면 컨텍스트 통째 날아감.
+
+1. **세션 시작 시**: HANDOVER.md 먼저 읽고 `git log --oneline -10` 으로 최근 커밋 확인
+2. **작업 단위 작게**: 한 사이클(작업 → 검증 → 커밋·푸시) 안에 끝낼 수 있는 크기
+3. **세션 종료 시**: HANDOVER.md 「현재 상태」, 「다음 액션」 갱신 후 푸시
+4. **연속성 중요 작업**: 로컬 Claude Code (`C:\Users\김성준\sales`) → `claude --resume`
+
+---
+
+## 새 세션에서 첫 메시지 예시
+
+```
+HANDOVER.md 읽고 「현재 상태」 검증한 뒤 「다음 우선순위 작업」 1번부터 진행해줘.
+작업 끝나면 HANDOVER.md 갱신하고 커밋·푸시한 다음 종료.
+```

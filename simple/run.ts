@@ -563,9 +563,11 @@ async function processDay(
         const productRule = (optKey && productRules.get(optKey)) || productRules.get(channelProductNo);
 
         // 자동 합산 — 옵션관리번호 매칭 실패 또는 원가 비어있을 때, 같은 채널상품번호의 단품 행 참조
+        // 옵션명 매칭 우선순위: ⭐옵션매핑 D열 라벨 → 상품목록 시트 (fallback)
         let computedCost = -1;
         let computedLogistics = -1;
-        if ((!productRule || productRule.costPerUnit === 0) && catalogOptNames && channelProductNo) {
+        let aggDebug = "";
+        if ((!productRule || productRule.costPerUnit === 0) && channelProductNo) {
           const orderOpt = po.productOption ?? "";
           const orderParts = orderOpt.split("/").map((s) => s.trim());
           const orderFirstPart = orderParts[0] ?? "";
@@ -580,8 +582,10 @@ async function processDay(
           let totalCost = 0;
           let firstLogistics = 0;
           let matchedCount = 0;
+          const matchedLabels: string[] = [];
           for (const rule of sameChannel) {
-            const catName = catalogOptNames.get(rule.optionManageCode);
+            // ⭐옵션매핑의 D열 라벨 우선, 없으면 상품목록 시트 lookup
+            const catName = rule.label || catalogOptNames?.get(rule.optionManageCode) || "";
             if (!catName) continue;
             const catParts = catName.split("/").map((s) => s.trim());
             const catFirstPart = catParts[0] ?? "";
@@ -591,6 +595,7 @@ async function processDay(
               totalCost += rule.costPerUnit;
               if (firstLogistics === 0) firstLogistics = rule.logisticsPerOrder;
               matchedCount++;
+              matchedLabels.push(catName);
             }
           }
           if (matchedCount > 0) {
@@ -599,8 +604,13 @@ async function processDay(
             if (matchedCount === 1 && multiplier > 1) totalCost *= multiplier;
             computedCost = totalCost;
             computedLogistics = firstLogistics;
+            aggDebug = `[자동합산] ${po.productOrderId} "${orderOpt}" → ${matchedLabels.join("+")} × ${multiplier > 1 && matchedCount === 1 ? multiplier : 1} = ${totalCost}원`;
+          } else if (sameChannel.length > 0) {
+            // 자동 합산 후보는 있는데 매칭 실패 — 진단용
+            aggDebug = `[자동합산 실패] ${po.productOrderId} chNo=${channelProductNo} orderOpt="${orderOpt}" 후보=${sameChannel.length}개 [${sameChannel.slice(0, 3).map((r) => r.label || r.optionManageCode).join(", ")}…]`;
           }
         }
+        if (aggDebug) console.log(aggDebug);
 
         const matched = productRule
           ? null
