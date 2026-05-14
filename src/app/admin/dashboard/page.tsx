@@ -4913,24 +4913,24 @@ interface CorpClient {
 }
 
 function CorpRelationTab() {
-  const [clients, setClients] = useState<CorpClient[]>([]);
+  const [allClients, setAllClients] = useState<CorpClient[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [toast, setToast] = useState<{ id: string; msg: string } | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/user-clients?all=true")
       .then((r) => r.json())
-      .then((data) => setClients(data as CorpClient[]))
-      .catch(() => setClients([]))
+      .then((data) => setAllClients(data as CorpClient[]))
+      .catch(() => setAllClients([]))
       .finally(() => setLoading(false));
   }, []);
 
-  // 드롭다운 선택지: 의료기관(dealerType: null) 제외
-  const corpOptions = clients.filter((c) => c.dealerType !== null);
+  // 의료기관 제외한 법인만 (테이블 행 + 드롭다운 옵션 모두 동일)
+  const corps = allClients.filter((c) => c.dealerType !== null);
 
-  const filtered = clients.filter((c) => {
+  const filtered = corps.filter((c) => {
     if (!query) return true;
     const q = query.toLowerCase();
     return (
@@ -4940,7 +4940,7 @@ function CorpRelationTab() {
     );
   });
 
-  async function setParent(childId: string, parentId: string | null) {
+  async function patchParent(childId: string, parentId: string | null) {
     setSaving(childId);
     try {
       const res = await fetch(`/api/user-clients?id=${childId}`, {
@@ -4949,11 +4949,11 @@ function CorpRelationTab() {
         body: JSON.stringify({ parentCorpId: parentId }),
       });
       if (res.ok) {
-        setClients((prev) =>
+        setAllClients((prev) =>
           prev.map((c) => (c.id === childId ? { ...c, parentCorpId: parentId } : c))
         );
-        const parentName = parentId ? clients.find((c) => c.id === parentId)?.clientName : null;
-        setToast({ id: childId, msg: parentName ? `상위법인 → ${parentName}` : "상위법인 해제" });
+        const parentName = parentId ? allClients.find((c) => c.id === parentId)?.clientName : null;
+        setToast(parentName ? `상위법인 → ${parentName}` : "상위법인 해제");
         setTimeout(() => setToast(null), 2000);
       }
     } finally {
@@ -4962,7 +4962,6 @@ function CorpRelationTab() {
   }
 
   const dealerLabel: Record<string, string> = {
-    "": "병의원(원외)",
     UPPER_CORP: "상위법인",
     LOWER_CORP: "하위법인",
     CORPORATION: "법인",
@@ -4970,7 +4969,6 @@ function CorpRelationTab() {
     SELF: "자사",
   };
   const dealerColor: Record<string, string> = {
-    "": "bg-green-100 text-green-700",
     UPPER_CORP: "bg-purple-100 text-purple-700",
     LOWER_CORP: "bg-blue-100 text-blue-700",
     CORPORATION: "bg-indigo-100 text-indigo-700",
@@ -4982,8 +4980,11 @@ function CorpRelationTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-bold text-gray-900">상위 하위법인 지정 <span className="text-base font-normal text-gray-400">({clients.length}건)</span></h2>
-          <p className="text-sm text-gray-500 mt-0.5">의료기관을 제외한 사업자 간 상위/하위 법인 관계를 지정해요.</p>
+          <h2 className="text-xl font-bold text-gray-900">
+            상위 하위법인 지정{" "}
+            <span className="text-base font-normal text-gray-400">({corps.length}건)</span>
+          </h2>
+          <p className="text-sm text-gray-500 mt-0.5">법인 간 상위/하위 관계를 지정해요. 의료기관은 표시되지 않아요.</p>
         </div>
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -4997,8 +4998,8 @@ function CorpRelationTab() {
       </div>
 
       {toast && (
-        <div className="fixed bottom-6 right-6 bg-gray-900 text-white text-sm px-4 py-2.5 rounded-lg shadow-lg z-50 animate-in fade-in slide-in-from-bottom-2">
-          {toast.msg}
+        <div className="fixed bottom-6 right-6 bg-gray-900 text-white text-sm px-4 py-2.5 rounded-lg shadow-lg z-50">
+          {toast}
         </div>
       )}
 
@@ -5009,8 +5010,8 @@ function CorpRelationTab() {
               <th className="text-left px-4 py-3 font-medium text-gray-600">거래처명</th>
               <th className="text-left px-4 py-3 font-medium text-gray-600">사업자번호</th>
               <th className="text-left px-4 py-3 font-medium text-gray-600">유형</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600 w-56">상위법인</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">하위법인</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-600 w-60">상위법인</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-600 w-72">하위법인</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
@@ -5024,56 +5025,95 @@ function CorpRelationTab() {
             ) : filtered.length === 0 ? (
               <tr>
                 <td colSpan={5} className="text-center py-16 text-gray-400">
-                  {query ? "검색 결과가 없어요." : "등록된 사업자가 없어요."}
+                  {query ? "검색 결과가 없어요." : "등록된 법인이 없어요."}
                 </td>
               </tr>
             ) : (
               filtered.map((c) => {
-                const children = clients.filter((x) => x.parentCorpId === c.id);
+                const children = corps.filter((x) => x.parentCorpId === c.id);
+                // 하위법인 추가 드롭다운: 이미 자녀이거나 자기 자신인 항목 제외
+                const addableChildren = corps.filter(
+                  (x) => x.id !== c.id && x.parentCorpId !== c.id
+                );
                 const isSaving = saving === c.id;
+                const isChildSaving = children.some((ch) => saving === ch.id);
+
                 return (
-                  <tr key={c.id} className="hover:bg-gray-50 transition-colors">
+                  <tr key={c.id} className="hover:bg-gray-50 transition-colors align-top">
                     <td className="px-4 py-3">
                       <div className="font-medium text-gray-900">{c.clientName}</div>
-                      <div className="text-xs text-gray-400 mt-0.5">{c.user.name} · {c.user.phone ?? c.user.email}</div>
+                      <div className="text-xs text-gray-400 mt-0.5">
+                        {c.user.name} · {c.user.phone ?? c.user.email}
+                      </div>
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-600">{c.bizNumber}</td>
                     <td className="px-4 py-3">
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${dealerColor[c.dealerType ?? ""] ?? "bg-gray-100 text-gray-600"}`}>
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                          dealerColor[c.dealerType ?? ""] ?? "bg-gray-100 text-gray-600"
+                        }`}
+                      >
                         {dealerLabel[c.dealerType ?? ""] ?? c.dealerType ?? "기타"}
                       </span>
                     </td>
+
+                    {/* 상위법인 드롭다운 */}
                     <td className="px-4 py-3">
                       <select
                         value={c.parentCorpId ?? ""}
-                        onChange={(e) => setParent(c.id, e.target.value || null)}
+                        onChange={(e) => patchParent(c.id, e.target.value || null)}
                         disabled={isSaving}
                         className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-wait"
                       >
                         <option value="">없음</option>
-                        {corpOptions
+                        {corps
                           .filter((x) => x.id !== c.id)
                           .map((x) => (
                             <option key={x.id} value={x.id}>
-                              {x.clientName} ({x.bizNumber})
+                              {x.clientName}
                             </option>
                           ))}
                       </select>
                     </td>
+
+                    {/* 하위법인: 현재 지정된 칩 + 추가 드롭다운 */}
                     <td className="px-4 py-3">
-                      <div className="flex flex-wrap gap-1">
-                        {children.length === 0 ? (
-                          <span className="text-xs text-gray-400">없음</span>
-                        ) : (
-                          children.map((ch) => (
-                            <span
-                              key={ch.id}
-                              className="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium"
-                            >
-                              {ch.clientName}
-                            </span>
-                          ))
+                      <div className="space-y-1.5">
+                        {children.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {children.map((ch) => (
+                              <span
+                                key={ch.id}
+                                className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium"
+                              >
+                                {ch.clientName}
+                                <button
+                                  onClick={() => patchParent(ch.id, null)}
+                                  disabled={saving === ch.id}
+                                  className="ml-0.5 text-blue-400 hover:text-red-500 disabled:opacity-50"
+                                  title="하위법인 해제"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </span>
+                            ))}
+                          </div>
                         )}
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            if (e.target.value) patchParent(e.target.value, c.id);
+                          }}
+                          disabled={isChildSaving || addableChildren.length === 0}
+                          className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-wait text-gray-400"
+                        >
+                          <option value="">+ 하위법인 추가</option>
+                          {addableChildren.map((x) => (
+                            <option key={x.id} value={x.id}>
+                              {x.clientName}
+                            </option>
+                          ))}
+                        </select>
                       </div>
                     </td>
                   </tr>
