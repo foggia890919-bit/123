@@ -122,7 +122,7 @@ export async function GET(req: NextRequest) {
         select: {
           id: true, userId: true, clientName: true, bizNumber: true,
           bizFileName: true, bizFileKey: true, approved: true, createdAt: true,
-          dealerType: true,
+          dealerType: true, parentCorpId: true,
           user: { select: { name: true, email: true, phone: true } },
         },
       });
@@ -250,9 +250,10 @@ export async function PATCH(req: NextRequest) {
   if (!isAdmin && !isOwner) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
   const body = await req.json();
-  const { approved, bizDocument, bizFileName, address } = body;
+  const { approved, bizDocument, bizFileName, address, parentCorpId } = body;
 
   if (approved !== undefined && !isAdmin) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+  if (parentCorpId !== undefined && !isAdmin) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
   if ((bizDocument !== undefined || bizFileName !== undefined) && !isAdmin && !isOwner) {
     return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
   }
@@ -260,6 +261,7 @@ export async function PATCH(req: NextRequest) {
   const data: Record<string, unknown> = {};
   if (address !== undefined) data.address = address ? String(address).trim() : null;
   if (approved !== undefined) data.approved = Boolean(approved);
+  if (parentCorpId !== undefined) data.parentCorpId = parentCorpId ?? null;
   if (bizDocument !== undefined) {
     const { fileKey: bizFileKey, fileData: bizDocumentFallback } =
       await persistDataUri(BUCKETS.userClientBiz, existing.userId, bizDocument);

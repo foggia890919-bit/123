@@ -24,7 +24,7 @@ declare global {
   }
 }
 
-type Tab = "upload" | "members" | "rates" | "filterReqs" | "userClients" | "bizManagement" | "apiSources" | "notices" | "companySubmissions" | "bulkSubmit" | "loginLogs" | "fileMigration" | "banners" | "boards";
+type Tab = "upload" | "members" | "rates" | "filterReqs" | "userClients" | "bizManagement" | "corpRelation" | "apiSources" | "notices" | "companySubmissions" | "bulkSubmit" | "loginLogs" | "fileMigration" | "banners" | "boards";
 
 interface MenuItem { key: Tab; label: string; icon: React.ElementType }
 interface MenuGroup { title: string; items: MenuItem[] }
@@ -44,6 +44,7 @@ const MENU_GROUPS: MenuGroup[] = [
       { key: "rates", label: "추가수수료 관리", icon: Percent },
       { key: "userClients", label: "담당자별 거래처", icon: Building2 },
       { key: "bizManagement", label: "사업자관리", icon: Building2 },
+      { key: "corpRelation", label: "상위 하위법인 지정", icon: Building2 },
     ],
   },
   {
@@ -157,6 +158,7 @@ export default function AdminDashboardPage() {
         {tab === "companySubmissions" && <CompanySubmissionsTab />}
         {tab === "userClients" && <UserClientsTab />}
         {tab === "bizManagement" && <BizManagementTab />}
+        {tab === "corpRelation" && <CorpRelationTab />}
         {tab === "apiSources" && <ApiSourcesTab />}
         {tab === "loginLogs" && <LoginLogsTab />}
         {tab === "fileMigration" && <FileMigrationTab />}
@@ -4894,6 +4896,190 @@ function BoardsTab() {
             ))}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+interface CorpClient {
+  id: string;
+  clientName: string;
+  bizNumber: string;
+  dealerType: string | null;
+  parentCorpId: string | null;
+  approved: boolean;
+  createdAt: string;
+  user: { name: string | null; email: string; phone?: string | null };
+}
+
+function CorpRelationTab() {
+  const [clients, setClients] = useState<CorpClient[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [toast, setToast] = useState<{ id: string; msg: string } | null>(null);
+
+  useEffect(() => {
+    fetch("/api/user-clients?all=true")
+      .then((r) => r.json())
+      .then((data) => {
+        const all = data as CorpClient[];
+        setClients(all.filter((c) => c.dealerType !== null));
+      })
+      .catch(() => setClients([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const filtered = clients.filter((c) => {
+    if (!query) return true;
+    const q = query.toLowerCase();
+    return (
+      c.clientName.toLowerCase().includes(q) ||
+      c.bizNumber.includes(q) ||
+      (c.user.name ?? "").toLowerCase().includes(q)
+    );
+  });
+
+  async function setParent(childId: string, parentId: string | null) {
+    setSaving(childId);
+    try {
+      const res = await fetch(`/api/user-clients?id=${childId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parentCorpId: parentId }),
+      });
+      if (res.ok) {
+        setClients((prev) =>
+          prev.map((c) => (c.id === childId ? { ...c, parentCorpId: parentId } : c))
+        );
+        const parentName = parentId ? clients.find((c) => c.id === parentId)?.clientName : null;
+        setToast({ id: childId, msg: parentName ? `상위법인 → ${parentName}` : "상위법인 해제" });
+        setTimeout(() => setToast(null), 2000);
+      }
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  const dealerLabel: Record<string, string> = {
+    UPPER_CORP: "상위법인",
+    LOWER_CORP: "하위법인",
+    CORPORATION: "법인",
+    INDIVIDUAL: "개인사업자",
+    SELF: "자사",
+  };
+  const dealerColor: Record<string, string> = {
+    UPPER_CORP: "bg-purple-100 text-purple-700",
+    LOWER_CORP: "bg-blue-100 text-blue-700",
+    CORPORATION: "bg-indigo-100 text-indigo-700",
+    INDIVIDUAL: "bg-orange-100 text-orange-700",
+    SELF: "bg-gray-100 text-gray-600",
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-gray-900">상위 하위법인 지정 <span className="text-base font-normal text-gray-400">({clients.length}건)</span></h2>
+          <p className="text-sm text-gray-500 mt-0.5">의료기관을 제외한 사업자 간 상위/하위 법인 관계를 지정해요.</p>
+        </div>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="거래처명 / 사업자번호 검색"
+            className="pl-9 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 w-72"
+          />
+        </div>
+      </div>
+
+      {toast && (
+        <div className="fixed bottom-6 right-6 bg-gray-900 text-white text-sm px-4 py-2.5 rounded-lg shadow-lg z-50 animate-in fade-in slide-in-from-bottom-2">
+          {toast.msg}
+        </div>
+      )}
+
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-100 bg-gray-50">
+              <th className="text-left px-4 py-3 font-medium text-gray-600">거래처명</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-600">사업자번호</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-600">유형</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-600 w-56">상위법인</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-600">하위법인</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-50">
+            {loading ? (
+              <tr>
+                <td colSpan={5} className="text-center py-16 text-gray-400">
+                  <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />
+                  불러오는 중...
+                </td>
+              </tr>
+            ) : filtered.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="text-center py-16 text-gray-400">
+                  {query ? "검색 결과가 없어요." : "등록된 사업자가 없어요."}
+                </td>
+              </tr>
+            ) : (
+              filtered.map((c) => {
+                const children = clients.filter((x) => x.parentCorpId === c.id);
+                const isSaving = saving === c.id;
+                return (
+                  <tr key={c.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-gray-900">{c.clientName}</div>
+                      <div className="text-xs text-gray-400 mt-0.5">{c.user.name} · {c.user.phone ?? c.user.email}</div>
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-600">{c.bizNumber}</td>
+                    <td className="px-4 py-3">
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${dealerColor[c.dealerType ?? ""] ?? "bg-gray-100 text-gray-600"}`}>
+                        {dealerLabel[c.dealerType ?? ""] ?? c.dealerType ?? "기타"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <select
+                        value={c.parentCorpId ?? ""}
+                        onChange={(e) => setParent(c.id, e.target.value || null)}
+                        disabled={isSaving}
+                        className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-wait"
+                      >
+                        <option value="">없음</option>
+                        {clients
+                          .filter((x) => x.id !== c.id)
+                          .map((x) => (
+                            <option key={x.id} value={x.id}>
+                              {x.clientName} ({x.bizNumber})
+                            </option>
+                          ))}
+                      </select>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap gap-1">
+                        {children.length === 0 ? (
+                          <span className="text-xs text-gray-400">없음</span>
+                        ) : (
+                          children.map((ch) => (
+                            <span
+                              key={ch.id}
+                              className="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium"
+                            >
+                              {ch.clientName}
+                            </span>
+                          ))
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );
