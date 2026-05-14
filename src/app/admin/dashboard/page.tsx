@@ -4920,15 +4920,15 @@ function CorpRelationTab() {
   const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/user-clients?all=true")
+    fetch("/api/user-clients?corps=true")
       .then((r) => r.json())
       .then((data) => setAllClients(data as CorpClient[]))
       .catch(() => setAllClients([]))
       .finally(() => setLoading(false));
   }, []);
 
-  // 의료기관 제외한 법인만 (테이블 행 + 드롭다운 옵션 모두 동일)
-  const corps = allClients.filter((c) => c.dealerType !== null);
+  // API에서 이미 의료기관 제외하므로 별도 프론트 필터 불필요
+  const corps = allClients;
 
   const filtered = corps.filter((c) => {
     if (!query) return true;
