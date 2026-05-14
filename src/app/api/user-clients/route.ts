@@ -127,14 +127,26 @@ export async function GET(req: NextRequest) {
         },
       });
     } catch {
-      rows = await prisma.userClient.findMany({
-        orderBy: { createdAt: "desc" },
-        select: {
-          id: true, userId: true, clientName: true, bizNumber: true,
-          bizFileName: true, bizFileKey: true, approved: true, createdAt: true,
-          user: { select: { name: true, email: true } },
-        },
-      });
+      try {
+        rows = await prisma.userClient.findMany({
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true, userId: true, clientName: true, bizNumber: true,
+            bizFileName: true, bizFileKey: true, approved: true, createdAt: true,
+            dealerType: true,
+            user: { select: { name: true, email: true, phone: true } },
+          },
+        });
+      } catch {
+        rows = await prisma.userClient.findMany({
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true, userId: true, clientName: true, bizNumber: true,
+            bizFileName: true, bizFileKey: true, approved: true, createdAt: true,
+            user: { select: { name: true, email: true } },
+          },
+        });
+      }
     }
     // hasBizDocument flag keeps existing UI logic working without transferring megabytes
     const annotated = rows.map((r) => ({ ...r, bizDocument: null, hasBizDocument: !!r.bizFileName }));
