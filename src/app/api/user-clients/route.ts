@@ -159,6 +159,102 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  const allMembers = req.nextUrl.searchParams.get("allMembers") === "true";
+  if (allMembers) {
+    if (user.role !== "ADMIN" && user.role !== "BIZ") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+    const buildRows = (
+      users: Array<{
+        id: string; name: string | null; email: string; phone: string | null; createdAt: Date;
+        userClients: Array<{
+          id: string; clientName: string; bizNumber: string; approved: boolean; createdAt: Date;
+          dealerType?: string | null; parentCorpId?: string | null;
+        }>;
+      }>
+    ) => {
+      const rows: unknown[] = [];
+      for (const u of users) {
+        const userInfo = { name: u.name, email: u.email, phone: u.phone ?? null };
+        if (u.userClients.length > 0) {
+          for (const uc of u.userClients) {
+            rows.push({
+              id: uc.id, userId: u.id, clientName: uc.clientName, bizNumber: uc.bizNumber,
+              dealerType: "dealerType" in uc ? (uc.dealerType ?? null) : null,
+              parentCorpId: "parentCorpId" in uc ? (uc.parentCorpId ?? null) : null,
+              approved: uc.approved,
+              createdAt: uc.createdAt instanceof Date ? uc.createdAt.toISOString() : uc.createdAt,
+              user: userInfo, isUserOnly: false,
+            });
+          }
+        } else {
+          rows.push({
+            id: null, userId: u.id, clientName: null, bizNumber: null,
+            dealerType: null, parentCorpId: null, approved: null,
+            createdAt: u.createdAt instanceof Date ? u.createdAt.toISOString() : u.createdAt,
+            user: userInfo, isUserOnly: true,
+          });
+        }
+      }
+      return rows;
+    };
+    // Level 1: dealerType WHERE + parentCorpId in select
+    try {
+      const users = await prisma.user.findMany({
+        where: { role: { not: "ADMIN" } },
+        select: {
+          id: true, name: true, email: true, phone: true, createdAt: true,
+          userClients: {
+            where: { dealerType: { not: null } },
+            select: {
+              id: true, clientName: true, bizNumber: true, dealerType: true,
+              parentCorpId: true, approved: true, createdAt: true,
+            },
+            orderBy: { clientName: "asc" },
+          },
+        },
+        orderBy: { name: "asc" },
+      });
+      return NextResponse.json(buildRows(users));
+    } catch { /* parentCorpId column missing */ }
+    // Level 2: dealerType WHERE, no parentCorpId
+    try {
+      const users = await prisma.user.findMany({
+        where: { role: { not: "ADMIN" } },
+        select: {
+          id: true, name: true, email: true, phone: true, createdAt: true,
+          userClients: {
+            where: { dealerType: { not: null } },
+            select: {
+              id: true, clientName: true, bizNumber: true, dealerType: true,
+              approved: true, createdAt: true,
+            },
+            orderBy: { clientName: "asc" },
+          },
+        },
+        orderBy: { name: "asc" },
+      });
+      return NextResponse.json((buildRows(users) as Array<Record<string, unknown>>).map((r) => ({ ...r, parentCorpId: null })));
+    } catch { /* dealerType column missing */ }
+    // Level 3: no WHERE, all UserClients included
+    try {
+      const users = await prisma.user.findMany({
+        where: { role: { not: "ADMIN" } },
+        select: {
+          id: true, name: true, email: true, phone: true, createdAt: true,
+          userClients: {
+            select: { id: true, clientName: true, bizNumber: true, approved: true, createdAt: true },
+            orderBy: { clientName: "asc" },
+          },
+        },
+        orderBy: { name: "asc" },
+      });
+      return NextResponse.json(
+        (buildRows(users) as Array<Record<string, unknown>>).map((r) => ({ ...r, dealerType: null, parentCorpId: null }))
+      );
+    } catch {
+      return NextResponse.json([]);
+    }
+  }
+
   if (all) {
     if (user.role !== "ADMIN" && user.role !== "BIZ") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
     // Exclude heavy bizDocument (base64) from list; download via /api/files/user-client-biz/[id]

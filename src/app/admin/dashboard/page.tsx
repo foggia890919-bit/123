@@ -4901,45 +4901,50 @@ function BoardsTab() {
   );
 }
 
-interface CorpClient {
-  id: string;
-  clientName: string;
-  bizNumber: string;
+interface CorpRow {
+  id: string | null;
+  userId: string;
+  clientName: string | null;
+  bizNumber: string | null;
   dealerType: string | null;
   parentCorpId: string | null;
-  approved: boolean;
+  approved: boolean | null;
   createdAt: string;
   user: { name: string | null; email: string; phone?: string | null };
+  isUserOnly: boolean;
 }
 
 function CorpRelationTab() {
-  const [allClients, setAllClients] = useState<CorpClient[]>([]);
+  const [allClients, setAllClients] = useState<CorpRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/user-clients?corps=true")
+    fetch("/api/user-clients?allMembers=true")
       .then((r) => r.json())
-      .then((data) => setAllClients(data as CorpClient[]))
+      .then((data) => setAllClients(data as CorpRow[]))
       .catch(() => setAllClients([]))
       .finally(() => setLoading(false));
   }, []);
 
-  const corps = allClients; // server already excluded 의료기관
+  // only UserClient rows (id !== null) can participate in parent/child hierarchy
+  const corps = allClients.filter((c) => !c.isUserOnly);
 
-  const filtered = corps.filter((c) => {
+  const filtered = allClients.filter((c) => {
     if (!query) return true;
     const q = query.toLowerCase();
     return (
-      c.clientName.toLowerCase().includes(q) ||
-      c.bizNumber.includes(q) ||
-      (c.user.name ?? "").toLowerCase().includes(q)
+      (c.clientName ?? "").toLowerCase().includes(q) ||
+      (c.bizNumber ?? "").includes(q) ||
+      (c.user.name ?? "").toLowerCase().includes(q) ||
+      c.user.email.toLowerCase().includes(q)
     );
   });
 
-  async function patchParent(childId: string, parentId: string | null) {
+  async function patchParent(childId: string | null, parentId: string | null) {
+    if (!childId) return;
     setSaving(childId);
     try {
       const res = await fetch(`/api/user-clients?id=${childId}`, {
@@ -4976,9 +4981,9 @@ function CorpRelationTab() {
         <div>
           <h2 className="text-xl font-bold text-gray-900">
             상위 하위법인 지정{" "}
-            <span className="text-base font-normal text-gray-400">({corps.length}건)</span>
+            <span className="text-base font-normal text-gray-400">({allClients.length}건)</span>
           </h2>
-          <p className="text-sm text-gray-500 mt-0.5">의료기관을 제외한 등록 사업자의 상위/하위 법인 관계를 지정해요.</p>
+          <p className="text-sm text-gray-500 mt-0.5">전체 회원 목록 (사업자 등록 {corps.length}건 포함). 상위/하위 법인 관계를 지정해요.</p>
         </div>
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -5029,15 +5034,35 @@ function CorpRelationTab() {
                 </td>
               </tr>
             ) : (
-              filtered.map((c) => {
-                const parent = corps.find((x) => x.id === c.parentCorpId);
-                const children = corps.filter((x) => x.parentCorpId === c.id);
-                const addableChildren = corps.filter((x) => x.id !== c.id && x.parentCorpId !== c.id);
+              filtered.map((c, idx) => {
+                const parent = c.id ? corps.find((x) => x.id === c.parentCorpId) : undefined;
+                const children = c.id ? corps.filter((x) => x.parentCorpId === c.id) : [];
+                const addableChildren = c.id ? corps.filter((x) => x.id !== c.id && x.parentCorpId !== c.id) : [];
                 const isSaving = saving === c.id;
                 const isChildSaving = children.some((ch) => saving === ch.id);
+                const rowKey = c.id ?? `user-${c.userId}-${idx}`;
+
+                if (c.isUserOnly) {
+                  return (
+                    <tr key={rowKey} className="hover:bg-gray-50 transition-colors align-middle bg-gray-50/40">
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-gray-700">{c.user.name ?? "(이름 없음)"}</div>
+                        <div className="text-xs text-gray-400 mt-0.5">{c.user.phone ?? c.user.email}</div>
+                      </td>
+                      <td className="px-4 py-3 text-xs text-gray-400">—</td>
+                      <td className="px-4 py-3">
+                        <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-gray-100 text-gray-400">사업자 미등록</span>
+                      </td>
+                      <td className="px-4 py-3 border-l border-gray-100 text-xs text-gray-400">—</td>
+                      <td className="px-4 py-3 text-xs text-gray-400">—</td>
+                      <td className="px-4 py-3 border-l border-gray-100 text-xs text-gray-400">—</td>
+                      <td className="px-4 py-3 text-xs text-gray-400">—</td>
+                    </tr>
+                  );
+                }
 
                 return (
-                  <tr key={c.id} className="hover:bg-gray-50 transition-colors align-middle">
+                  <tr key={rowKey} className="hover:bg-gray-50 transition-colors align-middle">
                     {/* 거래처명 */}
                     <td className="px-4 py-3">
                       <div className="font-medium text-gray-900">{c.clientName}</div>
@@ -5070,7 +5095,7 @@ function CorpRelationTab() {
                       >
                         <option value="">없음</option>
                         {corps.filter((x) => x.id !== c.id).map((x) => (
-                          <option key={x.id} value={x.id}>{x.clientName}</option>
+                          <option key={x.id} value={x.id!}>{x.clientName}</option>
                         ))}
                       </select>
                     </td>
@@ -5107,7 +5132,7 @@ function CorpRelationTab() {
                       >
                         <option value="">+ 추가</option>
                         {addableChildren.map((x) => (
-                          <option key={x.id} value={x.id}>{x.clientName}</option>
+                          <option key={x.id} value={x.id!}>{x.clientName}</option>
                         ))}
                       </select>
                     </td>
