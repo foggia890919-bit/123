@@ -171,26 +171,28 @@ export async function GET(req: NextRequest) {
         }>;
       }>
     ) => {
+      // 1유저당 1행. 사업자 여러 개면 첫 번째(clientName asc)를 대표로 표시, 나머지는 extraBizCount 로 알림.
       const rows: unknown[] = [];
       for (const u of users) {
         const userInfo = { name: u.name, email: u.email, phone: u.phone ?? null };
         if (u.userClients.length > 0) {
-          for (const uc of u.userClients) {
-            rows.push({
-              id: uc.id, userId: u.id, clientName: uc.clientName, bizNumber: uc.bizNumber,
-              dealerType: "dealerType" in uc ? (uc.dealerType ?? null) : null,
-              parentCorpId: "parentCorpId" in uc ? (uc.parentCorpId ?? null) : null,
-              approved: uc.approved,
-              createdAt: uc.createdAt instanceof Date ? uc.createdAt.toISOString() : uc.createdAt,
-              user: userInfo, isUserOnly: false,
-            });
-          }
+          const uc = u.userClients[0];
+          rows.push({
+            id: uc.id, userId: u.id, clientName: uc.clientName, bizNumber: uc.bizNumber,
+            dealerType: "dealerType" in uc ? (uc.dealerType ?? null) : null,
+            parentCorpId: "parentCorpId" in uc ? (uc.parentCorpId ?? null) : null,
+            approved: uc.approved,
+            createdAt: uc.createdAt instanceof Date ? uc.createdAt.toISOString() : uc.createdAt,
+            user: userInfo, isUserOnly: false,
+            extraBizCount: u.userClients.length - 1,
+          });
         } else {
           rows.push({
             id: null, userId: u.id, clientName: null, bizNumber: null,
             dealerType: null, parentCorpId: null, approved: null,
             createdAt: u.createdAt instanceof Date ? u.createdAt.toISOString() : u.createdAt,
             user: userInfo, isUserOnly: true,
+            extraBizCount: 0,
           });
         }
       }

@@ -4912,6 +4912,7 @@ interface CorpRow {
   createdAt: string;
   user: { name: string | null; email: string; phone?: string | null };
   isUserOnly: boolean;
+  extraBizCount?: number;
 }
 
 function CorpRelationTab() {
@@ -4981,9 +4982,9 @@ function CorpRelationTab() {
         <div>
           <h2 className="text-xl font-bold text-gray-900">
             상위 하위법인 지정{" "}
-            <span className="text-base font-normal text-gray-400">({allClients.length}건)</span>
+            <span className="text-base font-normal text-gray-400">({allClients.length}명)</span>
           </h2>
-          <p className="text-sm text-gray-500 mt-0.5">전체 회원 목록 (사업자 등록 {corps.length}건 포함). 상위/하위 법인 관계를 지정해요.</p>
+          <p className="text-sm text-gray-500 mt-0.5">회원 1명당 1행. 사업자 등록된 회원만 상위/하위 법인으로 지정할 수 있어요 (사업자 미등록 회원은 드롭다운에서 비활성).</p>
         </div>
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -5065,7 +5066,12 @@ function CorpRelationTab() {
                   <tr key={rowKey} className="hover:bg-gray-50 transition-colors align-middle">
                     {/* 거래처명 */}
                     <td className="px-4 py-3">
-                      <div className="font-medium text-gray-900">{c.clientName}</div>
+                      <div className="font-medium text-gray-900">
+                        {c.clientName}
+                        {c.extraBizCount && c.extraBizCount > 0 ? (
+                          <span className="ml-1 text-xs text-gray-400 font-normal">외 {c.extraBizCount}건</span>
+                        ) : null}
+                      </div>
                       <div className="text-xs text-gray-400 mt-0.5">{c.user.name} · {c.user.phone ?? c.user.email}</div>
                     </td>
                     {/* 사업자번호 */}
@@ -5094,8 +5100,16 @@ function CorpRelationTab() {
                         className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-wait"
                       >
                         <option value="">없음</option>
-                        {corps.filter((x) => x.id !== c.id).map((x) => (
-                          <option key={x.id} value={x.id!}>{x.clientName}</option>
+                        {allClients.filter((x) => x.userId !== c.userId).map((x) => (
+                          <option
+                            key={x.id ?? `user-${x.userId}`}
+                            value={x.id ?? ""}
+                            disabled={x.isUserOnly}
+                          >
+                            {x.isUserOnly
+                              ? `${x.user.name ?? "(이름 없음)"} (사업자 미등록)`
+                              : x.clientName}
+                          </option>
                         ))}
                       </select>
                     </td>
@@ -5127,13 +5141,23 @@ function CorpRelationTab() {
                       <select
                         value=""
                         onChange={(e) => { if (e.target.value) patchParent(e.target.value, c.id); }}
-                        disabled={isChildSaving || addableChildren.length === 0}
+                        disabled={isChildSaving}
                         className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-wait"
                       >
                         <option value="">+ 추가</option>
-                        {addableChildren.map((x) => (
-                          <option key={x.id} value={x.id!}>{x.clientName}</option>
-                        ))}
+                        {allClients
+                          .filter((x) => x.userId !== c.userId && x.parentCorpId !== c.id)
+                          .map((x) => (
+                            <option
+                              key={x.id ?? `user-${x.userId}`}
+                              value={x.id ?? ""}
+                              disabled={x.isUserOnly}
+                            >
+                              {x.isUserOnly
+                                ? `${x.user.name ?? "(이름 없음)"} (사업자 미등록)`
+                                : x.clientName}
+                            </option>
+                          ))}
                       </select>
                     </td>
                   </tr>
