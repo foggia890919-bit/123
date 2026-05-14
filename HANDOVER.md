@@ -108,20 +108,29 @@
 - **여기명품 사입관리 매칭**: 상품주문번호(AD) → 매입원가(AB) 자동 적용
 - **자동화 시트 UX**: 체크박스 자동, ⭐ 입력 시트 하이퍼링크, 날짜 picker, STOP 트리거 (모든 ☑/RUNNING 정리)
 
-### 🟡 마지막 push 미완료
-- `fix(simple): 추가상품 분리 보존 - 같은 chNo + 다른 productName 은 메인 합산 X`
-- 효과: 압박스타킹 같은 다중옵션 메인 합산은 유지하면서, 피쿠알+레몬즙 같은 추가상품은 별도 행으로 분리해서 매출/원가/이익 가시화
-
 ### 📝 검증 완료 (2026-05-14)
 - 와이케이팜 압박스타킹 자동합산 10건 전부 ✅: 원가 146,120원 · 물류 40,000원 · 이익 20,354원
 - 부위명 매칭 (종아리/무릎/허벅지) + 1+1/조합 패턴 모두 정상
+- 순위 추적 첫 발송 ✅: 올리브오일 2위, ⭐순위추적_누적 D열 갱신 확인
+- 사업자별 메시지 분리 + 옵션 sub-line 단일 날짜 실행 정상 동작 확인
+
+### ⏱ 작업별 정상 소요 시간 (기억용)
+- **매출 — 어제 + 7일 롤링**: **약 25분** (3 스토어 × 7일 페이지네이션). 14~20분 RUNNING 보여도 정상이니 STOP 누르지 말 것
+- 매출 — 단일 날짜: 약 3~5분
+- 순위 추적: 키워드당 약 30초
+
+### 🐞 2026-05-14 발견 버그 + fix
+- **scheduler race condition**: 사장님 STOP 으로 pkill → 자식 run.ts 가 SIGTERM 받고 죽으면, execSync 의 catch 가 먼저 "❌ Command failed" 박아서 STOP 처리 로직이 그 행을 안 잡고 건너뜀 → 시트에 사장님이 STOP 누른 흔적 안 남음
+  - fix: [scheduler.ts:247-259](simple/scheduler.ts:247) — err.signal 이 SIGTERM/SIGKILL 이면 "🛑 STOP 으로 중단됨" 박게
+- **sheets API 500 Internal Error 한 번에 작업 실패**: `meta 500` 같은 일시 장애에 writeRange 만 3회 retry, 나머지(meta/append/read/upsert/ensure/clear) 는 retry 없어 한 방에 실패
+  - fix: [sheets.ts withRetry](simple/sheets.ts) 헬퍼 추가, 핵심 데이터 처리 흐름의 모든 sheets API fetch 에 적용 (5회 retry, exponential 백오프 1.5/3/6/12s, 4xx 는 즉시 throw)
 
 ### ⏸ 사장님 액션 대기
 
-**1. 마지막 푸시 + Lightsail pull**
+**1. 이번 패치 푸시 + Lightsail pull** (scheduler race fix + sheets API retry 강화)
 ```
 cd C:\Users\김성준\sales
-git commit -m "feat(simple): 옵션매핑 자동 합산 - 단품 행만 입력시 1+1/조합 자동 계산"
+git commit -m "fix(simple): scheduler STOP race condition + sheets API 5회 retry 강화"
 git push
 ```
 ```
@@ -209,6 +218,8 @@ function onEdit(e) {
 | 옵션명 빈칸 / 추가상품 0건 | 네이버 API 응답 필드 (option1→optionName1, supplementProducts) | (해결됨) catalog.ts 매핑 fix |
 | 시장 카테고리 트리 1차만 12개 | (해결됨) childCount 조건 제거 + leaf 활용 + 429 retry | — |
 | 수수료 % 다르게 보임 | (해결됨) 매출-정산예정 = 진짜 수수료 | — |
+| STOP 눌렀는데 시트에 "Command failed" 박힘 | (해결됨 2026-05-14) scheduler catch race condition — SIGTERM 구분으로 "STOP 으로 중단됨" 박게 | — |
+| 시트 「주문원본」 쓰기 실패: meta 500 | (해결됨 2026-05-14) sheets API 일시 5xx — withRetry 헬퍼로 5회 retry + exponential 백오프 | — |
 
 ---
 

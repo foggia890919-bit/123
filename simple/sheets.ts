@@ -8,6 +8,32 @@ export interface SheetCreds {
 
 let cached: { token: string; exp: number } | null = null;
 
+/**
+ * Sheets API fetch 5회 retry — Google 측 5xx/네트워크 일시 장애 자동 회피.
+ * 백오프: 1.5/3/6/12s (총 약 22s). 4xx 는 즉시 throw (auth/format 등 재시도 무의미).
+ * 추출 정보: 메시지에 "<label> 4XX" 패턴 있으면 4xx 로 간주.
+ */
+async function withRetry<T>(label: string, fn: () => Promise<T>, maxAttempts = 5): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 1; i <= maxAttempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      // 4xx 패턴 (40X ~ 49X, 단 408 Timeout / 409 Conflict / 429 Rate-limit 은 재시도)
+      if (/\s4(0[0-7]|1\d|2[0-8]|[3-9]\d)\b/.test(msg)) {
+        throw err;
+      }
+      if (i === maxAttempts) throw err;
+      const delayMs = 1500 * Math.pow(2, i - 1); // 1500, 3000, 6000, 12000
+      console.warn(`[sheets:retry] ${label} ${i}/${maxAttempts} 실패 → ${delayMs}ms 후 재시도: ${msg.slice(0, 120)}`);
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
 async function getToken(c: SheetCreds): Promise<string> {
   if (cached && cached.exp > Date.now() + 60_000) return cached.token;
   const now = Math.floor(Date.now() / 1000);
@@ -55,14 +81,16 @@ export async function appendRows(
   rows: (string | number)[][],
 ): Promise<void> {
   if (rows.length === 0) return;
-  const token = await getToken(c);
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values/${encodeURIComponent(rangeA1)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ values: rows }),
+  await withRetry("appendRows", async () => {
+    const token = await getToken(c);
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values/${encodeURIComponent(rangeA1)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ values: rows }),
+    });
+    if (!res.ok) throw new Error(`appendRows ${res.status}: ${await res.text()}`);
   });
-  if (!res.ok) throw new Error(`appendRows ${res.status}: ${await res.text()}`);
 }
 
 function colLetter(idx: number): string {
@@ -103,31 +131,37 @@ export async function upsertRows(
   });
 
   if (dupRows.length > 0) {
-    const meta = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}?fields=sheets.properties`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-    if (meta.ok) {
+    const sheetIdNum = await withRetry("upsert:meta", async () => {
+      const meta = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}?fields=sheets.properties`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!meta.ok) throw new Error(`upsert:meta ${meta.status}: ${await meta.text()}`);
       const json = (await meta.json()) as {
         sheets?: { properties: { title: string; sheetId: number } }[];
       };
-      const sheetId = json.sheets?.find((s) => s.properties.title === tabName)?.properties.sheetId;
-      if (sheetId != null) {
+      return json.sheets?.find((s) => s.properties.title === tabName)?.properties.sheetId ?? null;
+    });
+    if (sheetIdNum != null) {
+      const sheetId = sheetIdNum;
+      {
         const sortedDesc = [...dupRows].sort((a, b) => b - a);
         const requests = sortedDesc.map((rowNum) => ({
           deleteDimension: {
             range: { sheetId, dimension: "ROWS", startIndex: rowNum - 1, endIndex: rowNum },
           },
         }));
-        const res = await fetch(
-          `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}:batchUpdate`,
-          {
-            method: "POST",
-            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-            body: JSON.stringify({ requests }),
-          },
-        );
-        if (!res.ok) throw new Error(`dedup ${res.status}: ${await res.text()}`);
+        await withRetry("dedup", async () => {
+          const res = await fetch(
+            `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}:batchUpdate`,
+            {
+              method: "POST",
+              headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ requests }),
+            },
+          );
+          if (!res.ok) throw new Error(`dedup ${res.status}: ${await res.text()}`);
+        });
         // 첫 번째 행이 삭제된 중복들 위에 있었으면 행 번호가 그대로지만,
         // 아래에 있었으면 (드물지만) 행 번호가 위로 밀림. 보정.
         const sortedAsc = [...dupRows].sort((a, b) => a - b);
@@ -159,15 +193,17 @@ export async function upsertRows(
   }
 
   if (updates.length > 0) {
-    const res = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values:batchUpdate`,
-      {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ valueInputOption: "USER_ENTERED", data: updates }),
-      },
-    );
-    if (!res.ok) throw new Error(`values:batchUpdate ${res.status}: ${await res.text()}`);
+    await withRetry("values:batchUpdate", async () => {
+      const res = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values:batchUpdate`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ valueInputOption: "USER_ENTERED", data: updates }),
+        },
+      );
+      if (!res.ok) throw new Error(`values:batchUpdate ${res.status}: ${await res.text()}`);
+    });
   }
   if (appends.length > 0) {
     await appendRows(c, `${tabName}!A2`, appends);
@@ -176,72 +212,69 @@ export async function upsertRows(
 }
 
 export async function readRange(c: SheetCreds, rangeA1: string): Promise<string[][]> {
-  const token = await getToken(c);
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values/${encodeURIComponent(rangeA1)}`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (res.status === 400) return []; // tab missing
-  if (!res.ok) throw new Error(`readRange ${res.status}: ${await res.text()}`);
-  const data = (await res.json()) as { values?: string[][] };
-  return data.values ?? [];
+  return withRetry("readRange", async () => {
+    const token = await getToken(c);
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values/${encodeURIComponent(rangeA1)}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (res.status === 400) return []; // tab missing
+    if (!res.ok) throw new Error(`readRange ${res.status}: ${await res.text()}`);
+    const data = (await res.json()) as { values?: string[][] };
+    return data.values ?? [];
+  });
 }
 
 export async function writeRange(
   c: SheetCreds,
   rangeA1: string,
   values: (string | number | boolean)[][],
-  maxAttempts = 3,
 ): Promise<void> {
-  // 네트워크 일시 장애(fetch failed 등) 자동 회피 — 1.5s, 3s, 4.5s 백오프
-  let lastErr: unknown;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      const token = await getToken(c);
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values/${encodeURIComponent(rangeA1)}?valueInputOption=USER_ENTERED`;
-      const res = await fetch(url, {
-        method: "PUT",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ values }),
-      });
-      if (!res.ok) throw new Error(`writeRange ${res.status}: ${await res.text()}`);
-      return;
-    } catch (err) {
-      lastErr = err;
-      if (attempt === maxAttempts) throw err;
-      await new Promise((r) => setTimeout(r, 1500 * attempt));
-    }
-  }
-  throw lastErr;
+  await withRetry("writeRange", async () => {
+    const token = await getToken(c);
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values/${encodeURIComponent(rangeA1)}?valueInputOption=USER_ENTERED`;
+    const res = await fetch(url, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ values }),
+    });
+    if (!res.ok) throw new Error(`writeRange ${res.status}: ${await res.text()}`);
+  });
 }
 
 export async function ensureTab(c: SheetCreds, name: string, headers: string[]): Promise<void> {
   const token = await getToken(c);
-  const meta = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}?fields=sheets.properties.title`,
-    { headers: { Authorization: `Bearer ${token}` } },
-  );
-  if (!meta.ok) throw new Error(`meta ${meta.status}: ${await meta.text()}`);
-  const json = (await meta.json()) as { sheets?: { properties: { title: string } }[] };
-  const exists = json.sheets?.some((s) => s.properties.title === name);
-  if (!exists) {
-    const add = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}:batchUpdate`,
-      {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ requests: [{ addSheet: { properties: { title: name } } }] }),
-      },
+  const exists = await withRetry("ensureTab:meta", async () => {
+    const meta = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}?fields=sheets.properties.title`,
+      { headers: { Authorization: `Bearer ${token}` } },
     );
-    if (!add.ok) throw new Error(`addSheet ${add.status}: ${await add.text()}`);
+    if (!meta.ok) throw new Error(`ensureTab:meta ${meta.status}: ${await meta.text()}`);
+    const json = (await meta.json()) as { sheets?: { properties: { title: string } }[] };
+    return !!json.sheets?.some((s) => s.properties.title === name);
+  });
+  if (!exists) {
+    await withRetry("ensureTab:addSheet", async () => {
+      const add = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}:batchUpdate`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ requests: [{ addSheet: { properties: { title: name } } }] }),
+        },
+      );
+      if (!add.ok) throw new Error(`ensureTab:addSheet ${add.status}: ${await add.text()}`);
+    });
   }
   if (headers.length > 0) {
     // 항상 헤더 덮어쓰기 (idempotent: 같으면 변화 없음, 칼럼 추가 시 자동 업데이트)
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values/${encodeURIComponent(name + "!A1")}?valueInputOption=USER_ENTERED`;
-    const res = await fetch(url, {
-      method: "PUT",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ values: [headers] }),
+    await withRetry("ensureTab:headers", async () => {
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values/${encodeURIComponent(name + "!A1")}?valueInputOption=USER_ENTERED`;
+      const res = await fetch(url, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ values: [headers] }),
+      });
+      if (!res.ok) throw new Error(`ensureTab:headers ${res.status}: ${await res.text()}`);
     });
-    if (!res.ok) throw new Error(`headers ${res.status}: ${await res.text()}`);
   }
 }
 
@@ -341,15 +374,17 @@ export async function clearTabData(
   tabName: string,
   startRow = 2,
 ): Promise<void> {
-  const token = await getToken(c);
-  const range = `${tabName}!A${startRow}:Z100000`;
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values/${encodeURIComponent(range)}:clear`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({}),
+  await withRetry("clearTabData", async () => {
+    const token = await getToken(c);
+    const range = `${tabName}!A${startRow}:Z100000`;
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values/${encodeURIComponent(range)}:clear`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    if (!res.ok) throw new Error(`clearTabData ${res.status}: ${await res.text()}`);
   });
-  if (!res.ok) throw new Error(`clearTabData ${res.status}: ${await res.text()}`);
 }
 
 /** 특정 셀에 날짜 picker 적용 — 데이터 검증 + 셀 형식 「날짜」 둘 다 설정해야 더블클릭 시 달력 뜸 */

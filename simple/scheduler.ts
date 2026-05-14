@@ -243,12 +243,19 @@ async function pollAndRun(): Promise<void> {
       }
       console.log(`[${nowKst()}] ✅ ${name} 완료`);
     } catch (err) {
+      // STOP 트리거의 pkill 로 SIGTERM/SIGKILL 받은 경우 — "Command failed" 가 아니라 STOP 메시지로 박음
+      // (그렇지 않으면 사장님이 STOP 눌렀는데도 시트에 "❌ Command failed" 만 남아 원인 오인됨 - race condition 회피)
+      const e = err as { signal?: string | null; status?: number | null };
+      const isStopSignal = e.signal === "SIGTERM" || e.signal === "SIGKILL";
       const msg = err instanceof Error ? err.message.slice(0, 200) : String(err);
-      await writeRow(clearVal, "ERROR", `❌ ${msg}`);
+      const result = isStopSignal
+        ? `🛑 STOP 으로 중단됨 ${nowKst()}`
+        : `❌ ${msg}`;
+      await writeRow(clearVal, "ERROR", result);
       if (task.cmd === "DATE_RANGE") {
         await writeRange(SHEET_CREDS!, `${TAB}!I${rowNum}`, [[""]]);
       }
-      console.error(`[${nowKst()}] ❌ ${name}: ${msg}`);
+      console.error(`[${nowKst()}] ${isStopSignal ? "🛑" : "❌"} ${name}: ${isStopSignal ? "SIGTERM/SIGKILL" : msg}`);
     }
   }
 }
