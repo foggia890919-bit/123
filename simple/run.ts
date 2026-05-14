@@ -837,6 +837,9 @@ async function processDay(
       productName: string;
       bottles: number;
       sales: number;
+      cost: number;
+      logistics: number;
+      profit: number;
       orderIds: Set<string>;
     }
     interface MainGroup {
@@ -849,6 +852,9 @@ async function processDay(
       productName: r.productName,
       bottles: 0,
       sales: 0,
+      cost: 0,
+      logistics: 0,
+      profit: 0,
       orderIds: new Set<string>(),
     });
     const groupByMain = (rows: Row[]): Map<string, MainGroup> => {
@@ -886,6 +892,9 @@ async function processDay(
         }
         g.main.bottles += mainRow.bottles;
         g.main.sales += mainRow.salesAmount;
+        g.main.cost += mainRow.cost;
+        g.main.logistics += mainRow.logistics;
+        g.main.profit += mainRow.profit;
         g.main.orderIds.add(mainRow.orderId);
         for (const ar of adds) {
           const aKey = ar.channelProductNo || ar.productName;
@@ -896,6 +905,9 @@ async function processDay(
           }
           aAgg.bottles += ar.bottles;
           aAgg.sales += ar.salesAmount;
+          aAgg.cost += ar.cost;
+          aAgg.logistics += ar.logistics;
+          aAgg.profit += ar.profit;
           aAgg.orderIds.add(ar.orderId);
         }
       }
@@ -906,11 +918,13 @@ async function processDay(
     const sortedMains = Array.from(sMains.values()).sort((a, b) => b.main.sales - a.main.sales);
     for (const g of sortedMains) {
       lines.push(`• <b>${g.main.label}</b> <code>${g.main.productKey}</code>`);
-      lines.push(`   ${g.main.bottles}개 · ${g.main.orderIds.size}건 · ${won(g.main.sales)}`);
+      lines.push(`   ${g.main.bottles}개 · ${g.main.orderIds.size}건 · 매출 ${won(g.main.sales)}`);
+      lines.push(`   📦 원가 ${won(g.main.cost)} · 🚚 ${won(g.main.logistics)} → 💎 이익 ${won(g.main.profit)}`);
       if (g.additional.size > 0) {
         const adds = Array.from(g.additional.values()).sort((a, b) => b.sales - a.sales);
         for (const a of adds) {
-          lines.push(`   ↳ 추가: <b>${a.label}</b> <code>${a.productKey}</code>  ${a.bottles}개 · ${a.orderIds.size}건 · ${won(a.sales)}`);
+          lines.push(`   ↳ 추가: <b>${a.label}</b> <code>${a.productKey}</code>`);
+          lines.push(`      ${a.bottles}개 · ${a.orderIds.size}건 · 매출 ${won(a.sales)} · 원가 ${won(a.cost)} · 이익 ${won(a.profit)}`);
         }
       }
     }
