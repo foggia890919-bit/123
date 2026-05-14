@@ -904,6 +904,17 @@ async function processDay(
         g.main.orderIds.add(mainRow.orderId);
         for (const ar of adds) {
           const aKey = ar.channelProductNo || ar.productName;
+          // 같은 채널상품번호의 다른 옵션 = 다중 옵션 구매 → 메인에 합치기
+          // (예: 압박스타킹 한 주문에 종아리형+허벅지형 같이 사면 둘 다 같은 chNo)
+          if (aKey === mainKey) {
+            g.main.bottles += ar.bottles;
+            g.main.sales += ar.salesAmount;
+            g.main.cost += ar.cost;
+            g.main.logistics += ar.logistics;
+            g.main.profit += ar.profit;
+            g.main.orderIds.add(ar.orderId);
+            continue;
+          }
           let aAgg = g.additional.get(aKey);
           if (!aAgg) {
             aAgg = makeAgg(ar);
