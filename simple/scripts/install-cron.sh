@@ -13,8 +13,13 @@ LOG_DIR="/home/ubuntu"
 # 기존 crontab 백업
 crontab -l > /tmp/cron.bak 2>/dev/null || true
 
-# sales 관련 줄만 제거 (다른 crontab 보존)
-grep -v "sales/simple" /tmp/cron.bak > /tmp/cron.clean || true
+# sales 관련 줄 + 우리가 추가한 PATH·헤더 주석 모두 제거 (재실행 시 중복 누적 방지)
+grep -v "sales/simple" /tmp/cron.bak \
+  | grep -v "^PATH=/usr/local/bin:/usr/bin:/bin$" \
+  | grep -v "^# 네이버 매출 자동화$" \
+  | grep -v "^# 매일 KST" \
+  | grep -v "^# 매분" \
+  > /tmp/cron.clean || true
 
 # 새 cron 추가
 cat >> /tmp/cron.clean <<EOF
