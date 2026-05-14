@@ -37,7 +37,7 @@
 | 시트 | 용도 | 컬럼 |
 |---|---|---|
 | 「여기명품 사입관리」 (`10DgfEqudeXOBmFFm8vyOHHuHJp6nZXKaxv4ecpbVhno`, gid=30917428) | 여기명품 매입원가 매핑 | AD=상품주문번호, AB=도매가+배송비+박스비 통합 |
-| 「B2C 재고장」 (`1TT4w04Etabf1C499icyItbfilWSUGPBlZIBRY76Urf0`, gid=303888745) | 재고 보고 데이터 | D=SEASON("반품" 포함 행 분리), AA=현재고수량, AF=현재고금액 |
+| 「B2C 재고장_찐」 (`1tVzl0Av8sfo0uJgDmrb-adC71bLjdP6eAompkRwDXCU`, gid=303888745) | 재고 보고 데이터 | D=SEASON("반품" 포함 행 분리), AA=현재고수량, AF=현재고금액 |
 
 → 두 시트 모두 `.env` 의 `GOOGLE_SERVICE_ACCOUNT_EMAIL` 에 *편집자(또는 뷰어)* 권한 공유 필요.
 
@@ -143,9 +143,9 @@ function onEdit(e) {
   - 허벅지 12,650원
   - 물류비 4,000원 (건당)
 
-**4. 「B2C 재고장」 시트 공유 (재고 보고용)**
-- URL: `https://docs.google.com/spreadsheets/d/1TT4w04Etabf1C499icyItbfilWSUGPBlZIBRY76Urf0/edit?gid=303888745`
-- 서비스 계정 (`GOOGLE_SERVICE_ACCOUNT_EMAIL`) 에 공유 확인 필요
+**4. 「B2C 재고장_찐」 시트 공유 (재고 보고용)** — ✅ 2026-05-14 완료
+- URL: `https://docs.google.com/spreadsheets/d/1tVzl0Av8sfo0uJgDmrb-adC71bLjdP6eAompkRwDXCU/edit?gid=303888745`
+- 서비스 계정 `sales-bot@bustling-bay-495106-k0.iam.gserviceaccount.com` 편집자 권한 등록됨
 
 **5. 「여기명품 사입관리」 시트 공유 + AD열 상품주문번호 입력 (사입 후 매번)**
 - URL: `https://docs.google.com/spreadsheets/d/10DgfEqudeXOBmFFm8vyOHHuHJp6nZXKaxv4ecpbVhno/edit?gid=30917428`

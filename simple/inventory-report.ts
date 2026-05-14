@@ -2,7 +2,7 @@
  * 재고 보고 — B2C 재고장 시트 read → 「⭐재고이력」 저장 → 텔레그램 발송.
  *
  * 시트 (별도 스프레드시트):
- *   ID: 1TT4w04Etabf1C499icyItbfilWSUGPBlZIBRY76Urf0, gid: 303888745
+ *   ID: 1tVzl0Av8sfo0uJgDmrb-adC71bLjdP6eAompkRwDXCU, gid: 303888745
  *
  * 컬럼:
  *   D = SEASON ("반품" 포함 행 = 반품재고)
@@ -30,7 +30,7 @@ if (!SHEET_CREDS) throw new Error("Google Sheet 환경변수 없음");
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TG_CHAT = process.env.TELEGRAM_CHAT_ID;
 
-const B2C_INVENTORY_SPREADSHEET_ID = "1TT4w04Etabf1C499icyItbfilWSUGPBlZIBRY76Urf0";
+const B2C_INVENTORY_SPREADSHEET_ID = "1tVzl0Av8sfo0uJgDmrb-adC71bLjdP6eAompkRwDXCU";
 const B2C_INVENTORY_GID = 303888745;
 
 interface Snapshot {
