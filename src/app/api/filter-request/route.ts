@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { requireSession, requireAdmin, isNextResponse } from "@/lib/auth-guard";
 import { BUCKETS, persistDataUri } from "@/lib/storage";
 import { sendAlimtalk } from "@/lib/coolsms";
+import { normalizeCompanyName } from "@/lib/company-name";
 
 export async function GET(req: NextRequest) {
   const user = await requireSession();
@@ -69,7 +70,11 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
-  const { clientName, bizNumber, bizDocument, bizFileName, companies, requestType } = await req.json();
+  const body = await req.json();
+  // 저장 전 정규화 — 이후 SubmissionRoute/CorpCompanyRate와 문자열 매칭 보장
+  const clientName = normalizeCompanyName(String(body.clientName ?? "").trim());
+  const bizNumber = String(body.bizNumber ?? "").replace(/\D/g, ""); // 숫자만
+  const { bizDocument, bizFileName, companies, requestType } = body;
 
   if (!clientName || !bizNumber || !companies?.length) {
     return NextResponse.json({ error: "필수 항목 누락" }, { status: 400 });

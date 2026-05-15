@@ -99,7 +99,9 @@ model UserClient {
   accountFileName String?
   dealerType   DealerType?
   isPublic     Boolean    @default(false)  // 상위법인 공개여부 — 공개 시 타인이 하위법인 등록 시 선택 가능
-  parentCorpId String?                     // 하위법인 등록 시 연결된 상위법인 UserClient.id
+  parentCorpId String?
+  parentCorp   UserClient?  @relation("CorpHierarchy", fields: [parentCorpId], references: [id], onDelete: SetNull)
+  childCorps   UserClient[] @relation("CorpHierarchy")
   address      String?
   managerName  String?
   managerPhone String?
@@ -116,6 +118,7 @@ model UserClient {
 
   @@index([userId])
   @@index([approved])
+  @@index([parentCorpId])
   @@unique([userId, bizNumber])
 }
 

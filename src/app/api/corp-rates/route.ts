@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { normalizeCompanyName } from "@/lib/company-name";
 
 function bizOrAdmin(role: string) { return role === "BIZ" || role === "ADMIN"; }
 
@@ -22,7 +23,11 @@ export async function POST(req: NextRequest) {
   if (isNextResponse(user)) return user;
   if (!bizOrAdmin(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
-  const { corpName, companyName, additionalRate, memo } = await req.json();
+  const body = await req.json();
+  // 저장 전 정규화 — UserClient.clientName 과 일치 보장
+  const corpName = normalizeCompanyName(String(body.corpName ?? "").trim());
+  const companyName = normalizeCompanyName(String(body.companyName ?? "").trim());
+  const { additionalRate, memo } = body;
   if (!corpName || !companyName)
     return NextResponse.json({ error: "법인명과 제약사명은 필수입니다." }, { status: 400 });
 
