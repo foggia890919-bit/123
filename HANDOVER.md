@@ -47,6 +47,7 @@
 - `NAVER_STORES_JSON` (3개 스토어: 비타앤오리진, 여기명품, 와이케이팜)
 - `NAVER_AD_API_KEY`, `NAVER_AD_SECRET`, `NAVER_AD_CUSTOMER_ID` (검색광고 — 검색량/시장 키워드)
 - `NAVER_DEVELOPER_CLIENT_ID`, `NAVER_DEVELOPER_CLIENT_SECRET` (검색 API — 순위 추적)
+- `NAVER_SHOPPING_COOKIE` (선택 — 시장 규모 작업용 봇 차단 우회. 미설정 시 HTTP 418. Chrome F12 → search.shopping.naver.com 쿠키 통째 복사)
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
 
 ---
@@ -84,7 +85,7 @@
 
 ---
 
-## 현재 상태 (2026-05-14)
+## 현재 상태 (2026-05-15)
 
 ### ✅ 운영 안정 — 모두 작동
 - **매출 자동화** (매일 8시 cron): 3개 스토어 매출 보고 + 7일 롤링 + 시트 누적
@@ -102,6 +103,7 @@
 - **catalog**: 옵션명/추가상품 매핑 완료, OOM 해결, 매번 clear+append
 - **검색량 조회**: batchUpdate fix (429 해결)
 - **시장 작업 4개** (카테고리 트리/Top500/규모/순위): 입력 시트 분리 + 자동 생성
+  - 시장 규모 (Top40 매출) — **사장님 쿠키 박기 대기 중** (2026-05-15). 네이버 쇼핑이 Lightsail IP 봇 차단(HTTP 418). market.ts:buildShoppingHeaders 가 `.env` 의 `NAVER_SHOPPING_COOKIE` 자동 주입. 사장님이 Chrome 쿠키 1회 박으면 부활. 만료 시 (1~2개월) 재발급. 향후 데이터 보려고 인프라는 그대로 유지
 - **순위 추적**: 네이버 검색 API + link 에서 채널상품번호 추출 매칭
 - **재고 보고** (매일 8:01 cron): B2C 재고장_찐 → ⭐재고이력 누적 + 텔레그램 — 첫 보고 2026-05-14 발송 확인 ✅
   - 비교 데이터 누적 일정: 2026-06-14 부터 당월초(06-01) 비교, 2026-07-14 부터 전월초(06-01)+당월초(07-01) 풀가동
@@ -220,6 +222,7 @@ function onEdit(e) {
 | 수수료 % 다르게 보임 | (해결됨) 매출-정산예정 = 진짜 수수료 | — |
 | STOP 눌렀는데 시트에 "Command failed" 박힘 | (해결됨 2026-05-14) scheduler catch race condition — SIGTERM 구분으로 "STOP 으로 중단됨" 박게 | — |
 | 시트 「주문원본」 쓰기 실패: meta 500 | (해결됨 2026-05-14) sheets API 일시 5xx — withRetry 헬퍼로 5회 retry + exponential 백오프 | — |
+| 시장규모 작업 OK 떴는데 시트 갱신 안 됨 | 네이버 쇼핑 페이지 봇 차단 (HTTP 418, Lightsail IP) | `.env` 에 `NAVER_SHOPPING_COOKIE` 박기. 자세한 절차: market.ts:fetchKeywordMarketSize 주석. 쿠키 만료 (1~2개월) 시 재발급 |
 
 ---
 

@@ -32,24 +32,30 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 // 최신 Chrome UA — 너무 옛 UA 는 봇 차단 (HTTP 418) 빈도 높음
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
-/** 네이버 쇼핑 페이지 스크래핑용 — 실제 Chrome 흉내 (sec-ch-* 등 필수) */
-const SHOPPING_HEADERS: Record<string, string> = {
-  "User-Agent": UA,
-  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-  "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-  "Accept-Encoding": "gzip, deflate, br",
-  "Cache-Control": "no-cache",
-  Pragma: "no-cache",
-  "sec-ch-ua": "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"",
-  "sec-ch-ua-mobile": "?0",
-  "sec-ch-ua-platform": "\"Windows\"",
-  "sec-fetch-dest": "document",
-  "sec-fetch-mode": "navigate",
-  "sec-fetch-site": "same-origin",
-  "sec-fetch-user": "?1",
-  "upgrade-insecure-requests": "1",
-};
+/** 네이버 쇼핑 페이지 스크래핑용 — 실제 Chrome 흉내 (sec-ch-* 등 필수) + 쿠키 (env) */
+function buildShoppingHeaders(): Record<string, string> {
+  const h: Record<string, string> = {
+    "User-Agent": UA,
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "no-cache",
+    Pragma: "no-cache",
+    "sec-ch-ua": "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"",
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": "\"Windows\"",
+    "sec-fetch-dest": "document",
+    "sec-fetch-mode": "navigate",
+    "sec-fetch-site": "same-origin",
+    "sec-fetch-user": "?1",
+    "upgrade-insecure-requests": "1",
+  };
+  const cookie = process.env.NAVER_SHOPPING_COOKIE?.trim();
+  if (cookie) h.Cookie = cookie;
+  return h;
+}
 let marketSize418DumpLogged = false; // 418 응답 body 1회만 dump
+let shoppingCookieWarned = false;    // 쿠키 미설정 경고 1회만 출력
 
 /** KST 기준 오늘 날짜 "YYYY-MM-DD" — UTC 새벽 시간에 전날로 박히는 사고 방지 */
 function todayKst(): string {
@@ -275,11 +281,32 @@ function parseKoNumber(s: string | number | undefined): number {
   return n;
 }
 
+/**
+ * 시장 규모 (Top10/40 매출·판매량) 수집.
+ *
+ * 차단 회피: 네이버 쇼핑 페이지가 Lightsail IP 를 봇으로 차단 (HTTP 418).
+ * → .env 의 NAVER_SHOPPING_COOKIE 에 사장님 Chrome 쿠키 박으면 정상 사용자처럼 통과.
+ *
+ * 쿠키 박는 법 (사장님 1회 설정):
+ *   1. Chrome 으로 https://search.shopping.naver.com/search/all?query=올리브오일 접속
+ *   2. F12 → Application 탭 → Cookies → https://search.shopping.naver.com
+ *   3. 모든 쿠키를 「Name=Value; Name=Value; ...」 형태로 복사
+ *      (또는 Network 탭 → 아무 요청 → Request Headers 의 `cookie:` 헤더 값 전체 복사)
+ *   4. ~/sales/simple/.env 에 NAVER_SHOPPING_COOKIE="..." 한 줄 추가
+ *   5. 쿠키 만료 (보통 1~2개월) 시 위 과정 반복
+ *
+ * 쿠키 없으면 (.env 미설정 시) 헤더 없이 요청 → HTTP 418 받고 진단8 dump.
+ */
 async function fetchKeywordMarketSize(keyword: string): Promise<MarketSize | null> {
+  const headers = buildShoppingHeaders();
+  if (!headers.Cookie && !shoppingCookieWarned) {
+    shoppingCookieWarned = true;
+    console.warn("⚠️ NAVER_SHOPPING_COOKIE 미설정 — 봇 차단(HTTP 418) 거의 확실. .env 에 쿠키 박기 (자세한 가이드: market.ts:fetchKeywordMarketSize 주석)");
+  }
   const url = `https://search.shopping.naver.com/search/all?query=${encodeURIComponent(keyword)}&pagingSize=40`;
   const res = await fetch(url, {
     headers: {
-      ...SHOPPING_HEADERS,
+      ...headers,
       Referer: "https://search.shopping.naver.com/",
     },
   });
