@@ -3,6 +3,7 @@ import { GoogleGenAI } from "@google/genai";
 import { prisma } from "@/lib/prisma";
 import { requireSession, requireAdmin, isNextResponse } from "@/lib/auth-guard";
 import { callDocumentAi, isDocumentAiConfigured, type DocAiResult } from "@/lib/document-ai";
+import { fetchRateEntries } from "@/lib/rate-utils";
 import {
   classifyVendor,
   isVendorCompatible,
@@ -674,21 +675,13 @@ export async function POST(req: NextRequest) {
       return a.anchorY - b.anchorY;
     });
 
-    // ── 4-1단계: 사용자 추가 수수료 (MemberCompanyRate) 일괄 조회 ───────────
-    // 매칭된 약품들의 제약사명을 모아 한 쿼리로 가져온다. 제약사명은 normalize 후 비교.
-    const matchedCompanies = Array.from(new Set(
-      pendingDrugs.map((d) => d.companyName.value).filter((n) => n)
-    ));
+    // ── 4-1단계: 사용자 추가 수수료 (개인 → 법인 폴백) 일괄 조회 ──────────
+    const norm = (s: string) => s.replace(/\(주\)|\(유\)|주식회사|㈜|\s+/g, "").toLowerCase();
     const additionalRateByCompany = new Map<string, number>();
-    if (matchedCompanies.length > 0) {
-      const memberRates = await prisma.memberCompanyRate.findMany({
-        where: { userId: user.id },
-        select: { companyName: true, additionalRate: true },
-      });
-      const norm = (s: string) => s.replace(/\(주\)|\(유\)|주식회사|㈜|\s+/g, "").toLowerCase();
-      for (const r of memberRates) {
-        additionalRateByCompany.set(norm(r.companyName), r.additionalRate);
-      }
+    const rateEntries = await fetchRateEntries(user.id);
+    for (const r of rateEntries) {
+      const key = norm(r.companyName);
+      if (!additionalRateByCompany.has(key)) additionalRateByCompany.set(key, r.additionalRate);
     }
 
     // ── 4-2단계: bboxYPercent 계산 — 견고한 위치 정렬 ──────────────────────

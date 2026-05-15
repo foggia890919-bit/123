@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { normalizeCompanyKey } from "@/lib/utils";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { buildRateMap } from "@/lib/rate-utils";
 
 async function loadOwned(id: string, userId: string, role: string) {
   const proposal = await prisma.proposal.findUnique({ where: { id } });
@@ -27,9 +28,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   });
   if (!proposal) return NextResponse.json({ error: "없음" }, { status: 404 });
 
-  const rateMap: Record<string, number> = {};
-  const rates = await prisma.memberCompanyRate.findMany({ where: { userId: proposal.userId } });
-  for (const r of rates) rateMap[normalizeCompanyKey(r.companyName)] = r.additionalRate;
+  const rateMap = await buildRateMap(proposal.userId);
 
   const items = proposal.items.map((item) => ({
     ...item,

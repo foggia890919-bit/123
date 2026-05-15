@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { normalizeCompanyKey } from "@/lib/utils";
+import { buildRateMap } from "@/lib/rate-utils";
 
 // 성분코드별 수수료 최고 약품 반환
 // POST { ingredientCodes: string[], userId?: string }
@@ -25,12 +26,7 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  // 유저별 추가수수료 맵
-  const rateMap: Record<string, number> = {};
-  if (userId) {
-    const rates = await prisma.memberCompanyRate.findMany({ where: { userId } });
-    for (const r of rates) rateMap[normalizeCompanyKey(r.companyName)] = r.additionalRate;
-  }
+  const rateMap = userId ? await buildRateMap(userId) : {};
 
   // 성분코드별 수수료 합계 최고 약품 선택
   const best: Record<string, (typeof meds)[0] & { additionalRate: number | null }> = {};

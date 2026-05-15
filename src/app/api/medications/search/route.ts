@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { normalizeCompanyKey } from "@/lib/utils";
 import { safeParseInt } from "@/lib/auth-guard";
+import { buildRateMap } from "@/lib/rate-utils";
 
 /**
  * HIRA 주성분코드 구조 (9자리 예: 641400ATR)
@@ -133,14 +134,8 @@ export async function GET(req: NextRequest) {
     fast ? Promise.resolve(0) : prisma.medication.count({ where }),
   ]);
 
-  // 로그인 회원의 추가수수료 적용 — 제약사명은 (주)/공백 무시하고 정규화 키로 매칭
-  let rateMap: Record<string, number> = {};
-  if (userId) {
-    const rates = await prisma.memberCompanyRate.findMany({ where: { userId } });
-    for (const r of rates) {
-      rateMap[normalizeCompanyKey(r.companyName)] = r.additionalRate;
-    }
-  }
+  // 로그인 회원의 추가수수료 적용 (개인 설정 → 법인 폴백)
+  const rateMap = userId ? await buildRateMap(userId) : {};
 
   const result = medications.map((med) => {
     let matchLevel: MatchLevel | null = null;

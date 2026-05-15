@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { normalizeCompanyKey } from "@/lib/utils";
 import { safeParseInt } from "@/lib/auth-guard";
+import { buildRateMap } from "@/lib/rate-utils";
 
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q")?.trim() || "";
@@ -58,13 +59,7 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const rateMap: Record<string, number> = {};
-  if (userId) {
-    const rates = await prisma.memberCompanyRate.findMany({ where: { userId } });
-    for (const r of rates) {
-      rateMap[normalizeCompanyKey(r.companyName)] = r.additionalRate;
-    }
-  }
+  const rateMap = userId ? await buildRateMap(userId) : {};
 
   const result = result_medications.map((med) => ({
     ...med,

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 import { BUCKETS, persistDataUri } from "@/lib/storage";
+import { normalizeCompanyName } from "@/lib/company-name";
 
 // GET /api/clients?q=...&bizNumber=...  전역 거래처 검색
 export async function GET(req: NextRequest) {
@@ -73,6 +74,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "거래처명과 사업자번호는 필수입니다." }, { status: 400 });
   }
 
+  const normalizedName = normalizeCompanyName(String(clientName).trim());
   const normalized = String(bizNumber).replace(/\D/g, "");
 
   const [
@@ -88,7 +90,7 @@ export async function POST(req: NextRequest) {
   try {
     const row = await prisma.client.create({
       data: {
-        clientName: String(clientName).trim(),
+        clientName: normalizedName,
         bizNumber: normalized,
         bizDocument: bizDocFallback,
         bizFileKey: bizFileKey ?? null,

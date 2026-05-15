@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { normalizeCompanyKey } from "@/lib/utils";
+import { buildRateMap } from "@/lib/rate-utils";
 
 function normalizeCode(code: string): string {
   const cleaned = code.replace(/[\s\-]/g, "").toUpperCase();
@@ -58,12 +59,7 @@ export async function POST(req: NextRequest) {
   const medById = new Map<string, typeof allMeds[0]>();
   for (const m of allMeds) medById.set(m.id, m);
 
-  // 추가수수료 맵
-  const rateMap: Record<string, number> = {};
-  if (userId) {
-    const rates = await prisma.memberCompanyRate.findMany({ where: { userId } });
-    for (const r of rates) rateMap[normalizeCompanyKey(r.companyName)] = r.additionalRate;
-  }
+  const rateMap = userId ? await buildRateMap(userId) : {};
 
   // 정규화 코드별 best 매칭 선택
   // 우선순위: EXCEL + commissionRate 있음 > EXCEL > PUBLIC_API + commissionRate > PUBLIC_API
