@@ -36,6 +36,7 @@ export default function SearchPage() {
   const { data: session } = useSession();
   const isSalesRep = hasRole(session?.user?.role, "SALES_REP");
   const [query, setQuery] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
   const [results, setResults] = useState<MedicationItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -195,7 +196,11 @@ export default function SearchPage() {
 
   async function handleSearch(e?: React.FormEvent) {
     e?.preventDefault();
-    await runSearch(query, selectedCompanies);
+    // 모바일 한글 IME 조합 중 버튼을 누르면 query state가 아직 업데이트 안 됨
+    // → DOM 실제 값을 직접 읽어서 사용
+    const actualQuery = inputRef.current?.value ?? query;
+    if (actualQuery !== query) setQuery(actualQuery);
+    await runSearch(actualQuery, selectedCompanies);
   }
 
   async function applyHistory(item: SearchHistoryItem) {
@@ -268,7 +273,7 @@ export default function SearchPage() {
         )}
 
         <form onSubmit={handleSearch} className="flex gap-2 max-w-2xl items-start">
-          <Input value={query} onChange={(e) => setQuery(e.target.value)}
+          <Input ref={inputRef} value={query} onChange={(e) => setQuery(e.target.value)}
             placeholder="예: 리피토, atorvastatin, 아스피린..." className="h-11 text-base" />
           <div ref={companyMenuRef} className="relative shrink-0">
             <button
