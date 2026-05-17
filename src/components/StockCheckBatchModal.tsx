@@ -119,7 +119,7 @@ export default function StockCheckBatchModal({ open, onClose, items }: Props) {
             </div>
           )}
 
-          {!loading && !error && Object.keys(byCode).length > 0 && (
+          {!loading && !error && items.length > 0 && (
             <div className="space-y-3">
               <table className="w-full text-sm border rounded-md overflow-hidden">
                 <thead className="bg-gray-50">
