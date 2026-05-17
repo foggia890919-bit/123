@@ -80,7 +80,7 @@ FROM "SubmissionRoute"
 GROUP BY norm_client, norm_company
 HAVING count(*) > 1;
 
--- 4-2. 충돌하는 중복 제거 (최신 updatedAt 행만 유지)
+-- 4-2. 충돌하는 중복 제거 (최신 createdAt 행만 유지)
 DELETE FROM "SubmissionRoute"
 WHERE id IN (
   SELECT id FROM (
@@ -88,7 +88,7 @@ WHERE id IN (
            ROW_NUMBER() OVER (
              PARTITION BY _normalize_company("clientName"),
                           _normalize_company("companyName")
-             ORDER BY "updatedAt" DESC
+             ORDER BY "createdAt" DESC
            ) AS rn
     FROM "SubmissionRoute"
   ) ranked
@@ -98,8 +98,7 @@ WHERE id IN (
 -- 4-3. 정규화 적용
 UPDATE "SubmissionRoute"
 SET "clientName"  = _normalize_company("clientName"),
-    "companyName" = _normalize_company("companyName"),
-    "updatedAt"   = now()
+    "companyName" = _normalize_company("companyName")
 WHERE "clientName"  != _normalize_company("clientName")
    OR "companyName" != _normalize_company("companyName");
 
