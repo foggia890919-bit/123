@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { normalizeCompanyName } from "@/lib/company-name";
 
 function bizOrAdmin(role: string) {
   return role === "BIZ" || role === "ADMIN";
@@ -31,8 +32,10 @@ export async function POST(req: NextRequest) {
   if (isNextResponse(user)) return user;
   if (!bizOrAdmin(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
-  const { companyName, submissionEntity, managerName, managerPhone, notes } =
-    await req.json();
+  const body = await req.json();
+  const companyName = normalizeCompanyName(String(body.companyName ?? "").trim());
+  const submissionEntity = normalizeCompanyName(String(body.submissionEntity ?? "").trim());
+  const { managerName, managerPhone, notes } = body;
 
   if (!companyName || !submissionEntity) {
     return NextResponse.json({ error: "제약사명과 제출처는 필수입니다." }, { status: 400 });

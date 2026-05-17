@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import * as XLSX from "xlsx";
 import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
+import { normalizeCompanyName } from "@/lib/company-name";
 
 // 특정 회원의 제약사별 추가수수료 조회
 export async function GET(req: NextRequest) {
@@ -77,7 +78,7 @@ export async function POST(req: NextRequest) {
 
   const data = rows
     .filter((r) => r.A && r.B != null && r.B !== "" && !isNaN(Number(r.B)))
-    .map((r) => ({ companyName: String(r.A).trim(), additionalRate: Number(r.B) }));
+    .map((r) => ({ companyName: normalizeCompanyName(String(r.A).trim()), additionalRate: Number(r.B) }));
 
   const samples = data.slice(0, 5);
   await prisma.$transaction(
@@ -99,15 +100,16 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   const guard = await requireAdmin();
   if (isNextResponse(guard)) return guard;
-  const { userId, companyName, additionalRate } = await req.json();
+  const { userId, companyName: rawCompanyName, additionalRate } = await req.json();
+  const companyName = normalizeCompanyName(String(rawCompanyName ?? "").trim());
   if (!userId || !companyName || additionalRate == null || isNaN(Number(additionalRate))) {
     return NextResponse.json({ error: "필수 항목 누락" }, { status: 400 });
   }
   const rate = Number(additionalRate);
   const saved = await prisma.memberCompanyRate.upsert({
-    where: { userId_companyName: { userId, companyName: String(companyName).trim() } },
+    where: { userId_companyName: { userId, companyName } },
     update: { additionalRate: rate, updatedAt: new Date() },
-    create: { userId, companyName: String(companyName).trim(), additionalRate: rate, updatedAt: new Date() },
+    create: { userId, companyName, additionalRate: rate, updatedAt: new Date() },
   });
   return NextResponse.json({ success: true, companyName: saved.companyName, additionalRate: saved.additionalRate });
 }

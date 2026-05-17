@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { normalizeCompanyKey } from "@/lib/utils";
+import { buildRateMap } from "@/lib/rate-utils";
 import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 
@@ -80,11 +81,7 @@ export async function POST(req: NextRequest) {
     orderBy: [{ isSettlement: "desc" }, { commissionRate: "desc" }],
   });
 
-  const rateMap: Record<string, number> = {};
-  if (userId) {
-    const rates = await prisma.memberCompanyRate.findMany({ where: { userId } });
-    for (const r of rates) rateMap[normalizeCompanyKey(r.companyName)] = r.additionalRate;
-  }
+  const rateMap = userId ? await buildRateMap(userId) : {};
 
   const medsWithRate: MedicationWithRate[] = allMeds.map((m) => ({
     ...m,

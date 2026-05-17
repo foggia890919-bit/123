@@ -366,7 +366,7 @@ export async function POST(req: NextRequest) {
   try {
     const createData: Record<string, unknown> = {
       userId: user.id,
-      clientName: String(clientName).trim(),
+      clientName: normalizeCompanyName(String(clientName).trim()),
       bizNumber: String(bizNumber).replace(/\D/g, ""),
       bizDocument: bizDocumentFallback,
       bizFileKey,
