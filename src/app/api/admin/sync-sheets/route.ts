@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 import { syncToSheets, type SheetData } from "@/lib/google-sheets";
 
+export const runtime = "nodejs";
+
 export async function POST() {
   const guard = await requireAdmin();
   if (isNextResponse(guard)) return guard;

@@ -5182,11 +5182,16 @@ function SyncSheetsButton() {
     setLoading(true); setError(null); setUrl(null);
     try {
       const res = await fetch("/api/admin/sync-sheets", { method: "POST" });
-      const data = await res.json();
+      let data: { url?: string; error?: string };
+      try {
+        data = await res.json();
+      } catch {
+        data = { error: `HTTP ${res.status} — 응답이 JSON이 아님 (라우트 미배포 가능성)` };
+      }
       if (data.url) setUrl(data.url);
       else setError(data.error ?? "오류 발생");
-    } catch {
-      setError("요청 실패");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "요청 실패");
     } finally {
       setLoading(false);
     }
