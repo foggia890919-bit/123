@@ -11,12 +11,20 @@ ALTER TABLE "UserClient"
 ALTER TABLE "UserClient"
   ADD COLUMN IF NOT EXISTS "isPublic" BOOLEAN NOT NULL DEFAULT false;
 
--- FK 제약 추가 (자기참조: 부모 법인 → UserClient)
-ALTER TABLE "UserClient"
-  ADD CONSTRAINT "UserClient_parentCorpId_fkey"
-  FOREIGN KEY ("parentCorpId")
-  REFERENCES "UserClient"("id")
-  ON DELETE SET NULL;
+-- FK 제약 추가 (이미 존재하면 스킵)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'UserClient_parentCorpId_fkey'
+  ) THEN
+    ALTER TABLE "UserClient"
+      ADD CONSTRAINT "UserClient_parentCorpId_fkey"
+      FOREIGN KEY ("parentCorpId")
+      REFERENCES "UserClient"("id")
+      ON DELETE SET NULL;
+  END IF;
+END$$;
 
 -- 인덱스 추가
 CREATE INDEX IF NOT EXISTS "UserClient_parentCorpId_idx"
