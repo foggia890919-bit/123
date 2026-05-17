@@ -51,14 +51,15 @@ def _line_score(mask: np.ndarray) -> float:
 
 
 def _top_heavy_score(mask: np.ndarray) -> float:
-    """위쪽 1/3 의 다크 픽셀 비율 vs 아래쪽 1/3. 양수면 위쪽이 더 무거움.
+    """위쪽 1/4 의 다크 픽셀 비율 vs 아래쪽 1/4. 양수면 위쪽이 더 무거움.
 
     한국어 표 양식은 헤더가 위쪽 → 0 도(정상) 에서 양수, 180 도(뒤집힘)에서 음수.
-    표가 화면 가득 차는 케이스에선 거의 0 에 가까워 약한 신호.
+    1/3 컷으로 잡으면 중앙쯤 박힌 워터마크(예: 04_paper_watermark 의 `배재천신경과`)
+    가 신호에 끼어들어 오판 — 1/4 컷이 워터마크 영향에 더 둔감하다.
     """
     h = mask.shape[0]
-    top = float(mask[: h // 3].sum())
-    bot = float(mask[-h // 3 :].sum())
+    top = float(mask[: h // 4].sum())
+    bot = float(mask[-h // 4 :].sum())
     total = top + bot
     if total < 1.0:
         return 0.0
@@ -91,19 +92,24 @@ def estimate_rotation_degrees(image: np.ndarray) -> int:
         rotated = _rotate(mask, deg)
         candidates.append((deg, _line_score(rotated), _top_heavy_score(rotated)))
 
-    # 1단계: line_score 로 0/180 후보군 vs 90/270 후보군 분리.
-    # 가로쓰기 후보(0 또는 180)는 line_score 가 높음.
+    # 1단계: line_score 로 가로쓰기 페어 vs 세로 페어 분리.
+    # 가로쓰기 후보(0/180)는 line_score 가 높음 — 글자가 행에 모이고 행 사이 공백이
+    # 있어 행 합이 들쭉날쭉. 90/270 은 평탄.
     by_line = sorted(candidates, key=lambda c: c[1], reverse=True)
     best, second = by_line[0], by_line[1]
-    # line_score 1·2위가 비슷(<5% 차이)하면 회전 신호가 약하다는 뜻 — 안 돌림.
-    if best[1] < 0.05 or (best[1] - second[1]) / max(best[1], 1e-6) < 0.05:
-        return 0
+
+    # 1·2위가 180도 차이 페어(둘 다 같은 글쓰기 방향)인지 확인. 그렇다면 line_score
+    # 차이가 작아도 가로쓰기 후보 확정 — top_heavy 로 0 vs 180 만 가르면 된다.
+    # 페어가 아니면 (예: 0과 90 이 비슷) 신호 약함 → 0 유지가 안전.
+    is_pair = abs(best[0] - second[0]) == 180
+    if not is_pair:
+        # 1위가 90/270 페어와 큰 차이 안 나는 케이스 — 회전 판단 신호 부족.
+        if best[1] < 0.05 or (best[1] - second[1]) / max(best[1], 1e-6) < 0.05:
+            return 0
 
     # 2단계: 가로쓰기 후보 페어({0,180} 또는 {90,270}) 중에서 top_heavy 양수 쪽 선택.
-    # best 의 페어 = best 와 180 도 차이 나는 후보.
     pair_deg = (best[0] + 180) % 360
     pair = next(c for c in candidates if c[0] == pair_deg)
-    # 둘의 top_heavy 비교. 더 큰(=헤더가 위에 있는) 쪽이 정답.
     chosen = best if best[2] >= pair[2] else pair
     return chosen[0]
 

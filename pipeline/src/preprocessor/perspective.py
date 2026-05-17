@@ -332,11 +332,15 @@ def correct_perspective(
     if cv_status == "ok":
         return warp_to_front(image, cv_result.corners), cv_result.method
 
-    # 4: VLM 폴오버 — OpenCV 가 corners=None 인 완전실패 케이스에만.
-    # (4점은 찾았는데 가드만 못 통과한 경우는 표 외곽 일부만 인식했단 신호 →
-    #  이때 VLM 에 다시 묻으면 페이지 헤더 같은 엉뚱한 영역을 새 사각형으로
-    #  짚을 위험이 더 큼. 그땐 minAreaRect 와 deskew 로 넘긴다.)
-    if vlm_adapter is not None and cv_result.corners is None:
+    # 4: VLM 폴오버 — OpenCV 가 가드를 통과 못 한 모든 케이스에서 적극 발동.
+    # (이전엔 corners=None 일 때만 호출 → 04_paper_watermark 같은 케이스에서
+    #  Hough/Contour/GrabCut 다 통과 못 했는데 minAreaRect 가 종이 회전 사각형을
+    #  잡으며 표 오른쪽을 잘랐다. VLM 에 직접 4 모서리를 물으면 사람이 보듯
+    #  종이 외곽을 짚어주므로, 비용 +1콜로 정확도 ↑.)
+    #
+    # 가드 통과한 VLM 결과만 채택 — VLM 도 자신없을 땐 confidence<0.5 로 거부됨.
+    # 그것마저 실패하면 minAreaRect 로 떨어진다.
+    if vlm_adapter is not None:
         from .vlm_corners import locate_corners_with_vlm
 
         vlm_res = locate_corners_with_vlm(image, vlm_adapter)
@@ -346,7 +350,13 @@ def correct_perspective(
                 ordered, image, img_area, min_area_ratio, aspect_range, min_span_ratio
             )
             if vlm_status == "ok":
-                return warp_to_front(image, ordered), f"vlm(conf={vlm_res.confidence:.2f})"
+                # VLM 이 정방향 기준으로 top_left/top_right/... 를 짚으므로 워프
+                # 결과는 자동으로 정방향이 됨 (VLM rotation 필드는 신뢰성 낮아 안 씀).
+                # 외측 마진 3% — VLM 이 종이 가장자리 안쪽으로 짚는 경향 안전판.
+                return (
+                    warp_to_front(image, ordered, outward_margin=0.03),
+                    f"vlm(conf={vlm_res.confidence:.2f})",
+                )
 
     # 5: minAreaRect — 회전 직사각형으로라도 펴기 (구겨진 종이 안전망).
     # 검출 사각형이 표 가장자리(특히 가장 우측 컬럼)를 약간 자르는 일이 잦아
