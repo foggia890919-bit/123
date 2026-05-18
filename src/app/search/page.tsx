@@ -242,17 +242,29 @@ export default function SearchPage() {
     refetchWithCompanies(next);
   }
 
-  // 검색 결과 로드 시 도매상 캐시 자동 워밍업 (snapshot 경로 — 한 번의 API 호출로 전체 처리)
+  // 검색 결과 로드 시 도매상 캐시 자동 워밍업
+  // 1단계: snapshot 경로로 캐시 채움 (DB 조회, 거의 무비용)
+  // 2단계: snapshot 에 없는 코드는 자동 라이브 스크랩 (워커 호출, 50개 한도)
   useEffect(() => {
-    const codes = results
+    const cached = results
       .map((m) => m.insuranceCode)
       .filter((c): c is string => !!c)
       .filter((c) => {
         const e = getStock(c);
         return e.status !== "done" && e.status !== "loading";
       });
-    if (codes.length > 0) {
-      fetchStockBatch(codes, false, STOCK_SITES);
+    if (cached.length > 0) {
+      fetchStockBatch(cached, false, STOCK_SITES);
+    }
+
+    // 서버 응답에서 med.stock 이 비어있는 코드 = snapshot DB 에 없음 → 자동 라이브
+    // 라이브 경로 한도가 50 이므로 최대 50개만 트리거. 나머지는 사용자가 "전체재고 새로고침"
+    const emptyCodes = results
+      .filter((m) => m.insuranceCode && (m.stock == null))
+      .map((m) => m.insuranceCode!)
+      .slice(0, 50);
+    if (emptyCodes.length > 0) {
+      fetchStockBatch(emptyCodes, true, STOCK_SITES);
     }
   }, [results]);
 
