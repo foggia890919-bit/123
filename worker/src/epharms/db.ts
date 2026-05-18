@@ -204,12 +204,18 @@ export async function upsertLedgerRows(
   rows: LedgerRow[]
 ): Promise<number> {
   if (rows.length === 0) return 0;
+
+  // 같은 배치 내 rowHash 중복 제거 — ON CONFLICT DO UPDATE는 동일 행을 두 번 건드릴 수 없음
+  const seen = new Map<string, LedgerRow>();
+  for (const r of rows) seen.set(rowHash(r), r);
+  const deduped = Array.from(seen.values());
+
   const client = await getPool().connect();
   let inserted = 0;
   try {
     const CHUNK = 200;
-    for (let i = 0; i < rows.length; i += CHUNK) {
-      const slice = rows.slice(i, i + CHUNK);
+    for (let i = 0; i < deduped.length; i += CHUNK) {
+      const slice = deduped.slice(i, i + CHUNK);
       const values: unknown[] = [];
       const placeholders: string[] = [];
       let p = 1;
