@@ -115,28 +115,45 @@ export async function fetchLedger(page: Page): Promise<LedgerRow[]> {
   }
   await page.waitForTimeout(1500);
 
-  // 결과 테이블 파싱
+  // 결과 테이블 파싱 — page.evaluate로 한 번에 처리 (행별 IPC 왕복 제거)
   // account_detail 컬럼: [0]명세일자 [1]EDI [2]제품명 [3]규격 [4]수량 [5]단가 [6]합계 [7]수금 [8]잔액 [9]제조번호 [10]유효기간 [11]비고
-  const rows = await page.locator(SEL.resultRows).all();
-  const out: LedgerRow[] = [];
-  for (const row of rows) {
-    const cells = await row.locator("td").allInnerTexts();
-    if (cells.length < 9) continue;          // 소계행·헤더 스킵
-    const date = parseDate(cells[0]);
-    if (!date) continue;                     // "전일잔액" / "명세소계" 행은 날짜 없음 → 스킵
-    const itemName = (cells[2] || "").trim();
-    if (!itemName || itemName === "명세소계") continue;
-    out.push({
-      entryDate: date,
-      ediCode:   (cells[1] || "").trim(),
-      itemName,
-      spec:      (cells[3] || "").trim(),
-      quantity:  parseMoney(cells[4]),
-      unitPrice: parseMoney(cells[5]),
-      sales:     parseMoney(cells[6]),
-      payment:   parseMoney(cells[7]),
-      balance:   parseMoney(cells[8]),
+  const out: LedgerRow[] = await page.evaluate((selector) => {
+    function parseMon(s: string) {
+      const c = (s || "").replace(/[^\d-]/g, "");
+      if (!c || c === "-") return 0;
+      return Number(c) || 0;
+    }
+    function parseDt(s: string) {
+      const m = (s || "").trim().match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
+      if (!m) return null;
+      return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+    }
+    const result: Array<{
+      entryDate: string; ediCode: string; itemName: string;
+      spec: string; quantity: number; unitPrice: number;
+      sales: number; payment: number; balance: number;
+    }> = [];
+    document.querySelectorAll(selector).forEach((tr) => {
+      const tds = Array.from(tr.querySelectorAll("td"));
+      if (tds.length < 9) return;
+      const cells = tds.map((td) => (td.innerText || "").trim());
+      const date = parseDt(cells[0]);
+      if (!date) return;
+      const itemName = cells[2] || "";
+      if (!itemName || itemName === "명세소계") return;
+      result.push({
+        entryDate: date,
+        ediCode: cells[1] || "",
+        itemName,
+        spec: cells[3] || "",
+        quantity: parseMon(cells[4]),
+        unitPrice: parseMon(cells[5]),
+        sales: parseMon(cells[6]),
+        payment: parseMon(cells[7]),
+        balance: parseMon(cells[8]),
+      });
     });
-  }
+    return result;
+  }, SEL.resultRows);
   return out;
 }
