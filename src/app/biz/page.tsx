@@ -9,7 +9,7 @@ import {
   ChevronRight, LayoutDashboard, ClipboardList,
   BarChart3, PercentCircle, Pill, UserCheck,
   Calculator, Network, Users, PackageSearch, Mail, Package, ShoppingCart,
-  KeyRound, Inbox,
+  KeyRound, Inbox, ArrowRightLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -80,6 +80,13 @@ const BIZ_MENU_GROUPS = [
         desc: "업로드 이력·기간 필터·상태 추적·삭제",
         icon: FileSearch,
         color: "bg-orange-50 text-orange-600",
+      },
+      {
+        href: "/biz/settlement/convert",
+        label: "정산내역서 변환·비교",
+        desc: "상위법인 정산서를 우리 양식으로 변환 + 기준 내역서와 변동 비교",
+        icon: ArrowRightLeft,
+        color: "bg-blue-50 text-blue-600",
       },
     ],
   },
