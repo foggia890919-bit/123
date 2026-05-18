@@ -92,15 +92,22 @@ export function fetchStock(code: string, productName: string, live = false, site
 }
 
 /**
- * 여러 보험코드의 재고를 한 번의 API 호출로 가져온다.
- * 검색 결과 자동 워밍업처럼 50건+ 일괄 처리할 때 사용.
- * Vercel 동시 함수 호출 제한을 피하고 워커 부하도 줄임.
+ * 여러 보험코드의 재고를 가져온다.
+ *
+ * @param force true 면 캐시의 loading/done 상태를 무시하고 재호출.
+ *              "전체재고 새로고침" 처럼 사용자가 명시적으로 다시 받고 싶을 때.
+ *
+ * 라이브 경로는 `/api/inventory/check` 에 50개 한도가 있어서, 50개를 초과하면
+ * 50개씩 청크로 쪼개 병렬 호출한다. snapshot 경로는 1000개 한도라 단일 호출.
+ * 각 청크는 응답이 들어오는 대로 캐시에 반영 (즉시 화면 업데이트).
  */
-export function fetchStockBatch(codes: string[], live = false, sites?: string[]) {
-  const targets = codes.filter((c) => {
-    const e = cache.get(c);
-    return !e || (e.status !== "loading" && e.status !== "done");
-  });
+export function fetchStockBatch(codes: string[], live = false, sites?: string[], force = false) {
+  const targets = force
+    ? codes.slice()
+    : codes.filter((c) => {
+        const e = cache.get(c);
+        return !e || (e.status !== "loading" && e.status !== "done");
+      });
   if (targets.length === 0) return;
 
   for (const code of targets) {
@@ -109,25 +116,30 @@ export function fetchStockBatch(codes: string[], live = false, sites?: string[])
   }
 
   const url = live ? "/api/inventory/check?live=1" : "/api/inventory/check";
-  fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ codes: targets, ...(sites ? { sites } : {}) }),
-  })
-    .then(safeJson)
-    .then(({ data, error }) => {
-      if (error) {
-        for (const c of targets) applyError(c, error);
-        return;
-      }
-      const d = data as { error?: string; results?: SiteResult[]; source?: "snapshot" | "live" };
-      if (d?.error) {
-        for (const c of targets) applyError(c, d.error!);
-        return;
-      }
-      for (const c of targets) applyResult(c, d?.results ?? [], d?.source);
+  const chunkSize = live ? 50 : 1000;
+
+  for (let i = 0; i < targets.length; i += chunkSize) {
+    const chunk = targets.slice(i, i + chunkSize);
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ codes: chunk, ...(sites ? { sites } : {}) }),
     })
-    .catch((err) => {
-      for (const c of targets) applyError(c, String(err));
-    });
+      .then(safeJson)
+      .then(({ data, error }) => {
+        if (error) {
+          for (const c of chunk) applyError(c, error);
+          return;
+        }
+        const d = data as { error?: string; results?: SiteResult[]; source?: "snapshot" | "live" };
+        if (d?.error) {
+          for (const c of chunk) applyError(c, d.error!);
+          return;
+        }
+        for (const c of chunk) applyResult(c, d?.results ?? [], d?.source);
+      })
+      .catch((err) => {
+        for (const c of chunk) applyError(c, String(err));
+      });
+  }
 }

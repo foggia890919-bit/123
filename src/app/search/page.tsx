@@ -269,13 +269,14 @@ export default function SearchPage() {
     }
   }, [results]);
 
-  // "전체재고 새로고침" — 모든 행을 실시간 라이브 스크랩으로 갱신 (한 번의 API 호출)
+  // "전체재고 새로고침" — 모든 행을 실시간 라이브 스크랩으로 강제 갱신.
+  // force=true 로 캐시의 done/loading 상태도 무시. 50개 초과 시 청크 분할은 fetchStockBatch 내부에서.
   function refreshAllLive() {
     const codes = results
       .map((m) => m.insuranceCode)
       .filter((c): c is string => !!c);
     if (codes.length > 0) {
-      fetchStockBatch(codes, true, STOCK_SITES);
+      fetchStockBatch(codes, true, STOCK_SITES, true);
     }
   }
 
