@@ -19,6 +19,9 @@ export default function RegisterPage() {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const bizFileRef = useRef<HTMLInputElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState({ email: "", password: "", name: "", role: "SALES_REP", phone: "", carrier: "" });
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState("");
@@ -171,9 +174,16 @@ export default function RegisterPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.name.trim()) { setError("이름을 입력해주세요."); return; }
-    if (!form.email.trim()) { setError("이메일을 입력해주세요."); return; }
-    if (!form.password || form.password.length < 8) { setError("비밀번호를 8자 이상 입력해주세요."); return; }
+    // DOM 값을 폴백으로 읽어 브라우저 자동완성이 React onChange를 우회한 경우에도 잡음
+    const nameVal = (nameRef.current?.value ?? form.name).trim();
+    const emailVal = (emailRef.current?.value ?? form.email).trim();
+    const passwordVal = passwordRef.current?.value ?? form.password;
+    if (nameVal && nameVal !== form.name) setForm(f => ({ ...f, name: nameVal }));
+    if (emailVal && emailVal !== form.email) setForm(f => ({ ...f, email: emailVal }));
+    if (passwordVal && passwordVal !== form.password) setForm(f => ({ ...f, password: passwordVal }));
+    if (!nameVal) { setError("이름을 입력해주세요."); return; }
+    if (!emailVal) { setError("이메일을 입력해주세요."); return; }
+    if (!passwordVal || passwordVal.length < 8) { setError("비밀번호를 8자 이상 입력해주세요."); return; }
     if (!form.carrier) { setError("통신사를 선택해주세요."); return; }
     if (!phoneVerified) { setError("휴대폰 본인인증을 완료해주세요."); return; }
     if (!file) { setError("첨부파일을 업로드해주세요."); return; }
@@ -221,6 +231,9 @@ export default function RegisterPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             ...form,
+            name: nameVal,
+            email: emailVal,
+            password: passwordVal,
             document: { fileName: file.name, fileData, docType: selectedRole?.docLabel },
             biz: bizNumber ? {
               bizNumber: bizNumber.replace(/\D/g, ""),
@@ -264,17 +277,17 @@ export default function RegisterPage() {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1">
             <label className="text-sm font-medium text-gray-700">이름</label>
-            <Input value={form.name} onChange={(e) => update("name", e.target.value)} placeholder="홍길동" required />
+            <Input ref={nameRef} value={form.name} onChange={(e) => update("name", e.target.value)} placeholder="홍길동" required />
           </div>
 
           <div className="space-y-1">
             <label className="text-sm font-medium text-gray-700">이메일</label>
-            <Input type="email" value={form.email} onChange={(e) => update("email", e.target.value)} placeholder="example@email.com" required />
+            <Input ref={emailRef} type="email" value={form.email} onChange={(e) => update("email", e.target.value)} placeholder="example@email.com" required />
           </div>
 
           <div className="space-y-1">
             <label className="text-sm font-medium text-gray-700">비밀번호</label>
-            <Input type="password" value={form.password} onChange={(e) => update("password", e.target.value)} placeholder="8자 이상" minLength={8} required />
+            <Input ref={passwordRef} type="password" value={form.password} onChange={(e) => update("password", e.target.value)} placeholder="8자 이상" minLength={8} required />
           </div>
 
           {/* 통신사 + 전화번호 + 인증 */}
