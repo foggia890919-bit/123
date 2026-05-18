@@ -94,3 +94,4 @@ CREATE INDEX IF NOT EXISTS "UserClient_isRateTarget_idx"        ON "UserClient"(
 6. 자율 진행 모드: 사용자에게 매번 묻지 않음. 합리적 기본값
 7. 대량 병렬 디스패치: 한 번에 4~5건 동시 진행
 8. 끝나면 종합 보고서 1방
+- 2026-05-18 12:23 | qa-crosscheck | epharms forceResetSync plan | CONDITIONAL_PASS
