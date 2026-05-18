@@ -1278,6 +1278,8 @@ function InhouseClientsTab() {
   const [saving, setSaving] = useState(false);
   const [syncingAll, setSyncingAll] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [epharmsSyncRunning, setEpharmsSyncRunning] = useState<boolean | null>(null);
+  const [resetting, setResetting] = useState(false);
 
   const [kmdClients, setKmdClients] = useState<InhouseKmdClient[]>([]);
   const [kmdSearch, setKmdSearch] = useState("");
@@ -1476,8 +1478,41 @@ function InhouseClientsTab() {
     await load();
   }
 
+  // 10초마다 워커 sync 상태 폴링 — stuck 감지 시 강제 재시작 버튼 표시
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const r = await fetch("/api/epharms-accounts/sync/reset");
+        if (r.ok) {
+          const body = await r.json() as { epharmsSyncRunning?: boolean | null };
+          setEpharmsSyncRunning(body.epharmsSyncRunning ?? null);
+        }
+      } catch { /* ignore */ }
+      timer = setTimeout(poll, 10_000);
+    }
+    poll();
+    return () => clearTimeout(timer);
+  }, []);
+
+  async function forceRestart() {
+    if (!confirm("현재 sync를 강제 중지하고 즉시 재시작합니다.\n계속하시겠습니까?")) return;
+    setResetting(true);
+    try {
+      const r = await fetch("/api/epharms-accounts/sync/reset", { method: "POST" });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) alert((body as { error?: string }).error || "강제 재시작 실패");
+      else {
+        alert("강제 재시작됨. 잠시 후 새로고침으로 결과 확인하세요.");
+        setEpharmsSyncRunning(true);
+      }
+    } finally {
+      setResetting(false);
+    }
+  }
+
   async function syncAll() {
-    if (!confirm("지금 전체 활성 계정의 매출원장을 다시 긁어옵니다. (수십분 소요 가능)\n진행할까요?")) return;
+    if (!confirm("지금 전체 활성 계정의 매출원장을 다시 긁어옵니다.\n진행할까요?")) return;
     setSyncingAll(true);
     try {
       const r = await fetch("/api/epharms-accounts/sync", { method: "POST" });
@@ -1577,10 +1612,21 @@ function InhouseClientsTab() {
           거래처별 yk.ep45.co.kr 로그인 계정 등록 → 매일 00:00(KST) 자동 sync
         </p>
         <div className="flex items-center gap-2">
+          {epharmsSyncRunning && (
+            <button
+              onClick={forceRestart}
+              disabled={resetting}
+              className="flex items-center gap-1.5 px-3 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg disabled:opacity-50"
+            >
+              {resetting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              강제 재시작
+            </button>
+          )}
           <button
             onClick={syncAll}
-            disabled={syncingAll}
+            disabled={syncingAll || !!epharmsSyncRunning}
             className="flex items-center gap-1.5 px-3 py-2 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded-lg disabled:opacity-50"
+            title={epharmsSyncRunning ? "sync 진행 중 — 강제 재시작을 사용하세요" : undefined}
           >
             {syncingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             지금 전체 sync

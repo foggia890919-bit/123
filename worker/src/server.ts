@@ -6,7 +6,7 @@ import type { Credentials, InventoryItem, WholesaleAdapter } from "../../src/scr
 import { startScheduler, triggerJobNow, isJobRunning } from "./scheduler.ts";
 import { hasDb } from "./db.ts";
 import { startEpharmsScheduler } from "./epharms/cron.ts";
-import { isEpharmsSyncRunning, runEpharmsSync } from "./epharms/sync.ts";
+import { isEpharmsSyncRunning, runEpharmsSync, forceResetSync } from "./epharms/sync.ts";
 import { isProductSyncRunning, syncProductMaster } from "./epharms/products.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -173,6 +173,14 @@ app.post("/epharms/sync", async (req, res) => {
     console.error("[epharms] manual sync failed:", err)
   );
   res.json({ ok: true, started: true, onlyAccountId: onlyAccountId ?? null });
+});
+
+// 강제 재시작: hung 상태의 running 플래그를 초기화 후 즉시 전체 sync 재시작.
+app.post("/epharms/sync/reset", async (req, res) => {
+  if (!hasDb()) { res.status(503).json({ error: "DATABASE_URL not configured" }); return; }
+  forceResetSync();
+  runEpharmsSync({}).catch(err => console.error("[epharms] force-restart failed:", err));
+  res.json({ ok: true, reset: true, started: true });
 });
 
 // 이팜스 상품 마스터 자동 동기화 — 페이지별 크롤링.

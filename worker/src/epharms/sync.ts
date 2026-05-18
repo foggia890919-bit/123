@@ -16,9 +16,15 @@ const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 let running = false;
+let syncGen = 0; // 강제 재시작 시 세대 번호 증가 → 구형 hung sync의 finally가 플래그를 덮어쓰지 못하게 함
 
 export function isEpharmsSyncRunning(): boolean {
   return running;
+}
+
+export function forceResetSync(): void {
+  syncGen++;      // 구형 sync 무효화
+  running = false;
 }
 
 export interface EpharmsSyncResult {
@@ -31,6 +37,7 @@ export interface EpharmsSyncResult {
 export async function runEpharmsSync(opts: { onlyAccountId?: string } = {}): Promise<EpharmsSyncResult> {
   if (running) throw new Error("ePharms sync already running");
   running = true;
+  const myGen = syncGen; // 이 실행의 세대 번호를 기억
   const t0 = Date.now();
   let ok = 0, failed = 0, total = 0;
 
@@ -91,7 +98,7 @@ export async function runEpharmsSync(opts: { onlyAccountId?: string } = {}): Pro
     }
   } finally {
     await browser?.close().catch(() => {});
-    running = false;
+    if (syncGen === myGen) running = false; // 강제 재시작으로 세대가 바뀌었으면 리셋 생략
   }
 
   const durationMs = Date.now() - t0;
