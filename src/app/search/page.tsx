@@ -12,6 +12,10 @@ import { useSession } from "next-auth/react";
 import type { MedicationItem } from "@/types";
 import { hasRole } from "@/lib/roles";
 import { useGuestLimit } from "@/hooks/useGuestLimit";
+import { fetchStock, getStock } from "@/lib/stock-cache";
+
+// 인천약품 제외, 백제·훼밀리만
+const STOCK_SITES = ["ibjp", "family"];
 
 interface CompanyOpt { name: string; count: number }
 interface SearchHistoryItem {
@@ -238,6 +242,26 @@ export default function SearchPage() {
     refetchWithCompanies(next);
   }
 
+  // 검색 결과 로드 시 도매상 캐시 자동 워밍업 (snapshot 경로 — 워커 호출 안 함, DB만 읽음)
+  // 이미 받은 코드는 재요청 안 함 → 화면 깜빡임 방지
+  useEffect(() => {
+    for (const med of results) {
+      if (!med.insuranceCode) continue;
+      const cached = getStock(med.insuranceCode);
+      if (cached.status === "done" || cached.status === "loading") continue;
+      fetchStock(med.insuranceCode, med.productName, false, STOCK_SITES);
+    }
+  }, [results]);
+
+  // "전체재고 새로고침" — 모든 행을 실시간 라이브 스크랩으로 갱신 (인라인 스피너)
+  function refreshAllLive() {
+    for (const med of results) {
+      if (med.insuranceCode) {
+        fetchStock(med.insuranceCode, med.productName, true, STOCK_SITES);
+      }
+    }
+  }
+
   return (
     <>
       {showGate && <GuestGateModal onClose={() => setShowGate(false)} />}
@@ -453,7 +477,7 @@ export default function SearchPage() {
               <p className="text-sm text-gray-500">검색 결과 <span className="font-semibold text-gray-900">{total.toLocaleString()}개</span></p>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setBatchStockOpen(true)}
+                  onClick={refreshAllLive}
                   disabled={results.filter(r => r.insuranceCode).length === 0}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
