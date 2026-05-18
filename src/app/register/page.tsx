@@ -171,6 +171,10 @@ export default function RegisterPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!form.name.trim()) { setError("이름을 입력해주세요."); return; }
+    if (!form.email.trim()) { setError("이메일을 입력해주세요."); return; }
+    if (!form.password || form.password.length < 8) { setError("비밀번호를 8자 이상 입력해주세요."); return; }
+    if (!form.carrier) { setError("통신사를 선택해주세요."); return; }
     if (!phoneVerified) { setError("휴대폰 본인인증을 완료해주세요."); return; }
     if (!file) { setError("첨부파일을 업로드해주세요."); return; }
     if (file.size > 10 * 1024 * 1024) { setError("파일 크기는 10MB 이하여야 합니다."); return; }
