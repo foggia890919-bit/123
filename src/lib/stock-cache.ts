@@ -44,6 +44,32 @@ export function subscribeStock(code: string, fn: () => void): () => void {
   return () => listeners.get(code)?.delete(fn);
 }
 
+async function safeJson(res: Response): Promise<{ data?: unknown; error?: string }> {
+  const text = await res.text();
+  if (!text) return { error: `Empty response (HTTP ${res.status})` };
+  try {
+    return { data: JSON.parse(text) };
+  } catch {
+    return { error: `Invalid JSON (HTTP ${res.status})` };
+  }
+}
+
+function applyResult(code: string, results: SiteResult[], source?: "snapshot" | "live") {
+  const codeResults = results.filter((r) => r.insuranceCode === code);
+  cache.set(code, {
+    status: "done",
+    results: codeResults,
+    source,
+    fetchedAt: new Date(),
+  });
+  notify(code);
+}
+
+function applyError(code: string, error: string) {
+  cache.set(code, { status: "error", error });
+  notify(code);
+}
+
 export function fetchStock(code: string, productName: string, live = false, sites?: string[]) {
   if (cache.get(code)?.status === "loading") return;
   cache.set(code, { status: "loading" });
@@ -55,22 +81,53 @@ export function fetchStock(code: string, productName: string, live = false, site
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ codes: [code], ...(sites ? { sites } : {}) }),
   })
-    .then((res) => res.json())
-    .then((data) => {
-      if (data.error) {
-        cache.set(code, { status: "error", error: data.error });
-      } else {
-        cache.set(code, {
-          status: "done",
-          results: data.results ?? [],
-          source: data.source,
-          fetchedAt: new Date(),
-        });
+    .then(safeJson)
+    .then(({ data, error }) => {
+      if (error) return applyError(code, error);
+      const d = data as { error?: string; results?: SiteResult[]; source?: "snapshot" | "live" };
+      if (d?.error) return applyError(code, d.error);
+      applyResult(code, d?.results ?? [], d?.source);
+    })
+    .catch((err) => applyError(code, String(err)));
+}
+
+/**
+ * 여러 보험코드의 재고를 한 번의 API 호출로 가져온다.
+ * 검색 결과 자동 워밍업처럼 50건+ 일괄 처리할 때 사용.
+ * Vercel 동시 함수 호출 제한을 피하고 워커 부하도 줄임.
+ */
+export function fetchStockBatch(codes: string[], live = false, sites?: string[]) {
+  const targets = codes.filter((c) => {
+    const e = cache.get(c);
+    return !e || (e.status !== "loading" && e.status !== "done");
+  });
+  if (targets.length === 0) return;
+
+  for (const code of targets) {
+    cache.set(code, { status: "loading" });
+    notify(code);
+  }
+
+  const url = live ? "/api/inventory/check?live=1" : "/api/inventory/check";
+  fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ codes: targets, ...(sites ? { sites } : {}) }),
+  })
+    .then(safeJson)
+    .then(({ data, error }) => {
+      if (error) {
+        for (const c of targets) applyError(c, error);
+        return;
       }
-      notify(code);
+      const d = data as { error?: string; results?: SiteResult[]; source?: "snapshot" | "live" };
+      if (d?.error) {
+        for (const c of targets) applyError(c, d.error!);
+        return;
+      }
+      for (const c of targets) applyResult(c, d?.results ?? [], d?.source);
     })
     .catch((err) => {
-      cache.set(code, { status: "error", error: String(err) });
-      notify(code);
+      for (const c of targets) applyError(c, String(err));
     });
 }
