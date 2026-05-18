@@ -106,13 +106,11 @@ async function parseCurrentPage(page: Page): Promise<ProductRow[]> {
     if (!headerRow) return out;
     const headers = Array.from(headerRow.querySelectorAll("th, td"))
       .map((c) => (c.textContent ?? "").trim());
-    const idx = (label: string) => headers.findIndex((h) => h === label || h.includes(label));
-
-    const cManu = idx("제약사");
-    const cName = idx("상품명");
-    const cSpec = idx("규격");
-    const cCode = idx("기준단가코드");
-    const cPrice = idx("단가");
+    const cManu = headers.findIndex((h) => h === "제약사" || h.includes("제약사"));
+    const cName = headers.findIndex((h) => h === "상품명" || h.includes("상품명"));
+    const cSpec = headers.findIndex((h) => h === "규격" || h.includes("규격"));
+    const cCode = headers.findIndex((h) => h === "기준단가코드" || h.includes("기준단가코드"));
+    const cPrice = headers.findIndex((h) => h === "단가" || h.includes("단가"));
     if (cName < 0 || cCode < 0) return out;
 
     const bodyRows = Array.from(target.querySelectorAll("tbody tr"));
@@ -169,12 +167,9 @@ async function goToPage(page: Page, n: number): Promise<boolean> {
     const firstRowTextBefore = await page.locator('tbody tr td').first().textContent().catch(() => "");
     await direct.click();
     // 테이블 갱신 대기 — 첫 행 텍스트가 바뀔 때까지
+    const prevText = JSON.stringify(firstRowTextBefore ?? "");
     await page.waitForFunction(
-      (prev) => {
-        const td = document.querySelector("tbody tr td");
-        return td && (td.textContent ?? "").trim() !== prev;
-      },
-      firstRowTextBefore ?? "",
+      `(() => { const td = document.querySelector("tbody tr td"); return !!td && (td.textContent || "").trim() !== ${prevText}; })()`,
       { timeout: 15_000 }
     ).catch(() => {});
   }
