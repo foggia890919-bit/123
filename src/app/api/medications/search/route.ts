@@ -173,28 +173,11 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const insuranceCodes = result.map((m) => m.insuranceCode).filter((c): c is string => !!c);
-  if (!fast && insuranceCodes.length > 0) {
-    const rows = await prisma.$queryRaw<Array<{ insuranceCode: string; stock: number }>>`
-      SELECT DISTINCT ON ("siteKey", "insuranceCode")
-             "insuranceCode",
-             COALESCE("stock", 0)::int AS stock
-      FROM "InventorySnapshot"
-      WHERE "insuranceCode" = ANY(${insuranceCodes}::text[])
-        AND "siteKey" IN ('ibjp', 'family')
-        AND "scrapedAt" > NOW() - INTERVAL '7 days'
-      ORDER BY "siteKey", "insuranceCode", "scrapedAt" DESC
-    `;
-    const stockByCode = new Map<string, number>();
-    for (const r of rows) {
-      stockByCode.set(r.insuranceCode, (stockByCode.get(r.insuranceCode) ?? 0) + Number(r.stock));
-    }
-    for (const m of result) {
-      if (m.insuranceCode && stockByCode.has(m.insuranceCode)) {
-        m.stock = stockByCode.get(m.insuranceCode)!;
-      }
-    }
-  }
+  // 검색 결과 응답에는 InventorySnapshot 의 stock 을 채우지 않는다.
+  // 이유: snapshot 에 워커 오류/매칭 실패로 stock=0 이 박혀 있을 때,
+  //       그 잘못된 값이 검색 직후 그대로 표시되어 사용자가 "품절"로 오인함.
+  //       대신 UI 의 자동 워밍업이 항상 /api/inventory/check (live 또는 snapshot 분기)
+  //       경로로 가져와서 화면을 채운다.
 
   return NextResponse.json({ medications: result, total });
 }
