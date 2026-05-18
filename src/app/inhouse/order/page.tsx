@@ -550,7 +550,7 @@ export default function InhouseOrderPage() {
 
         {/* 거래처 선택 후 메인 */}
         {clientSelected && (
-          <div className="flex gap-4 items-start">
+          <div className="flex flex-col lg:flex-row gap-4 lg:items-start">
             {/* ── 좌측: 상품 테이블 ── */}
             <div className="flex-1 min-w-0 space-y-4">
 
@@ -737,7 +737,7 @@ export default function InhouseOrderPage() {
             </div>
 
             {/* ── 우측 패널 ── */}
-            <div className="w-72 shrink-0 space-y-4">
+            <div className="w-full lg:w-72 lg:shrink-0 space-y-4">
 
               {/* 장바구니 */}
               <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
