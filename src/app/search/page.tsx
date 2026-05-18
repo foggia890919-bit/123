@@ -243,28 +243,29 @@ export default function SearchPage() {
   }
 
   // 검색 결과 로드 시 도매상 캐시 자동 워밍업
-  // 1단계: snapshot 경로로 캐시 채움 (DB 조회, 거의 무비용)
-  // 2단계: snapshot 에 없는 코드는 자동 라이브 스크랩 (워커 호출, 50개 한도)
+  // - m.stock != null (snapshot DB 에 있음): snapshot 경로로 캐시 채움 (DB 조회, 거의 무비용)
+  // - m.stock == null (snapshot DB 에 없음): 자동 라이브 스크랩 (워커 호출, 50개 한도)
+  // 두 그룹은 disjoint 라 같은 코드가 두 번 호출되지 않는다.
+  // (예전 구현은 1단계가 모든 idle 코드를 loading 으로 잡아버려서
+  //  2단계 fetchStockBatch 의 loading/done 필터에 걸려 라이브 호출이 영원히 skip 됐다.)
   useEffect(() => {
-    const cached = results
-      .map((m) => m.insuranceCode)
-      .filter((c): c is string => !!c)
-      .filter((c) => {
-        const e = getStock(c);
-        return e.status !== "done" && e.status !== "loading";
-      });
-    if (cached.length > 0) {
-      fetchStockBatch(cached, false, STOCK_SITES);
+    const codesWithSnapshot: string[] = [];
+    const codesWithoutSnapshot: string[] = [];
+    for (const m of results) {
+      if (!m.insuranceCode) continue;
+      const e = getStock(m.insuranceCode);
+      if (e.status === "done" || e.status === "loading") continue;
+      if (m.stock == null) codesWithoutSnapshot.push(m.insuranceCode);
+      else codesWithSnapshot.push(m.insuranceCode);
     }
 
-    // 서버 응답에서 med.stock 이 비어있는 코드 = snapshot DB 에 없음 → 자동 라이브
+    if (codesWithSnapshot.length > 0) {
+      fetchStockBatch(codesWithSnapshot, false, STOCK_SITES);
+    }
     // 라이브 경로 한도가 50 이므로 최대 50개만 트리거. 나머지는 사용자가 "전체재고 새로고침"
-    const emptyCodes = results
-      .filter((m) => m.insuranceCode && (m.stock == null))
-      .map((m) => m.insuranceCode!)
-      .slice(0, 50);
-    if (emptyCodes.length > 0) {
-      fetchStockBatch(emptyCodes, true, STOCK_SITES);
+    const liveTargets = codesWithoutSnapshot.slice(0, 50);
+    if (liveTargets.length > 0) {
+      fetchStockBatch(liveTargets, true, STOCK_SITES);
     }
   }, [results]);
 
