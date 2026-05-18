@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, Fragment, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import { Building2, Plus, Trash2, FileText, CheckCircle2, XCircle, Loader2, AlertCircle,
-  Stethoscope, Briefcase, Pencil, MapPin, Filter, Send, Search, ChevronDown, X } from "lucide-react";
+  Stethoscope, Briefcase, Pencil, MapPin, Filter, Send, Search, ChevronDown, X, RefreshCw } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import RequireRole from "@/components/RequireRole";
@@ -96,6 +96,7 @@ export default function ClientsPage() {
   const [companyStatuses, setCompanyStatuses] = useState<Record<string, string>>({});
   const [myRequests, setMyRequests] = useState<MyRequest[]>([]);
   const [requestFilter, setRequestFilter] = useState<string>("all");
+  const [requestsLoading, setRequestsLoading] = useState(false);
 
   /* ── 초기 로드 ── */
   useEffect(() => {
@@ -137,9 +138,14 @@ export default function ClientsPage() {
   }, [clientMenuOpen, companyMenuOpen]);
 
   async function loadMyRequests(uid: string) {
-    const res = await fetch(`/api/filter-request?userId=${uid}`);
-    const data = await res.json();
-    setMyRequests(Array.isArray(data) ? data : []);
+    setRequestsLoading(true);
+    try {
+      const res = await fetch(`/api/filter-request?userId=${uid}`);
+      const data = await res.json();
+      setMyRequests(Array.isArray(data) ? data : []);
+    } finally {
+      setRequestsLoading(false);
+    }
   }
 
   async function loadFromProposal(proposalId: string) {
@@ -487,7 +493,9 @@ export default function ClientsPage() {
                     <option key={biz} value={biz}>{name}</option>
                   ))}
                 </select>
-                <button type="button" onClick={() => session?.user?.id && loadMyRequests(session.user.id)} className="text-xs text-gray-500 hover:text-gray-700 shrink-0">새로고침</button>
+                <button type="button" onClick={() => session?.user?.id && loadMyRequests(session.user.id)} disabled={requestsLoading} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 disabled:opacity-40 shrink-0">
+                  {requestsLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}새로고침
+                </button>
               </div>
             </div>
             {filteredRequests.length === 0 ? (
