@@ -40,7 +40,7 @@ interface ApiResponse {
   } | null;
   sheetError?: string;
   error?: string;
-  debug?: { durationMs?: number; model?: string; fallbackUsed?: boolean; flashDurationMs?: number };
+  debug?: { durationMs?: number; model?: string };
 }
 
 // "만성질환 / 고혈압" vs "만성질환/고혈압" 같은 띄어쓰기 차이만 합치는 약한 정규화.
@@ -142,7 +142,7 @@ export default function RxStatsExtractPage() {
         )}
 
         <Button onClick={handleSubmit} disabled={!file || loading} className="w-full">
-          {loading ? "분석 중... (Flash 1~3s, Pro 폴백 시 +20s)" : "분석 + 시트 기록"}
+          {loading ? "분석 중... (gemini-3.5-flash, 보통 3~10s)" : "분석 + 시트 기록"}
         </Button>
       </div>
 
@@ -154,11 +154,6 @@ export default function RxStatsExtractPage() {
               <CheckCircle className="w-5 h-5" />
               <span className="font-semibold">분석 완료</span>
               <span className="text-xs text-green-700 ml-auto flex items-center gap-2">
-                {result.debug?.fallbackUsed && (
-                  <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px]">
-                    Pro 폴백
-                  </span>
-                )}
                 {result.debug?.model && (
                   <span className="text-[10px] text-green-600">{result.debug.model}</span>
                 )}

@@ -13,10 +13,10 @@ export interface SalesExtractDebug {
   durationMs: number;
 }
 
-export type GeminiSalesModel = "gemini-2.5-flash" | "gemini-2.5-pro";
+// 2026-05 GA. 단일 모델 — Pro 폴백 불필요 (3.5 Flash 가 3.1 Pro 보다 우위).
+export type GeminiSalesModel = "gemini-3.5-flash";
 
-const DEFAULT_MODEL: GeminiSalesModel = "gemini-2.5-flash";
-const FALLBACK_MODEL: GeminiSalesModel = "gemini-2.5-pro";
+const DEFAULT_MODEL: GeminiSalesModel = "gemini-3.5-flash";
 
 const SALES_SCHEMA = {
   type: Type.OBJECT,
@@ -121,46 +121,7 @@ export async function extractSalesFromImage(
   };
 }
 
-// "빈손" 정의: 병원명과 금액 둘 다 비어있으면 사실상 인식 실패.
-// 둘 중 하나라도 있으면 사용자가 검수해서 쓸 수 있으니 폴백 안 함.
-function isExtractionEmpty(d: SalesExtractResult): boolean {
+// 완전 빈손 판정. API route 의 422 응답 분기에 사용.
+export function isSalesExtractEmpty(d: SalesExtractResult): boolean {
   return !d.hospitalName && d.totalAmount === 0;
-}
-
-// Flash 로 먼저 시도 → 빈손이면 Pro 로 자동 재시도.
-// 비정형/흐릿한 사진에서 Flash 가 놓치는 케이스를 Pro 의 더 강한 vision 으로 회수.
-// debug.model 에 최종 사용된 모델이 기록되므로 운영자가 어떤 사진이 Pro 까지 갔는지 추적 가능.
-export async function extractSalesWithFallback(
-  base64: string,
-  mimeType: string,
-): Promise<{
-  data: SalesExtractResult;
-  debug: SalesExtractDebug & { fallbackUsed: boolean; flashDurationMs?: number };
-}> {
-  const first = await extractSalesFromImage(base64, mimeType, DEFAULT_MODEL);
-  if (!isExtractionEmpty(first.data)) {
-    return { data: first.data, debug: { ...first.debug, fallbackUsed: false } };
-  }
-
-  // Flash 가 빈손 → Pro 재시도
-  let second: { data: SalesExtractResult; debug: SalesExtractDebug };
-  try {
-    second = await extractSalesFromImage(base64, mimeType, FALLBACK_MODEL);
-  } catch {
-    // Pro 호출 자체가 실패하면 Flash 결과(빈손) 반환 — 사용자에게는 422 로 전달됨
-    return {
-      data: first.data,
-      debug: { ...first.debug, fallbackUsed: false, flashDurationMs: first.debug.durationMs },
-    };
-  }
-  return {
-    data: second.data,
-    debug: {
-      rawText: second.debug.rawText,
-      model: second.debug.model,
-      durationMs: second.debug.durationMs,
-      fallbackUsed: true,
-      flashDurationMs: first.debug.durationMs,
-    },
-  };
 }

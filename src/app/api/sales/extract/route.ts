@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
-import { extractSalesWithFallback } from "@/lib/gemini-sales-extract";
+import { extractSalesFromImage } from "@/lib/gemini-sales-extract";
 import { appendSalesRow } from "@/lib/google-sheets-append";
 import { assertSafePublicUrl } from "@/lib/url-safety";
 
@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
 
   let extractResult;
   try {
-    extractResult = await extractSalesWithFallback(base64, mimeType);
+    extractResult = await extractSalesFromImage(base64, mimeType);
   } catch (e) {
     return NextResponse.json({ error: `Gemini 추출 실패: ${String(e).slice(0, 200)}` }, { status: 502 });
   }
@@ -82,8 +82,6 @@ export async function POST(req: NextRequest) {
   const debugOut = {
     durationMs: debug.durationMs,
     model: debug.model,
-    fallbackUsed: debug.fallbackUsed,
-    flashDurationMs: debug.flashDurationMs,
   };
 
   if (!data.hospitalName && data.totalAmount === 0) {

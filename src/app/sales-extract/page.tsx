@@ -17,7 +17,7 @@ interface ApiResponse {
   sheet?: { url: string; range: string } | null;
   sheetError?: string;
   error?: string;
-  debug?: { durationMs?: number; model?: string; fallbackUsed?: boolean; flashDurationMs?: number };
+  debug?: { durationMs?: number; model?: string };
 }
 
 export default function SalesExtractPage() {
@@ -103,11 +103,6 @@ export default function SalesExtractPage() {
             <CheckCircle className="w-5 h-5" />
             <span className="font-semibold">추출 완료</span>
             <span className="text-xs text-green-700 ml-auto flex items-center gap-2">
-              {result.debug?.fallbackUsed && (
-                <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px]">
-                  Pro 폴백
-                </span>
-              )}
               {result.debug?.model && (
                 <span className="text-[10px] text-green-600">{result.debug.model}</span>
               )}

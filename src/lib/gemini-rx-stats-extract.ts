@@ -33,10 +33,11 @@ export interface RxExtractDebug {
   durationMs: number;
 }
 
-export type GeminiRxModel = "gemini-2.5-flash" | "gemini-2.5-pro";
+// 2026-05 GA. 3.1 Pro 보다 코딩·추론 우위, 4배 빠름, 비용 저렴.
+// 단일 모델 — 별도 Pro 폴백 불필요 (다운그레이드가 됨).
+export type GeminiRxModel = "gemini-3.5-flash";
 
-const DEFAULT_MODEL: GeminiRxModel = "gemini-2.5-flash";
-const FALLBACK_MODEL: GeminiRxModel = "gemini-2.5-pro";
+const DEFAULT_MODEL: GeminiRxModel = "gemini-3.5-flash";
 
 const DRUG_ITEM_SCHEMA = {
   type: Type.OBJECT,
@@ -228,44 +229,11 @@ export async function extractRxStatsFromImage(
   };
 }
 
-// "빈손" 판정: 약품 행 자체가 0개 || (요약의 약품수/총금액 모두 0).
-// 부분 추출 (예: 35행 중 25행만) 은 폴백 안 함 — UI 에서 summary vs drugs 불일치 경고로 노출.
-function isExtractionEmpty(d: RxExtractResult): boolean {
+// 완전 빈손 판정. 호출처(API route) 가 422 응답 분기에 사용.
+// 부분 추출 (예: 35행 중 25행만) 은 여기서 안 잡음 — UI 가 summary.drugCount vs
+// drugs.length 비교로 경고 표시.
+export function isRxExtractEmpty(d: RxExtractResult): boolean {
   if (d.drugs.length === 0) return true;
   if (d.summary.drugCount === 0 && d.summary.totalAmountWon === 0) return true;
   return false;
-}
-
-// Flash → Pro 폴백. Flash 가 표를 아예 인식 못 했을 때만 Pro 재시도.
-export async function extractRxStatsWithFallback(
-  base64: string,
-  mimeType: string,
-): Promise<{
-  data: RxExtractResult;
-  debug: RxExtractDebug & { fallbackUsed: boolean; flashDurationMs?: number };
-}> {
-  const first = await extractRxStatsFromImage(base64, mimeType, DEFAULT_MODEL);
-  if (!isExtractionEmpty(first.data)) {
-    return { data: first.data, debug: { ...first.debug, fallbackUsed: false } };
-  }
-
-  let second: { data: RxExtractResult; debug: RxExtractDebug };
-  try {
-    second = await extractRxStatsFromImage(base64, mimeType, FALLBACK_MODEL);
-  } catch {
-    return {
-      data: first.data,
-      debug: { ...first.debug, fallbackUsed: false, flashDurationMs: first.debug.durationMs },
-    };
-  }
-  return {
-    data: second.data,
-    debug: {
-      rawText: second.debug.rawText,
-      model: second.debug.model,
-      durationMs: second.debug.durationMs,
-      fallbackUsed: true,
-      flashDurationMs: first.debug.durationMs,
-    },
-  };
 }

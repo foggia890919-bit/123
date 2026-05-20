@@ -9,7 +9,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { extractRxStatsWithFallback } from "../src/lib/gemini-rx-stats-extract";
+import { extractRxStatsFromImage } from "../src/lib/gemini-rx-stats-extract";
 
 async function main() {
   const imgPath = process.argv[2];
@@ -40,7 +40,7 @@ async function main() {
   console.error(`[1/1] ${path.basename(absPath)} (${(buf.length / 1024).toFixed(1)} KB, ${mime}) → Gemini 분석 중...`);
 
   const t0 = Date.now();
-  const { data, debug } = await extractRxStatsWithFallback(buf.toString("base64"), mime);
+  const { data, debug } = await extractRxStatsFromImage(buf.toString("base64"), mime);
   const totalMs = Date.now() - t0;
 
   // ── 출력 (마크다운) ───────────────────────────────────────────────────────
@@ -89,9 +89,8 @@ async function main() {
   }
 
   console.log("\n## debug");
-  console.log(`- 최종 모델: ${debug.model}`);
-  console.log(`- 응답 시간: ${debug.durationMs}ms`);
-  console.log(`- Pro 폴백 사용: ${debug.fallbackUsed}${debug.flashDurationMs ? ` (Flash 시도 ${debug.flashDurationMs}ms)` : ""}`);
+  console.log(`- 모델: ${debug.model}`);
+  console.log(`- Gemini 응답 시간: ${debug.durationMs}ms`);
   console.log(`- 전체 wall time: ${totalMs}ms\n`);
 }
 

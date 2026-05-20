@@ -35,10 +35,9 @@ POST /api/rx-stats/extract
    │  - SSRF 가드 (imageUrl 모드)
    │  - 10MB size 가드
    ↓
-extractRxStatsWithFallback(base64, mime)
-   │  1차: gemini-2.5-flash + responseSchema + thinkingBudget=-1
-   │  2차(자동): drugs[] 빈 배열 또는 (drugCount==0 AND 총금액==0) 일 때만
-   │             gemini-2.5-pro 재시도
+extractRxStatsFromImage(base64, mime)
+   │  gemini-3.5-flash + responseSchema + thinkingBudget=-1
+   │  (2026-05 GA, 3.1 Pro 보다 우위 — 별도 Pro 폴백 없음)
    ↓
 { pharma, period, hospital, summary{4}, drugs[]{8필드} }
    ↓
@@ -85,24 +84,24 @@ JSON 응답 + 시트 링크 + batchId
 
 매칭 실패 시 `period=""`. 원본은 `periodRaw` 에 보존되어 시트에 같이 기록됨.
 
-## 모델 선택 / 폴백 정책
+## 모델 / 추론 설정
 
-- **1차**: `gemini-2.5-flash` — 1~3초, 장당 수 원
-- **2차(자동)**: `gemini-2.5-pro` — `drugs.length===0` 또는 `summary` 가 완전 빈손일 때만
+- **`gemini-3.5-flash`** 단일 모델 (2026-05 GA, Google I/O 2026 발표)
+- 이전 세대의 3.1 Pro 보다 코딩·추론 성능 우위 + 4배 빠름 → 별도 Pro 폴백 불필요
 - `thinkingBudget: -1` (AUTOMATIC) — 다행 표 추출은 단계적 추론이 정확도에 결정적
-- `temperature: 0` — 결정론적 출력
+- `temperature: 0` — 결정론적 출력 (같은 사진 매번 같은 결과)
 
-### 폴백의 한계 (운영자 인지 필요)
+### 부분 추출 케이스 (운영자 인지 필요)
 
-**부분 추출은 폴백 트리거 안 함.** Flash 가 35행 중 25행만 뽑아도 `drugs.length > 0`
-이므로 Pro 재시도 없이 그대로 사용자에게 응답. 대신:
+3.5 Flash 가 35행 중 25행만 뽑는 케이스가 드물지만 발생 가능. 자동 재시도 없음.
+대신:
 
 - UI 가 `summary.drugCount !== drugs.length` 시 주황색 경고 배너 표시
 - 사용자가 시트 검수 또는 더 선명한 사진으로 재시도 가능
 - 운영자 모니터링: 시트 "요약" 탭의 `약품수` vs "약품" 탭의 batchId 별 행 수 비교 가능
 
-전면적인 부분 추출 자동 감지/재시도가 필요하면 별도 PR 에서 합계 일치 검증 →
-mismatch 시 강제 Pro 재시도 로직 추가 검토.
+운영 데이터에서 부분추출 비율이 높으면 별도 PR 에서 동일 모델 재시도 또는 합계
+일치 검증 로직 추가 검토.
 
 ## 시트 구조
 
@@ -167,7 +166,7 @@ curl -X POST https://<host>/api/rx-stats/extract \
     "drugsRange": "약품!A150:L184",
     "batchId": "a1b2c3d4-..."
   },
-  "debug": { "durationMs": 4820, "model": "gemini-2.5-flash", "fallbackUsed": false }
+  "debug": { "durationMs": 4820, "model": "gemini-3.5-flash" }
 }
 ```
 
@@ -189,19 +188,19 @@ GEMINI_API_KEY=AIza... npx tsx scripts/test-gemini-rx-stats.ts /path/to/photo.jp
    자동 Pro 재시도는 별도 PR.
 2. **카테고리 자유 형식** — 시트 필터링 시 "만성질환/고혈압" 과 "만성질환/고지혈증"
    이 다른 그룹으로 잡힘. 의도된 동작이지만 운영 데이터 누적 후 enum 후보 정리 가능.
-3. **`thinkingBudget=-1` 응답 지연** — 복잡 사진은 Pro 폴백 시 25~40초 소요. Vercel
-   maxDuration 120s 로 여유 확보. 시간이 더 늘면 thinkingBudget 을 고정값으로 제한.
+3. **`thinkingBudget=-1` 응답 지연** — 복잡 사진은 25~30초까지 소요 가능. Vercel
+   maxDuration 90s 로 여유 확보. 시간이 더 늘면 thinkingBudget 을 고정값으로 제한.
 4. **효능 환각 위험** — Gemini 가 모르는 약품에 그럴듯한 잘못된 효능을 만들 수 있음.
    UI 와 시트 모두에 "AI 자동 추론, 의료 의사결정 X" 주석 표시. 운영 중 환각 발견 시
    해당 약품을 프롬프트에 negative example 로 추가 검토.
 
 ## 관련 파일
 
-- `src/lib/gemini-rx-stats-extract.ts` — Gemini 호출 + period 정규화 + fallback
+- `src/lib/gemini-rx-stats-extract.ts` — Gemini 호출 + period 정규화
 - `src/lib/google-sheets-rx-append.ts` — 두 탭 batch append + race 가드
-- `src/app/api/rx-stats/extract/route.ts` — POST 엔드포인트 (`maxDuration=120`)
+- `src/app/api/rx-stats/extract/route.ts` — POST 엔드포인트 (`maxDuration=90`)
 - `src/app/rx-stats-extract/page.tsx` — 카테고리별 표 UI + 부분추출 경고
 - `scripts/test-gemini-rx-stats.ts` — 로컬 추출 테스트
 - `src/lib/google-sheets.ts` — `findOrCreateSpreadsheet`, `sheetsApi` (재사용)
 - `src/lib/url-safety.ts` — SSRF 가드 (재사용)
-- `vercel.json` — `maxDuration: 120` 명시
+- `vercel.json` — `maxDuration: 90` 명시

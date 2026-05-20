@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
-import { extractRxStatsWithFallback } from "@/lib/gemini-rx-stats-extract";
+import { extractRxStatsFromImage } from "@/lib/gemini-rx-stats-extract";
 import { appendRxStats } from "@/lib/google-sheets-rx-append";
 import { assertSafePublicUrl } from "@/lib/url-safety";
 
 export const runtime = "nodejs";
-// Flash + Pro 폴백 + thinkingBudget=-1 worst case 대응. 35행+ 사진은 Pro 가 20~30s 소요.
-export const maxDuration = 120;
+// gemini-3.5-flash 단일 호출 + thinkingBudget=-1. 35행+ 사진 worst case 30s 내외.
+export const maxDuration = 90;
 
 const MAX_IMAGE_BYTES = 10_000_000;
 const FETCH_TIMEOUT_MS = 20_000;
@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
 
   let extractResult;
   try {
-    extractResult = await extractRxStatsWithFallback(base64, mimeType);
+    extractResult = await extractRxStatsFromImage(base64, mimeType);
   } catch (e) {
     return NextResponse.json({ error: `Gemini 추출 실패: ${String(e).slice(0, 200)}` }, { status: 502 });
   }
@@ -83,8 +83,6 @@ export async function POST(req: NextRequest) {
   const debugOut = {
     durationMs: debug.durationMs,
     model: debug.model,
-    fallbackUsed: debug.fallbackUsed,
-    flashDurationMs: debug.flashDurationMs,
   };
 
   // 완전 빈손 — 사진이 처방통계 표가 아닐 가능성
