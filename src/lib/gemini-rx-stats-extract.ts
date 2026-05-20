@@ -1,0 +1,271 @@
+import { GoogleGenAI, Type } from "@google/genai";
+
+export interface RxDrugRow {
+  name: string;
+  code: string;          // 보험코드 9자리. 없으면 ""
+  quantity: number;      // 총사용량. 소수 허용 (시럽 등)
+  prescriptions: number; // 처방횟수
+  unitPrice: number;     // 단가. 모르면 0
+  totalPrice: number;    // 총금액. 모르면 0
+  category: string;      // 자유 형식 분류 "만성질환/고혈압" 등
+  efficacy: string;      // 짧은 효능 한 줄
+}
+
+export interface RxStatsSummary {
+  drugCount: number;
+  totalPrescriptions: number;
+  totalQuantity: number;
+  totalAmountWon: number;
+}
+
+export interface RxExtractResult {
+  pharma: string;        // "경동"
+  period: string;        // "YYYY-MM" 정규화 결과 (실패 시 "")
+  periodRaw: string;     // 모델 원본 응답 ("2026년 4월" 등)
+  hospital: string;
+  summary: RxStatsSummary;
+  drugs: RxDrugRow[];
+}
+
+export interface RxExtractDebug {
+  rawText: string;
+  model: GeminiRxModel;
+  durationMs: number;
+}
+
+export type GeminiRxModel = "gemini-2.5-flash" | "gemini-2.5-pro";
+
+const DEFAULT_MODEL: GeminiRxModel = "gemini-2.5-flash";
+const FALLBACK_MODEL: GeminiRxModel = "gemini-2.5-pro";
+
+const DRUG_ITEM_SCHEMA = {
+  type: Type.OBJECT,
+  required: ["name", "code", "quantity", "prescriptions", "unitPrice", "totalPrice", "category", "efficacy"],
+  properties: {
+    name: { type: Type.STRING, description: "약품명 (한글+영문 그대로, 용량/제형 포함)" },
+    code: { type: Type.STRING, description: "보험코드 9자리 숫자. 모르면 빈 문자열." },
+    quantity: { type: Type.NUMBER, description: "총사용량 컬럼 값. 소수 허용." },
+    prescriptions: { type: Type.INTEGER, description: "처방횟수 컬럼 값." },
+    unitPrice: { type: Type.NUMBER, description: "단가(원). 콤마 제거한 순수 숫자. 모르면 0." },
+    totalPrice: { type: Type.NUMBER, description: "총금액(원). 콤마 제거한 순수 숫자. 모르면 0." },
+    category: {
+      type: Type.STRING,
+      description: "약품을 자유 형식으로 분류. 예: '만성질환/고혈압', '만성질환/고지혈증', '근골격/통풍', '소화기/PPI'. enum 강요 안 함.",
+    },
+    efficacy: {
+      type: Type.STRING,
+      description: "짧은 효능 한 줄. 예: '혈전 생성 예방 (항혈소판제)'. 추측 금지 — 잘 모르는 약품이면 빈 문자열.",
+    },
+  },
+};
+
+const SCHEMA = {
+  type: Type.OBJECT,
+  required: ["pharma", "period", "hospital", "summary", "drugs"],
+  properties: {
+    pharma: { type: Type.STRING, description: "제약사명 (예: '경동', '한미'). 모르면 빈 문자열." },
+    period: {
+      type: Type.STRING,
+      description: "통계 기간. 반드시 YYYY-MM 형식 (예: '2026-04'). 사진에 '2026년 4월' 처럼 나와 있어도 YYYY-MM 으로 변환해서 응답.",
+    },
+    hospital: { type: Type.STRING, description: "병원/의원 이름. 사진에 없으면 빈 문자열." },
+    summary: {
+      type: Type.OBJECT,
+      required: ["drugCount", "totalPrescriptions", "totalQuantity", "totalAmountWon"],
+      properties: {
+        drugCount: { type: Type.INTEGER, description: "약품 종류 수 (행 개수)." },
+        totalPrescriptions: { type: Type.INTEGER, description: "총 처방횟수." },
+        totalQuantity: { type: Type.NUMBER, description: "총 사용량 합계. 소수 허용." },
+        totalAmountWon: { type: Type.INTEGER, description: "총 금액(원). 콤마 제거한 순수 정수." },
+      },
+    },
+    drugs: {
+      type: Type.ARRAY,
+      description: "약품별 행 리스트. 합계행/카테고리 헤더행 제외 — 진짜 약품 행만.",
+      items: DRUG_ITEM_SCHEMA,
+    },
+  },
+};
+
+function buildPrompt(): string {
+  return [
+    "이 사진은 한국 EMR 처방 통계 표 화면입니다. 비스듬히 찍히거나 모니터 반사 등으로 보일 수 있어요.",
+    "사진을 사람처럼 보고 다음을 추출하세요. 위치 기반 OCR 아니라 멀티모달 비전으로 표 구조를 직접 이해해서 행 단위로 정리.",
+    "",
+    "추출 규칙:",
+    "1) 상단/제목/검색조건 영역에서 제약사명·통계기간·병원명을 찾는다.",
+    "2) 표의 합계 영역(약품건수/처방횟수/총사용량/총금액) 4개 숫자를 summary 에.",
+    "3) 표 본문은 한 행 = 한 약품. 합계행이나 카테고리 헤더행은 제외. 같은 약품명이 두 번 나오면 둘 다 별도 항목으로 보존.",
+    "4) 각 약품에 대해 medicine 지식 기반으로 category(자유 형식, 예: '만성질환/고혈압')와 efficacy(짧은 효능)를 부여.",
+    "5) 잘 모르는 약품은 category='기타', efficacy='' 로. 추측 환각 금지.",
+    "6) 모든 숫자는 콤마 제거한 순수 숫자. 단가/금액 없으면 0.",
+    "7) period 는 반드시 YYYY-MM 형식 (예: '2026-04'). 사진에 '2026년 4월' 로 보여도 변환.",
+    "",
+    "응답은 지정된 JSON 스키마만. 자유 텍스트 금지.",
+  ].join("\n");
+}
+
+function parseJsonLoose(text: string): unknown {
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { /* fallthrough */ }
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  try { return JSON.parse(m[0]); } catch { return null; }
+}
+
+function toNum(v: unknown): number {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const cleaned = v.replace(/[^\d.-]/g, "");
+    const n = parseFloat(cleaned);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+
+function toInt(v: unknown): number {
+  const n = toNum(v);
+  return Math.max(0, Math.floor(n));
+}
+
+// "2026-04" / "2026.04" / "2026년 4월" / "Apr 2026" 등을 YYYY-MM 으로 정규화.
+// 실패 시 빈 문자열 반환 — 원본은 periodRaw 에 보존됨.
+function normalizePeriod(raw: string): string {
+  if (!raw) return "";
+  const s = raw.trim();
+  // 이미 YYYY-MM
+  let m = s.match(/^(\d{4})-(\d{1,2})$/);
+  if (m) return `${m[1]}-${m[2].padStart(2, "0")}`;
+  // YYYY.MM, YYYY/MM
+  m = s.match(/(\d{4})[./](\d{1,2})/);
+  if (m) return `${m[1]}-${m[2].padStart(2, "0")}`;
+  // YYYY년 MM월
+  m = s.match(/(\d{4}).*?(\d{1,2})\s*월/);
+  if (m) return `${m[1]}-${m[2].padStart(2, "0")}`;
+  // 영문월
+  const months: Record<string, string> = {
+    jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+    jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+  };
+  m = s.match(/([A-Za-z]{3,9})\s+(\d{4})/);
+  if (m) {
+    const mm = months[m[1].slice(0, 3).toLowerCase()];
+    if (mm) return `${m[2]}-${mm}`;
+  }
+  return "";
+}
+
+function normalizeDrug(d: Record<string, unknown>): RxDrugRow {
+  return {
+    name: String(d.name ?? "").trim(),
+    code: String(d.code ?? "").replace(/\D/g, ""),
+    quantity: toNum(d.quantity),
+    prescriptions: toInt(d.prescriptions),
+    unitPrice: toNum(d.unitPrice),
+    totalPrice: toNum(d.totalPrice),
+    category: String(d.category ?? "").trim(),
+    efficacy: String(d.efficacy ?? "").trim(),
+  };
+}
+
+export async function extractRxStatsFromImage(
+  base64: string,
+  mimeType: string,
+  model: GeminiRxModel = DEFAULT_MODEL,
+): Promise<{ data: RxExtractResult; debug: RxExtractDebug }> {
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error("GEMINI_API_KEY 미설정");
+  }
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+  const t0 = Date.now();
+  const response = await ai.models.generateContent({
+    model,
+    // OCR 사전 처리 없이 사진 원본을 멀티모달 vision 에 그대로 전달.
+    contents: [{
+      role: "user",
+      parts: [
+        { inlineData: { mimeType, data: base64 } },
+        { text: buildPrompt() },
+      ],
+    }],
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: SCHEMA,
+      temperature: 0,
+      // 다행 표 추출은 단계적 추론이 정확도에 결정적. -1 = AUTOMATIC (모델이 입력 복잡도 따라 자동 조정).
+      thinkingConfig: { thinkingBudget: -1, includeThoughts: false },
+    },
+  });
+
+  const raw = response.text ?? "";
+  const parsed = parseJsonLoose(raw) as Record<string, unknown> | null;
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error(`Gemini 빈/잘못된 응답: ${raw.slice(0, 200)}`);
+  }
+
+  const summary = (parsed.summary ?? {}) as Record<string, unknown>;
+  const drugsRaw = Array.isArray(parsed.drugs) ? parsed.drugs : [];
+  const periodRaw = String(parsed.period ?? "").trim();
+
+  const data: RxExtractResult = {
+    pharma: String(parsed.pharma ?? "").trim(),
+    period: normalizePeriod(periodRaw),
+    periodRaw,
+    hospital: String(parsed.hospital ?? "").trim(),
+    summary: {
+      drugCount: toInt(summary.drugCount),
+      totalPrescriptions: toInt(summary.totalPrescriptions),
+      totalQuantity: toNum(summary.totalQuantity),
+      totalAmountWon: toInt(summary.totalAmountWon),
+    },
+    drugs: drugsRaw.map((d) => normalizeDrug(d as Record<string, unknown>)),
+  };
+
+  return {
+    data,
+    debug: { rawText: raw, model, durationMs: Date.now() - t0 },
+  };
+}
+
+// "빈손" 판정: 약품 행 자체가 0개 || (요약의 약품수/총금액 모두 0).
+// 부분 추출 (예: 35행 중 25행만) 은 폴백 안 함 — UI 에서 summary vs drugs 불일치 경고로 노출.
+function isExtractionEmpty(d: RxExtractResult): boolean {
+  if (d.drugs.length === 0) return true;
+  if (d.summary.drugCount === 0 && d.summary.totalAmountWon === 0) return true;
+  return false;
+}
+
+// Flash → Pro 폴백. Flash 가 표를 아예 인식 못 했을 때만 Pro 재시도.
+export async function extractRxStatsWithFallback(
+  base64: string,
+  mimeType: string,
+): Promise<{
+  data: RxExtractResult;
+  debug: RxExtractDebug & { fallbackUsed: boolean; flashDurationMs?: number };
+}> {
+  const first = await extractRxStatsFromImage(base64, mimeType, DEFAULT_MODEL);
+  if (!isExtractionEmpty(first.data)) {
+    return { data: first.data, debug: { ...first.debug, fallbackUsed: false } };
+  }
+
+  let second: { data: RxExtractResult; debug: RxExtractDebug };
+  try {
+    second = await extractRxStatsFromImage(base64, mimeType, FALLBACK_MODEL);
+  } catch {
+    return {
+      data: first.data,
+      debug: { ...first.debug, fallbackUsed: false, flashDurationMs: first.debug.durationMs },
+    };
+  }
+  return {
+    data: second.data,
+    debug: {
+      rawText: second.debug.rawText,
+      model: second.debug.model,
+      durationMs: second.debug.durationMs,
+      fallbackUsed: true,
+      flashDurationMs: first.debug.durationMs,
+    },
+  };
+}
