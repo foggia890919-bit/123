@@ -40,7 +40,7 @@ async function getToken(): Promise<string> {
 
 // ── Sheets / Drive API 헬퍼 ────────────────────────────────────────────────
 
-async function sheetsApi(path: string, method = "GET", body?: unknown) {
+export async function sheetsApi(path: string, method = "GET", body?: unknown) {
   const token = await getToken();
   const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets${path}`, {
     method,
@@ -64,17 +64,18 @@ async function driveApi(path: string, method = "GET", body?: unknown) {
 
 // ── 스프레드시트 찾기 or 생성 ─────────────────────────────────────────────
 
-const SPREADSHEET_NAME = "KMD 데이터 현황";
+const DEFAULT_SPREADSHEET_NAME = "KMD 데이터 현황";
 
-async function findOrCreateSpreadsheet(): Promise<string> {
+export async function findOrCreateSpreadsheet(name: string = DEFAULT_SPREADSHEET_NAME): Promise<string> {
   const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
-  const q = `name='${SPREADSHEET_NAME}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false${folderId ? ` and '${folderId}' in parents` : ""}`;
+  const escaped = name.replace(/'/g, "\\'");
+  const q = `name='${escaped}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false${folderId ? ` and '${folderId}' in parents` : ""}`;
   const list = await driveApi(`/files?q=${encodeURIComponent(q)}&fields=files(id,name)`) as { files: { id: string }[] };
   if (list.files.length > 0) return list.files[0].id;
 
   // 없으면 새로 생성
   const created = await sheetsApi("", "POST", {
-    properties: { title: SPREADSHEET_NAME, locale: "ko_KR", timeZone: "Asia/Seoul" },
+    properties: { title: name, locale: "ko_KR", timeZone: "Asia/Seoul" },
   }) as { spreadsheetId: string };
 
   if (folderId) {
