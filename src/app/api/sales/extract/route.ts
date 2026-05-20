@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
-import { extractSalesFromImage } from "@/lib/gemini-sales-extract";
+import { extractSalesWithFallback } from "@/lib/gemini-sales-extract";
 import { appendSalesRow } from "@/lib/google-sheets-append";
 import { assertSafePublicUrl } from "@/lib/url-safety";
 
@@ -74,18 +74,24 @@ export async function POST(req: NextRequest) {
 
   let extractResult;
   try {
-    extractResult = await extractSalesFromImage(base64, mimeType);
+    extractResult = await extractSalesWithFallback(base64, mimeType);
   } catch (e) {
     return NextResponse.json({ error: `Gemini 추출 실패: ${String(e).slice(0, 200)}` }, { status: 502 });
   }
   const { data, debug } = extractResult;
+  const debugOut = {
+    durationMs: debug.durationMs,
+    model: debug.model,
+    fallbackUsed: debug.fallbackUsed,
+    flashDurationMs: debug.flashDurationMs,
+  };
 
   if (!data.hospitalName && data.totalAmount === 0) {
     return NextResponse.json({
       success: false,
       error: "이미지에서 병원명과 금액 둘 다 찾지 못했어요. 더 선명한 사진으로 다시 시도해주세요.",
       data,
-      debug: { durationMs: debug.durationMs },
+      debug: debugOut,
     }, { status: 422 });
   }
 
@@ -95,7 +101,7 @@ export async function POST(req: NextRequest) {
       success: true,
       data,
       sheet: { url: sheet.spreadsheetUrl, range: sheet.appendedRange },
-      debug: { durationMs: debug.durationMs, model: debug.model },
+      debug: debugOut,
     });
   } catch (e) {
     // 추출은 성공했으니 사용자에게 결과는 돌려주고 시트 실패만 알린다.
@@ -104,7 +110,7 @@ export async function POST(req: NextRequest) {
       data,
       sheet: null,
       sheetError: String(e).slice(0, 300),
-      debug: { durationMs: debug.durationMs, model: debug.model },
+      debug: debugOut,
     });
   }
 }

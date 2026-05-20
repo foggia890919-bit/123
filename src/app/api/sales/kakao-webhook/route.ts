@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { extractSalesFromImage } from "@/lib/gemini-sales-extract";
+import { extractSalesWithFallback } from "@/lib/gemini-sales-extract";
 import { appendSalesRow } from "@/lib/google-sheets-append";
 import { assertSafePublicUrl } from "@/lib/url-safety";
 
@@ -98,7 +98,8 @@ export async function POST(req: NextRequest) {
 
   let data;
   try {
-    data = (await extractSalesFromImage(buf.toString("base64"), mimeType)).data;
+    // Flash 우선 → 빈손이면 Pro 폴백. 카카오 SLA 빠듯하지만 정확도 우선.
+    data = (await extractSalesWithFallback(buf.toString("base64"), mimeType)).data;
   } catch (e) {
     return kakaoText(`AI 분석 실패: ${String(e).slice(0, 80)}`);
   }

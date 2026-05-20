@@ -13,7 +13,10 @@ export interface SalesExtractDebug {
   durationMs: number;
 }
 
-const MODEL = "gemini-2.5-flash";
+export type GeminiSalesModel = "gemini-2.5-flash" | "gemini-2.5-pro";
+
+const DEFAULT_MODEL: GeminiSalesModel = "gemini-2.5-flash";
+const FALLBACK_MODEL: GeminiSalesModel = "gemini-2.5-pro";
 
 const SALES_SCHEMA = {
   type: Type.OBJECT,
@@ -74,6 +77,7 @@ function toInt(v: unknown): number {
 export async function extractSalesFromImage(
   base64: string,
   mimeType: string,
+  model: GeminiSalesModel = DEFAULT_MODEL,
 ): Promise<{ data: SalesExtractResult; debug: SalesExtractDebug }> {
   if (!process.env.GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY 미설정");
@@ -82,7 +86,8 @@ export async function extractSalesFromImage(
 
   const t0 = Date.now();
   const response = await ai.models.generateContent({
-    model: MODEL,
+    model,
+    // 사진 원본 그대로 전송 — OCR 사전 처리 없음. Gemini 멀티모달이 직접 본다.
     contents: [{
       role: "user",
       parts: [
@@ -112,6 +117,50 @@ export async function extractSalesFromImage(
 
   return {
     data,
-    debug: { rawText: raw, model: MODEL, durationMs: Date.now() - t0 },
+    debug: { rawText: raw, model, durationMs: Date.now() - t0 },
+  };
+}
+
+// "빈손" 정의: 병원명과 금액 둘 다 비어있으면 사실상 인식 실패.
+// 둘 중 하나라도 있으면 사용자가 검수해서 쓸 수 있으니 폴백 안 함.
+function isExtractionEmpty(d: SalesExtractResult): boolean {
+  return !d.hospitalName && d.totalAmount === 0;
+}
+
+// Flash 로 먼저 시도 → 빈손이면 Pro 로 자동 재시도.
+// 비정형/흐릿한 사진에서 Flash 가 놓치는 케이스를 Pro 의 더 강한 vision 으로 회수.
+// debug.model 에 최종 사용된 모델이 기록되므로 운영자가 어떤 사진이 Pro 까지 갔는지 추적 가능.
+export async function extractSalesWithFallback(
+  base64: string,
+  mimeType: string,
+): Promise<{
+  data: SalesExtractResult;
+  debug: SalesExtractDebug & { fallbackUsed: boolean; flashDurationMs?: number };
+}> {
+  const first = await extractSalesFromImage(base64, mimeType, DEFAULT_MODEL);
+  if (!isExtractionEmpty(first.data)) {
+    return { data: first.data, debug: { ...first.debug, fallbackUsed: false } };
+  }
+
+  // Flash 가 빈손 → Pro 재시도
+  let second: { data: SalesExtractResult; debug: SalesExtractDebug };
+  try {
+    second = await extractSalesFromImage(base64, mimeType, FALLBACK_MODEL);
+  } catch {
+    // Pro 호출 자체가 실패하면 Flash 결과(빈손) 반환 — 사용자에게는 422 로 전달됨
+    return {
+      data: first.data,
+      debug: { ...first.debug, fallbackUsed: false, flashDurationMs: first.debug.durationMs },
+    };
+  }
+  return {
+    data: second.data,
+    debug: {
+      rawText: second.debug.rawText,
+      model: second.debug.model,
+      durationMs: second.debug.durationMs,
+      fallbackUsed: true,
+      flashDurationMs: first.debug.durationMs,
+    },
   };
 }

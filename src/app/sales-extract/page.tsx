@@ -17,7 +17,7 @@ interface ApiResponse {
   sheet?: { url: string; range: string } | null;
   sheetError?: string;
   error?: string;
-  debug?: { durationMs?: number; model?: string };
+  debug?: { durationMs?: number; model?: string; fallbackUsed?: boolean; flashDurationMs?: number };
 }
 
 export default function SalesExtractPage() {
@@ -102,11 +102,19 @@ export default function SalesExtractPage() {
           <div className="flex items-center gap-2 text-green-800">
             <CheckCircle className="w-5 h-5" />
             <span className="font-semibold">추출 완료</span>
-            {result.debug?.durationMs && (
-              <span className="text-xs text-green-700 ml-auto">
-                {(result.debug.durationMs / 1000).toFixed(1)}s
-              </span>
-            )}
+            <span className="text-xs text-green-700 ml-auto flex items-center gap-2">
+              {result.debug?.fallbackUsed && (
+                <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px]">
+                  Pro 폴백
+                </span>
+              )}
+              {result.debug?.model && (
+                <span className="text-[10px] text-green-600">{result.debug.model}</span>
+              )}
+              {result.debug?.durationMs && (
+                <span>{(result.debug.durationMs / 1000).toFixed(1)}s</span>
+              )}
+            </span>
           </div>
           <div className="grid grid-cols-[7rem_1fr] gap-y-1 text-sm">
             <div className="text-gray-500">병원명</div>
