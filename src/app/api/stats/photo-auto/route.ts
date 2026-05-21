@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse, after } from "next/server";
+import { createHash } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 import { BUCKETS, persistDataUri } from "@/lib/storage";
@@ -68,6 +69,30 @@ export async function POST(req: NextRequest) {
   const imageDataUri = `data:${mimeType};base64,${base64}`;
   const fileName = file.name;
 
+  // ── 중복 사진 차단 — 같은 거래처×월에 같은 hash 사진 있으면 reject ──
+  // 사용자가 페이지 새로고침 / 실수로 다시 업로드 시 N배 중복 들어가던 문제 fix.
+  // 검수자가 "이게 같은 거? 다른 사진?" 헷갈리는 상황 차단.
+  const imageHash = createHash("sha256").update(buffer).digest("hex");
+  const existingSame = await prisma.prescriptionReport.findFirst({
+    where: {
+      userId: user.id,
+      clientId,
+      year,
+      month,
+      // ocrData JSON path 의 imageHash 값 비교 (Postgres jsonb)
+      ocrData: { path: ["imageHash"], equals: imageHash },
+    },
+    select: { id: true, status: true },
+  });
+  if (existingSame) {
+    return NextResponse.json({
+      ok: false,
+      duplicate: true,
+      reportId: existingSame.id,
+      error: `이미 같은 사진이 등록되어 있습니다 (${fileName}). 검수 페이지에서 확인하세요.`,
+    }, { status: 409 });
+  }
+
   // ── 1) Storage 저장 (응답 전에 동기) — 사용자가 보낸 사진 자체는 무조건 보존 ──
   let imageKey: string | null = null;
   let imageDataFallback: string | null = null;
@@ -102,6 +127,7 @@ export async function POST(req: NextRequest) {
           aiDrugs: [],
           processingStartedAt: new Date().toISOString(),
           fileName,
+          imageHash,                                 // 중복 차단용
         },
         totalFee: 0,
         clientApprovedAtSave: client.approved,

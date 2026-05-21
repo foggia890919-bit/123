@@ -163,6 +163,42 @@ export default function StatsReviewPage() {
     }
   }
 
+  // 선택된 사진들 일괄 삭제 — 순차 DELETE (서버 부담 방지)
+  async function handleBulkDelete() {
+    if (selectedIds.size === 0) { setError("선택된 사진이 없습니다"); return; }
+    if (!confirm(`정말 선택한 ${selectedIds.size}장의 사진과 데이터를 모두 삭제하시겠습니까? Storage 파일도 함께 삭제됩니다.`)) return;
+    setBusy(true);
+    setError("");
+    const ids = Array.from(selectedIds);
+    const failed: string[] = [];
+    for (const id of ids) {
+      try {
+        const res = await fetch(`/api/stats?id=${id}`, { method: "DELETE" });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          failed.push(`${id.slice(0, 8)}: ${data.error || `HTTP ${res.status}`}`);
+        }
+      } catch (e) {
+        failed.push(`${id.slice(0, 8)}: ${String(e).slice(0, 100)}`);
+      }
+    }
+    // 상세 재조회
+    if (selected) {
+      const r = await fetch(`/api/stats/submissions?clientId=${selected.clientId}&year=${selected.year}&month=${selected.month}`);
+      const d = await r.json();
+      setDetail(d);
+      if (!d.reports?.length) {
+        setSelected(null);
+        refreshGroups();
+      }
+    }
+    setSelectedIds(new Set());
+    if (failed.length > 0) {
+      setError(`${ids.length - failed.length}장 삭제 / ${failed.length}장 실패:\n${failed.join("\n")}`);
+    }
+    setBusy(false);
+  }
+
   async function handleSubmit(action: "submit" | "reopen", scope: "all" | "selected") {
     if (!selected) return;
     const reportIds = scope === "selected" ? Array.from(selectedIds) : undefined;
@@ -245,6 +281,13 @@ export default function StatsReviewPage() {
           <Button onClick={() => setSelectedIds(new Set())}
             disabled={busy || selectedIds.size === 0} variant="outline" size="sm">
             선택 해제
+          </Button>
+          <Button onClick={handleBulkDelete}
+            disabled={busy || selectedIds.size === 0}
+            variant="outline" size="sm"
+            className="text-red-600 border-red-300 hover:bg-red-50">
+            <Trash2 className="w-3.5 h-3.5 mr-1" />
+            선택한 {selectedIds.size}장 삭제
           </Button>
           <span className="ml-auto flex gap-2">
             {!detail.submitted ? (
@@ -465,11 +508,25 @@ function ReviewPhotoCard({
     const scroller = imgScrollRef.current;
     const img = imgElRef.current;
     if (!scroller || !img) return;
-    // bbox 의 중심 Y 비율 × 사진 픽셀 높이 × zoom = 스크롤 목표 위치
     const centerY = ((bbox[1] + bbox[3]) / 2) * img.clientHeight * zoom;
     const targetTop = Math.max(0, centerY - scroller.clientHeight / 2);
     scroller.scrollTo({ top: targetTop, behavior: "smooth" });
   }, [focusedIdx, rows, zoom]);
+
+  // Ctrl/Cmd + 마우스 휠로 zoom 조절. React onWheel 은 passive 라 preventDefault
+  // 안 됨 → native listener 로 등록 필요. 휠 위치를 중심으로 확대해야 자연스러움.
+  useEffect(() => {
+    const scroller = imgScrollRef.current;
+    if (!scroller) return;
+    function handleWheel(e: WheelEvent) {
+      if (!(e.ctrlKey || e.metaKey)) return;     // Ctrl(Windows) 또는 Cmd(Mac) 만
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -0.15 : 0.15;
+      setZoom((z) => Math.max(0.5, Math.min(4.0, Math.round((z + delta) * 100) / 100)));
+    }
+    scroller.addEventListener("wheel", handleWheel, { passive: false });
+    return () => scroller.removeEventListener("wheel", handleWheel);
+  }, []);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>, idx: number, field: string) {
     if (e.key !== "ArrowUp" && e.key !== "ArrowDown" && e.key !== "Enter") return;
@@ -655,13 +712,23 @@ function ReviewPhotoCard({
               <Maximize2 className="w-4 h-4 text-gray-600" />
             </button>
             <span className="text-[10px] text-gray-400 ml-2">
-              + / − 줌, 확대 후 사진 드래그로 이동
+              + / − 버튼, <kbd className="px-1 border border-gray-300 rounded text-[9px]">Ctrl</kbd>+휠 줌, 드래그 이동
             </span>
             {imgData && (
-              <a href={imgData} target="_blank" rel="noreferrer"
-                className="ml-auto text-[11px] text-blue-600 hover:underline">
+              <button onClick={async () => {
+                // dataUri 가 크면 브라우저가 새 탭에서 직접 못 엶 → blob URL 변환
+                try {
+                  const blob = await (await fetch(imgData)).blob();
+                  const url = URL.createObjectURL(blob);
+                  window.open(url, "_blank");
+                  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+                } catch (e) {
+                  alert(`새 탭 열기 실패: ${String(e).slice(0, 200)}`);
+                }
+              }}
+                className="ml-auto text-[11px] text-blue-600 hover:underline cursor-pointer">
                 새 탭 확대
-              </a>
+              </button>
             )}
           </div>
 

@@ -133,14 +133,20 @@ export default function StatsPhotoPage() {
 
   function addBatchFiles(files: FileList | File[] | null) {
     if (!files) return;
-    const items: BatchItem[] = Array.from(files)
-      .filter((f) => f.type.startsWith("image/"))
-      .map((f) => ({
-        id: crypto.randomUUID(),
-        file: f,
-        status: "pending" as const,
-      }));
-    if (items.length > 0) setBatchItems((prev) => [...prev, ...items]);
+    // 같은 파일 (이름+크기+수정시각) 이미 batchItems 에 있으면 중복 추가 거부.
+    // 서버 측에선 SHA-256 hash 로 중복 차단되지만 클라이언트에서 미리 거름.
+    const incoming = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    setBatchItems((prev) => {
+      const seen = new Set(prev.map((it) => `${it.file.name}|${it.file.size}|${it.file.lastModified}`));
+      const newItems: BatchItem[] = [];
+      for (const f of incoming) {
+        const key = `${f.name}|${f.size}|${f.lastModified}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        newItems.push({ id: crypto.randomUUID(), file: f, status: "pending" });
+      }
+      return [...prev, ...newItems];
+    });
   }
 
   function removeBatchItem(id: string) {
@@ -163,20 +169,22 @@ export default function StatsPhotoPage() {
       fd.append("year", String(year));
       fd.append("month", String(month));
       const res = await fetch("/api/stats/photo-auto", { method: "POST", body: fd });
-      // 동기 처리 — 응답 30~60초 후 ok:true 또는 error.
-      // 응답이 빈 문자열이거나 HTML 에러 페이지일 수 있음 — JSON.parse 안전화
       const text = await res.text();
-      let data: { ok?: boolean; error?: string; drugCount?: number; sheetWarning?: string | null };
+      let data: { ok?: boolean; error?: string; duplicate?: boolean; sheetWarning?: string | null };
       try {
         data = text ? JSON.parse(text) : { error: `빈 응답 (HTTP ${res.status})` };
       } catch {
         data = { error: text.slice(0, 200) || `HTTP ${res.status} 응답 파싱 실패` };
       }
+      // 409 = 중복 사진. 사용자에게 명확히 표시 (실패 아님 — 이미 있음)
+      if (res.status === 409 || data.duplicate) {
+        update({ status: "error", errorMsg: data.error || "이미 등록된 사진 (중복)" });
+        return;
+      }
       if (!res.ok || data.error || !data.ok) {
         update({ status: "error", errorMsg: data.error || `HTTP ${res.status}` });
         return;
       }
-      // 시트만 실패한 경우도 표시
       if (data.sheetWarning) {
         update({ status: "queued", errorMsg: `DB 저장됨 · 시트 실패: ${data.sheetWarning}` });
       } else {
