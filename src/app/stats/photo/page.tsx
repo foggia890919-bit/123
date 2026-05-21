@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useSession } from "next-auth/react";
-import { Upload, CheckCircle, AlertCircle, Trash2, Sparkles, Building2 } from "lucide-react";
+import { Upload, CheckCircle, AlertCircle, Trash2, Sparkles, Building2, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 // AI 처방통계 등록 — 사진 1장 또는 여러 장 한꺼번에 업로드 → 서버 백그라운드에서
@@ -70,6 +70,39 @@ export default function StatsPhotoPage() {
     rowCount: number;
   } | null>(null);
 
+  // 제약사별 매출 요약 (당월/전월/전전월) — 거래처 선택 시 자동 fetch + 백그라운드 처리 중 polling.
+  interface SalesSummaryRow {
+    companyName: string;
+    isAllowed: boolean;
+    currentSales: number;
+    prevSales: number;
+    prevPrevSales: number;
+    currentPhotoCount: number;
+  }
+  interface SalesSummary {
+    year: number;
+    month: number;
+    prevYear: number;
+    prevMonth: number;
+    prevPrevYear: number;
+    prevPrevMonth: number;
+    byCompany: SalesSummaryRow[];
+    currentProcessingCount: number;
+    currentErrorCount: number;
+  }
+  const [salesSummary, setSalesSummary] = useState<SalesSummary | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+
+  function refreshSalesSummary() {
+    if (!selectedClientId || !year || !month) { setSalesSummary(null); return; }
+    setSummaryLoading(true);
+    fetch(`/api/stats/sales-summary?clientId=${selectedClientId}&year=${year}&month=${month}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => setSalesSummary(data))
+      .catch(() => setSalesSummary(null))
+      .finally(() => setSummaryLoading(false));
+  }
+
   // 배치 등록 state
   const [batchItems, setBatchItems] = useState<BatchItem[]>([]);
   const [batchRunning, setBatchRunning] = useState(false);
@@ -114,6 +147,34 @@ export default function StatsPhotoPage() {
       })
       .catch(() => setSubmissionStatus(null));
   }, [selectedClientId, year, month]);
+
+  // 거래처+월 선택 시 매출 요약 (당월/전월/전전월) 자동 fetch
+  useEffect(() => {
+    refreshSalesSummary();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClientId, year, month]);
+
+  // 사진 전송 완료 후 백그라운드 처리 중 자동 갱신 polling.
+  // 사진이 queued 상태이거나 서버 측 PROCESSING 카운트 > 0 이면 5초 간격 refetch.
+  // 5분 후 자동 종료 (timeout). 페이지 나가도 백엔드는 계속 처리.
+  useEffect(() => {
+    if (!selectedClientId) return;
+    const hasQueued = batchItems.some((it) => it.status === "queued");
+    const hasProcessing = (salesSummary?.currentProcessingCount ?? 0) > 0;
+    if (!hasQueued && !hasProcessing) return;
+
+    const startedAt = Date.now();
+    const id = setInterval(() => {
+      // 5분 후 자동 종료
+      if (Date.now() - startedAt > 5 * 60 * 1000) {
+        clearInterval(id);
+        return;
+      }
+      refreshSalesSummary();
+    }, 5000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClientId, batchItems, salesSummary?.currentProcessingCount]);
 
   // 배치 진행 중 페이지 떠나면 경고
   useEffect(() => {
@@ -291,31 +352,97 @@ export default function StatsPhotoPage() {
           </div>
         )}
 
-        {/* 거래가능 제약사 chip */}
-        {selectedClientId && (
-          <div className="bg-blue-50 border border-blue-100 rounded px-3 py-2.5">
-            <div className="flex items-center gap-2 mb-1.5">
-              <Building2 className="w-3.5 h-3.5 text-blue-600" />
-              <span className="text-[11px] font-semibold text-blue-800">
-                거래가능 제약사 ({allowedCompanies.length}개)
+        {/* 거래가능 제약사 + 제약사별 매출 표 (당월/전월/전전월) */}
+        {selectedClientId && salesSummary && (
+          <div className="bg-white border border-gray-200 rounded overflow-hidden">
+            <div className="flex items-center gap-2 px-3 py-2 border-b bg-gray-50">
+              <Building2 className="w-3.5 h-3.5 text-gray-600" />
+              <span className="text-xs font-semibold text-gray-700">
+                제약사별 매출 ({salesSummary.byCompany.length}개사)
               </span>
-              {companiesLoading && <span className="text-[10px] text-blue-500">조회 중...</span>}
+              {(batchItems.some((it) => it.status === "queued") || salesSummary.currentProcessingCount > 0) && (
+                <span className="ml-2 text-[11px] text-blue-600 inline-flex items-center gap-1">
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  처리 중 — 자동 갱신 (5초). <span className="font-semibold ml-1">옆에 나가도 업데이트는 됨</span>
+                </span>
+              )}
+              <button onClick={refreshSalesSummary} disabled={summaryLoading}
+                className="ml-auto text-[11px] text-gray-500 hover:text-gray-800 inline-flex items-center gap-1">
+                <RefreshCw className={`w-3 h-3 ${summaryLoading ? "animate-spin" : ""}`} /> 새로고침
+              </button>
             </div>
-            {allowedCompanies.length === 0 && !companiesLoading ? (
-              <p className="text-[11px] text-gray-500">
-                이 거래처의 등록된 제약사가 없습니다.{" "}
-                <a href="/biz/submission-routes" className="text-blue-600 underline">통계제출처 관리</a> 에서 등록하세요.
-              </p>
+            {salesSummary.byCompany.length === 0 ? (
+              <div className="px-3 py-4 text-[11px] text-gray-500 text-center">
+                거래가능 제약사도 매출 실적도 없음.{" "}
+                <a href="/biz/submission-routes" className="text-blue-600 underline">통계제출처 관리</a> 에서 제약사 등록.
+              </div>
             ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {allowedCompanies.map((name) => (
-                  <span key={name}
-                    className="inline-block px-2 py-0.5 bg-white border border-blue-200 rounded text-[11px] text-blue-700">
-                    {name}
-                  </span>
-                ))}
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 text-gray-500">
+                    <tr>
+                      <th className="text-left px-3 py-1.5">제약사</th>
+                      <th className="text-right px-3 py-1.5 w-28">{salesSummary.prevPrevYear}.{String(salesSummary.prevPrevMonth).padStart(2, "0")}</th>
+                      <th className="text-right px-3 py-1.5 w-28">{salesSummary.prevYear}.{String(salesSummary.prevMonth).padStart(2, "0")}</th>
+                      <th className="text-right px-3 py-1.5 w-28 bg-orange-50 text-orange-700 font-semibold">
+                        {salesSummary.year}.{String(salesSummary.month).padStart(2, "0")} (당월)
+                      </th>
+                      <th className="text-center px-2 py-1.5 w-14">사진</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {salesSummary.byCompany.map((c) => (
+                      <tr key={c.companyName} className={`border-t ${c.isAllowed ? "" : "bg-amber-50"}`}>
+                        <td className="px-3 py-1.5">
+                          <span className="text-gray-800">{c.companyName}</span>
+                          {!c.isAllowed && c.companyName !== "(미분류)" && (
+                            <span className="ml-1.5 text-[10px] text-amber-700 font-semibold">⚠ 거래 외</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-1.5 text-right font-mono text-gray-500">
+                          {c.prevPrevSales > 0 ? c.prevPrevSales.toLocaleString() : "-"}
+                        </td>
+                        <td className="px-3 py-1.5 text-right font-mono text-gray-500">
+                          {c.prevSales > 0 ? c.prevSales.toLocaleString() : "-"}
+                        </td>
+                        <td className="px-3 py-1.5 text-right font-mono font-bold bg-orange-50 text-orange-900">
+                          {c.currentSales > 0 ? c.currentSales.toLocaleString() : "-"}
+                        </td>
+                        <td className="px-2 py-1.5 text-center text-[11px] text-gray-500">
+                          {c.currentPhotoCount > 0 ? `${c.currentPhotoCount}장` : "-"}
+                        </td>
+                      </tr>
+                    ))}
+                    <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
+                      <td className="px-3 py-2 text-gray-700">합계</td>
+                      <td className="px-3 py-2 text-right font-mono text-gray-600">
+                        {salesSummary.byCompany.reduce((s, c) => s + c.prevPrevSales, 0).toLocaleString()}원
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono text-gray-600">
+                        {salesSummary.byCompany.reduce((s, c) => s + c.prevSales, 0).toLocaleString()}원
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono text-orange-900 bg-orange-100">
+                        {salesSummary.byCompany.reduce((s, c) => s + c.currentSales, 0).toLocaleString()}원
+                      </td>
+                      <td className="px-2 py-2 text-center text-[11px] text-gray-500">
+                        {salesSummary.byCompany.reduce((s, c) => s + c.currentPhotoCount, 0)}장
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             )}
+            {salesSummary.currentErrorCount > 0 && (
+              <div className="px-3 py-1.5 bg-red-50 border-t border-red-200 text-[11px] text-red-700">
+                ⚠ 당월에 처리 실패한 사진 {salesSummary.currentErrorCount}장.{" "}
+                <a href="/biz/stats-review" className="underline font-semibold">검수 메뉴</a>에서 확인 + 재업로드.
+              </div>
+            )}
+          </div>
+        )}
+        {selectedClientId && !salesSummary && summaryLoading && (
+          <div className="text-center py-4 text-xs text-gray-400 inline-flex items-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin" /> 매출 실적 조회 중...
           </div>
         )}
 
