@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse, after } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 import { BUCKETS, persistDataUri } from "@/lib/storage";
@@ -7,11 +7,11 @@ import { fetchMasterByCodes, fetchMasterByNamePrefixes, matchMedication, type Me
 import { appendRxStats } from "@/lib/google-sheets-rx-append";
 import { fetchRateEntries } from "@/lib/rate-utils";
 
-// 사용자 의도: "사진 넣고 저장만 누르게 하고 나머지는 백단에서". 즉 클라이언트는 fetch
-// 응답만 빨리 받고 페이지 이동 자유. 서버가 Gemini 분석 + DB 저장 + 시트 저장 다 처리.
-//
-// Next.js 16 `after()` API 활용: 응답 보낸 후에도 함수 invocation 이 maxDuration 까지
-// 유지되면서 백그라운드 작업 계속.
+// 사진 한 장당 Gemini 분석 + 마스터 매칭 + DB + 시트 저장 동기 처리.
+// 이전 next/server after() 백그라운드 패턴은 일부 사진 silent fail 발생 (Vercel 함수
+// 인스턴스 비활성화 + console.error 만 → 클라이언트에 안 알림).
+// 동기로 바꿔서 사진별 실패를 정확히 클라이언트에 전달 — 데이터 무손실 우선.
+// 응답 시간 30~60초/사진. 클라이언트가 concurrency 3 으로 묶어 7장이면 약 2분.
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
   if (!clientId) return NextResponse.json({ error: "clientId 필수" }, { status: 400 });
   if (!year || !month) return NextResponse.json({ error: "year/month 필수" }, { status: 400 });
 
-  // 거래처 권한 검증 (응답 전에 동기적으로)
+  // 거래처 권한 검증
   const client = await prisma.userClient.findUnique({
     where: { id: clientId },
     select: { approved: true, userId: true, clientName: true },
@@ -58,144 +58,176 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
   }
 
-  // 사진 buffer 를 응답 전에 미리 추출 — after() 콜백 안에선 req body 접근 불가
   const buffer = Buffer.from(await file.arrayBuffer());
   const base64 = buffer.toString("base64");
   const mimeType = file.type || "image/jpeg";
   const imageDataUri = `data:${mimeType};base64,${base64}`;
   const fileName = file.name;
 
-  // 응답 보낸 후 백그라운드에서 Gemini 분석 + DB + 시트 저장.
-  // 에러는 콘솔 로그만 (클라이언트로 알릴 길 없음). 향후 jobId 별 상태 테이블 가능.
-  after(async () => {
-    try {
-      // 1) Gemini 분석
-      const { data: rx } = await extractRxStatsFromImage(base64, mimeType);
-      if (rx.drugs.length === 0) {
-        console.error("[photo-auto bg]", fileName, "drugs 0건 — 인식 실패");
-        return;
-      }
+  // ── 동기 처리 시작 ───────────────────────────────────────────────────────
 
-      // 2) 마스터 매칭 — 보험코드 + 제품명 prefix 둘 다 일괄 조회
-      const codes = rx.drugs
-        .map((d) => d.code.replace(/\D/g, ""))
-        .filter((c) => c.length === 9);
-      const names = rx.drugs.map((d) => d.name).filter(Boolean);
-      const [masterByCode, masterByName] = await Promise.all([
-        fetchMasterByCodes(codes),
-        fetchMasterByNamePrefixes(names),
-      ]);
-      const rateEntries = await fetchRateEntries(user.id);
-      const additionalByCompany = new Map(
-        rateEntries.map((r) => [normCompany(r.companyName), r.additionalRate]),
-      );
+  // 1) Gemini 분석
+  let rx;
+  try {
+    const result = await extractRxStatsFromImage(base64, mimeType);
+    rx = result.data;
+  } catch (e) {
+    return NextResponse.json(
+      { error: `Gemini 분석 실패 (${fileName}): ${String(e).slice(0, 300)}` },
+      { status: 502 },
+    );
+  }
+  if (rx.drugs.length === 0) {
+    return NextResponse.json(
+      { error: `약품 0건 — Gemini 가 사진(${fileName})에서 약품을 인식하지 못함. 사진이 흐릿하거나 처방통계 표가 아닌지 확인.` },
+      { status: 422 },
+    );
+  }
 
-      const finalDrugs = rx.drugs.map((d) => {
-        const merged: MergedDrug = {
-          insuranceCode: d.code,
-          productName: d.name,
-          companyName: "",
-          quantity: String(d.quantity ?? ""),
-          confidence: d.code ? 90 : 60,
-        };
-        const match = matchMedication(merged, masterByCode, masterByName);
-        const additionalRate = additionalByCompany.get(normCompany(match.companyName)) ?? null;
-        return {
-          insuranceCode: match.insuranceCode,
-          companyName: match.companyName,
-          productName: match.productName,
-          quantity: String(d.quantity ?? ""),
-          unitPrice: match.unitPrice ?? (d.unitPrice || null),
-          commissionRate: match.commissionRate,
-          additionalRate,
-          matchedMedicationId: match.matchedMedicationId,
-          bboxYPercent: null,
-          bbox: d.bbox,
-        };
-      });
+  // 2) 마스터 매칭
+  const codes = rx.drugs
+    .map((d) => d.code.replace(/\D/g, ""))
+    .filter((c) => c.length === 9);
+  const names = rx.drugs.map((d) => d.name).filter(Boolean);
+  const [masterByCode, masterByName] = await Promise.all([
+    fetchMasterByCodes(codes),
+    fetchMasterByNamePrefixes(names),
+  ]);
+  const rateEntries = await fetchRateEntries(user.id);
+  const additionalByCompany = new Map(
+    rateEntries.map((r) => [normCompany(r.companyName), r.additionalRate]),
+  );
 
-      const totalFee = finalDrugs.reduce((s, d) => {
-        const qty = parseFloat(d.quantity) || 0;
-        const unit = d.unitPrice ?? 0;
-        return s + qty * unit;
-      }, 0);
+  const finalDrugs = rx.drugs.map((d) => {
+    const merged: MergedDrug = {
+      insuranceCode: d.code,
+      productName: d.name,
+      companyName: "",
+      quantity: String(d.quantity ?? ""),
+      confidence: d.code ? 90 : 60,
+    };
+    const match = matchMedication(merged, masterByCode, masterByName);
+    const additionalRate = additionalByCompany.get(normCompany(match.companyName)) ?? null;
+    return {
+      insuranceCode: match.insuranceCode,
+      companyName: match.companyName,
+      productName: match.productName,
+      quantity: String(d.quantity ?? ""),
+      unitPrice: match.unitPrice ?? (d.unitPrice || null),
+      commissionRate: match.commissionRate,
+      additionalRate,
+      matchedMedicationId: match.matchedMedicationId,
+      bboxYPercent: null,
+      bbox: d.bbox,
+    };
+  });
 
-      // 3) DB 저장
-      const { fileKey: imageKey, fileData: imageDataFallback } =
-        await persistDataUri(BUCKETS.prescriptionImage, user.id, imageDataUri);
+  const totalFee = finalDrugs.reduce((s, d) => {
+    const qty = parseFloat(d.quantity) || 0;
+    const unit = d.unitPrice ?? 0;
+    return s + qty * unit;
+  }, 0);
 
-      const report = await prisma.prescriptionReport.create({
-        data: {
-          userId: user.id,
-          clientId,
-          year,
-          month,
-          hospitalName: client.clientName,
-          companyName: rx.pharma || "",
-          imageData: imageDataFallback,
-          imageKey,
-          ocrData: {
-            source: "gemini-direct-photo-auto",
-            vendor: "unknown",
-            captureType: "photo",
-            finalDrugs,
-            aiDrugs: finalDrugs,
-            avgConfidence: 95,
-            manualCheckCount: 0,
-            geminiMeta: {
-              pharma: rx.pharma,
-              period: rx.period,
-              periodRaw: rx.periodRaw,
-              summary: rx.summary,
-            },
-            sheetBatchId: null as string | null,
-            sheetUrl: null as string | null,
-          },
-          totalFee,
-          clientApprovedAtSave: client.approved,
-          updatedAt: new Date(),
-        },
-      });
+  // 3) 이미지 + DB 저장
+  let imageKey: string | null = null;
+  let imageDataFallback: string | null = null;
+  try {
+    const persisted = await persistDataUri(BUCKETS.prescriptionImage, user.id, imageDataUri);
+    imageKey = persisted.fileKey;
+    imageDataFallback = persisted.fileData;
+  } catch (e) {
+    return NextResponse.json(
+      { error: `이미지 저장 실패 (${fileName}): ${String(e).slice(0, 200)}` },
+      { status: 500 },
+    );
+  }
 
-      // 4) 시트 저장
-      try {
-        const sheet = await appendRxStats(
-          {
+  let report;
+  try {
+    report = await prisma.prescriptionReport.create({
+      data: {
+        userId: user.id,
+        clientId,
+        year,
+        month,
+        hospitalName: client.clientName,
+        companyName: rx.pharma || "",
+        imageData: imageDataFallback,
+        imageKey,
+        ocrData: {
+          source: "gemini-direct-photo-auto",
+          vendor: "unknown",
+          captureType: "photo",
+          finalDrugs,
+          aiDrugs: finalDrugs,
+          avgConfidence: 95,
+          manualCheckCount: 0,
+          geminiMeta: {
             pharma: rx.pharma,
             period: rx.period,
             periodRaw: rx.periodRaw,
-            hospital: client.clientName,
-            summary: {
-              drugCount: rx.drugs.length,
-              totalPrescriptions: rx.summary.totalPrescriptions,
-              totalQuantity: rx.summary.totalQuantity,
-              totalAmountWon: Math.round(totalFee),
-            },
-            drugs: rx.drugs,
+            summary: rx.summary,
           },
-          "manual",
-        );
-        await prisma.prescriptionReport.update({
-          where: { id: report.id },
-          data: {
-            ocrData: {
-              ...(report.ocrData as Record<string, unknown>),
-              sheetBatchId: sheet.batchId,
-              sheetUrl: sheet.spreadsheetUrl,
-            },
-          },
-        });
-      } catch (e) {
-        console.error("[photo-auto bg sheet]", fileName, String(e).slice(0, 200));
-        // DB 저장은 성공했으니 시트만 실패. 운영자가 사용자에게 안내 필요.
-      }
+          sheetBatchId: null as string | null,
+          sheetUrl: null as string | null,
+        },
+        totalFee,
+        clientApprovedAtSave: client.approved,
+        updatedAt: new Date(),
+      },
+    });
+  } catch (e) {
+    return NextResponse.json(
+      { error: `DB 저장 실패 (${fileName}): ${String(e).slice(0, 200)}` },
+      { status: 500 },
+    );
+  }
 
-      console.log(`[photo-auto bg] ${fileName} 완료 — ${finalDrugs.length}건, ${totalFee.toLocaleString()}원`);
-    } catch (e) {
-      console.error("[photo-auto bg]", fileName, String(e).slice(0, 500));
-    }
+  // 4) 시트 저장 — 실패해도 DB 는 보존
+  let sheetUrl: string | null = null;
+  let sheetBatchId: string | null = null;
+  let sheetWarning: string | null = null;
+  try {
+    const sheet = await appendRxStats(
+      {
+        pharma: rx.pharma,
+        period: rx.period,
+        periodRaw: rx.periodRaw,
+        hospital: client.clientName,
+        summary: {
+          drugCount: rx.drugs.length,
+          totalPrescriptions: rx.summary.totalPrescriptions,
+          totalQuantity: rx.summary.totalQuantity,
+          totalAmountWon: Math.round(totalFee),
+        },
+        drugs: rx.drugs,
+      },
+      "manual",
+    );
+    sheetUrl = sheet.spreadsheetUrl;
+    sheetBatchId = sheet.batchId;
+    await prisma.prescriptionReport.update({
+      where: { id: report.id },
+      data: {
+        ocrData: {
+          ...(report.ocrData as Record<string, unknown>),
+          sheetBatchId,
+          sheetUrl,
+        },
+      },
+    });
+  } catch (e) {
+    sheetWarning = String(e).slice(0, 200);
+  }
+
+  return NextResponse.json({
+    ok: true,
+    reportId: report.id,
+    fileName,
+    drugCount: rx.drugs.length,
+    totalFee,
+    sheetUrl,
+    sheetBatchId,
+    sheetWarning,
   });
-
-  // 즉시 응답 — 클라이언트는 이후 페이지 자유
-  return NextResponse.json({ queued: true, fileName, sizeKB: Math.round(buffer.length / 1024) });
 }
