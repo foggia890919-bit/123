@@ -51,7 +51,7 @@ export async function sheetsApi(path: string, method = "GET", body?: unknown) {
   return res.json();
 }
 
-async function driveApi(path: string, method = "GET", body?: unknown) {
+export async function driveApi(path: string, method = "GET", body?: unknown) {
   const token = await getToken();
   const res = await fetch(`https://www.googleapis.com/drive/v3${path}`, {
     method,
