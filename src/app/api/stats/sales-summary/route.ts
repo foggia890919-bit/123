@@ -82,10 +82,11 @@ export async function GET(req: NextRequest) {
     if (!allowedNameByKey.has(key)) allowedNameByKey.set(key, r.companyName.trim());
   }
 
-  // 제약사별 월별 매출 + 사진 수 + 처리 상태.
+  // 제약사별 월별 매출 + 수량 + 사진 수 + 처리 상태.
   // key = companyNameKey (정규화) — "(주)셀트리온", "셀트리온제약(본사)" 같은 key 로 합산.
   // displayName = 가장 정식 표기 (allowed 우선 → 가장 긴 원본 → normalize 결과).
-  interface MonthAgg { sales: number; photoCount: number }
+  // sales / quantity 둘 다 합산 — 비급여 약품은 단가 0 이라 매출만으론 부족, 수량이 진짜 지표.
+  interface MonthAgg { sales: number; quantity: number; photoCount: number }
   interface CompanyBucket { displayName: string; current: MonthAgg; prev: MonthAgg; prevPrev: MonthAgg }
   const byCompany = new Map<string, CompanyBucket>();
   let currentProcessingCount = 0;
@@ -96,7 +97,6 @@ export async function GET(req: NextRequest) {
     const key = companyNameKey(raw) || "__unmatched__";
     const existing = byCompany.get(key);
     if (existing) {
-      // displayName 갱신 — 거래가능 제약사 표기 우선, 그 다음 가장 긴 원본
       const allowed = allowedNameByKey.get(key);
       if (allowed) existing.displayName = allowed;
       else if (raw && raw.length > existing.displayName.length) existing.displayName = raw;
@@ -104,9 +104,9 @@ export async function GET(req: NextRequest) {
     }
     const fresh: CompanyBucket = {
       displayName: allowedNameByKey.get(key) || normalizeCompanyName(raw) || raw || "(미분류)",
-      current: { sales: 0, photoCount: 0 },
-      prev: { sales: 0, photoCount: 0 },
-      prevPrev: { sales: 0, photoCount: 0 },
+      current: { sales: 0, quantity: 0, photoCount: 0 },
+      prev: { sales: 0, quantity: 0, photoCount: 0 },
+      prevPrev: { sales: 0, quantity: 0, photoCount: 0 },
     };
     byCompany.set(key, fresh);
     return fresh;
@@ -127,7 +127,6 @@ export async function GET(req: NextRequest) {
     // 사진 1장에 들어있는 제약사들 (정규화 키 set) — 사진 수 카운트용 (한 사진이 한 회사 두번 X)
     const photoKeys = new Set<string>();
     for (const d of drugs) {
-      // 행별 companyName 이 비어있으면 사진 전체 제약사 (report.companyName, Gemini meta) 로 fallback.
       const rowCompany = (d.companyName || "").trim();
       const reportCompany = (r.companyName || "").trim();
       const name = rowCompany || reportCompany || "(미분류)";
@@ -140,6 +139,7 @@ export async function GET(req: NextRequest) {
       else if (r.year === prev.year && r.month === prev.month) target = agg.prev;
       else target = agg.prevPrev;
       target.sales += sales;
+      target.quantity += qty;
       photoKeys.add(companyNameKey(name) || "__unmatched__");
     }
     for (const key of photoKeys) {
@@ -161,17 +161,24 @@ export async function GET(req: NextRequest) {
       companyName: agg.displayName,
       isAllowed: allowedKeySet.has(key),
       currentSales: Math.round(agg.current.sales),
+      currentQuantity: Math.round(agg.current.quantity * 10) / 10,
       prevSales: Math.round(agg.prev.sales),
+      prevQuantity: Math.round(agg.prev.quantity * 10) / 10,
       prevPrevSales: Math.round(agg.prevPrev.sales),
+      prevPrevQuantity: Math.round(agg.prevPrev.quantity * 10) / 10,
       currentPhotoCount: agg.current.photoCount,
     }))
-    // 거래 외 + 매출 3개월 모두 0 = 노이즈 (Gemini 가 단가 못 잡은 케이스). 표에서 제외.
-    // 거래가능 제약사는 매출 0 이라도 표시 (이 회사 매출 0 이라고 명확히 알리려고).
-    .filter((c) => c.isAllowed || c.currentSales > 0 || c.prevSales > 0 || c.prevPrevSales > 0)
-    // 거래가능 제약사 우선, 그 안에서 당월 매출 큰 순
+    // 거래 외 + 매출 + 수량 모두 0 = 노이즈. 거래가능은 0 이라도 표시.
+    .filter((c) =>
+      c.isAllowed
+      || c.currentSales > 0 || c.prevSales > 0 || c.prevPrevSales > 0
+      || c.currentQuantity > 0 || c.prevQuantity > 0 || c.prevPrevQuantity > 0,
+    )
+    // 거래가능 제약사 우선, 그 안에서 당월 매출 큰 순 (매출 0 이면 수량 큰 순)
     .sort((a, b) => {
       if (a.isAllowed !== b.isAllowed) return a.isAllowed ? -1 : 1;
-      return b.currentSales - a.currentSales;
+      if (b.currentSales !== a.currentSales) return b.currentSales - a.currentSales;
+      return b.currentQuantity - a.currentQuantity;
     });
 
   return NextResponse.json({
