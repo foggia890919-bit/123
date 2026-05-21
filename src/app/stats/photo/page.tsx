@@ -590,7 +590,6 @@ export default function StatsPhotoPage() {
           <>
             <label
               className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-gray-300 rounded-md py-10 cursor-pointer hover:bg-gray-50 transition-colors"
-              onClick={() => inputRef.current?.click()}
               onDragOver={(e) => e.preventDefault()}
               onDragEnter={(e) => e.preventDefault()}
               onDrop={(e) => {
@@ -626,7 +625,6 @@ export default function StatsPhotoPage() {
           <>
             <label
               className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-gray-300 rounded-md py-10 cursor-pointer hover:bg-gray-50 transition-colors"
-              onClick={() => batchInputRef.current?.click()}
               onDragOver={(e) => e.preventDefault()}
               onDragEnter={(e) => e.preventDefault()}
               onDrop={(e) => {
