@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 import { BUCKETS, persistDataUri } from "@/lib/storage";
 import { extractRxStatsFromImage } from "@/lib/gemini-rx-stats-extract";
-import { fetchMasterByCodes, matchMedication, type MergedDrug } from "@/lib/medication-master-match";
+import { fetchMasterByCodes, fetchMasterByNamePrefixes, matchMedication, type MergedDrug } from "@/lib/medication-master-match";
 import { appendRxStats } from "@/lib/google-sheets-rx-append";
 import { fetchRateEntries } from "@/lib/rate-utils";
 
@@ -76,11 +76,15 @@ export async function POST(req: NextRequest) {
         return;
       }
 
-      // 2) 마스터 매칭
+      // 2) 마스터 매칭 — 보험코드 + 제품명 prefix 둘 다 일괄 조회
       const codes = rx.drugs
         .map((d) => d.code.replace(/\D/g, ""))
         .filter((c) => c.length === 9);
-      const masterByCode = await fetchMasterByCodes(codes);
+      const names = rx.drugs.map((d) => d.name).filter(Boolean);
+      const [masterByCode, masterByName] = await Promise.all([
+        fetchMasterByCodes(codes),
+        fetchMasterByNamePrefixes(names),
+      ]);
       const rateEntries = await fetchRateEntries(user.id);
       const additionalByCompany = new Map(
         rateEntries.map((r) => [normCompany(r.companyName), r.additionalRate]),
@@ -94,7 +98,7 @@ export async function POST(req: NextRequest) {
           quantity: String(d.quantity ?? ""),
           confidence: d.code ? 90 : 60,
         };
-        const match = matchMedication(merged, masterByCode);
+        const match = matchMedication(merged, masterByCode, masterByName);
         const additionalRate = additionalByCompany.get(normCompany(match.companyName)) ?? null;
         return {
           insuranceCode: match.insuranceCode,

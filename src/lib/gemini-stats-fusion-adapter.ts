@@ -1,5 +1,5 @@
 import { extractRxStatsFromImage, type RxExtractResult, type RxDrugRow } from "./gemini-rx-stats-extract";
-import { fetchMasterByCodes, matchMedication, type MergedDrug } from "./medication-master-match";
+import { fetchMasterByCodes, fetchMasterByNamePrefixes, matchMedication, type MergedDrug } from "./medication-master-match";
 import { fetchRateEntries } from "./rate-utils";
 
 // stats/page.tsx 가 자체 재정의해서 쓰는 JSON 응답 형식. import 의존성 없음 — 응답 형식만 호환.
@@ -125,11 +125,15 @@ export async function extractStatsLikeFusion(
   // 1) Gemini 한 번 호출 — 사진 전체 표 추출.
   const { data: rx, debug } = await extractRxStatsFromImage(base64, mimeType);
 
-  // 2) 보험코드 9자리 일괄 조회.
+  // 2) 보험코드 9자리 일괄 조회 + 제품명 prefix 폴백 조회 (코드 매칭 실패 행 backfill).
   const codes = rx.drugs
     .map((d) => d.code.replace(/\D/g, ""))
     .filter((c) => c.length === 9);
-  const masterByCode = await fetchMasterByCodes(codes);
+  const names = rx.drugs.map((d) => d.name).filter(Boolean);
+  const [masterByCode, masterByName] = await Promise.all([
+    fetchMasterByCodes(codes),
+    fetchMasterByNamePrefixes(names),
+  ]);
 
   // 3) 사용자별 추가 수수료 (개인 → 부모법인 폴백) 한 번에 로드.
   const rateEntries = await fetchRateEntries(userId);
@@ -151,7 +155,7 @@ export async function extractStatsLikeFusion(
       confidence: d.code ? 90 : 60,
       priceHint: d.unitPrice || undefined,
     };
-    const match = matchMedication(merged, masterByCode);
+    const match = matchMedication(merged, masterByCode, masterByName);
 
     if (match.matchedMedicationId) matchedCount++; else unmatchedCount++;
 
