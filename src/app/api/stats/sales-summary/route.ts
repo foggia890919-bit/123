@@ -165,6 +165,9 @@ export async function GET(req: NextRequest) {
       prevPrevSales: Math.round(agg.prevPrev.sales),
       currentPhotoCount: agg.current.photoCount,
     }))
+    // 거래 외 + 매출 3개월 모두 0 = 노이즈 (Gemini 가 단가 못 잡은 케이스). 표에서 제외.
+    // 거래가능 제약사는 매출 0 이라도 표시 (이 회사 매출 0 이라고 명확히 알리려고).
+    .filter((c) => c.isAllowed || c.currentSales > 0 || c.prevSales > 0 || c.prevPrevSales > 0)
     // 거래가능 제약사 우선, 그 안에서 당월 매출 큰 순
     .sort((a, b) => {
       if (a.isAllowed !== b.isAllowed) return a.isAllowed ? -1 : 1;
