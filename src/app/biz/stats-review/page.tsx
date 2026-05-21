@@ -23,6 +23,8 @@ interface Metrics {
   masterMatchRate: number;
   mismatchCount: number;
   partialExtractionCount: number;
+  processingCount?: number;
+  errorCount?: number;
 }
 
 interface GroupListItem {
@@ -312,13 +314,23 @@ export default function StatsReviewPage() {
             <button key={`${g.clientId}|${g.year}|${g.month}`}
               onClick={() => setSelected({ clientId: g.clientId, year: g.year, month: g.month })}
               className="w-full bg-white border border-gray-200 rounded-lg p-4 text-left hover:border-orange-300 transition-colors">
-              <div className="flex items-center gap-3 mb-2">
+              <div className="flex items-center gap-2 mb-2 flex-wrap">
                 <h3 className="text-sm font-bold text-gray-900">{g.clientName}</h3>
                 <span className="text-xs text-gray-500">{g.year}년 {g.month}월</span>
                 {g.submitted ? (
                   <span className="px-1.5 py-0.5 rounded bg-green-100 text-green-700 text-[10px] font-semibold">제출완료</span>
                 ) : (
                   <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-semibold">검수 대기</span>
+                )}
+                {(g.metrics.processingCount ?? 0) > 0 && (
+                  <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-semibold">
+                    처리중 {g.metrics.processingCount}장
+                  </span>
+                )}
+                {(g.metrics.errorCount ?? 0) > 0 && (
+                  <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 text-[10px] font-semibold">
+                    실패 {g.metrics.errorCount}장
+                  </span>
                 )}
                 <ChevronRight className="w-4 h-4 text-gray-400 ml-auto" />
               </div>
@@ -585,6 +597,17 @@ function ReviewPhotoCard({
         {report.status === "SUBMITTED" && (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700 border border-green-300 font-semibold">
             제출완료
+          </span>
+        )}
+        {report.status === "PROCESSING" && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 border border-blue-300 font-semibold flex items-center gap-1">
+            <Loader2 className="w-3 h-3 animate-spin" />처리중
+          </span>
+        )}
+        {report.status === "ERROR" && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-300 font-semibold"
+            title={(report.ocrData as { error?: string })?.error ?? "처리 실패"}>
+            처리 실패 ⓘ
           </span>
         )}
         {partial && (
