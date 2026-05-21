@@ -219,10 +219,10 @@ export default function StatsPhotoPage() {
         <h1 className="text-2xl font-bold text-gray-900">AI 처방통계 등록</h1>
       </div>
       <p className="text-sm text-gray-500 -mt-2">
-        사진 1장이든 여러 장이든 선택 → "전송" → 서버가 Gemini 분석 + 마스터 매칭 + 영업실적 DB + 구글 시트 저장.
-        사진 1장당 약 30~60초 소요. 처리 완료까지 페이지 유지하세요. 검수는{" "}
-        <a href="/biz/stats-review" className="text-orange-600 underline">AI 처방통계 검수</a> 메뉴에서
-        사진과 함께 자세히 진행.
+        사진 1장이든 여러 장이든 선택 → "전송". 사진이 서버에 즉시 저장되고 백그라운드에서 Gemini 분석 + 매칭 + 시트.
+        페이지 닫거나 다른 작업 하셔도 OK. 결과는{" "}
+        <a href="/biz/stats-review" className="text-orange-600 underline">AI 처방통계 검수</a> 에서
+        사진과 함께 확인. (Gemini 가 처리 못한 사진은 검수에서 "처리 실패" 로 표시되어 재업로드 가능)
       </p>
 
       {/* 거래처/월 선택 */}
@@ -359,9 +359,9 @@ export default function StatsPhotoPage() {
                     "bg-red-100 text-red-700"
                   }`}>
                     {it.status === "pending" ? "대기" :
-                     it.status === "sending" ? "처리중 (30~60s)" :
-                     it.status === "queued"  ? "완료" :
-                     "실패"}
+                     it.status === "sending" ? "전송중" :
+                     it.status === "queued"  ? "전송완료 (백그라운드 처리)" :
+                     "전송 실패"}
                   </span>
                   {it.errorMsg && (
                     <span className="text-[10px] text-red-600 max-w-[200px] truncate" title={it.errorMsg}>
@@ -390,14 +390,18 @@ export default function StatsPhotoPage() {
         </Button>
 
         {batchItems.filter(it => it.status === "queued").length > 0 && (
-          <div className="bg-green-50 border border-green-200 rounded p-3 text-xs text-green-800 space-y-1">
+          <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-800 space-y-1">
             <div className="font-semibold flex items-center gap-1">
-              <CheckCircle className="w-3.5 h-3.5"/>
-              {batchItems.filter(it => it.status === "queued").length}장 처리 완료 — DB + 시트 저장됨
+              <Sparkles className="w-3.5 h-3.5"/>
+              {batchItems.filter(it => it.status === "queued").length}장 전송 완료 · 서버에서 백그라운드 처리 중
             </div>
-            <div className="text-[11px] text-green-700 pt-1">
-              <a href="/biz/stats-review" className="underline font-semibold">AI 처방통계 검수</a> 에서
-              사진과 함께 검수하거나 <a href="/mypage/performance" className="underline">영업실적 관리</a> 에서 조회.
+            <div className="text-blue-700">
+              사진은 이미 서버에 저장됐어요. 페이지 닫거나 다른 작업 하셔도 됩니다.
+              Gemini 분석 + DB + 시트 저장은 약 30~60초/사진 소요.
+            </div>
+            <div className="text-[11px] text-blue-600 pt-1">
+              결과는 <a href="/biz/stats-review" className="underline font-semibold">AI 처방통계 검수</a> 에서
+              확인. 처리 실패한 사진은 "실패" 배지 + 사유 표시됩니다.
             </div>
           </div>
         )}

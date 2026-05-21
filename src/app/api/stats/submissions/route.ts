@@ -46,15 +46,20 @@ interface ReportInGroup {
   createdAt: Date;
 }
 
-function computeMetrics(reports: ReportForMetrics[]) {
+function computeMetrics(reports: Array<{ ocrData: unknown; totalFee: number | null; status?: string }>) {
   let rowCount = 0;
   let totalFee = 0;
   let masterMatched = 0;
   let mismatchCount = 0;
   let partialExtractionCount = 0;
+  let processingCount = 0;
+  let errorCount = 0;
   const confidenceSum: number[] = [];
 
   for (const r of reports) {
+    if (r.status === "PROCESSING") processingCount++;
+    if (r.status === "ERROR") errorCount++;
+
     const ocr = (r.ocrData ?? {}) as OcrDataRecord;
     const drugs = ocr.finalDrugs ?? ocr.aiDrugs ?? [];
     rowCount += drugs.length;
@@ -66,7 +71,6 @@ function computeMetrics(reports: ReportForMetrics[]) {
     }
     if (typeof ocr.avgConfidence === "number") confidenceSum.push(ocr.avgConfidence);
 
-    // 부분 추출 — Gemini summary.drugCount vs drugs.length
     const detected = ocr.geminiMeta?.summary?.drugCount ?? 0;
     if (detected > 0 && detected !== drugs.length) {
       partialExtractionCount++;
@@ -83,6 +87,8 @@ function computeMetrics(reports: ReportForMetrics[]) {
     masterMatchRate: rowCount > 0 ? Math.round((masterMatched / rowCount) * 100) : 0,
     mismatchCount,
     partialExtractionCount,
+    processingCount,
+    errorCount,
   };
 }
 
@@ -129,7 +135,7 @@ export async function GET(req: NextRequest) {
       client: { id: string; clientName: string } | null;
     }
     const typedReports = reports as ReportRowDetailed[];
-    const metrics = computeMetrics(typedReports.map((r): ReportForMetrics => ({ ocrData: r.ocrData, totalFee: r.totalFee })));
+    const metrics = computeMetrics(typedReports.map((r) => ({ ocrData: r.ocrData, totalFee: r.totalFee, status: r.status })));
     const submitted = typedReports.length > 0 && typedReports.every((r) => r.status === "SUBMITTED");
 
     return NextResponse.json({
