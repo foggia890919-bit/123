@@ -72,6 +72,8 @@ interface GroupDetail {
   submitted: boolean;
   metrics: Metrics;
   reports: ReportRow[];
+  duplicateCount?: number;
+  duplicateBy?: Record<string, Array<{ reportId: string; similarity: number }>>;
 }
 
 function MetricBadge({ label, value, color = "gray" }: { label: string; value: string | number; color?: "gray" | "green" | "amber" | "red" | "blue" }) {
@@ -266,6 +268,19 @@ export default function StatsReviewPage() {
             color={detail.metrics.mismatchCount + detail.metrics.partialExtractionCount > 0 ? "amber" : "gray"} />
         </div>
 
+        {/* 중복 의심 알림 — 사진 hash 는 다른데 약품 데이터가 70%+ 일치 */}
+        {(detail.duplicateCount ?? 0) > 0 && (
+          <div className="bg-amber-50 border border-amber-300 rounded p-3 text-xs text-amber-900">
+            <div className="font-semibold flex items-center gap-1 mb-1">
+              <AlertTriangle className="w-4 h-4" />
+              중복 의심 {detail.duplicateCount}장 — 약품 데이터가 다른 사진과 70%+ 일치
+            </div>
+            <div className="text-amber-800 text-[11px]">
+              영업사원이 같은 처방통계를 다른 각도로 두 번 찍었거나 옛 데이터 중복일 가능성. 사진 카드의 "중복 의심" 배지 클릭해서 비교 후 불필요한 사진 삭제.
+            </div>
+          </div>
+        )}
+
         {/* 액션 — 선택된 사진들 또는 그룹 전체 */}
         <div className="flex flex-wrap gap-2 items-center">
           <Button onClick={() => handleSubmit("submit", "selected")}
@@ -319,6 +334,8 @@ export default function StatsReviewPage() {
               selected={selectedIds.has(r.id)}
               onToggleSelect={() => toggleSelect(r.id)}
               onDelete={() => handleDelete(r.id)}
+              duplicateMatches={detail.duplicateBy?.[r.id] ?? []}
+              allReports={detail.reports}
               onSaved={async () => {
                 // 저장 후 상세 재조회 (지표 갱신)
                 if (selected) {
@@ -424,6 +441,8 @@ function ReviewPhotoCard({
   onToggleSelect,
   onDelete,
   onSaved,
+  duplicateMatches,
+  allReports,
 }: {
   report: ReportRow;
   busy: boolean;
@@ -434,6 +453,8 @@ function ReviewPhotoCard({
   onToggleSelect: () => void;
   onDelete: () => void;
   onSaved: () => void | Promise<void>;
+  duplicateMatches: Array<{ reportId: string; similarity: number }>;
+  allReports: ReportRow[];
 }) {
   const initialDrugs = report.ocrData?.finalDrugs ?? [];
 
@@ -665,6 +686,19 @@ function ReviewPhotoCard({
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-300 font-semibold"
             title={(report.ocrData as { error?: string })?.error ?? "처리 실패"}>
             처리 실패 ⓘ
+          </span>
+        )}
+        {/* 중복 의심 — 같은 그룹 다른 사진과 약품 70%+ 일치 */}
+        {duplicateMatches.length > 0 && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 font-semibold"
+            title={duplicateMatches.map((m) => {
+              const other = allReports.find((rr) => rr.id === m.reportId);
+              const otherIdx = allReports.findIndex((rr) => rr.id === m.reportId);
+              const label = other ? `사진 #${otherIdx + 1} (${new Date(other.createdAt).toLocaleString()})` : m.reportId.slice(0, 8);
+              return `${label} 와 ${m.similarity}% 일치`;
+            }).join("\n")}>
+            ⚠ 중복 의심 {duplicateMatches[0].similarity}%
+            {duplicateMatches.length > 1 && ` (+${duplicateMatches.length - 1})`}
           </span>
         )}
         {partial && (
