@@ -25,6 +25,12 @@ interface Metrics {
   partialExtractionCount: number;
   processingCount?: number;
   errorCount?: number;
+  // 검증 강화 (A) 지표
+  lowQualityRowCount?: number;
+  priceMismatchCount?: number;
+  revenueMismatchCount?: number;
+  companyMismatchCount?: number;
+  totalSumMismatchCount?: number;
 }
 
 interface GroupListItem {
@@ -52,12 +58,23 @@ interface ReportRow {
       productName?: string;
       quantity?: string;
       unitPrice?: number;
+      totalPrice?: number;
       matchedMedicationId?: string | null;
       mismatch?: unknown;
+      companyNameMismatch?: { geminiCompanyName?: string; masterCompanyName?: string } | null;
+      finalConfidence?: number;
+      qualityChecks?: {
+        masterMatch?: { applicable?: boolean; matched?: boolean; detail?: string };
+        prefixMatch?: { applicable?: boolean; matched?: boolean; detail?: string };
+        priceMatch?: { applicable?: boolean; matched?: boolean; detail?: string };
+        revenueMatch?: { applicable?: boolean; matched?: boolean; detail?: string };
+      };
       bbox?: [number, number, number, number];
     }>;
     avgConfidence?: number;
     sheetUrl?: string;
+    totalSumCheck?: { applicable?: boolean; matched?: boolean; detail?: string };
+    companiesInPhoto?: string[];
     geminiMeta?: {
       summary?: { drugCount?: number; totalAmountWon?: number };
     };
@@ -96,6 +113,27 @@ function confidenceColor(n: number): "green" | "amber" | "red" {
   if (n >= 90) return "green";
   if (n >= 75) return "amber";
   return "red";
+}
+
+// 행별 점수 dot — 보험코드 셀 옆 작은 컬러 동그라미.
+function scoreDotClass(score: number): string {
+  if (score === 0) return "bg-gray-300";
+  if (score >= 90) return "bg-green-500";
+  if (score >= 75) return "bg-amber-500";
+  return "bg-red-500";
+}
+
+// 한 사진 안에 여러 제약사가 섞일 때 시각 그룹화용 — 제약사명 → 결정적 색상.
+function companyColor(name: string): string {
+  if (!name) return "bg-gray-400";
+  const palette = [
+    "bg-blue-500", "bg-green-500", "bg-purple-500", "bg-pink-500",
+    "bg-orange-500", "bg-cyan-500", "bg-yellow-500", "bg-red-500",
+    "bg-indigo-500", "bg-teal-500", "bg-rose-500", "bg-lime-500",
+  ];
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
+  return palette[Math.abs(h) % palette.length];
 }
 
 export default function StatsReviewPage() {
@@ -294,6 +332,24 @@ export default function StatsReviewPage() {
           <MetricBadge label="불일치 / 부분추출" value={`${detail.metrics.mismatchCount} / ${detail.metrics.partialExtractionCount}`}
             color={detail.metrics.mismatchCount + detail.metrics.partialExtractionCount > 0 ? "amber" : "gray"} />
         </div>
+        {/* 검증 강화 (A) — 행 단위 품질 지표. 검수자가 우선 봐야 할 행 안내. */}
+        <div className="grid grid-cols-5 gap-2">
+          <MetricBadge label="낮은 점수 행"
+            value={`${detail.metrics.lowQualityRowCount ?? 0}건`}
+            color={(detail.metrics.lowQualityRowCount ?? 0) > 0 ? "red" : "gray"} />
+          <MetricBadge label="단가 불일치"
+            value={`${detail.metrics.priceMismatchCount ?? 0}건`}
+            color={(detail.metrics.priceMismatchCount ?? 0) > 0 ? "amber" : "gray"} />
+          <MetricBadge label="매출 불일치"
+            value={`${detail.metrics.revenueMismatchCount ?? 0}건`}
+            color={(detail.metrics.revenueMismatchCount ?? 0) > 0 ? "amber" : "gray"} />
+          <MetricBadge label="제약사 불일치"
+            value={`${detail.metrics.companyMismatchCount ?? 0}건`}
+            color={(detail.metrics.companyMismatchCount ?? 0) > 0 ? "amber" : "gray"} />
+          <MetricBadge label="합계 검증 실패"
+            value={`${detail.metrics.totalSumMismatchCount ?? 0}장`}
+            color={(detail.metrics.totalSumMismatchCount ?? 0) > 0 ? "amber" : "gray"} />
+        </div>
 
         {/* 중복 의심 알림 — 사진 hash 는 다른데 약품 데이터가 70%+ 일치 */}
         {(detail.duplicateCount ?? 0) > 0 && (
@@ -487,6 +543,13 @@ interface EditableDrugRow {
   totalPriceManual: boolean;
   matched: boolean;
   hasMismatch: boolean;
+  // 행 단위 검증 — 0~100 점수 + 4개 check 결과. 표에서 색상/툴팁 강조.
+  finalConfidence: number;
+  priceCheckBad: boolean;        // priceMatch applicable && !matched
+  revenueCheckBad: boolean;
+  prefixCheckBad: boolean;
+  // Gemini 가 추출한 행별 제약사와 마스터 매칭 제약사가 다른 경우. 검수에서 사람이 결정.
+  companyNameMismatch: { geminiCompanyName: string; masterCompanyName: string } | null;
   bbox: [number, number, number, number];        // 사진 highlight overlay 좌표
 }
 
@@ -526,16 +589,27 @@ function ReviewPhotoCard({
       const bbox: [number, number, number, number] = Array.isArray(d.bbox) && d.bbox.length === 4
         ? [d.bbox[0], d.bbox[1], d.bbox[2], d.bbox[3]]
         : [0, 0, 0, 0];
+      const q = d.qualityChecks;
       return {
         insuranceCode: d.insuranceCode ?? "",
         companyName: d.companyName ?? "",
         productName: d.productName ?? "",
         quantity: d.quantity ?? "",
         unitPrice: unit,
-        totalPrice: Math.round(qty * unit),
+        totalPrice: d.totalPrice ?? Math.round(qty * unit),
         totalPriceManual: false,
         matched: !!d.matchedMedicationId,
         hasMismatch: d.mismatch != null,
+        finalConfidence: typeof d.finalConfidence === "number" ? d.finalConfidence : 0,
+        priceCheckBad: !!(q?.priceMatch?.applicable && q.priceMatch.matched === false),
+        revenueCheckBad: !!(q?.revenueMatch?.applicable && q.revenueMatch.matched === false),
+        prefixCheckBad: !!(q?.prefixMatch?.applicable && q.prefixMatch.matched === false),
+        companyNameMismatch: d.companyNameMismatch?.geminiCompanyName && d.companyNameMismatch?.masterCompanyName
+          ? {
+              geminiCompanyName: d.companyNameMismatch.geminiCompanyName,
+              masterCompanyName: d.companyNameMismatch.masterCompanyName,
+            }
+          : null,
         bbox,
       };
     })
@@ -670,6 +744,11 @@ function ReviewPhotoCard({
     setRows((prev) => [...prev, {
       insuranceCode: "", companyName: "", productName: "", quantity: "0",
       unitPrice: 0, totalPrice: 0, totalPriceManual: false, matched: false, hasMismatch: false,
+      finalConfidence: 0,
+      priceCheckBad: false,
+      revenueCheckBad: false,
+      prefixCheckBad: false,
+      companyNameMismatch: null,
       bbox: [0, 0, 0, 0],
     }]);
     setDirty(true);
@@ -722,6 +801,14 @@ function ReviewPhotoCard({
   const matchedCount = rows.filter((r) => r.matched).length;
   // 단가 0 = 마스터 매칭 실패 OR 비급여 — 검수자가 직접 채워야 할 행
   const priceMissingCount = rows.filter((r) => r.unitPrice === 0).length;
+  // 검증 강화 (A) — 행 단위 품질 지표
+  const lowQualityCount = rows.filter((r) => r.finalConfidence > 0 && r.finalConfidence < 75).length;
+  const priceMismatchCount = rows.filter((r) => r.priceCheckBad).length;
+  const revenueMismatchCount = rows.filter((r) => r.revenueCheckBad).length;
+  const companyMismatchCount = rows.filter((r) => r.companyNameMismatch != null).length;
+  // 사진 단위 합계 검증
+  const sumCheck = report.ocrData?.totalSumCheck;
+  const sumCheckBad = !!(sumCheck?.applicable && sumCheck?.matched === false);
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
@@ -734,6 +821,12 @@ function ReviewPhotoCard({
         <span className="text-xs text-gray-400">|</span>
         <span className="text-xs text-gray-500">{new Date(report.createdAt).toLocaleString()}</span>
         <span className="text-xs font-semibold">{report.companyName || "(제약사 미상)"}</span>
+        {(report.ocrData?.companiesInPhoto?.length ?? 0) > 1 && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 border border-purple-300 font-semibold"
+            title={`행별 제약사: ${report.ocrData?.companiesInPhoto?.join(", ")}`}>
+            N제약사 {report.ocrData?.companiesInPhoto?.length}곳
+          </span>
+        )}
         <span className="text-xs text-gray-500">· {rows.length}건 · {totalRevenue.toLocaleString()}원</span>
         {report.status === "SUBMITTED" && (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700 border border-green-300 font-semibold">
@@ -778,6 +871,31 @@ function ReviewPhotoCard({
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-800 border border-yellow-400 font-semibold"
             title="단가 0 — 보험코드 마스터 매칭 실패 또는 비급여. 표에서 직접 단가 입력 필요.">
             💰 단가 미입력 {priceMissingCount}
+          </span>
+        )}
+        {/* 검증 강화 (A) 배지 — 행별 검사 결과 요약 */}
+        {lowQualityCount > 0 && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-300"
+            title="finalConfidence < 75 (점수가 낮은 행). 표에서 ◯ 색상이 빨강인 행 확인.">
+            낮은 점수 {lowQualityCount}
+          </span>
+        )}
+        {(priceMismatchCount + revenueMismatchCount) > 0 && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300"
+            title="단가/매출 검증 실패 행. 마스터 단가나 수량×단가=매출 등식이 안 맞음.">
+            단가/매출 ❌ {priceMismatchCount + revenueMismatchCount}
+          </span>
+        )}
+        {companyMismatchCount > 0 && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-300"
+            title="Gemini 가 추출한 제약사와 마스터 매칭 제약사가 다른 행. 사진 보고 사람이 결정 필요.">
+            제약사 불일치 {companyMismatchCount}
+          </span>
+        )}
+        {sumCheckBad && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 border border-orange-300"
+            title={`사진 합계 검증 실패: ${sumCheck?.detail ?? ""}`}>
+            합계 ❌
           </span>
         )}
         <span className="text-[10px] text-gray-400 ml-auto">매칭 {matchedCount}/{rows.length}</span>
@@ -900,34 +1018,57 @@ function ReviewPhotoCard({
             </thead>
             <tbody>
               {rows.map((d, i) => {
-                // 강조 우선순위: mismatch (빨강) > focused (주황) > 단가 0 (노랑) > 기본.
-                // mismatch 가 더 심각한 문제 (코드↔이름 불일치) 라 우선.
-                const rowClass = d.hasMismatch
+                // 강조 우선순위 (검증 강화 후):
+                //   mismatch (코드↔이름) || companyName 불일치 → red (사람 확인 필요)
+                //   focused                                      → orange
+                //   price/revenue/prefix check 실패              → yellow (자동 검증 실패)
+                //   단가 0 (마스터 미매칭)                       → yellow
+                const qualityBad = d.priceCheckBad || d.revenueCheckBad || d.prefixCheckBad;
+                const rowClass = (d.hasMismatch || d.companyNameMismatch != null)
                   ? "bg-red-50"
                   : focusedIdx === i
                   ? "bg-orange-50"
+                  : qualityBad
+                  ? "bg-yellow-50"
                   : d.unitPrice === 0
                   ? "bg-yellow-50"
                   : "";
+                const tooltipParts: string[] = [];
+                if (d.finalConfidence > 0) tooltipParts.push(`점수 ${d.finalConfidence}/100`);
+                if (d.prefixCheckBad) tooltipParts.push("약품명 prefix 불일치");
+                if (d.priceCheckBad) tooltipParts.push("단가 검증 실패");
+                if (d.revenueCheckBad) tooltipParts.push("매출=수량×단가 검증 실패");
+                if (d.companyNameMismatch) tooltipParts.push(`제약사 불일치: ${d.companyNameMismatch.geminiCompanyName} vs ${d.companyNameMismatch.masterCompanyName}`);
+                const scoreTooltip = tooltipParts.join(" · ") || "검증 데이터 없음";
                 // 필터 ON + 단가 0 아닌 row → 숨김 (DOM 유지, bbox/focus 인덱스 보존)
                 const hiddenByFilter = priceMissingOnly && d.unitPrice !== 0;
                 return (
                   <tr key={i} className={`border-t ${rowClass} ${hiddenByFilter ? "hidden" : ""}`}>
                     <td className="px-1 py-0.5">
-                      <input ref={(el) => { inputRefs.current[`${i}:insuranceCode`] = el; }}
-                        value={d.insuranceCode}
-                        onChange={(e) => updateRow(i, { insuranceCode: e.target.value })}
-                        onFocus={() => setFocusedIdx(i)}
-                        onKeyDown={(e) => handleKeyDown(e, i, "insuranceCode")}
-                        className="w-full px-1 py-0.5 border rounded text-[11px] font-mono"/>
+                      <div className="flex items-center gap-1">
+                        <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${scoreDotClass(d.finalConfidence)}`}
+                          title={scoreTooltip} />
+                        <input ref={(el) => { inputRefs.current[`${i}:insuranceCode`] = el; }}
+                          value={d.insuranceCode}
+                          onChange={(e) => updateRow(i, { insuranceCode: e.target.value })}
+                          onFocus={() => setFocusedIdx(i)}
+                          onKeyDown={(e) => handleKeyDown(e, i, "insuranceCode")}
+                          className="w-full px-1 py-0.5 border rounded text-[11px] font-mono"/>
+                      </div>
                     </td>
                     <td className="px-1 py-0.5">
-                      <input ref={(el) => { inputRefs.current[`${i}:companyName`] = el; }}
-                        value={d.companyName}
-                        onChange={(e) => updateRow(i, { companyName: e.target.value })}
-                        onFocus={() => setFocusedIdx(i)}
-                        onKeyDown={(e) => handleKeyDown(e, i, "companyName")}
-                        className="w-full px-1 py-0.5 border rounded text-[11px]"/>
+                      <div className="flex items-center gap-1">
+                        <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${companyColor(d.companyName)}`}
+                          title={d.companyNameMismatch
+                            ? `Gemini "${d.companyNameMismatch.geminiCompanyName}" vs 마스터 "${d.companyNameMismatch.masterCompanyName}"`
+                            : (d.companyName || "(제약사 미상)")} />
+                        <input ref={(el) => { inputRefs.current[`${i}:companyName`] = el; }}
+                          value={d.companyName}
+                          onChange={(e) => updateRow(i, { companyName: e.target.value })}
+                          onFocus={() => setFocusedIdx(i)}
+                          onKeyDown={(e) => handleKeyDown(e, i, "companyName")}
+                          className={`w-full px-1 py-0.5 border rounded text-[11px] ${d.companyNameMismatch ? "border-red-400 bg-red-50" : ""}`}/>
+                      </div>
                     </td>
                     <td className="px-1 py-0.5">
                       <input ref={(el) => { inputRefs.current[`${i}:productName`] = el; }}

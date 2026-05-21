@@ -10,9 +10,12 @@ const SUMMARY_HEADERS = [
   "기록일시", "제약사", "기간(YYYY-MM)", "기간원본", "병원",
   "약품수", "처방횟수", "총사용량", "총금액", "출처", "batchId",
 ] as const;
+// "제약사(행별)" 컬럼은 한 사진에 여러 제약사 약품이 섞일 때 행별 분리용.
+// 기존 사진 단위 "제약사" 컬럼(pharma 대표값) 과 별개. 옛 batchId 데이터는 이 컬럼이 비어 있음.
 const DRUGS_HEADERS = [
   "기록일시", "batchId", "제약사", "기간(YYYY-MM)",
   "약품명", "보험코드", "사용량", "처방횟수", "단가", "총금액", "카테고리", "효능",
+  "제약사(행별)",
 ] as const;
 
 // batchId 컬럼 인덱스 — 검수 페이지 수정 시 옛 batchId 행 찾아서 삭제용
@@ -79,19 +82,42 @@ export async function appendRxStats(
   const batchId = randomUUID();
   const ts = new Date().toISOString();
 
-  const summaryRow: (string | number)[][] = [[
-    ts,
-    payload.pharma,
-    payload.period,
-    payload.periodRaw,
-    payload.hospital,
-    payload.summary.drugCount,
-    payload.summary.totalPrescriptions,
-    payload.summary.totalQuantity,
-    payload.summary.totalAmountWon,
-    source,
-    batchId,
-  ]];
+  // 한 사진 안에 여러 제약사가 섞이는 경우(흔함) — SUMMARY 탭에서 제약사별로 N행 분리.
+  // 같은 batchId 공유 → replaceRxStats 시 한 번에 다 삭제됨.
+  // 행별 companyName 이 비어 있으면 사진 대표 pharma 로 fallback. 둘 다 없으면 "(미분류)".
+  const summaryByCompany = new Map<string, {
+    rows: typeof payload.drugs;
+    drugCount: number;
+    prescriptions: number;
+    quantity: number;
+    amount: number;
+  }>();
+  for (const d of payload.drugs) {
+    const key = (d.companyName?.trim() || payload.pharma || "(미분류)");
+    const prev = summaryByCompany.get(key) ?? { rows: [], drugCount: 0, prescriptions: 0, quantity: 0, amount: 0 };
+    prev.rows.push(d);
+    prev.drugCount += 1;
+    prev.prescriptions += d.prescriptions || 0;
+    prev.quantity += d.quantity || 0;
+    prev.amount += d.totalPrice || 0;
+    summaryByCompany.set(key, prev);
+  }
+
+  // 사진 안에 약품 0건이면 종전처럼 1행 — payload.pharma 기준
+  const summaryRow: (string | number)[][] = summaryByCompany.size === 0
+    ? [[
+        ts, payload.pharma, payload.period, payload.periodRaw, payload.hospital,
+        payload.summary.drugCount,
+        payload.summary.totalPrescriptions,
+        payload.summary.totalQuantity,
+        payload.summary.totalAmountWon,
+        source, batchId,
+      ]]
+    : Array.from(summaryByCompany.entries()).map(([company, agg]) => [
+        ts, company, payload.period, payload.periodRaw, payload.hospital,
+        agg.drugCount, agg.prescriptions, agg.quantity, Math.round(agg.amount),
+        source, batchId,
+      ]);
 
   const drugRows: (string | number)[][] = payload.drugs.map((d) => [
     ts,
@@ -106,10 +132,11 @@ export async function appendRxStats(
     d.totalPrice,
     d.category,
     d.efficacy,
+    d.companyName ?? "",
   ]);
 
   const sumRange = encodeURIComponent(`${SUMMARY_TAB}!A:K`);
-  const drugRange = encodeURIComponent(`${DRUGS_TAB}!A:L`);
+  const drugRange = encodeURIComponent(`${DRUGS_TAB}!A:M`);
 
   const sumRes = await sheetsApi(
     `/${id}/values/${sumRange}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,

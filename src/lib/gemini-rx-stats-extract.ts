@@ -3,6 +3,10 @@ import { GoogleGenAI, Type } from "@google/genai";
 export interface RxDrugRow {
   name: string;
   code: string;          // 보험코드 9자리. 없으면 ""
+  // 행별 제약사 — 사진 표에 제약사 컬럼이 있으면 Gemini 가 행마다 추출.
+  // 한 사진에 여러 제약사 약품이 섞인 경우 (실제로 흔함) 행별로 분리 가능.
+  // 표에 컬럼 없으면 "" — 마스터 매칭이 채워줌.
+  companyName: string;
   quantity: number;      // 총사용량. 소수 허용 (시럽 등)
   prescriptions: number; // 처방횟수
   unitPrice: number;     // 단가. 모르면 0
@@ -45,10 +49,14 @@ const DEFAULT_MODEL: GeminiRxModel = "gemini-3.5-flash";
 
 const DRUG_ITEM_SCHEMA = {
   type: Type.OBJECT,
-  required: ["name", "code", "quantity", "prescriptions", "unitPrice", "totalPrice", "category", "efficacy", "bbox"],
+  required: ["name", "code", "companyName", "quantity", "prescriptions", "unitPrice", "totalPrice", "category", "efficacy", "bbox"],
   properties: {
     name: { type: Type.STRING, description: "약품명 (한글+영문 그대로, 용량/제형 포함)" },
     code: { type: Type.STRING, description: "보험코드 9자리 숫자. 모르면 빈 문자열." },
+    companyName: {
+      type: Type.STRING,
+      description: "이 약품 행의 제약사명. 표에 제약사 컬럼이 있으면 그 값을 그대로 (예: '한미약품', '대원제약'). 컬럼 없으면 빈 문자열.",
+    },
     quantity: { type: Type.NUMBER, description: "총사용량 컬럼 값. 소수 허용." },
     prescriptions: { type: Type.INTEGER, description: "처방횟수 컬럼 값." },
     unitPrice: { type: Type.NUMBER, description: "단가(원). 콤마 제거한 순수 숫자. 모르면 0." },
@@ -103,9 +111,10 @@ function buildPrompt(): string {
     "사진을 사람처럼 보고 다음을 추출하세요. 위치 기반 OCR 아니라 멀티모달 비전으로 표 구조를 직접 이해해서 행 단위로 정리.",
     "",
     "추출 규칙:",
-    "1) 상단/제목/검색조건 영역에서 제약사명·통계기간·병원명을 찾는다.",
+    "1) 상단/제목/검색조건 영역에서 제약사명(전체 통계의 대표값)·통계기간·병원명을 찾는다. 한 사진에 여러 제약사가 섞인 경우 가장 행이 많은 제약사를 pharma 에 (또는 빈 문자열).",
     "2) 표의 합계 영역(약품건수/처방횟수/총사용량/총금액) 4개 숫자를 summary 에.",
     "3) 표 본문은 한 행 = 한 약품. 합계행이나 카테고리 헤더행은 제외. 같은 약품명이 두 번 나오면 둘 다 별도 항목으로 보존.",
+    "3-1) **각 약품 행마다 companyName 필드에 그 행의 제약사명을 적는다.** 표에 제약사 컬럼이 있으면 그 값 그대로. 컬럼 없거나 빈 셀이면 빈 문자열. 한 사진에 여러 제약사가 섞이는 경우(EMR 처방통계에서 흔함) 각 행이 자신의 제약사를 갖도록.",
     "4) 각 약품에 대해 medicine 지식 기반으로 category(자유 형식, 예: '만성질환/고혈압')와 efficacy(짧은 효능)를 부여.",
     "5) 잘 모르는 약품은 category='기타', efficacy='' 로. 추측 환각 금지.",
     "6) 모든 숫자는 콤마 제거한 순수 숫자. 단가/금액 없으면 0.",
@@ -181,6 +190,7 @@ function normalizeDrug(d: Record<string, unknown>): RxDrugRow {
   return {
     name: String(d.name ?? "").trim(),
     code: String(d.code ?? "").replace(/\D/g, ""),
+    companyName: String(d.companyName ?? "").trim(),
     quantity: toNum(d.quantity),
     prescriptions: toInt(d.prescriptions),
     unitPrice: toNum(d.unitPrice),

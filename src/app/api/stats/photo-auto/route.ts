@@ -7,6 +7,7 @@ import { extractRxStatsFromImage } from "@/lib/gemini-rx-stats-extract";
 import { fetchMasterByCodes, fetchMasterByNamePrefixes, matchMedication, type MergedDrug } from "@/lib/medication-master-match";
 import { appendRxStats } from "@/lib/google-sheets-rx-append";
 import { fetchRateEntries } from "@/lib/rate-utils";
+import { computeRowQuality, checkTotalSum } from "@/lib/rx-quality-checks";
 
 // "닥치고 저장" 패턴 — 사용자 의도: 영업사원은 사진만 던지면 끝.
 //
@@ -181,23 +182,55 @@ export async function POST(req: NextRequest) {
         const merged: MergedDrug = {
           insuranceCode: d.code,
           productName: d.name,
-          companyName: "",
+          companyName: d.companyName,
           quantity: String(d.quantity ?? ""),
           confidence: d.code ? 90 : 60,
+          priceHint: d.unitPrice || undefined,
         };
         const match = matchMedication(merged, masterByCode, masterByName);
         const additionalRate = additionalByCompany.get(normCompany(match.companyName)) ?? null;
+        const codeOk = match.matchedMedicationId !== null && d.code.replace(/\D/g, "").length === 9;
+        const finalUnitPrice = match.unitPrice ?? (d.unitPrice || null);
+
+        const { checks, score } = computeRowQuality({
+          matchedMedicationId: match.matchedMedicationId,
+          codeOk,
+          nameSimilar: match.nameCodeMismatch == null && !!match.matchedMedicationId,
+          masterProductName: match.productName,
+          ocrProductName: d.name,
+          quantity: d.quantity ?? 0,
+          geminiUnitPrice: d.unitPrice || undefined,
+          masterUnitPrice: match.unitPrice,
+          geminiTotalPrice: d.totalPrice || undefined,
+          finalUnitPrice,
+        });
+
+        const geminiCompany = d.companyName.trim();
+        const masterCompany = (match.companyName || "").trim();
+        const companyNameMismatch =
+          geminiCompany && masterCompany &&
+          normCompany(geminiCompany) !== normCompany(masterCompany)
+            ? { geminiCompanyName: geminiCompany, masterCompanyName: masterCompany }
+            : null;
+
         return {
           insuranceCode: match.insuranceCode,
-          companyName: match.companyName,
+          // Gemini 행별 추출값 우선 — 사진의 실제 제약사 보존
+          companyName: geminiCompany || masterCompany,
           productName: match.productName,
           quantity: String(d.quantity ?? ""),
-          unitPrice: match.unitPrice ?? (d.unitPrice || null),
+          unitPrice: finalUnitPrice,
           commissionRate: match.commissionRate,
           additionalRate,
           matchedMedicationId: match.matchedMedicationId,
+          finalConfidence: score.overall,
           bboxYPercent: null,
           bbox: d.bbox,
+          mismatch: match.nameCodeMismatch
+            ? { kind: "code-name-mismatch" as const, ...match.nameCodeMismatch }
+            : null,
+          companyNameMismatch,
+          qualityChecks: checks,
         };
       });
 
@@ -206,6 +239,34 @@ export async function POST(req: NextRequest) {
         const unit = d.unitPrice ?? 0;
         return s + qty * unit;
       }, 0);
+
+      const avgConfidence = finalDrugs.length
+        ? Math.round(finalDrugs.reduce((s, d) => s + d.finalConfidence, 0) / finalDrugs.length)
+        : 0;
+      const manualCheckCount = finalDrugs.filter((d) => d.finalConfidence < 90).length;
+
+      // 사진 단위 합계 검증 — Gemini summary 와 행 합산 비교 (Gemini 추출 매출 기준)
+      const rowSumGemini = rx.drugs.reduce((s, d) => s + (d.totalPrice || 0), 0);
+      const totalSumCheck = checkTotalSum(rowSumGemini, rx.summary.totalAmountWon);
+
+      // 한 사진 안의 모든 제약사 (행별 companyName set)
+      const companySet = new Set<string>();
+      for (const fd of finalDrugs) {
+        const v = fd.companyName.trim();
+        if (v) companySet.add(v);
+      }
+      const companiesInPhoto = Array.from(companySet);
+
+      // PrescriptionReport.companyName 단일 컬럼은 "가장 행이 많은 제약사" 로 결정.
+      // 옛 의미("사진의 단일 제약사") → 새 의미("주된 제약사"). 행별 정확도는 finalDrugs[].companyName 에 있음.
+      const companyRowCount = new Map<string, number>();
+      for (const fd of finalDrugs) {
+        const k = fd.companyName.trim();
+        if (!k) continue;
+        companyRowCount.set(k, (companyRowCount.get(k) ?? 0) + 1);
+      }
+      const dominantCompany = Array.from(companyRowCount.entries())
+        .sort((a, b) => b[1] - a[1])[0]?.[0] ?? rx.pharma ?? "";
 
       // 시트 저장 — 실패해도 DB row 는 PENDING_REVIEW 로 진행
       let sheetUrl: string | null = null;
@@ -239,7 +300,7 @@ export async function POST(req: NextRequest) {
         where: { id: report.id },
         data: {
           status: "PENDING_REVIEW",
-          companyName: rx.pharma || "",
+          companyName: dominantCompany,
           totalFee,
           ocrData: {
             source: "gemini-direct-photo-auto",
@@ -247,8 +308,10 @@ export async function POST(req: NextRequest) {
             captureType: "photo",
             finalDrugs,
             aiDrugs: finalDrugs,
-            avgConfidence: 95,
-            manualCheckCount: 0,
+            avgConfidence,
+            manualCheckCount,
+            totalSumCheck,
+            companiesInPhoto,
             geminiMeta: {
               pharma: rx.pharma,
               period: rx.period,

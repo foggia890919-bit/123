@@ -102,7 +102,7 @@ export interface MatchResult {
   nameCodeMismatch: { masterProductName: string; ocrProductName: string } | null;
 }
 
-// 보험코드 9자리로 마스터 매칭 + 한글 첫 2자 sanity check.
+// 보험코드 9자리로 마스터 매칭 + 한글 첫 3자 sanity check.
 // 정확 매칭 시 단가/수수료/companyName 마스터값 채워줌. 보험코드 매칭 실패 시
 // byNamePrefix 가 주어지면 제품명 prefix + dose 매칭으로 폴백 (사용자 요구).
 export function matchMedication(
@@ -119,7 +119,7 @@ export function matchMedication(
     const masterKorean = parseDrugName(m.productName).korean;
     let nameSimilar = ocrKorean.length < 2 || masterKorean.length < 2;
     if (!nameSimilar) {
-      const limit = Math.min(2, ocrKorean.length, masterKorean.length);
+      const limit = Math.min(3, ocrKorean.length, masterKorean.length);
       for (let i = 0; i < limit; i++) {
         if (ocrKorean[i] === masterKorean[i]) { nameSimilar = true; break; }
       }

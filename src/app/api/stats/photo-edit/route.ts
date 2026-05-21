@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 import { replaceRxStats } from "@/lib/google-sheets-rx-append";
 import type { RxExtractResult } from "@/lib/gemini-rx-stats-extract";
+import { computeRowQuality, checkTotalSum } from "@/lib/rx-quality-checks";
 
 // 검수 페이지에서 수정 후 저장 — DB + 구글 시트 동시 갱신.
 // 시트는 옛 batchId 행 삭제 후 새 batchId 로 재append (옛 데이터 안 보이게).
@@ -58,19 +59,64 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 2) DB 의 ocrData 갱신 — finalDrugs / aiDrugs 5컬럼 구조 호환
-  const finalDrugs = rows.map((r) => ({
-    insuranceCode: r.insuranceCode,
-    companyName: r.companyName,
-    productName: r.productName,
-    quantity: r.quantity,
-    unitPrice: r.unitPrice,
-    commissionRate: null,
-    additionalRate: null,
-    matchedMedicationId: null,
-    bboxYPercent: null,
-  }));
+  // 2) DB 의 ocrData 갱신 — 수정된 데이터로 행별 quality 재계산.
+  // 검수자가 단가 채워주거나 행 추가했으면 그에 맞춰 점수도 갱신.
+  // 마스터 매칭은 다시 안 함 (검수자가 이미 봤다는 전제) — codeOk=false, nameSimilar=false 로 보존성 유지.
+  const finalDrugs = rows.map((r) => {
+    const qtyNum = parseFloat(r.quantity) || 0;
+    const { checks, score } = computeRowQuality({
+      matchedMedicationId: null,
+      codeOk: false,
+      nameSimilar: false,
+      masterProductName: "",
+      ocrProductName: r.productName,
+      quantity: qtyNum,
+      geminiUnitPrice: undefined,
+      masterUnitPrice: null,
+      geminiTotalPrice: r.totalPrice || undefined,
+      finalUnitPrice: r.unitPrice || null,
+    });
+    return {
+      insuranceCode: r.insuranceCode,
+      companyName: r.companyName,
+      productName: r.productName,
+      quantity: r.quantity,
+      unitPrice: r.unitPrice,
+      commissionRate: null,
+      additionalRate: null,
+      matchedMedicationId: null,
+      bboxYPercent: null,
+      finalConfidence: score.overall,
+      qualityChecks: checks,
+    };
+  });
   const totalFee = rows.reduce((s, r) => s + (Number(r.totalPrice) || 0), 0);
+  const avgConfidence = finalDrugs.length
+    ? Math.round(finalDrugs.reduce((s, d) => s + d.finalConfidence, 0) / finalDrugs.length)
+    : 0;
+  const manualCheckCount = finalDrugs.filter((d) => d.finalConfidence < 90).length;
+
+  // 한 사진 안의 모든 제약사 (검수 후 행별 companyName set)
+  const companySet = new Set<string>();
+  for (const fd of finalDrugs) {
+    const v = fd.companyName.trim();
+    if (v) companySet.add(v);
+  }
+  const companiesInPhoto = Array.from(companySet);
+
+  // 사진 단위 합계 검증 (검수 후 — 행 매출 합계 = totalFee 자동 일치 가능성 큼)
+  const rowSumEdited = rows.reduce((s, r) => s + (r.totalPrice || 0), 0);
+  const totalSumCheck = checkTotalSum(rowSumEdited, Math.round(totalFee));
+
+  // 대표 제약사 — 행이 가장 많은 제약사
+  const companyRowCount = new Map<string, number>();
+  for (const fd of finalDrugs) {
+    const k = fd.companyName.trim();
+    if (!k) continue;
+    companyRowCount.set(k, (companyRowCount.get(k) ?? 0) + 1);
+  }
+  const dominantCompany = Array.from(companyRowCount.entries())
+    .sort((a, b) => b[1] - a[1])[0]?.[0] ?? existing.companyName ?? "";
 
   const prevOcr = (existing.ocrData ?? {}) as Record<string, unknown>;
   const prevGeminiMeta = (prevOcr.geminiMeta ?? {}) as {
@@ -102,6 +148,7 @@ export async function POST(req: NextRequest) {
       drugs: rows.map((r) => ({
         name: r.productName,
         code: r.insuranceCode,
+        companyName: r.companyName,
         quantity: parseFloat(r.quantity) || 0,
         prescriptions: 0,
         unitPrice: r.unitPrice,
@@ -129,14 +176,19 @@ export async function POST(req: NextRequest) {
     sheetWarning = `시트 갱신 실패: ${String(e).slice(0, 200)}`;
   }
 
-  // 4) DB 업데이트 — 새 sheetBatchId 반영
+  // 4) DB 업데이트 — 새 sheetBatchId + 재계산된 quality 지표 반영
   const updated = await prisma.prescriptionReport.update({
     where: { id: reportId },
     data: {
+      companyName: dominantCompany,
       ocrData: {
         ...prevOcr,
         finalDrugs,
         aiDrugs: finalDrugs,
+        avgConfidence,
+        manualCheckCount,
+        totalSumCheck,
+        companiesInPhoto,
         sheetBatchId,
         sheetUrl,
       },
