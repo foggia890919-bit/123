@@ -584,9 +584,11 @@ function ReviewPhotoCard({
       </div>
 
       {/* 좌측 사진 (확대 60%) / 우측 편집 표 (40%, 스크롤) */}
+      {/* min-w-0: CSS grid 의 default min-width: auto 가 자식 콘텐츠 자연 폭에 끌려가는 문제 차단.
+         사진 원본 (3000px+) 이 column 폭을 부풀려 우측 표를 0px 까지 squeeze 하던 버그 fix. */}
       <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr]">
         {/* 좌측: 사진 + zoom 컨트롤 (sticky) */}
-        <div className="bg-gray-100 lg:border-r border-gray-200">
+        <div className="bg-gray-100 lg:border-r border-gray-200 min-w-0">
           <div className="lg:sticky lg:top-4">
             {/* zoom 컨트롤 바 */}
             <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 bg-white">
@@ -644,8 +646,8 @@ function ReviewPhotoCard({
           </div>
         </div>
 
-        {/* 우측: 편집 가능 표 — 사진 sticky 와 같이 스크롤되도록 max-h + overflow */}
-        <div className="overflow-auto max-h-[80vh]">
+        {/* 우측: 편집 가능 표 — min-w-0 으로 좌측 사진의 큰 폭에 squeeze 안 되게 */}
+        <div className="overflow-auto max-h-[80vh] min-w-0">
           <table className="w-full text-xs">
             <thead className="bg-gray-50 text-gray-500 sticky top-0 z-10">
               <tr>
