@@ -5,8 +5,10 @@ import { appendRxStats } from "@/lib/google-sheets-rx-append";
 import { assertSafePublicUrl } from "@/lib/url-safety";
 
 export const runtime = "nodejs";
-// gemini-3.5-flash 단일 호출 + thinkingBudget=-1. 35행+ 사진 worst case 30s 내외.
-export const maxDuration = 90;
+// 사용자 정책: 실시간 응답 불필요, 정확한 처리 우선. 5분 풀로 사용해서 복잡한
+// 35행+ 사진도 thinkingBudget=-1 가 충분히 추론할 수 있게 한다. 실측 42s 평균,
+// worst case 여유 확보.
+export const maxDuration = 300;
 
 const MAX_IMAGE_BYTES = 10_000_000;
 const FETCH_TIMEOUT_MS = 20_000;

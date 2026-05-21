@@ -188,8 +188,10 @@ GEMINI_API_KEY=AIza... npx tsx scripts/test-gemini-rx-stats.ts /path/to/photo.jp
    자동 Pro 재시도는 별도 PR.
 2. **카테고리 자유 형식** — 시트 필터링 시 "만성질환/고혈압" 과 "만성질환/고지혈증"
    이 다른 그룹으로 잡힘. 의도된 동작이지만 운영 데이터 누적 후 enum 후보 정리 가능.
-3. **`thinkingBudget=-1` 응답 지연** — 복잡 사진은 25~30초까지 소요 가능. Vercel
-   maxDuration 90s 로 여유 확보. 시간이 더 늘면 thinkingBudget 을 고정값으로 제한.
+3. **`thinkingBudget=-1` 응답 지연** — 복잡 사진(35행+)은 실측 40~60초, worst case
+   2~3분까지 갈 수 있음. 사용자 정책상 실시간 응답 불필요 — 정확도 우선. Vercel
+   maxDuration 300s(5분) 로 풀 여유 확보. 시간이 더 늘면 thinkingBudget 을 고정값
+   으로 제한하는 옵션 검토.
 4. **효능 환각 위험** — Gemini 가 모르는 약품에 그럴듯한 잘못된 효능을 만들 수 있음.
    UI 와 시트 모두에 "AI 자동 추론, 의료 의사결정 X" 주석 표시. 운영 중 환각 발견 시
    해당 약품을 프롬프트에 negative example 로 추가 검토.
@@ -198,9 +200,9 @@ GEMINI_API_KEY=AIza... npx tsx scripts/test-gemini-rx-stats.ts /path/to/photo.jp
 
 - `src/lib/gemini-rx-stats-extract.ts` — Gemini 호출 + period 정규화
 - `src/lib/google-sheets-rx-append.ts` — 두 탭 batch append + race 가드
-- `src/app/api/rx-stats/extract/route.ts` — POST 엔드포인트 (`maxDuration=90`)
+- `src/app/api/rx-stats/extract/route.ts` — POST 엔드포인트 (`maxDuration=300`)
 - `src/app/rx-stats-extract/page.tsx` — 카테고리별 표 UI + 부분추출 경고
 - `scripts/test-gemini-rx-stats.ts` — 로컬 추출 테스트
 - `src/lib/google-sheets.ts` — `findOrCreateSpreadsheet`, `sheetsApi` (재사용)
 - `src/lib/url-safety.ts` — SSRF 가드 (재사용)
-- `vercel.json` — `maxDuration: 90` 명시
+- `vercel.json` — `maxDuration: 300` 명시
