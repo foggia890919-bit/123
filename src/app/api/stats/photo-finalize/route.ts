@@ -169,6 +169,7 @@ export async function POST(req: NextRequest) {
         totalPrice: r.totalPrice,
         category: orig?.category ?? "",
         efficacy: orig?.efficacy ?? "",
+        bbox: orig?.bbox ?? ([0, 0, 0, 0] as [number, number, number, number]),
       };
     }),
   };

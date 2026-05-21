@@ -392,7 +392,15 @@ export default function StatsPhotoPage() {
       fd.append("year", String(year));
       fd.append("month", String(month));
       const res = await fetch("/api/stats/photo-auto", { method: "POST", body: fd });
-      const data = await res.json() as { queued?: boolean; error?: string };
+      // 응답이 빈 문자열이거나 HTML 에러 페이지일 수 있음 — res.json() 직접 호출 시
+      // SyntaxError 발생. text() 후 JSON 시도, 실패 시 raw 메시지로 fallback.
+      const text = await res.text();
+      let data: { queued?: boolean; error?: string };
+      try {
+        data = text ? JSON.parse(text) : { error: `빈 응답 (HTTP ${res.status})` };
+      } catch {
+        data = { error: text.slice(0, 200) || `HTTP ${res.status} 응답 파싱 실패` };
+      }
       if (!res.ok || data.error) {
         update({ status: "error", errorMsg: data.error || `HTTP ${res.status}` });
         return;
@@ -412,10 +420,14 @@ export default function StatsPhotoPage() {
     setBatchRunning(true);
     setError("");
     try {
-      // 동시 전송 (Promise.all) — 응답이 빠르므로 사용자 대기 시간 최소화.
-      // 서버 측에서 각 요청을 별도 함수 invocation 으로 받아 백그라운드 처리.
+      // 동시 전송 — Vercel 함수 동시 호출 부담 / 네트워크 끊김 방지로 3개씩 chunk.
+      // 한꺼번에 N개 (예: 7) Promise.all 보내면 일부 응답이 잘려서 SyntaxError 가능.
+      const CONCURRENCY = 3;
       const targets = batchItems.filter((it) => it.status === "pending" || it.status === "error");
-      await Promise.all(targets.map((it) => sendBatchItem(it)));
+      for (let i = 0; i < targets.length; i += CONCURRENCY) {
+        const chunk = targets.slice(i, i + CONCURRENCY);
+        await Promise.all(chunk.map((it) => sendBatchItem(it)));
+      }
     } finally {
       setBatchRunning(false);
     }
