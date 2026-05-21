@@ -110,6 +110,7 @@ export async function POST(req: NextRequest) {
           additionalRate,
           matchedMedicationId: match.matchedMedicationId,
           bboxYPercent: null,
+          bbox: d.bbox,
         };
       });
 

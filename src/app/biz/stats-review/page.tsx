@@ -52,6 +52,7 @@ interface ReportRow {
       unitPrice?: number;
       matchedMedicationId?: string | null;
       mismatch?: unknown;
+      bbox?: [number, number, number, number];
     }>;
     avgConfidence?: number;
     sheetUrl?: string;
@@ -355,6 +356,7 @@ interface EditableDrugRow {
   totalPriceManual: boolean;
   matched: boolean;
   hasMismatch: boolean;
+  bbox: [number, number, number, number];        // 사진 highlight overlay 좌표
 }
 
 function ReviewPhotoCard({
@@ -384,6 +386,9 @@ function ReviewPhotoCard({
     initialDrugs.map((d) => {
       const qty = parseFloat(d.quantity ?? "0") || 0;
       const unit = d.unitPrice ?? 0;
+      const bbox: [number, number, number, number] = Array.isArray(d.bbox) && d.bbox.length === 4
+        ? [d.bbox[0], d.bbox[1], d.bbox[2], d.bbox[3]]
+        : [0, 0, 0, 0];
       return {
         insuranceCode: d.insuranceCode ?? "",
         companyName: d.companyName ?? "",
@@ -394,6 +399,7 @@ function ReviewPhotoCard({
         totalPriceManual: false,
         matched: !!d.matchedMedicationId,
         hasMismatch: d.mismatch != null,
+        bbox,
       };
     })
   );
@@ -408,6 +414,23 @@ function ReviewPhotoCard({
   // 키보드 화살표 행 이동용 — input ref dict, focusedIdx
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
+  // 사진 영역 스크롤 컨테이너 + img 요소 ref — focus 행 bbox 로 자동 스크롤
+  const imgScrollRef = useRef<HTMLDivElement | null>(null);
+  const imgElRef = useRef<HTMLImageElement | null>(null);
+
+  // focusedIdx 가 바뀌면 사진의 해당 bbox 가 보이도록 자동 스크롤
+  useEffect(() => {
+    if (focusedIdx === null) return;
+    const bbox = rows[focusedIdx]?.bbox;
+    if (!bbox || !bbox.some((v) => v > 0)) return;
+    const scroller = imgScrollRef.current;
+    const img = imgElRef.current;
+    if (!scroller || !img) return;
+    // bbox 의 중심 Y 비율 × 사진 픽셀 높이 × zoom = 스크롤 목표 위치
+    const centerY = ((bbox[1] + bbox[3]) / 2) * img.clientHeight * zoom;
+    const targetTop = Math.max(0, centerY - scroller.clientHeight / 2);
+    scroller.scrollTo({ top: targetTop, behavior: "smooth" });
+  }, [focusedIdx, rows, zoom]);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>, idx: number, field: string) {
     if (e.key !== "ArrowUp" && e.key !== "ArrowDown" && e.key !== "Enter") return;
@@ -469,6 +492,7 @@ function ReviewPhotoCard({
     setRows((prev) => [...prev, {
       insuranceCode: "", companyName: "", productName: "", quantity: "0",
       unitPrice: 0, totalPrice: 0, totalPriceManual: false, matched: false, hasMismatch: false,
+      bbox: [0, 0, 0, 0],
     }]);
     setDirty(true);
   }
@@ -586,19 +610,31 @@ function ReviewPhotoCard({
               </span>
             </div>
 
-            {/* 사진 영역 — overflow scroll for zoom */}
-            <div className="p-3 overflow-auto max-h-[80vh]">
+            {/* 사진 영역 — overflow scroll for zoom + bbox highlight overlay */}
+            <div ref={imgScrollRef} className="p-3 overflow-auto max-h-[80vh]">
               {imgLoading ? (
                 <div className="aspect-[3/4] flex items-center justify-center text-gray-400">
                   <Loader2 className="w-5 h-5 animate-spin" />
                 </div>
               ) : imgData ? (
-                <a href={imgData} target="_blank" rel="noreferrer" className="block">
+                <div className="relative inline-block"
+                  style={{ transform: `scale(${zoom})`, transformOrigin: "top left", transition: "transform 0.15s" }}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={imgData} alt="원본 사진"
-                    style={{ transform: `scale(${zoom})`, transformOrigin: "top left", transition: "transform 0.15s" }}
-                    className="max-w-full rounded shadow" />
-                </a>
+                  <img ref={imgElRef} src={imgData} alt="원본 사진"
+                    className="max-w-none rounded shadow block" />
+                  {/* bbox highlight — focused row 의 좌표를 사진 위에 노란 박스로 */}
+                  {focusedIdx !== null && rows[focusedIdx]?.bbox && rows[focusedIdx].bbox.some((v) => v > 0) && (
+                    <div
+                      className="absolute border-2 border-yellow-400 bg-yellow-300/20 pointer-events-none transition-all duration-150"
+                      style={{
+                        left: `${rows[focusedIdx].bbox[0] * 100}%`,
+                        top: `${rows[focusedIdx].bbox[1] * 100}%`,
+                        width: `${(rows[focusedIdx].bbox[2] - rows[focusedIdx].bbox[0]) * 100}%`,
+                        height: `${(rows[focusedIdx].bbox[3] - rows[focusedIdx].bbox[1]) * 100}%`,
+                      }}
+                    />
+                  )}
+                </div>
               ) : (
                 <div className="aspect-[3/4] flex items-center justify-center text-gray-400 text-xs">
                   원본 사진 없음
