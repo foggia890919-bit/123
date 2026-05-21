@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { companyNameKey, normalizeCompanyName } from "@/lib/company-name";
 
 // 거래처×월 기준 제약사별 매출 요약 — 처방통계 등록 페이지에서 거래처 선택 시 표시.
 // 당월/전월/전전월 3개월 동시 조회. 거래가능 제약사 (SubmissionRoute) + 실제 매출 발생
@@ -70,25 +71,44 @@ export async function GET(req: NextRequest) {
     where: { clientName: client.clientName, active: true },
     select: { companyName: true },
   })) as Array<{ companyName: string }>;
-  const allowedCompanies = new Set<string>(routes.map((r) => r.companyName.trim()));
+  // 거래가능 제약사 — fingerprint key 로 비교용 set + 원본 표기 보존 map.
+  // "(주)셀트리온제약" 과 "셀트리온제약" 같은 key 로 잡힘.
+  const allowedKeySet = new Set<string>();
+  const allowedNameByKey = new Map<string, string>();
+  for (const r of routes) {
+    const key = companyNameKey(r.companyName);
+    if (!key) continue;
+    allowedKeySet.add(key);
+    if (!allowedNameByKey.has(key)) allowedNameByKey.set(key, r.companyName.trim());
+  }
 
-  // 제약사별 월별 매출 + 사진 수 + 처리 상태
+  // 제약사별 월별 매출 + 사진 수 + 처리 상태.
+  // key = companyNameKey (정규화) — "(주)셀트리온", "셀트리온제약(본사)" 같은 key 로 합산.
+  // displayName = 가장 정식 표기 (allowed 우선 → 가장 긴 원본 → normalize 결과).
   interface MonthAgg { sales: number; photoCount: number }
-  const byCompany = new Map<string, { current: MonthAgg; prev: MonthAgg; prevPrev: MonthAgg }>();
-  // 처리 중/실패 카운트 (당월만)
+  interface CompanyBucket { displayName: string; current: MonthAgg; prev: MonthAgg; prevPrev: MonthAgg }
+  const byCompany = new Map<string, CompanyBucket>();
   let currentProcessingCount = 0;
   let currentErrorCount = 0;
 
-  function bucket(name: string) {
-    const trimmed = (name || "(미분류)").trim();
-    const existing = byCompany.get(trimmed);
-    if (existing) return existing;
-    const fresh = {
+  function bucket(rawName: string): CompanyBucket {
+    const raw = (rawName || "").trim();
+    const key = companyNameKey(raw) || "__unmatched__";
+    const existing = byCompany.get(key);
+    if (existing) {
+      // displayName 갱신 — 거래가능 제약사 표기 우선, 그 다음 가장 긴 원본
+      const allowed = allowedNameByKey.get(key);
+      if (allowed) existing.displayName = allowed;
+      else if (raw && raw.length > existing.displayName.length) existing.displayName = raw;
+      return existing;
+    }
+    const fresh: CompanyBucket = {
+      displayName: allowedNameByKey.get(key) || normalizeCompanyName(raw) || raw || "(미분류)",
       current: { sales: 0, photoCount: 0 },
       prev: { sales: 0, photoCount: 0 },
       prevPrev: { sales: 0, photoCount: 0 },
     };
-    byCompany.set(trimmed, fresh);
+    byCompany.set(key, fresh);
     return fresh;
   }
 
@@ -104,11 +124,10 @@ export async function GET(req: NextRequest) {
     const drugs = ocr.finalDrugs ?? ocr.aiDrugs ?? [];
     if (drugs.length === 0) continue;
 
-    // 사진 1장에 들어있는 제약사들 (set) — 사진 수 카운트용
-    const photoCompanies = new Set<string>();
+    // 사진 1장에 들어있는 제약사들 (정규화 키 set) — 사진 수 카운트용 (한 사진이 한 회사 두번 X)
+    const photoKeys = new Set<string>();
     for (const d of drugs) {
       // 행별 companyName 이 비어있으면 사진 전체 제약사 (report.companyName, Gemini meta) 로 fallback.
-      // 마스터 매칭 실패한 행은 companyName 빈 채로 들어와 "(미분류)" 로 잡히던 문제.
       const rowCompany = (d.companyName || "").trim();
       const reportCompany = (r.companyName || "").trim();
       const name = rowCompany || reportCompany || "(미분류)";
@@ -121,10 +140,11 @@ export async function GET(req: NextRequest) {
       else if (r.year === prev.year && r.month === prev.month) target = agg.prev;
       else target = agg.prevPrev;
       target.sales += sales;
-      photoCompanies.add(name);
+      photoKeys.add(companyNameKey(name) || "__unmatched__");
     }
-    for (const name of photoCompanies) {
-      const agg = bucket(name);
+    for (const key of photoKeys) {
+      const agg = byCompany.get(key);
+      if (!agg) continue;
       if (r.year === year && r.month === month) agg.current.photoCount += 1;
       else if (r.year === prev.year && r.month === prev.month) agg.prev.photoCount += 1;
       else agg.prevPrev.photoCount += 1;
@@ -132,14 +152,14 @@ export async function GET(req: NextRequest) {
   }
 
   // 거래가능 제약사도 빈 row 로 포함 (실적 0이라도 표시)
-  for (const name of allowedCompanies) {
-    bucket(name);
+  for (const r of routes) {
+    bucket(r.companyName);
   }
 
   const list = Array.from(byCompany.entries())
-    .map(([name, agg]) => ({
-      companyName: name,
-      isAllowed: allowedCompanies.has(name),
+    .map(([key, agg]) => ({
+      companyName: agg.displayName,
+      isAllowed: allowedKeySet.has(key),
       currentSales: Math.round(agg.current.sales),
       prevSales: Math.round(agg.prev.sales),
       prevPrevSales: Math.round(agg.prevPrev.sales),
