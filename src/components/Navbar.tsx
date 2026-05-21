@@ -45,12 +45,10 @@ const navItems: NavItem[] = [
     label: "통계",
     icon: BarChart3,
     minRole: "BIZ",
-    matchPrefixes: ["/stats", "/rx-stats-extract", "/sales-extract"],
+    matchPrefixes: ["/stats"],
     children: [
       { href: "/stats", label: "통계자동입력", icon: BarChart3 },
       { href: "/stats/bulk-check", label: "통계엑셀대량확인", icon: ClipboardList },
-      { href: "/rx-stats-extract", label: "처방통계 사진분석", icon: BarChart3 },
-      { href: "/sales-extract", label: "병원실적 사진분석", icon: TrendingUp },
     ],
   },
   {
