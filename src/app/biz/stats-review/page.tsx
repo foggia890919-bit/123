@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle, AlertTriangle, ExternalLink, Trash2, ChevronRight, ArrowLeft, BarChart3, Loader2, Plus, Save } from "lucide-react";
+import { CheckCircle, AlertTriangle, ExternalLink, Trash2, ChevronRight, ArrowLeft, BarChart3, Loader2, Plus, Save, ZoomIn, ZoomOut, Maximize2 } from "lucide-react";
+import { useRef } from "react";
 import { Button } from "@/components/ui/button";
 
 // AI 처방통계 사진 검수 페이지. 관리자/BIZ 가 사용자들의 업로드를 거래처×월 단위로
@@ -402,6 +403,26 @@ function ReviewPhotoCard({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [dirty, setDirty] = useState(false);
+  // 사진 zoom — 1.0(원본) ~ 3.0(3배). + / - 버튼 또는 Cmd/Ctrl+휠.
+  const [zoom, setZoom] = useState(1.0);
+  // 키보드 화살표 행 이동용 — input ref dict, focusedIdx
+  const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>, idx: number, field: string) {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown" && e.key !== "Enter") return;
+    e.preventDefault();
+    const dir = e.key === "ArrowUp" ? -1 : 1;
+    const nextIdx = idx + dir;
+    if (nextIdx < 0 || nextIdx >= rows.length) return;
+    const target = inputRefs.current[`${nextIdx}:${field}`];
+    target?.focus();
+    target?.select();
+    if (target) {
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+    setFocusedIdx(nextIdx);
+  }
 
   // 사진 로드 — submissions API 의 hasImage 가 imageKey 만 봐서 false negative 가능.
   // 무조건 fetch 시도 후 응답에서 판단 (imageData 가 null 이면 그제서야 "없음" 표시).
@@ -538,32 +559,59 @@ function ReviewPhotoCard({
         </button>
       </div>
 
-      {/* 좌측 사진 / 우측 편집 표 */}
-      <div className="grid grid-cols-1 lg:grid-cols-[420px_1fr]">
-        {/* 좌측: 사진 (sticky) */}
-        <div className="bg-gray-100 p-3 lg:border-r border-gray-200">
+      {/* 좌측 사진 (확대 60%) / 우측 편집 표 (40%, 스크롤) */}
+      <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr]">
+        {/* 좌측: 사진 + zoom 컨트롤 (sticky) */}
+        <div className="bg-gray-100 lg:border-r border-gray-200">
           <div className="lg:sticky lg:top-4">
-            {imgLoading ? (
-              <div className="aspect-[3/4] flex items-center justify-center text-gray-400">
-                <Loader2 className="w-5 h-5 animate-spin" />
-              </div>
-            ) : imgData ? (
-              <a href={imgData} target="_blank" rel="noreferrer">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={imgData} alt="원본 사진" className="max-w-full max-h-[600px] mx-auto rounded shadow" />
-              </a>
-            ) : (
-              <div className="aspect-[3/4] flex items-center justify-center text-gray-400 text-xs">
-                원본 사진 없음
-              </div>
-            )}
+            {/* zoom 컨트롤 바 */}
+            <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 bg-white">
+              <button onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))} disabled={!imgData}
+                className="p-1 rounded hover:bg-gray-100 disabled:opacity-30" title="축소">
+                <ZoomOut className="w-4 h-4 text-gray-600" />
+              </button>
+              <span className="text-xs text-gray-600 font-mono w-12 text-center">
+                {Math.round(zoom * 100)}%
+              </span>
+              <button onClick={() => setZoom((z) => Math.min(4.0, z + 0.25))} disabled={!imgData}
+                className="p-1 rounded hover:bg-gray-100 disabled:opacity-30" title="확대">
+                <ZoomIn className="w-4 h-4 text-gray-600" />
+              </button>
+              <button onClick={() => setZoom(1.0)} disabled={!imgData || zoom === 1.0}
+                className="p-1 rounded hover:bg-gray-100 disabled:opacity-30" title="원본 크기">
+                <Maximize2 className="w-4 h-4 text-gray-600" />
+              </button>
+              <span className="text-[10px] text-gray-400 ml-2">
+                + / − 버튼 또는 사진 클릭으로 새 탭 확대
+              </span>
+            </div>
+
+            {/* 사진 영역 — overflow scroll for zoom */}
+            <div className="p-3 overflow-auto max-h-[80vh]">
+              {imgLoading ? (
+                <div className="aspect-[3/4] flex items-center justify-center text-gray-400">
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                </div>
+              ) : imgData ? (
+                <a href={imgData} target="_blank" rel="noreferrer" className="block">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={imgData} alt="원본 사진"
+                    style={{ transform: `scale(${zoom})`, transformOrigin: "top left", transition: "transform 0.15s" }}
+                    className="max-w-full rounded shadow" />
+                </a>
+              ) : (
+                <div className="aspect-[3/4] flex items-center justify-center text-gray-400 text-xs">
+                  원본 사진 없음
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* 우측: 편집 가능 표 */}
-        <div className="overflow-x-auto">
+        {/* 우측: 편집 가능 표 — 사진 sticky 와 같이 스크롤되도록 max-h + overflow */}
+        <div className="overflow-auto max-h-[80vh]">
           <table className="w-full text-xs">
-            <thead className="bg-gray-50 text-gray-500 sticky top-0">
+            <thead className="bg-gray-50 text-gray-500 sticky top-0 z-10">
               <tr>
                 <th className="text-left px-2 py-1.5 w-[110px]">보험코드</th>
                 <th className="text-left px-2 py-1.5 w-[110px]">제약사</th>
@@ -575,40 +623,70 @@ function ReviewPhotoCard({
               </tr>
             </thead>
             <tbody>
-              {rows.map((d, i) => (
-                <tr key={i} className={`border-t ${d.hasMismatch ? "bg-red-50" : ""}`}>
-                  <td className="px-1 py-0.5">
-                    <input value={d.insuranceCode} onChange={(e) => updateRow(i, { insuranceCode: e.target.value })}
-                      className="w-full px-1 py-0.5 border rounded text-[11px] font-mono"/>
-                  </td>
-                  <td className="px-1 py-0.5">
-                    <input value={d.companyName} onChange={(e) => updateRow(i, { companyName: e.target.value })}
-                      className="w-full px-1 py-0.5 border rounded text-[11px]"/>
-                  </td>
-                  <td className="px-1 py-0.5">
-                    <input value={d.productName} onChange={(e) => updateRow(i, { productName: e.target.value })}
-                      className="w-full px-1 py-0.5 border rounded text-[11px]"/>
-                  </td>
-                  <td className="px-1 py-0.5">
-                    <input type="number" step="0.1" value={d.quantity} onChange={(e) => updateRow(i, { quantity: e.target.value })}
-                      className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
-                  </td>
-                  <td className="px-1 py-0.5">
-                    <input type="number" value={d.unitPrice} onChange={(e) => updateRow(i, { unitPrice: Number(e.target.value) })}
-                      className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
-                  </td>
-                  <td className="px-1 py-0.5">
-                    <input type="number" value={d.totalPrice}
-                      onChange={(e) => updateRow(i, { totalPrice: Number(e.target.value), totalPriceManual: true })}
-                      className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
-                  </td>
-                  <td className="px-1 py-0.5 text-center">
-                    <button onClick={() => removeRow(i)} className="text-gray-300 hover:text-red-500" title="행 삭제">
-                      <Trash2 className="w-3 h-3"/>
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {rows.map((d, i) => {
+                const rowClass = d.hasMismatch
+                  ? "bg-red-50"
+                  : focusedIdx === i
+                  ? "bg-orange-50"
+                  : "";
+                return (
+                  <tr key={i} className={`border-t ${rowClass}`}>
+                    <td className="px-1 py-0.5">
+                      <input ref={(el) => { inputRefs.current[`${i}:insuranceCode`] = el; }}
+                        value={d.insuranceCode}
+                        onChange={(e) => updateRow(i, { insuranceCode: e.target.value })}
+                        onFocus={() => setFocusedIdx(i)}
+                        onKeyDown={(e) => handleKeyDown(e, i, "insuranceCode")}
+                        className="w-full px-1 py-0.5 border rounded text-[11px] font-mono"/>
+                    </td>
+                    <td className="px-1 py-0.5">
+                      <input ref={(el) => { inputRefs.current[`${i}:companyName`] = el; }}
+                        value={d.companyName}
+                        onChange={(e) => updateRow(i, { companyName: e.target.value })}
+                        onFocus={() => setFocusedIdx(i)}
+                        onKeyDown={(e) => handleKeyDown(e, i, "companyName")}
+                        className="w-full px-1 py-0.5 border rounded text-[11px]"/>
+                    </td>
+                    <td className="px-1 py-0.5">
+                      <input ref={(el) => { inputRefs.current[`${i}:productName`] = el; }}
+                        value={d.productName}
+                        onChange={(e) => updateRow(i, { productName: e.target.value })}
+                        onFocus={() => setFocusedIdx(i)}
+                        onKeyDown={(e) => handleKeyDown(e, i, "productName")}
+                        className="w-full px-1 py-0.5 border rounded text-[11px]"/>
+                    </td>
+                    <td className="px-1 py-0.5">
+                      <input ref={(el) => { inputRefs.current[`${i}:quantity`] = el; }}
+                        type="number" step="0.1" value={d.quantity}
+                        onChange={(e) => updateRow(i, { quantity: e.target.value })}
+                        onFocus={() => setFocusedIdx(i)}
+                        onKeyDown={(e) => handleKeyDown(e, i, "quantity")}
+                        className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
+                    </td>
+                    <td className="px-1 py-0.5">
+                      <input ref={(el) => { inputRefs.current[`${i}:unitPrice`] = el; }}
+                        type="number" value={d.unitPrice}
+                        onChange={(e) => updateRow(i, { unitPrice: Number(e.target.value) })}
+                        onFocus={() => setFocusedIdx(i)}
+                        onKeyDown={(e) => handleKeyDown(e, i, "unitPrice")}
+                        className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
+                    </td>
+                    <td className="px-1 py-0.5">
+                      <input ref={(el) => { inputRefs.current[`${i}:totalPrice`] = el; }}
+                        type="number" value={d.totalPrice}
+                        onChange={(e) => updateRow(i, { totalPrice: Number(e.target.value), totalPriceManual: true })}
+                        onFocus={() => setFocusedIdx(i)}
+                        onKeyDown={(e) => handleKeyDown(e, i, "totalPrice")}
+                        className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
+                    </td>
+                    <td className="px-1 py-0.5 text-center">
+                      <button onClick={() => removeRow(i)} className="text-gray-300 hover:text-red-500" title="행 삭제">
+                        <Trash2 className="w-3 h-3"/>
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
