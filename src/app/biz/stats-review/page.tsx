@@ -106,6 +106,9 @@ export default function StatsReviewPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // 일괄 작업 진행 상태 — N/M 표시 + 완료 알림용
+  const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number; label: string } | null>(null);
+  const [bulkSuccess, setBulkSuccess] = useState<string>("");
   // 사진별 선택 — 체크박스로 토글, "선택한 N장 제출완료" 일괄 적용
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
@@ -165,25 +168,34 @@ export default function StatsReviewPage() {
     }
   }
 
-  // 선택된 사진들 일괄 삭제 — 순차 DELETE (서버 부담 방지)
+  // 선택된 사진들 일괄 삭제 — 순차 DELETE (서버 부담 방지) + 진행 상태 + 완료 알림
   async function handleBulkDelete() {
     if (selectedIds.size === 0) { setError("선택된 사진이 없습니다"); return; }
     if (!confirm(`정말 선택한 ${selectedIds.size}장의 사진과 데이터를 모두 삭제하시겠습니까? Storage 파일도 함께 삭제됩니다.`)) return;
     setBusy(true);
     setError("");
+    setBulkSuccess("");
     const ids = Array.from(selectedIds);
+    const total = ids.length;
+    setBulkProgress({ current: 0, total, label: "삭제" });
     const failed: string[] = [];
-    for (const id of ids) {
+    let succeeded = 0;
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      setBulkProgress({ current: i + 1, total, label: "삭제" });
       try {
         const res = await fetch(`/api/stats?id=${id}`, { method: "DELETE" });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           failed.push(`${id.slice(0, 8)}: ${data.error || `HTTP ${res.status}`}`);
+        } else {
+          succeeded++;
         }
       } catch (e) {
         failed.push(`${id.slice(0, 8)}: ${String(e).slice(0, 100)}`);
       }
     }
+    setBulkProgress(null);
     // 상세 재조회
     if (selected) {
       const r = await fetch(`/api/stats/submissions?clientId=${selected.clientId}&year=${selected.year}&month=${selected.month}`);
@@ -196,7 +208,10 @@ export default function StatsReviewPage() {
     }
     setSelectedIds(new Set());
     if (failed.length > 0) {
-      setError(`${ids.length - failed.length}장 삭제 / ${failed.length}장 실패:\n${failed.join("\n")}`);
+      setError(`${succeeded}장 삭제 / ${failed.length}장 실패:\n${failed.join("\n")}`);
+    } else {
+      setBulkSuccess(`✅ ${succeeded}장 삭제 완료`);
+      setTimeout(() => setBulkSuccess(""), 5000);
     }
     setBusy(false);
   }
@@ -302,7 +317,8 @@ export default function StatsReviewPage() {
             variant="outline" size="sm"
             className="text-red-600 border-red-300 hover:bg-red-50">
             <Trash2 className="w-3.5 h-3.5 mr-1" />
-            선택한 {selectedIds.size}장 삭제
+            {bulkProgress?.label === "삭제" ? `삭제 중... ${bulkProgress.current}/${bulkProgress.total}`
+              : `선택한 ${selectedIds.size}장 삭제`}
           </Button>
           <span className="ml-auto flex gap-2">
             {!detail.submitted ? (
@@ -318,7 +334,26 @@ export default function StatsReviewPage() {
         </div>
 
         {error && (
-          <div className="bg-red-50 border border-red-200 rounded p-3 text-xs text-red-700">{error}</div>
+          <div className="bg-red-50 border border-red-200 rounded p-3 text-xs text-red-700 whitespace-pre-wrap">{error}</div>
+        )}
+        {bulkSuccess && (
+          <div className="bg-green-50 border border-green-200 rounded p-3 text-xs text-green-800 flex items-center gap-2">
+            <CheckCircle className="w-4 h-4 text-green-600" />
+            <span className="font-semibold">{bulkSuccess}</span>
+          </div>
+        )}
+        {bulkProgress && (
+          <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-800 flex items-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+            <span className="font-semibold">
+              {bulkProgress.label} 중... {bulkProgress.current}/{bulkProgress.total}
+            </span>
+            <div className="flex-1 ml-2 bg-blue-100 rounded-full h-1.5 overflow-hidden">
+              <div className="bg-blue-600 h-full transition-all"
+                style={{ width: `${(bulkProgress.current / bulkProgress.total) * 100}%` }} />
+            </div>
+            <span className="text-[10px] text-blue-600">페이지 닫지 마세요</span>
+          </div>
         )}
 
         {/* 사진 카드 리스트 — 좌측 사진 / 우측 편집 가능 표 */}
