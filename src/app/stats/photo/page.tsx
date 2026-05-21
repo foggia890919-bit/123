@@ -180,6 +180,21 @@ export default function StatsPhotoPage() {
       .finally(() => setCompaniesLoading(false));
   }, [selectedClientId, clients]);
 
+  // 분석/저장 진행 중에 페이지 떠나려 하면 브라우저 경고. 사용자 실수로 처리 중인
+  // 사진을 잃어버리는 사고 방지. 단건/대량 양쪽 모두 동일 보호.
+  useEffect(() => {
+    const inProgress = analyzing || saving || batchRunning;
+    if (!inProgress) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      // 일부 브라우저는 returnValue 설정 필요. 메시지는 보안상 브라우저 기본 문구로 대체됨.
+      e.returnValue = "";
+      return "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [analyzing, saving, batchRunning]);
+
   const selectedClient = clients.find((c) => c.id === selectedClientId);
 
   function pickFile(f: File | null) {
