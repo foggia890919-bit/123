@@ -163,19 +163,25 @@ export default function StatsPhotoPage() {
       fd.append("year", String(year));
       fd.append("month", String(month));
       const res = await fetch("/api/stats/photo-auto", { method: "POST", body: fd });
+      // 동기 처리 — 응답 30~60초 후 ok:true 또는 error.
       // 응답이 빈 문자열이거나 HTML 에러 페이지일 수 있음 — JSON.parse 안전화
       const text = await res.text();
-      let data: { queued?: boolean; error?: string };
+      let data: { ok?: boolean; error?: string; drugCount?: number; sheetWarning?: string | null };
       try {
         data = text ? JSON.parse(text) : { error: `빈 응답 (HTTP ${res.status})` };
       } catch {
         data = { error: text.slice(0, 200) || `HTTP ${res.status} 응답 파싱 실패` };
       }
-      if (!res.ok || data.error) {
+      if (!res.ok || data.error || !data.ok) {
         update({ status: "error", errorMsg: data.error || `HTTP ${res.status}` });
         return;
       }
-      update({ status: "queued" });
+      // 시트만 실패한 경우도 표시
+      if (data.sheetWarning) {
+        update({ status: "queued", errorMsg: `DB 저장됨 · 시트 실패: ${data.sheetWarning}` });
+      } else {
+        update({ status: "queued" });
+      }
     } catch (e) {
       update({ status: "error", errorMsg: `전송 실패: ${String(e).slice(0, 200)}` });
     }
@@ -213,9 +219,8 @@ export default function StatsPhotoPage() {
         <h1 className="text-2xl font-bold text-gray-900">AI 처방통계 등록</h1>
       </div>
       <p className="text-sm text-gray-500 -mt-2">
-        사진 한 장이든 여러 장이든 한꺼번에 선택해서 전송하면 끝. 서버가 Gemini 분석 + 마스터 매칭 +
-        영업실적 DB + 구글 시트 저장을 백그라운드로 처리합니다.
-        검수는{" "}
+        사진 1장이든 여러 장이든 선택 → "전송" → 서버가 Gemini 분석 + 마스터 매칭 + 영업실적 DB + 구글 시트 저장.
+        사진 1장당 약 30~60초 소요. 처리 완료까지 페이지 유지하세요. 검수는{" "}
         <a href="/biz/stats-review" className="text-orange-600 underline">AI 처방통계 검수</a> 메뉴에서
         사진과 함께 자세히 진행.
       </p>
@@ -335,7 +340,7 @@ export default function StatsPhotoPage() {
                 선택된 사진 {batchItems.length}장
               </span>
               <span className="text-[10px] text-gray-500 ml-2">
-                전송됨 {batchItems.filter(it => it.status === "queued").length} · 실패 {batchItems.filter(it => it.status === "error").length} · 대기 {batchItems.filter(it => it.status === "pending").length}
+                완료 {batchItems.filter(it => it.status === "queued").length} · 실패 {batchItems.filter(it => it.status === "error").length} · 대기 {batchItems.filter(it => it.status === "pending").length} · 처리중 {batchItems.filter(it => it.status === "sending").length}
               </span>
               <Button variant="outline" size="sm" onClick={clearBatch} disabled={batchRunning}
                 className="ml-auto text-xs">전체 초기화</Button>
@@ -354,8 +359,8 @@ export default function StatsPhotoPage() {
                     "bg-red-100 text-red-700"
                   }`}>
                     {it.status === "pending" ? "대기" :
-                     it.status === "sending" ? "전송중" :
-                     it.status === "queued"  ? "전송됨 (백그라운드)" :
+                     it.status === "sending" ? "처리중 (30~60s)" :
+                     it.status === "queued"  ? "완료" :
                      "실패"}
                   </span>
                   {it.errorMsg && (
@@ -385,19 +390,14 @@ export default function StatsPhotoPage() {
         </Button>
 
         {batchItems.filter(it => it.status === "queued").length > 0 && (
-          <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-800 space-y-1">
+          <div className="bg-green-50 border border-green-200 rounded p-3 text-xs text-green-800 space-y-1">
             <div className="font-semibold flex items-center gap-1">
-              <Sparkles className="w-3.5 h-3.5"/>
-              {batchItems.filter(it => it.status === "queued").length}장 전송 완료 · 백그라운드 처리 중
+              <CheckCircle className="w-3.5 h-3.5"/>
+              {batchItems.filter(it => it.status === "queued").length}장 처리 완료 — DB + 시트 저장됨
             </div>
-            <div className="text-blue-700">
-              서버가 사진별로 Gemini 분석 → 영업실적 DB + 구글 시트에 자동 저장합니다.
-              사진 1장당 약 30~60초 소요. 이 페이지를 닫거나 다른 작업을 하셔도 됩니다.
-            </div>
-            <div className="text-[11px] text-blue-600 pt-1">
-              결과는 <a href="/mypage/performance" className="underline">영업실적 관리</a> 또는{" "}
+            <div className="text-[11px] text-green-700 pt-1">
               <a href="/biz/stats-review" className="underline font-semibold">AI 처방통계 검수</a> 에서
-              확인하세요.
+              사진과 함께 검수하거나 <a href="/mypage/performance" className="underline">영업실적 관리</a> 에서 조회.
             </div>
           </div>
         )}
