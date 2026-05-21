@@ -1,4 +1,4 @@
-import { extractRxStatsFromImage, type RxExtractResult } from "./gemini-rx-stats-extract";
+import { extractRxStatsFromImage, type RxExtractResult, type RxDrugRow } from "./gemini-rx-stats-extract";
 import { fetchMasterByCodes, matchMedication, type MergedDrug } from "./medication-master-match";
 import { fetchRateEntries } from "./rate-utils";
 
@@ -46,6 +46,9 @@ export interface FusionResultJson {
   partialExtraction:
     | { detected: number; extracted: number }
     | null;
+  // 새 /stats/photo 페이지가 시트 append 시 카테고리/효능/처방횟수 원본 보존하려고 사용.
+  // 기존 /stats 페이지는 이 필드 무시 (5컬럼만 보고 무관).
+  rawDrugs: RxDrugRow[];
   // Gemini 가 자체 분석한 메타 (참고용, hidden 영역 진단 박스에 표시 가능)
   geminiMeta: {
     pharma: string;
@@ -220,6 +223,7 @@ export async function extractStatsLikeFusion(
     prescriptionDate: { value: "", confidence: 0 },
     patientName: { value: "", confidence: 0 },
     partialExtraction,
+    rawDrugs: rx.drugs,
     geminiMeta: {
       pharma: rx.pharma,
       period: rx.period,
