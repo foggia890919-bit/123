@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle, AlertTriangle, ExternalLink, Trash2, ChevronRight, ArrowLeft, BarChart3, Loader2, Plus, Save, ZoomIn, ZoomOut, Maximize2 } from "lucide-react";
+import { CheckCircle, AlertTriangle, ExternalLink, Trash2, ChevronRight, ArrowLeft, BarChart3, Loader2, Plus, Save, ZoomIn, ZoomOut, Maximize2, Filter } from "lucide-react";
 import { useRef } from "react";
 import { Button } from "@/components/ui/button";
 
@@ -111,6 +111,9 @@ export default function StatsReviewPage() {
   const [bulkSuccess, setBulkSuccess] = useState<string>("");
   // 사진별 선택 — 체크박스로 토글, "선택한 N장 제출완료" 일괄 적용
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // 단가 0 행 (마스터 매칭 실패 = 직접 입력 필요) 만 보기 토글.
+  // 검수자가 채워야 할 행만 빠르게 찾아 채우려는 용도.
+  const [priceMissingOnly, setPriceMissingOnly] = useState(false);
 
   function toggleSelect(id: string) {
     setSelectedIds((prev) => {
@@ -249,6 +252,15 @@ export default function StatsReviewPage() {
 
   const filteredGroups = useMemo(() => groups, [groups]);
 
+  // 상세 화면 — 단가 0 (마스터 매칭 실패) 인 행 합계. 검수자가 채워야 할 행 수.
+  const priceMissingCount = useMemo(() => {
+    if (!detail) return 0;
+    return detail.reports.reduce((acc, r) => {
+      const drugs = r.ocrData?.finalDrugs ?? [];
+      return acc + drugs.filter((d) => (d.unitPrice ?? 0) === 0).length;
+    }, 0);
+  }, [detail]);
+
   // ── 상세 화면 ──
   if (selected && detail) {
     return (
@@ -320,6 +332,17 @@ export default function StatsReviewPage() {
             {bulkProgress?.label === "삭제" ? `삭제 중... ${bulkProgress.current}/${bulkProgress.total}`
               : `선택한 ${selectedIds.size}장 삭제`}
           </Button>
+          {/* 단가 0 (마스터 매칭 실패) 행 필터 — 검수자가 채워야 할 행만 빠르게 본다.
+              매칭 실패 0 건이면 버튼 자체 숨김 (불필요한 UI) */}
+          {priceMissingCount > 0 && (
+            <Button onClick={() => setPriceMissingOnly((v) => !v)} variant="outline" size="sm"
+              className={priceMissingOnly
+                ? "bg-yellow-100 border-yellow-400 text-yellow-900 hover:bg-yellow-200"
+                : "border-yellow-300 text-yellow-800 hover:bg-yellow-50"}>
+              <Filter className="w-3.5 h-3.5 mr-1" />
+              {priceMissingOnly ? `매칭 실패만 ${priceMissingCount}건 표시 중 (전체 보기)` : `단가 미입력 ${priceMissingCount}건만 보기`}
+            </Button>
+          )}
           <span className="ml-auto flex gap-2">
             {!detail.submitted ? (
               <Button onClick={() => handleSubmit("submit", "all")} disabled={busy} variant="outline" size="sm">
@@ -371,6 +394,7 @@ export default function StatsReviewPage() {
               onDelete={() => handleDelete(r.id)}
               duplicateMatches={detail.duplicateBy?.[r.id] ?? []}
               allReports={detail.reports}
+              priceMissingOnly={priceMissingOnly}
               onSaved={async () => {
                 // 저장 후 상세 재조회 (지표 갱신)
                 if (selected) {
@@ -478,6 +502,7 @@ function ReviewPhotoCard({
   onSaved,
   duplicateMatches,
   allReports,
+  priceMissingOnly,
 }: {
   report: ReportRow;
   busy: boolean;
@@ -490,6 +515,7 @@ function ReviewPhotoCard({
   onSaved: () => void | Promise<void>;
   duplicateMatches: Array<{ reportId: string; similarity: number }>;
   allReports: ReportRow[];
+  priceMissingOnly: boolean;
 }) {
   const initialDrugs = report.ocrData?.finalDrugs ?? [];
 
@@ -694,6 +720,8 @@ function ReviewPhotoCard({
   const partial = detected > 0 && detected !== rows.length;
   const mismatchCount = rows.filter((r) => r.hasMismatch).length;
   const matchedCount = rows.filter((r) => r.matched).length;
+  // 단가 0 = 마스터 매칭 실패 OR 비급여 — 검수자가 직접 채워야 할 행
+  const priceMissingCount = rows.filter((r) => r.unitPrice === 0).length;
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
@@ -744,6 +772,12 @@ function ReviewPhotoCard({
         {mismatchCount > 0 && (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-300">
             불일치 {mismatchCount}
+          </span>
+        )}
+        {priceMissingCount > 0 && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-800 border border-yellow-400 font-semibold"
+            title="단가 0 — 보험코드 마스터 매칭 실패 또는 비급여. 표에서 직접 단가 입력 필요.">
+            💰 단가 미입력 {priceMissingCount}
           </span>
         )}
         <span className="text-[10px] text-gray-400 ml-auto">매칭 {matchedCount}/{rows.length}</span>
@@ -866,13 +900,19 @@ function ReviewPhotoCard({
             </thead>
             <tbody>
               {rows.map((d, i) => {
+                // 강조 우선순위: mismatch (빨강) > focused (주황) > 단가 0 (노랑) > 기본.
+                // mismatch 가 더 심각한 문제 (코드↔이름 불일치) 라 우선.
                 const rowClass = d.hasMismatch
                   ? "bg-red-50"
                   : focusedIdx === i
                   ? "bg-orange-50"
+                  : d.unitPrice === 0
+                  ? "bg-yellow-50"
                   : "";
+                // 필터 ON + 단가 0 아닌 row → 숨김 (DOM 유지, bbox/focus 인덱스 보존)
+                const hiddenByFilter = priceMissingOnly && d.unitPrice !== 0;
                 return (
-                  <tr key={i} className={`border-t ${rowClass}`}>
+                  <tr key={i} className={`border-t ${rowClass} ${hiddenByFilter ? "hidden" : ""}`}>
                     <td className="px-1 py-0.5">
                       <input ref={(el) => { inputRefs.current[`${i}:insuranceCode`] = el; }}
                         value={d.insuranceCode}
