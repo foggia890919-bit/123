@@ -151,6 +151,13 @@ export default function StatsPhotoPage() {
   const [allowedCompanies, setAllowedCompanies] = useState<string[]>([]);
   const [companiesLoading, setCompaniesLoading] = useState(false);
 
+  // 거래처×월 제출완료 여부 — 제출완료면 업로드 차단.
+  const [submissionStatus, setSubmissionStatus] = useState<{
+    submitted: boolean;
+    photoCount: number;
+    rowCount: number;
+  } | null>(null);
+
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -176,6 +183,22 @@ export default function StatsPhotoPage() {
       .catch(() => setAllowedCompanies([]))
       .finally(() => setCompaniesLoading(false));
   }, [selectedClientId, clients]);
+
+  // 거래처+월 선택 시 제출완료 여부 자동 조회. 제출완료면 업로드 disable.
+  useEffect(() => {
+    if (!selectedClientId || !year || !month) { setSubmissionStatus(null); return; }
+    fetch(`/api/stats/submissions?clientId=${selectedClientId}&year=${year}&month=${month}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data: { submitted: boolean; metrics: { photoCount: number; rowCount: number } } | null) => {
+        if (!data) { setSubmissionStatus(null); return; }
+        setSubmissionStatus({
+          submitted: data.submitted && data.metrics.photoCount > 0,
+          photoCount: data.metrics.photoCount,
+          rowCount: data.metrics.rowCount,
+        });
+      })
+      .catch(() => setSubmissionStatus(null));
+  }, [selectedClientId, year, month]);
 
   // 분석/저장 진행 중에 페이지 떠나려 하면 브라우저 경고. 사용자 실수로 처리 중인
   // 사진을 잃어버리는 사고 방지. 단건/대량 양쪽 모두 동일 보호.
@@ -479,6 +502,24 @@ export default function StatsPhotoPage() {
           </div>
         </div>
 
+        {/* 제출완료 거래처×월 — 업로드 차단 배너 */}
+        {submissionStatus?.submitted && (
+          <div className="bg-red-50 border border-red-200 rounded px-3 py-2.5 flex items-start gap-2">
+            <CheckCircle className="w-4 h-4 text-red-600 mt-0.5 flex-shrink-0" />
+            <div className="text-xs text-red-800 flex-1">
+              <div className="font-semibold">
+                ✅ 제출완료 — {selectedClient?.clientName} · {year}년 {month}월
+              </div>
+              <div className="text-red-700 mt-0.5">
+                사진 {submissionStatus.photoCount}장 / 약품 {submissionStatus.rowCount}건이 이미 제출완료된
+                거래처×월입니다. 추가 업로드 불가. 잘못 올린 거면{" "}
+                <a href="/biz/stats-review" className="underline font-semibold">검수 페이지</a>에서
+                삭제 후 다시 업로드하세요.
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* 거래가능 제약사 chip — 선택된 거래처의 SubmissionRoute (active=true) 에서 조회 */}
         {selectedClientId && (
           <div className="bg-blue-50 border border-blue-100 rounded px-3 py-2.5">
@@ -536,8 +577,12 @@ export default function StatsPhotoPage() {
               </div>
             )}
 
-            <Button onClick={handleAnalyze} disabled={!file || analyzing} className="w-full">
-              {analyzing ? "분석 중... (Gemini 3.5, 30~60초)" : "사진 분석 시작"}
+            <Button onClick={handleAnalyze}
+              disabled={!file || analyzing || submissionStatus?.submitted}
+              className="w-full">
+              {analyzing ? "분석 중... (Gemini 3.5, 30~60초)"
+                : submissionStatus?.submitted ? "제출완료된 거래처×월입니다"
+                : "사진 분석 시작"}
             </Button>
           </>
         )}
@@ -611,10 +656,12 @@ export default function StatsPhotoPage() {
               </div>
             )}
 
-            <Button onClick={runBatch} disabled={batchRunning || batchItems.length === 0 || !selectedClientId}
+            <Button onClick={runBatch}
+              disabled={batchRunning || batchItems.length === 0 || !selectedClientId || submissionStatus?.submitted}
               className="w-full bg-orange-600 hover:bg-orange-700">
               {batchRunning
                 ? `전송 중... (${batchItems.filter(it => it.status === "queued" || it.status === "error").length}/${batchItems.length})`
+                : submissionStatus?.submitted ? "제출완료된 거래처×월입니다"
                 : `${batchItems.length}장 전송 (서버에서 자동 분석·저장)`}
             </Button>
 
