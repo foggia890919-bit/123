@@ -144,6 +144,9 @@ interface OcrResult {
   hospitalName: OcrField;
   columnTemplate: ColumnTemplate | null;
   pipeline?: PipelineDiagnostics;
+  // Gemini-direct 백엔드가 사진 상단 합계의 약품수와 실제 추출 행 수가 다를 때 채움.
+  // 사용자가 일부 행 누락을 즉시 인지할 수 있게 경고 배너 노출 (단건/배치 양쪽).
+  partialExtraction?: { detected: number; extracted: number } | null;
 }
 interface ManualDrug {
   insuranceCode: string;
@@ -424,6 +427,14 @@ function BatchUploadPanel({ clients }: { clients: UserClient[] }) {
                     {row.ocr.manualCheckCount > 0 && (
                       <span className="text-xs bg-red-100 text-red-700 border border-red-300 px-1.5 py-0.5 rounded font-semibold">
                         검토필요 {row.ocr.manualCheckCount}건
+                      </span>
+                    )}
+                    {row.ocr.partialExtraction && (
+                      <span
+                        className="text-xs bg-amber-100 text-amber-800 border border-amber-300 px-1.5 py-0.5 rounded font-semibold"
+                        title={`사진 약품수 ${row.ocr.partialExtraction.detected}건 vs 추출 ${row.ocr.partialExtraction.extracted}건 — 일부 누락 가능`}
+                      >
+                        부분추출 {row.ocr.partialExtraction.detected}/{row.ocr.partialExtraction.extracted}
                       </span>
                     )}
                     <button
@@ -1740,6 +1751,20 @@ export default function StatsPage() {
                 <Plus className="w-3 h-3" />행 추가
               </button>
             </div>
+
+            {/* 부분 추출 경고 — Gemini 가 사진 상단 합계의 약품수 vs 실제 추출 행 수가 다를 때 노출.
+                AI 가 일부 행을 놓쳤거나 사진 자체가 흐릿한 경우 사용자가 즉시 인지하고 검수/재시도. */}
+            {editOcr?.partialExtraction && (
+              <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                <div className="text-xs text-amber-800">
+                  <span className="font-semibold">부분 추출 감지</span> — 사진의 약품수 (
+                  <strong>{editOcr.partialExtraction.detected}건</strong>) 와 추출된 행 수 (
+                  <strong>{editOcr.partialExtraction.extracted}건</strong>) 가 다릅니다. 일부 행이
+                  누락됐을 수 있어요 — 행 추가로 수동 입력하거나 더 선명한 사진으로 재시도하세요.
+                </div>
+              </div>
+            )}
 
             {/* 총수량/총금액/총 수수료 + 최종 승인 — 패널이 height 제한이라
                 자연스럽게 상단 고정 (rows 스크롤은 아래쪽 flex-1 영역에서). */}
