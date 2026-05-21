@@ -4,7 +4,7 @@ import bcrypt from "bcryptjs";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 import { BUCKETS, persistDataUri } from "@/lib/storage";
 
-const VALID_ROLES = ["SALES_REP", "BASIC", "DOCTOR", "PHARMACIST"];
+const VALID_ROLES = ["BUSINESS", "BASIC", "DOCTOR", "PHARMACIST"];
 
 export async function GET(_req: NextRequest) {
   const session = await requireSession();

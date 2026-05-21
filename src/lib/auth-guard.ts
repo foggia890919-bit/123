@@ -49,7 +49,7 @@ export async function requireRole(minRole: string): Promise<SessionUser | NextRe
   if (!user) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
   const hierarchy: Record<string, number> = {
     BASIC: 0, DOCTOR: 0, PHARMACIST: 0,
-    SALES_REP: 1, BIZ: 2, ADMIN: 99,
+    BUSINESS: 1, BIZ: 2, ADMIN: 99,
   };
   if (user.role === "ADMIN") return user;
   if ((hierarchy[user.role] ?? -1) < (hierarchy[minRole] ?? 99)) {

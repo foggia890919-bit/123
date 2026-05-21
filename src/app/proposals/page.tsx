@@ -62,7 +62,7 @@ function ProposalsContent() {
   const { data: session } = useSession();
   const searchParams = useSearchParams();
   const userId = session?.user?.id || "";
-  const isSalesRep = hasRole(session?.user?.role, "SALES_REP");
+  const isSalesRep = hasRole(session?.user?.role, "BUSINESS");
   const isBiz = hasRole(session?.user?.role, "BIZ");
 
   const [proposals, setProposals] = useState<Proposal[]>([]);

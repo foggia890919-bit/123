@@ -11,7 +11,7 @@ model User {
   email        String               @unique
   name         String?
   password     String
-  role         Role                 @default(SALES_REP)
+  role         Role                 @default(BUSINESS)
   approved     Boolean              @default(false)
   phone        String?
   carrier      String?
@@ -124,7 +124,7 @@ model UserClient {
 
 enum Role {
   ADMIN
-  SALES_REP
+  BUSINESS
   BIZ
   BASIC
   DOCTOR

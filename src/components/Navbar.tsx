@@ -33,7 +33,7 @@ const navItems: NavItem[] = [
     kind: "group",
     label: "제안서",
     icon: FileText,
-    minRole: "SALES_REP",
+    minRole: "BUSINESS",
     matchPrefixes: ["/proposals", "/bulk-register"],
     children: [
       { href: "/proposals",     label: "제안서",       icon: FileText },

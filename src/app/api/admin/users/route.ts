@@ -58,7 +58,7 @@ export async function PATCH(req: NextRequest) {
   }
 
   if ("role" in body) {
-    const validRoles = ["ADMIN", "SALES_REP", "BIZ", "BASIC", "DOCTOR", "PHARMACIST"];
+    const validRoles = ["ADMIN", "BUSINESS", "BIZ", "BASIC", "DOCTOR", "PHARMACIST"];
     if (!validRoles.includes(body.role)) {
       return NextResponse.json({ error: "잘못된 역할" }, { status: 400 });
     }

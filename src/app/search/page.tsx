@@ -38,7 +38,7 @@ function formatRelativeTime(iso: string): string {
 
 export default function SearchPage() {
   const { data: session } = useSession();
-  const isSalesRep = hasRole(session?.user?.role, "SALES_REP");
+  const isSalesRep = hasRole(session?.user?.role, "BUSINESS");
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const [results, setResults] = useState<MedicationItem[]>([]);

@@ -8,7 +8,7 @@ const KAKAO_URL = "https://open.kakao.com/me/ykmedi";
 
 const GRADE_DESC: Record<UserRole, string> = {
   BASIC: "일반회원",
-  SALES_REP: "영맨회원 — 통합검색 수수료·정산제약사·리스트다운·제안서",
+  BUSINESS: "사업자 — 통합검색 수수료·정산제약사·리스트다운·제안서",
   BIZ: "비즈회원 — 제약사 필터링·거래처 등록·처방통계",
   ADMIN: "관리자",
   DOCTOR: "의사",
