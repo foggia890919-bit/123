@@ -64,17 +64,14 @@ interface EditRow {
   totalPriceManual: boolean;        // true = 사용자가 수동 편집 → 자동 재계산 비활성화
 }
 
-// 대량 등록 — 사진 1장 단위 처리 상태
+// 대량 등록 — 사진 1장 단위 전송 상태.
+// 새 background 패턴: 클라이언트는 사진을 서버에 "전송"만 하고 끝. 서버가 Gemini 분석 + DB +
+// 시트 저장을 비동기 백그라운드로 수행. 사용자는 페이지 떠나도 OK.
 interface BatchItem {
   id: string;
   file: File;
-  status: "pending" | "analyzing" | "saving" | "done" | "error";
+  status: "pending" | "sending" | "queued" | "error";
   errorMsg?: string;
-  ocr?: OcrResponse;
-  drugs?: EditRow[];
-  saved?: FinalizeResponse;
-  startedAt?: number;
-  finishedAt?: number;
 }
 
 interface FinalizeResponse {
@@ -356,87 +353,30 @@ export default function StatsPhotoPage() {
     setBatchItems((prev) => prev.filter((it) => it.id !== id));
   }
 
-  // 한 사진 처리 — 분석 → 자동 저장 (검수 단계 없음, 사용자 정책).
-  // 동시 처리는 Gemini quota / Vercel 함수 동시 호출 부담이라 순차 진행.
-  async function processBatchItem(item: BatchItem): Promise<void> {
+  // 한 사진 전송 — 압축 후 /api/stats/photo-auto POST. 응답이 빠르고 (1~2초)
+  // 백그라운드 처리는 서버가 알아서. 사용자는 응답 후 자유롭게 페이지 이동 가능.
+  async function sendBatchItem(item: BatchItem): Promise<void> {
     const update = (patch: Partial<BatchItem>) =>
       setBatchItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, ...patch } : it)));
 
-    update({ status: "analyzing", startedAt: Date.now() });
+    update({ status: "sending" });
 
-    let ocrData: OcrResponse;
-    let compressed: Blob;
     try {
-      compressed = await compressImage(item.file);
+      const compressed = await compressImage(item.file);
       const fd = new FormData();
-      fd.append("image", compressed, "rx.jpg");
-      const res = await fetch("/api/stats/ocr", { method: "POST", body: fd });
-      ocrData = await res.json() as OcrResponse;
-      if (!res.ok || ocrData.error) {
-        update({ status: "error", errorMsg: ocrData.error || `HTTP ${res.status}`, finishedAt: Date.now() });
-        return;
-      }
-    } catch (e) {
-      update({ status: "error", errorMsg: `분석 실패: ${String(e).slice(0, 200)}`, finishedAt: Date.now() });
-      return;
-    }
-
-    const drugs: EditRow[] = ocrData.drugs.map((d) => {
-      const qty = parseFloat(d.quantity.value) || 0;
-      const unit = d.unitPrice || 0;
-      return {
-        insuranceCode: d.insuranceCode.value,
-        companyName: d.companyName.value,
-        productName: d.productName.value,
-        quantity: d.quantity.value,
-        unitPrice: unit,
-        totalPrice: qty * unit,
-        totalPriceManual: false,
-      };
-    });
-
-    if (drugs.length === 0) {
-      update({ status: "error", errorMsg: "약품 행 추출 실패", ocr: ocrData, finishedAt: Date.now() });
-      return;
-    }
-
-    update({ status: "saving", ocr: ocrData, drugs });
-
-    // DB + 시트 저장 (단건과 동일 endpoint)
-    try {
-      const imageBase64 = await fileToDataUri(compressed);
-      const body = {
-        clientId: selectedClientId,
-        year,
-        month,
-        hospitalName: selectedClient?.clientName ?? ocrData.hospitalName.value,
-        companyName: ocrData.geminiMeta.pharma,
-        imageBase64,
-        rows: drugs.map((r) => ({
-          insuranceCode: r.insuranceCode,
-          companyName: r.companyName,
-          productName: r.productName,
-          quantity: r.quantity,
-          unitPrice: r.unitPrice,
-          totalPrice: r.totalPrice,
-        })),
-        rawDrugs: ocrData.rawDrugs,
-        geminiMeta: ocrData.geminiMeta,
-        rawGeminiText: ocrData.rawGeminiText,
-      };
-      const res = await fetch("/api/stats/photo-finalize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json() as FinalizeResponse;
+      fd.append("image", compressed, item.file.name);
+      fd.append("clientId", selectedClientId);
+      fd.append("year", String(year));
+      fd.append("month", String(month));
+      const res = await fetch("/api/stats/photo-auto", { method: "POST", body: fd });
+      const data = await res.json() as { queued?: boolean; error?: string };
       if (!res.ok || data.error) {
-        update({ status: "error", errorMsg: data.error || `HTTP ${res.status}`, finishedAt: Date.now() });
+        update({ status: "error", errorMsg: data.error || `HTTP ${res.status}` });
         return;
       }
-      update({ status: "done", saved: data, finishedAt: Date.now() });
+      update({ status: "queued" });
     } catch (e) {
-      update({ status: "error", errorMsg: `저장 실패: ${String(e).slice(0, 200)}`, finishedAt: Date.now() });
+      update({ status: "error", errorMsg: `전송 실패: ${String(e).slice(0, 200)}` });
     }
   }
 
@@ -449,12 +389,10 @@ export default function StatsPhotoPage() {
     setBatchRunning(true);
     setError("");
     try {
-      // 순차 처리 — pending 상태인 것만
-      for (const it of batchItems) {
-        if (it.status !== "pending" && it.status !== "error") continue;
-        // 동적으로 가장 최신 state 의 동일 id 항목을 처리
-        await processBatchItem(it);
-      }
+      // 동시 전송 (Promise.all) — 응답이 빠르므로 사용자 대기 시간 최소화.
+      // 서버 측에서 각 요청을 별도 함수 invocation 으로 받아 백그라운드 처리.
+      const targets = batchItems.filter((it) => it.status === "pending" || it.status === "error");
+      await Promise.all(targets.map((it) => sendBatchItem(it)));
     } finally {
       setBatchRunning(false);
     }
@@ -464,39 +402,8 @@ export default function StatsPhotoPage() {
     setBatchItems([]);
   }
 
-  // 배치 전체의 제약사별 매출 집계 (status === "done" 만)
-  const batchTotalByCompany = useMemo(() => {
-    const m = new Map<string, { revenue: number; rowCount: number; photoCount: number }>();
-    let totalRev = 0;
-    let totalRows = 0;
-    const photoSet = new Map<string, Set<string>>();   // company → photo ids
-    for (const it of batchItems) {
-      if (it.status !== "done" || !it.drugs) continue;
-      for (const r of it.drugs) {
-        const name = (r.companyName || "(미분류)").trim();
-        const prev = m.get(name) ?? { revenue: 0, rowCount: 0, photoCount: 0 };
-        prev.revenue += Number(r.totalPrice) || 0;
-        prev.rowCount += 1;
-        m.set(name, prev);
-        if (!photoSet.has(name)) photoSet.set(name, new Set());
-        photoSet.get(name)!.add(it.id);
-        totalRev += Number(r.totalPrice) || 0;
-        totalRows += 1;
-      }
-    }
-    // photoCount 채움
-    for (const [name, v] of m) {
-      v.photoCount = photoSet.get(name)?.size ?? 0;
-    }
-    return {
-      rows: Array.from(m.entries())
-        .map(([name, v]) => ({ name, ...v }))
-        .sort((a, b) => b.revenue - a.revenue),
-      totalRev,
-      totalRows,
-      donePhotos: batchItems.filter((it) => it.status === "done").length,
-    };
-  }, [batchItems]);
+  // (background 패턴 도입 후 클라이언트에서 배치 누적 매출 표시는 제거됨.
+  //  결과는 서버 백그라운드에서 DB + 시트에 저장 → 사용자가 시트/실적관리에서 확인.)
 
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
@@ -665,7 +572,7 @@ export default function StatsPhotoPage() {
                     선택된 사진 {batchItems.length}장
                   </span>
                   <span className="text-[10px] text-gray-500 ml-2">
-                    완료 {batchItems.filter(it => it.status === "done").length} · 실패 {batchItems.filter(it => it.status === "error").length} · 대기 {batchItems.filter(it => it.status === "pending").length}
+                    전송됨 {batchItems.filter(it => it.status === "queued").length} · 실패 {batchItems.filter(it => it.status === "error").length} · 대기 {batchItems.filter(it => it.status === "pending").length}
                   </span>
                   <Button variant="outline" size="sm" onClick={clearBatch} disabled={batchRunning}
                     className="ml-auto text-xs">전체 초기화</Button>
@@ -678,29 +585,22 @@ export default function StatsPhotoPage() {
                         <span className="ml-2 text-[10px] text-gray-400">{(it.file.size / 1024).toFixed(0)}KB</span>
                       </span>
                       <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                        it.status === "pending"   ? "bg-gray-100 text-gray-600" :
-                        it.status === "analyzing" ? "bg-blue-100 text-blue-700" :
-                        it.status === "saving"    ? "bg-purple-100 text-purple-700" :
-                        it.status === "done"      ? "bg-green-100 text-green-700" :
+                        it.status === "pending" ? "bg-gray-100 text-gray-600" :
+                        it.status === "sending" ? "bg-blue-100 text-blue-700" :
+                        it.status === "queued"  ? "bg-green-100 text-green-700" :
                         "bg-red-100 text-red-700"
                       }`}>
-                        {it.status === "pending"   ? "대기" :
-                         it.status === "analyzing" ? "분석중" :
-                         it.status === "saving"    ? "저장중" :
-                         it.status === "done"      ? `완료 (${it.drugs?.length ?? 0}건)` :
+                        {it.status === "pending" ? "대기" :
+                         it.status === "sending" ? "전송중" :
+                         it.status === "queued"  ? "전송됨 (백그라운드)" :
                          "실패"}
                       </span>
-                      {it.saved?.totalFee != null && (
-                        <span className="text-[10px] text-gray-600 w-24 text-right">
-                          {it.saved.totalFee.toLocaleString()}원
-                        </span>
-                      )}
                       {it.errorMsg && (
                         <span className="text-[10px] text-red-600 max-w-[200px] truncate" title={it.errorMsg}>
                           {it.errorMsg}
                         </span>
                       )}
-                      {!batchRunning && it.status !== "saving" && it.status !== "analyzing" && (
+                      {!batchRunning && it.status !== "sending" && (
                         <button onClick={() => removeBatchItem(it.id)} className="text-gray-400 hover:text-red-500">
                           <Trash2 className="w-3.5 h-3.5"/>
                         </button>
@@ -713,8 +613,27 @@ export default function StatsPhotoPage() {
 
             <Button onClick={runBatch} disabled={batchRunning || batchItems.length === 0 || !selectedClientId}
               className="w-full bg-orange-600 hover:bg-orange-700">
-              {batchRunning ? `처리 중... (${batchItems.filter(it => it.status === "done" || it.status === "error").length}/${batchItems.length})` : `전체 분석 + 자동 저장 (${batchItems.length}장)`}
+              {batchRunning
+                ? `전송 중... (${batchItems.filter(it => it.status === "queued" || it.status === "error").length}/${batchItems.length})`
+                : `${batchItems.length}장 전송 (서버에서 자동 분석·저장)`}
             </Button>
+
+            {batchItems.filter(it => it.status === "queued").length > 0 && (
+              <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-800 space-y-1">
+                <div className="font-semibold flex items-center gap-1">
+                  <Sparkles className="w-3.5 h-3.5"/>
+                  {batchItems.filter(it => it.status === "queued").length}장 전송 완료 · 백그라운드 처리 중
+                </div>
+                <div className="text-blue-700">
+                  서버가 사진별로 Gemini 분석 → 영업실적 DB + 구글 시트에 자동 저장합니다.
+                  사진 1장당 약 30~60초 소요. 이 페이지를 닫거나 다른 작업을 하셔도 됩니다.
+                </div>
+                <div className="text-[11px] text-blue-600 pt-1">
+                  결과는 <a href="/mypage/performance" className="underline">영업실적 관리</a> 또는
+                  구글 시트 (처방통계 데이터) 에서 확인하세요. 처리 완료 후 시트가 자동 업데이트됩니다.
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -837,93 +756,6 @@ export default function StatsPhotoPage() {
               </div>
             </div>
           )}
-        </div>
-      )}
-
-      {/* 대량 — 제약사별 매출 합계 패널 (모든 사진 누적) */}
-      {mode === "batch" && batchTotalByCompany.donePhotos > 0 && (
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-          <div className="flex items-center gap-2 px-4 py-3 border-b bg-orange-50">
-            <Building2 className="w-4 h-4 text-orange-700" />
-            <span className="text-sm font-semibold text-orange-900">제약사별 매출 합계 (대량 누적)</span>
-            <span className="text-[11px] text-orange-700 ml-auto">
-              사진 {batchTotalByCompany.donePhotos}장 · 약품 행 {batchTotalByCompany.totalRows}건
-            </span>
-          </div>
-          <div className="px-4 py-3 space-y-1">
-            {batchTotalByCompany.rows.map((c) => {
-              const isAllowed = c.name === "(미분류)" || allowedSet.size === 0 || allowedSet.has(c.name);
-              return (
-                <div key={c.name}
-                  className={`flex items-center gap-2 px-2 py-1.5 rounded ${isAllowed ? "bg-gray-50" : "bg-amber-50 border border-amber-200"}`}>
-                  <span className="text-xs text-gray-800 flex-1 truncate">
-                    {c.name}
-                    {!isAllowed && c.name !== "(미분류)" && (
-                      <span className="ml-2 text-[10px] text-amber-700 font-semibold">⚠ 거래 외</span>
-                    )}
-                  </span>
-                  <span className="text-[10px] text-gray-500 w-16 text-right">{c.photoCount}장</span>
-                  <span className="text-[11px] text-gray-500 w-16 text-right">{c.rowCount}건</span>
-                  <span className="text-xs font-mono font-semibold text-gray-800 w-32 text-right">
-                    {c.revenue.toLocaleString()}원
-                  </span>
-                </div>
-              );
-            })}
-            <div className="flex items-center gap-2 px-2 py-2 mt-2 border-t border-gray-300 bg-orange-100 rounded">
-              <span className="text-xs font-bold text-orange-900 flex-1">
-                {selectedClient?.clientName ?? "거래처"} · {year}년 {month}월 총 매출
-              </span>
-              <span className="text-sm font-mono font-bold text-orange-900">
-                {batchTotalByCompany.totalRev.toLocaleString()}원
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 대량 — 사진별 상세 결과 (시트 링크) */}
-      {mode === "batch" && batchItems.filter(it => it.status === "done").length > 0 && (
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-          <div className="flex items-center gap-2 px-4 py-2 border-b bg-gray-50">
-            <CheckCircle className="w-3.5 h-3.5 text-green-600" />
-            <span className="text-xs font-semibold text-gray-700">사진별 저장 결과</span>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="bg-gray-50 text-gray-500">
-                <tr>
-                  <th className="text-left px-3 py-2">사진</th>
-                  <th className="text-right px-3 py-2 w-16">약품수</th>
-                  <th className="text-right px-3 py-2 w-28">매출</th>
-                  <th className="text-left px-3 py-2 w-32">시트</th>
-                  <th className="text-left px-3 py-2 w-20">소요</th>
-                </tr>
-              </thead>
-              <tbody>
-                {batchItems.filter(it => it.status === "done").map((it) => (
-                  <tr key={it.id} className="border-t">
-                    <td className="px-3 py-2 truncate max-w-[280px]">{it.file.name}</td>
-                    <td className="px-3 py-2 text-right">{it.drugs?.length ?? 0}</td>
-                    <td className="px-3 py-2 text-right font-mono">{it.saved?.totalFee?.toLocaleString() ?? "-"}원</td>
-                    <td className="px-3 py-2">
-                      {it.saved?.sheetUrl ? (
-                        <a href={it.saved.sheetUrl} target="_blank" rel="noreferrer"
-                          className="text-blue-600 hover:underline inline-flex items-center gap-1">
-                          시트 <ExternalLink className="w-3 h-3"/>
-                        </a>
-                      ) : it.saved?.sheetWarning ? (
-                        <span className="text-amber-600">⚠ 시트X</span>
-                      ) : "-"}
-                    </td>
-                    <td className="px-3 py-2 text-gray-500">
-                      {it.startedAt && it.finishedAt ? `${((it.finishedAt - it.startedAt) / 1000).toFixed(1)}s` : "-"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
         </div>
       )}
 
