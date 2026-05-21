@@ -9,6 +9,10 @@ export interface RxDrugRow {
   totalPrice: number;    // 총금액. 모르면 0
   category: string;      // 자유 형식 분류 "만성질환/고혈압" 등
   efficacy: string;      // 짧은 효능 한 줄
+  // bbox: 사진 내 행 위치 [x1, y1, x2, y2] 비율 (0~1).
+  // 검수 페이지에서 표 행 focus 시 사진 위에 노란 highlight overlay + 자동 스크롤용.
+  // Gemini 의 spatial understanding 활용. 못 잡으면 [0,0,0,0].
+  bbox: [number, number, number, number];
 }
 
 export interface RxStatsSummary {
@@ -41,7 +45,7 @@ const DEFAULT_MODEL: GeminiRxModel = "gemini-3.5-flash";
 
 const DRUG_ITEM_SCHEMA = {
   type: Type.OBJECT,
-  required: ["name", "code", "quantity", "prescriptions", "unitPrice", "totalPrice", "category", "efficacy"],
+  required: ["name", "code", "quantity", "prescriptions", "unitPrice", "totalPrice", "category", "efficacy", "bbox"],
   properties: {
     name: { type: Type.STRING, description: "약품명 (한글+영문 그대로, 용량/제형 포함)" },
     code: { type: Type.STRING, description: "보험코드 9자리 숫자. 모르면 빈 문자열." },
@@ -56,6 +60,11 @@ const DRUG_ITEM_SCHEMA = {
     efficacy: {
       type: Type.STRING,
       description: "짧은 효능 한 줄. 예: '혈전 생성 예방 (항혈소판제)'. 추측 금지 — 잘 모르는 약품이면 빈 문자열.",
+    },
+    bbox: {
+      type: Type.ARRAY,
+      description: "이 약품 행의 사진 내 위치를 비율(0~1) 4개 숫자로: [x1, y1, x2, y2]. 사진 좌상단이 (0,0), 우하단이 (1,1). 약품명 행 전체를 감싸는 사각형. 못 잡으면 [0,0,0,0].",
+      items: { type: Type.NUMBER },
     },
   },
 };
@@ -101,6 +110,7 @@ function buildPrompt(): string {
     "5) 잘 모르는 약품은 category='기타', efficacy='' 로. 추측 환각 금지.",
     "6) 모든 숫자는 콤마 제거한 순수 숫자. 단가/금액 없으면 0.",
     "7) period 는 반드시 YYYY-MM 형식 (예: '2026-04'). 사진에 '2026년 4월' 로 보여도 변환.",
+    "8) **각 약품 행의 사진 내 위치 bbox**: [x1, y1, x2, y2] 비율 (0~1). 사진 좌상단이 (0,0), 우하단이 (1,1). 그 약품 행 전체(왼쪽 보험코드부터 오른쪽 금액 끝까지)를 감싸는 사각형. 못 잡으면 [0,0,0,0].",
     "",
     "응답은 지정된 JSON 스키마만. 자유 텍스트 금지.",
   ].join("\n");
@@ -157,6 +167,17 @@ function normalizePeriod(raw: string): string {
 }
 
 function normalizeDrug(d: Record<string, unknown>): RxDrugRow {
+  // bbox 정규화: [x1, y1, x2, y2] 4개 number, 모두 0~1 사이로 clamp. 누락/형식 오류면 [0,0,0,0].
+  const rawBbox = Array.isArray(d.bbox) ? d.bbox : [];
+  const clamp01 = (n: unknown): number => {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return 0;
+    return Math.max(0, Math.min(1, v));
+  };
+  const bbox: [number, number, number, number] = rawBbox.length === 4
+    ? [clamp01(rawBbox[0]), clamp01(rawBbox[1]), clamp01(rawBbox[2]), clamp01(rawBbox[3])]
+    : [0, 0, 0, 0];
+
   return {
     name: String(d.name ?? "").trim(),
     code: String(d.code ?? "").replace(/\D/g, ""),
@@ -166,6 +187,7 @@ function normalizeDrug(d: Record<string, unknown>): RxDrugRow {
     totalPrice: toNum(d.totalPrice),
     category: String(d.category ?? "").trim(),
     efficacy: String(d.efficacy ?? "").trim(),
+    bbox,
   };
 }
 

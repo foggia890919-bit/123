@@ -25,6 +25,8 @@ interface FusionDrug {
   mismatch:
     | { kind: "code-name-mismatch"; masterProductName: string; ocrProductName: string }
     | null;
+  // Gemini bbox [x1, y1, x2, y2] 비율 0~1 — 검수 페이지에서 표 행 ↔ 사진 위치 매칭용
+  bbox: [number, number, number, number];
 }
 
 export interface FusionResultJson {
@@ -197,6 +199,7 @@ export async function extractStatsLikeFusion(
       mismatch: match.nameCodeMismatch
         ? { kind: "code-name-mismatch" as const, ...match.nameCodeMismatch }
         : null,
+      bbox: d.bbox,
     };
   });
 
