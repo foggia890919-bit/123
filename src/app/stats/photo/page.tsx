@@ -155,26 +155,33 @@ export default function StatsPhotoPage() {
   }, [selectedClientId, year, month]);
 
   // 사진 전송 완료 후 백그라운드 처리 중 자동 갱신 polling.
-  // 사진이 queued 상태이거나 서버 측 PROCESSING 카운트 > 0 이면 5초 간격 refetch.
-  // 5분 후 자동 종료 (timeout). 페이지 나가도 백엔드는 계속 처리.
+  // 클라이언트가 방금 보낸 사진(queued) 만 추적 — 옛 PROCESSING row 가 stuck 이면
+  // 영원히 polling 돌던 버그 fix. 3분 timeout. 페이지 나가도 백엔드는 계속 처리.
+  const [pollStartAt, setPollStartAt] = useState<number | null>(null);
   useEffect(() => {
     if (!selectedClientId) return;
     const hasQueued = batchItems.some((it) => it.status === "queued");
-    const hasProcessing = (salesSummary?.currentProcessingCount ?? 0) > 0;
-    if (!hasQueued && !hasProcessing) return;
+    if (!hasQueued) {
+      // queued 가 모두 끝나면 polling 종료 (옛 PROCESSING row 와 무관)
+      setPollStartAt(null);
+      return;
+    }
+    // 첫 polling 시작 시각 기록
+    if (pollStartAt === null) setPollStartAt(Date.now());
 
-    const startedAt = Date.now();
     const id = setInterval(() => {
-      // 5분 후 자동 종료
-      if (Date.now() - startedAt > 5 * 60 * 1000) {
+      const now = Date.now();
+      // 3분 후 자동 종료
+      if (pollStartAt !== null && now - pollStartAt > 3 * 60 * 1000) {
         clearInterval(id);
+        setPollStartAt(null);
         return;
       }
       refreshSalesSummary();
     }, 5000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedClientId, batchItems, salesSummary?.currentProcessingCount]);
+  }, [selectedClientId, batchItems, pollStartAt]);
 
   // 배치 진행 중 페이지 떠나면 경고
   useEffect(() => {
@@ -360,7 +367,7 @@ export default function StatsPhotoPage() {
               <span className="text-xs font-semibold text-gray-700">
                 제약사별 매출 ({salesSummary.byCompany.length}개사)
               </span>
-              {(batchItems.some((it) => it.status === "queued") || salesSummary.currentProcessingCount > 0) && (
+              {(batchItems.some((it) => it.status === "queued") && pollStartAt !== null) && (
                 <span className="ml-2 text-[11px] text-blue-600 inline-flex items-center gap-1">
                   <RefreshCw className="w-3 h-3 animate-spin" />
                   처리 중 — 자동 갱신 (5초). <span className="font-semibold ml-1">옆에 나가도 업데이트는 됨</span>
