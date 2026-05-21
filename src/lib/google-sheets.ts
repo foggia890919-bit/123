@@ -73,15 +73,16 @@ export async function findOrCreateSpreadsheet(name: string = DEFAULT_SPREADSHEET
   const list = await driveApi(`/files?q=${encodeURIComponent(q)}&fields=files(id,name)`) as { files: { id: string }[] };
   if (list.files.length > 0) return list.files[0].id;
 
-  // 없으면 새로 생성
-  const created = await sheetsApi("", "POST", {
-    properties: { title: name, locale: "ko_KR", timeZone: "Asia/Seoul" },
-  }) as { spreadsheetId: string };
-
-  if (folderId) {
-    await driveApi(`/files/${created.spreadsheetId}?addParents=${folderId}&fields=id`, "PATCH");
-  }
-  return created.spreadsheetId;
+  // Drive API 로 폴더 안에 직접 시트 생성. Sheets API 의 spreadsheets.create 는
+  // 서비스 계정 본인 My Drive 에 만들려고 해서 서비스 계정에 storage quota 가 없으면
+  // 403 PERMISSION_DENIED 가 남 (서비스 계정은 기본적으로 0 quota). 폴더에 parents
+  // 지정해서 만들면 폴더 owner 의 quota 를 사용해 통과한다.
+  const created = await driveApi("/files", "POST", {
+    name,
+    mimeType: "application/vnd.google-apps.spreadsheet",
+    ...(folderId ? { parents: [folderId] } : {}),
+  }) as { id: string };
+  return created.id;
 }
 
 // ── 시트 데이터 쓰기 ───────────────────────────────────────────────────────
