@@ -95,3 +95,5 @@ CREATE INDEX IF NOT EXISTS "UserClient_isRateTarget_idx"        ON "UserClient"(
 7. 대량 병렬 디스패치: 한 번에 4~5건 동시 진행
 8. 끝나면 종합 보고서 1방
 - 2026-05-18 12:23 | qa-crosscheck | epharms forceResetSync plan | CONDITIONAL_PASS
+
+- 2026-05-21 14:40 | qa-crosscheck | AI처방통계 A/B/C plan (행정확도/N제약사분리/zip다운) | CONDITIONAL_PASS
