@@ -15,6 +15,10 @@ const DRUGS_HEADERS = [
   "약품명", "보험코드", "사용량", "처방횟수", "단가", "총금액", "카테고리", "효능",
 ] as const;
 
+// batchId 컬럼 인덱스 — 검수 페이지 수정 시 옛 batchId 행 찾아서 삭제용
+const SUMMARY_BATCH_ID_COL = SUMMARY_HEADERS.indexOf("batchId");   // 10
+const DRUGS_BATCH_ID_COL = DRUGS_HEADERS.indexOf("batchId");      // 1
+
 export interface AppendRxResult {
   spreadsheetUrl: string;
   summaryRange: string;
@@ -128,5 +132,86 @@ export async function appendRxStats(
     summaryRange: sumRes.updates?.updatedRange ?? "",
     drugsRange,
     batchId,
+  };
+}
+
+// 특정 batchId 의 모든 행을 시트에서 삭제. 검수 페이지에서 수정 시 옛 데이터 제거용.
+// 두 탭 (요약/약품) 모두 처리. 실패해도 throw 안 하고 결과만 반환.
+async function deleteRowsByBatchId(
+  spreadsheetId: string,
+  tab: string,
+  batchIdColumnIndex: number,
+  batchId: string,
+): Promise<{ deleted: number }> {
+  // 1) 시트 전체 조회
+  const range = encodeURIComponent(`${tab}!A:Z`);
+  const data = await sheetsApi(`/${spreadsheetId}/values/${range}`) as { values?: string[][] };
+  const rows = data.values ?? [];
+  if (rows.length === 0) return { deleted: 0 };
+
+  // 2) 매칭 행 인덱스 (헤더는 row 0, 건너뜀)
+  const targetIndices: number[] = [];
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i]?.[batchIdColumnIndex] === batchId) targetIndices.push(i);
+  }
+  if (targetIndices.length === 0) return { deleted: 0 };
+
+  // 3) sheetId 조회
+  const meta = await sheetsApi(`/${spreadsheetId}?fields=sheets.properties`) as {
+    sheets: { properties: { sheetId: number; title: string } }[];
+  };
+  const sheet = meta.sheets.find((s) => s.properties.title === tab);
+  if (!sheet) return { deleted: 0 };
+  const sheetId = sheet.properties.sheetId;
+
+  // 4) 행 삭제 — 역순 (인덱스 안 밀리도록)
+  const requests = [...targetIndices]
+    .sort((a, b) => b - a)
+    .map((idx) => ({
+      deleteDimension: {
+        range: {
+          sheetId,
+          dimension: "ROWS",
+          startIndex: idx,
+          endIndex: idx + 1,
+        },
+      },
+    }));
+  await sheetsApi(`/${spreadsheetId}:batchUpdate`, "POST", { requests });
+  return { deleted: targetIndices.length };
+}
+
+// 검수 페이지 수정 → 옛 batchId 행 시트에서 삭제 + 새 batchId 로 재append.
+// 결과: 시트에서 옛 데이터 사라지고 최신만 보임.
+export async function replaceRxStats(
+  oldBatchId: string,
+  newPayload: RxExtractResult,
+  source: RxSource,
+): Promise<AppendRxResult & { deletedSummary: number; deletedDrugs: number }> {
+  const id = await findOrCreateSpreadsheet(spreadsheetName());
+
+  // 1) 옛 batchId 의 행들 두 탭에서 삭제 (실패해도 진행 — 새 데이터는 들어가야 함)
+  let deletedSummary = 0;
+  let deletedDrugs = 0;
+  try {
+    const r1 = await deleteRowsByBatchId(id, SUMMARY_TAB, SUMMARY_BATCH_ID_COL, oldBatchId);
+    deletedSummary = r1.deleted;
+  } catch (e) {
+    console.error("[replaceRxStats summary delete]", oldBatchId, String(e).slice(0, 200));
+  }
+  try {
+    const r2 = await deleteRowsByBatchId(id, DRUGS_TAB, DRUGS_BATCH_ID_COL, oldBatchId);
+    deletedDrugs = r2.deleted;
+  } catch (e) {
+    console.error("[replaceRxStats drugs delete]", oldBatchId, String(e).slice(0, 200));
+  }
+
+  // 2) 새 batchId 로 append
+  const appended = await appendRxStats(newPayload, source);
+
+  return {
+    ...appended,
+    deletedSummary,
+    deletedDrugs,
   };
 }
