@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
-import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck, ShoppingCart, ClipboardList, MessageCircle, TrendingUp, Wallet, Users } from "lucide-react";
+import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck, ShoppingCart, ClipboardList, MessageCircle, TrendingUp, Wallet, Users, Sparkles } from "lucide-react";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
 interface NavLeaf {
@@ -47,7 +47,8 @@ const navItems: NavItem[] = [
     minRole: "BIZ",
     matchPrefixes: ["/stats"],
     children: [
-      { href: "/stats", label: "통계자동입력", icon: BarChart3 },
+      { href: "/stats/photo", label: "AI 처방통계 등록", icon: Sparkles },
+      { href: "/stats", label: "통계자동입력 (구)", icon: BarChart3 },
       { href: "/stats/bulk-check", label: "통계엑셀대량확인", icon: ClipboardList },
     ],
   },
