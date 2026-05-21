@@ -418,6 +418,33 @@ function ReviewPhotoCard({
   const imgScrollRef = useRef<HTMLDivElement | null>(null);
   const imgElRef = useRef<HTMLImageElement | null>(null);
 
+  // 마우스 드래그로 사진 영역 panning — 확대 후 다른 영역 빠르게 보기.
+  // mousedown 위치 기억 → mousemove 차이만큼 scrollLeft/scrollTop 역방향 이동.
+  const dragStartRef = useRef<{ x: number; y: number; scrollLeft: number; scrollTop: number } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  function onPanStart(e: React.MouseEvent<HTMLDivElement>) {
+    if (!imgScrollRef.current) return;
+    dragStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      scrollLeft: imgScrollRef.current.scrollLeft,
+      scrollTop: imgScrollRef.current.scrollTop,
+    };
+    setIsDragging(true);
+  }
+  function onPanMove(e: React.MouseEvent<HTMLDivElement>) {
+    if (!dragStartRef.current || !imgScrollRef.current) return;
+    const dx = e.clientX - dragStartRef.current.x;
+    const dy = e.clientY - dragStartRef.current.y;
+    imgScrollRef.current.scrollLeft = dragStartRef.current.scrollLeft - dx;
+    imgScrollRef.current.scrollTop = dragStartRef.current.scrollTop - dy;
+  }
+  function onPanEnd() {
+    dragStartRef.current = null;
+    setIsDragging(false);
+  }
+
   // focusedIdx 가 바뀌면 사진의 해당 bbox 가 보이도록 자동 스크롤
   useEffect(() => {
     if (focusedIdx === null) return;
@@ -583,71 +610,89 @@ function ReviewPhotoCard({
         </button>
       </div>
 
-      {/* 좌측 사진 (확대 60%) / 우측 편집 표 (40%, 스크롤) */}
-      {/* min-w-0: CSS grid 의 default min-width: auto 가 자식 콘텐츠 자연 폭에 끌려가는 문제 차단.
-         사진 원본 (3000px+) 이 column 폭을 부풀려 우측 표를 0px 까지 squeeze 하던 버그 fix. */}
-      <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr]">
-        {/* 좌측: 사진 + zoom 컨트롤 (sticky) */}
-        <div className="bg-gray-100 lg:border-r border-gray-200 min-w-0">
-          <div className="lg:sticky lg:top-4">
-            {/* zoom 컨트롤 바 */}
-            <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 bg-white">
-              <button onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))} disabled={!imgData}
-                className="p-1 rounded hover:bg-gray-100 disabled:opacity-30" title="축소">
-                <ZoomOut className="w-4 h-4 text-gray-600" />
-              </button>
-              <span className="text-xs text-gray-600 font-mono w-12 text-center">
-                {Math.round(zoom * 100)}%
-              </span>
-              <button onClick={() => setZoom((z) => Math.min(4.0, z + 0.25))} disabled={!imgData}
-                className="p-1 rounded hover:bg-gray-100 disabled:opacity-30" title="확대">
-                <ZoomIn className="w-4 h-4 text-gray-600" />
-              </button>
-              <button onClick={() => setZoom(1.0)} disabled={!imgData || zoom === 1.0}
-                className="p-1 rounded hover:bg-gray-100 disabled:opacity-30" title="원본 크기">
-                <Maximize2 className="w-4 h-4 text-gray-600" />
-              </button>
-              <span className="text-[10px] text-gray-400 ml-2">
-                + / − 버튼 또는 사진 클릭으로 새 탭 확대
-              </span>
-            </div>
-
-            {/* 사진 영역 — overflow scroll for zoom + bbox highlight overlay */}
-            <div ref={imgScrollRef} className="p-3 overflow-auto max-h-[80vh]">
-              {imgLoading ? (
-                <div className="aspect-[3/4] flex items-center justify-center text-gray-400">
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                </div>
-              ) : imgData ? (
-                <div className="relative inline-block"
-                  style={{ transform: `scale(${zoom})`, transformOrigin: "top left", transition: "transform 0.15s" }}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img ref={imgElRef} src={imgData} alt="원본 사진"
-                    className="max-w-none rounded shadow block" />
-                  {/* bbox highlight — focused row 의 좌표를 사진 위에 노란 박스로 */}
-                  {focusedIdx !== null && rows[focusedIdx]?.bbox && rows[focusedIdx].bbox.some((v) => v > 0) && (
-                    <div
-                      className="absolute border-2 border-yellow-400 bg-yellow-300/20 pointer-events-none transition-all duration-150"
-                      style={{
-                        left: `${rows[focusedIdx].bbox[0] * 100}%`,
-                        top: `${rows[focusedIdx].bbox[1] * 100}%`,
-                        width: `${(rows[focusedIdx].bbox[2] - rows[focusedIdx].bbox[0]) * 100}%`,
-                        height: `${(rows[focusedIdx].bbox[3] - rows[focusedIdx].bbox[1]) * 100}%`,
-                      }}
-                    />
-                  )}
-                </div>
-              ) : (
-                <div className="aspect-[3/4] flex items-center justify-center text-gray-400 text-xs">
-                  원본 사진 없음
-                </div>
-              )}
-            </div>
+      {/* 상하 분할 — 위에 사진 (60vh) / 아래에 편집 표 (스크롤) */}
+      <div className="flex flex-col">
+        {/* 위: 사진 + zoom 컨트롤 */}
+        <div className="bg-gray-100 border-b border-gray-200">
+          {/* zoom 컨트롤 바 */}
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 bg-white">
+            <button onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))} disabled={!imgData}
+              className="p-1 rounded hover:bg-gray-100 disabled:opacity-30" title="축소">
+              <ZoomOut className="w-4 h-4 text-gray-600" />
+            </button>
+            <span className="text-xs text-gray-600 font-mono w-12 text-center">
+              {Math.round(zoom * 100)}%
+            </span>
+            <button onClick={() => setZoom((z) => Math.min(4.0, z + 0.25))} disabled={!imgData}
+              className="p-1 rounded hover:bg-gray-100 disabled:opacity-30" title="확대">
+              <ZoomIn className="w-4 h-4 text-gray-600" />
+            </button>
+            <button onClick={() => setZoom(1.0)} disabled={!imgData || zoom === 1.0}
+              className="p-1 rounded hover:bg-gray-100 disabled:opacity-30" title="원본 크기">
+              <Maximize2 className="w-4 h-4 text-gray-600" />
+            </button>
+            <span className="text-[10px] text-gray-400 ml-2">
+              + / − 줌, 확대 후 사진 드래그로 이동
+            </span>
+            {imgData && (
+              <a href={imgData} target="_blank" rel="noreferrer"
+                className="ml-auto text-[11px] text-blue-600 hover:underline">
+                새 탭 확대
+              </a>
+            )}
           </div>
+
+          {/* 사진 영역 — overflow scroll for zoom + drag panning + bbox highlight */}
+          <div ref={imgScrollRef}
+            onMouseDown={onPanStart}
+            onMouseMove={onPanMove}
+            onMouseUp={onPanEnd}
+            onMouseLeave={onPanEnd}
+            style={{ cursor: imgData ? (isDragging ? "grabbing" : "grab") : "default" }}
+            className="p-3 overflow-auto max-h-[60vh] select-none">
+            {imgLoading ? (
+              <div className="aspect-[3/4] flex items-center justify-center text-gray-400">
+                <Loader2 className="w-5 h-5 animate-spin" />
+              </div>
+            ) : imgData ? (
+              <div className="relative inline-block"
+                style={{ transform: `scale(${zoom})`, transformOrigin: "top left", transition: "transform 0.15s" }}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img ref={imgElRef} src={imgData} alt="원본 사진"
+                  draggable={false}
+                  className="max-w-none rounded shadow block pointer-events-none" />
+                {/* bbox highlight — focused row 의 좌표를 사진 위에 노란 박스로.
+                    옛 데이터엔 bbox 없어서 [0,0,0,0] → 안 그림. 새 업로드부터 작동. */}
+                {focusedIdx !== null && rows[focusedIdx]?.bbox && rows[focusedIdx].bbox.some((v) => v > 0) && (
+                  <div
+                    className="absolute border-2 border-yellow-400 bg-yellow-300/20 pointer-events-none transition-all duration-150"
+                    style={{
+                      left: `${rows[focusedIdx].bbox[0] * 100}%`,
+                      top: `${rows[focusedIdx].bbox[1] * 100}%`,
+                      width: `${(rows[focusedIdx].bbox[2] - rows[focusedIdx].bbox[0]) * 100}%`,
+                      height: `${(rows[focusedIdx].bbox[3] - rows[focusedIdx].bbox[1]) * 100}%`,
+                    }}
+                  />
+                )}
+              </div>
+            ) : (
+              <div className="aspect-[3/4] flex items-center justify-center text-gray-400 text-xs">
+                원본 사진 없음
+              </div>
+            )}
+          </div>
+
+          {/* bbox 없는 옛 데이터 안내 */}
+          {imgData && focusedIdx !== null && rows[focusedIdx]?.bbox &&
+           !rows[focusedIdx].bbox.some((v) => v > 0) && (
+            <div className="bg-amber-50 border-t border-amber-200 px-3 py-1.5 text-[11px] text-amber-800">
+              ⓘ 이 사진은 bbox(좌표 정보) 없이 저장된 옛 데이터라 사진 위 자동 강조 표시 안 됨. 새로 업로드한 사진부터 작동.
+            </div>
+          )}
         </div>
 
-        {/* 우측: 편집 가능 표 — min-w-0 으로 좌측 사진의 큰 폭에 squeeze 안 되게 */}
-        <div className="overflow-auto max-h-[80vh] min-w-0">
+        {/* 아래: 편집 가능 표 */}
+        <div className="overflow-auto max-h-[55vh]">
           <table className="w-full text-xs">
             <thead className="bg-gray-50 text-gray-500 sticky top-0 z-10">
               <tr>
