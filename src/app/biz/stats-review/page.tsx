@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle, AlertTriangle, ExternalLink, Trash2, ChevronRight, ArrowLeft, BarChart3, Loader2 } from "lucide-react";
+import { CheckCircle, AlertTriangle, ExternalLink, Trash2, ChevronRight, ArrowLeft, BarChart3, Loader2, Plus, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 // AI 처방통계 사진 검수 페이지. 관리자/BIZ 가 사용자들의 업로드를 거래처×월 단위로
@@ -226,85 +226,23 @@ export default function StatsReviewPage() {
           <div className="bg-red-50 border border-red-200 rounded p-3 text-xs text-red-700">{error}</div>
         )}
 
-        {/* 사진 카드 리스트 */}
-        <div className="space-y-3">
-          {detail.reports.map((r) => {
-            const drugs = r.ocrData?.finalDrugs ?? [];
-            const detected = r.ocrData?.geminiMeta?.summary?.drugCount ?? 0;
-            const partial = detected > 0 && detected !== drugs.length;
-            const matchedCount = drugs.filter((d) => d.matchedMedicationId).length;
-            const mismatchCount = drugs.filter((d) => d.mismatch != null).length;
-            return (
-              <div key={r.id} className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-                <div className="flex items-center gap-3 px-4 py-2 border-b bg-gray-50">
-                  <span className="text-xs text-gray-500">{new Date(r.createdAt).toLocaleString()}</span>
-                  <span className="text-xs font-semibold">{r.companyName || "(제약사 미상)"}</span>
-                  <span className="text-xs text-gray-500">· {drugs.length}건 · {r.totalFee?.toLocaleString() ?? 0}원</span>
-                  {partial && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">
-                      <AlertTriangle className="w-3 h-3 inline mr-0.5" />부분추출 {detected}→{drugs.length}
-                    </span>
-                  )}
-                  {mismatchCount > 0 && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-300">
-                      불일치 {mismatchCount}
-                    </span>
-                  )}
-                  <span className="text-[10px] text-gray-400 ml-auto">매칭 {matchedCount}/{drugs.length}</span>
-                  {r.ocrData?.sheetUrl && (
-                    <a href={r.ocrData.sheetUrl} target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 hover:underline inline-flex items-center gap-0.5">
-                      시트 <ExternalLink className="w-3 h-3" />
-                    </a>
-                  )}
-                  {r.hasImage && (
-                    <a href={`/api/files/prescription-report/${r.id}`} target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 hover:underline">
-                      원본사진
-                    </a>
-                  )}
-                  <button onClick={() => handleDelete(r.id)} disabled={busy}
-                    className="ml-2 text-red-400 hover:text-red-600" title="이 사진과 추출 데이터 삭제 (Storage 파일도 함께 삭제)">
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead className="bg-gray-50 text-gray-500">
-                      <tr>
-                        <th className="text-left px-3 py-1.5">보험코드</th>
-                        <th className="text-left px-3 py-1.5">제약사</th>
-                        <th className="text-left px-3 py-1.5">제품명</th>
-                        <th className="text-right px-3 py-1.5">수량</th>
-                        <th className="text-right px-3 py-1.5">단가</th>
-                        <th className="text-right px-3 py-1.5">매출</th>
-                        <th className="text-center px-3 py-1.5 w-12">상태</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {drugs.map((d, i) => {
-                        const qty = parseFloat(d.quantity ?? "0") || 0;
-                        const unit = d.unitPrice ?? 0;
-                        return (
-                          <tr key={i} className={`border-t ${d.mismatch ? "bg-red-50" : ""}`}>
-                            <td className="px-3 py-1 font-mono">{d.insuranceCode || "-"}</td>
-                            <td className="px-3 py-1 truncate max-w-[120px]">{d.companyName || "-"}</td>
-                            <td className="px-3 py-1 truncate max-w-[240px]">{d.productName || "-"}</td>
-                            <td className="px-3 py-1 text-right">{qty.toLocaleString()}</td>
-                            <td className="px-3 py-1 text-right text-gray-500">{unit ? unit.toLocaleString() : "-"}</td>
-                            <td className="px-3 py-1 text-right font-mono">{(qty * unit).toLocaleString()}</td>
-                            <td className="px-3 py-1 text-center">
-                              {d.matchedMedicationId
-                                ? <span className="text-green-600" title="마스터 매칭">●</span>
-                                : <span className="text-gray-300" title="매칭 안됨">●</span>}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            );
-          })}
+        {/* 사진 카드 리스트 — 좌측 사진 / 우측 편집 가능 표 */}
+        <div className="space-y-4">
+          {detail.reports.map((r) => (
+            <ReviewPhotoCard
+              key={r.id}
+              report={r}
+              busy={busy}
+              onDelete={() => handleDelete(r.id)}
+              onSaved={async () => {
+                // 저장 후 상세 재조회 (지표 갱신)
+                if (selected) {
+                  const res = await fetch(`/api/stats/submissions?clientId=${selected.clientId}&year=${selected.year}&month=${selected.month}`);
+                  setDetail(await res.json());
+                }
+              }}
+            />
+          ))}
         </div>
       </div>
     );
@@ -362,6 +300,295 @@ export default function StatsReviewPage() {
         <div className="bg-red-50 border border-red-200 rounded p-3 text-xs text-red-700">{error}</div>
       )}
       {detailLoading && <div className="text-center py-4 text-xs text-gray-400">상세 로딩...</div>}
+    </div>
+  );
+}
+
+// 사진별 검수 카드 — 좌측 원본 사진(sticky) / 우측 편집 가능한 추출 표.
+// 수정 후 저장 = DB update + 구글 시트 갱신 (옛 batchId 행 삭제 + 새 batchId append).
+interface EditableDrugRow {
+  insuranceCode: string;
+  companyName: string;
+  productName: string;
+  quantity: string;
+  unitPrice: number;
+  totalPrice: number;
+  totalPriceManual: boolean;
+  matched: boolean;
+  hasMismatch: boolean;
+}
+
+function ReviewPhotoCard({
+  report,
+  busy,
+  onDelete,
+  onSaved,
+}: {
+  report: ReportRow;
+  busy: boolean;
+  onDelete: () => void;
+  onSaved: () => void | Promise<void>;
+}) {
+  const initialDrugs = report.ocrData?.finalDrugs ?? [];
+
+  const [rows, setRows] = useState<EditableDrugRow[]>(() =>
+    initialDrugs.map((d) => {
+      const qty = parseFloat(d.quantity ?? "0") || 0;
+      const unit = d.unitPrice ?? 0;
+      return {
+        insuranceCode: d.insuranceCode ?? "",
+        companyName: d.companyName ?? "",
+        productName: d.productName ?? "",
+        quantity: d.quantity ?? "",
+        unitPrice: unit,
+        totalPrice: Math.round(qty * unit),
+        totalPriceManual: false,
+        matched: !!d.matchedMedicationId,
+        hasMismatch: d.mismatch != null,
+      };
+    })
+  );
+
+  const [imgData, setImgData] = useState<string | null>(null);
+  const [imgLoading, setImgLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [dirty, setDirty] = useState(false);
+
+  // 사진 로드 — readFileAsDataUri endpoint 가 JSON dataUri 반환
+  useEffect(() => {
+    if (!report.hasImage) return;
+    setImgLoading(true);
+    fetch(`/api/files/prescription-report/${report.id}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d: { imageData?: string } | null) => setImgData(d?.imageData ?? null))
+      .catch(() => setImgData(null))
+      .finally(() => setImgLoading(false));
+  }, [report.id, report.hasImage]);
+
+  const totalRevenue = rows.reduce((s, r) => s + (Number(r.totalPrice) || 0), 0);
+
+  // 제약사별 매출 합계 (실시간)
+  const byCompany = useMemo(() => {
+    const m = new Map<string, { revenue: number; rowCount: number }>();
+    for (const r of rows) {
+      const name = (r.companyName || "(미분류)").trim();
+      const prev = m.get(name) ?? { revenue: 0, rowCount: 0 };
+      prev.revenue += Number(r.totalPrice) || 0;
+      prev.rowCount += 1;
+      m.set(name, prev);
+    }
+    return Array.from(m.entries())
+      .map(([name, v]) => ({ name, ...v }))
+      .sort((a, b) => b.revenue - a.revenue);
+  }, [rows]);
+
+  function updateRow(i: number, patch: Partial<EditableDrugRow>) {
+    setRows((prev) => prev.map((r, idx) => {
+      if (idx !== i) return r;
+      const next: EditableDrugRow = { ...r, ...patch };
+      if (!next.totalPriceManual && (patch.quantity !== undefined || patch.unitPrice !== undefined)) {
+        const qty = parseFloat(next.quantity) || 0;
+        next.totalPrice = Math.round(qty * next.unitPrice);
+      }
+      return next;
+    }));
+    setDirty(true);
+  }
+
+  function addRow() {
+    setRows((prev) => [...prev, {
+      insuranceCode: "", companyName: "", productName: "", quantity: "0",
+      unitPrice: 0, totalPrice: 0, totalPriceManual: false, matched: false, hasMismatch: false,
+    }]);
+    setDirty(true);
+  }
+
+  function removeRow(i: number) {
+    setRows((prev) => prev.filter((_, idx) => idx !== i));
+    setDirty(true);
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    setSaveError("");
+    try {
+      const res = await fetch("/api/stats/photo-edit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reportId: report.id,
+          rows: rows.map((r) => ({
+            insuranceCode: r.insuranceCode,
+            companyName: r.companyName,
+            productName: r.productName,
+            quantity: r.quantity,
+            unitPrice: r.unitPrice,
+            totalPrice: r.totalPrice,
+          })),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setSaveError(data.error || `HTTP ${res.status}`);
+        return;
+      }
+      setDirty(false);
+      if (data.sheetWarning) {
+        setSaveError(`저장됨 (DB ✅) — 시트 갱신은 실패: ${data.sheetWarning}`);
+      }
+      await onSaved();
+    } catch (e) {
+      setSaveError(`저장 실패: ${String(e).slice(0, 200)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const detected = report.ocrData?.geminiMeta?.summary?.drugCount ?? 0;
+  const partial = detected > 0 && detected !== rows.length;
+  const mismatchCount = rows.filter((r) => r.hasMismatch).length;
+  const matchedCount = rows.filter((r) => r.matched).length;
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+      {/* 헤더 */}
+      <div className="flex items-center gap-3 px-4 py-2 border-b bg-gray-50 flex-wrap">
+        <span className="text-xs text-gray-500">{new Date(report.createdAt).toLocaleString()}</span>
+        <span className="text-xs font-semibold">{report.companyName || "(제약사 미상)"}</span>
+        <span className="text-xs text-gray-500">· {rows.length}건 · {totalRevenue.toLocaleString()}원</span>
+        {partial && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">
+            <AlertTriangle className="w-3 h-3 inline mr-0.5" />부분추출 {detected}→{rows.length}
+          </span>
+        )}
+        {mismatchCount > 0 && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-300">
+            불일치 {mismatchCount}
+          </span>
+        )}
+        <span className="text-[10px] text-gray-400 ml-auto">매칭 {matchedCount}/{rows.length}</span>
+        {report.ocrData?.sheetUrl && (
+          <a href={report.ocrData.sheetUrl} target="_blank" rel="noreferrer"
+            className="text-[10px] text-blue-600 hover:underline inline-flex items-center gap-0.5">
+            시트 <ExternalLink className="w-3 h-3" />
+          </a>
+        )}
+        <button onClick={onDelete} disabled={busy || saving}
+          className="text-red-400 hover:text-red-600" title="이 사진 + 추출 데이터 삭제 (Storage 파일 포함)">
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {/* 좌측 사진 / 우측 편집 표 */}
+      <div className="grid grid-cols-1 lg:grid-cols-[420px_1fr]">
+        {/* 좌측: 사진 (sticky) */}
+        <div className="bg-gray-100 p-3 lg:border-r border-gray-200">
+          <div className="lg:sticky lg:top-4">
+            {imgLoading ? (
+              <div className="aspect-[3/4] flex items-center justify-center text-gray-400">
+                <Loader2 className="w-5 h-5 animate-spin" />
+              </div>
+            ) : imgData ? (
+              <a href={imgData} target="_blank" rel="noreferrer">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={imgData} alt="원본 사진" className="max-w-full max-h-[600px] mx-auto rounded shadow" />
+              </a>
+            ) : (
+              <div className="aspect-[3/4] flex items-center justify-center text-gray-400 text-xs">
+                원본 사진 없음
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 우측: 편집 가능 표 */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-gray-50 text-gray-500 sticky top-0">
+              <tr>
+                <th className="text-left px-2 py-1.5 w-[110px]">보험코드</th>
+                <th className="text-left px-2 py-1.5 w-[110px]">제약사</th>
+                <th className="text-left px-2 py-1.5">제품명</th>
+                <th className="text-right px-2 py-1.5 w-[72px]">수량</th>
+                <th className="text-right px-2 py-1.5 w-[80px]">단가</th>
+                <th className="text-right px-2 py-1.5 w-[100px]">매출</th>
+                <th className="w-7"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((d, i) => (
+                <tr key={i} className={`border-t ${d.hasMismatch ? "bg-red-50" : ""}`}>
+                  <td className="px-1 py-0.5">
+                    <input value={d.insuranceCode} onChange={(e) => updateRow(i, { insuranceCode: e.target.value })}
+                      className="w-full px-1 py-0.5 border rounded text-[11px] font-mono"/>
+                  </td>
+                  <td className="px-1 py-0.5">
+                    <input value={d.companyName} onChange={(e) => updateRow(i, { companyName: e.target.value })}
+                      className="w-full px-1 py-0.5 border rounded text-[11px]"/>
+                  </td>
+                  <td className="px-1 py-0.5">
+                    <input value={d.productName} onChange={(e) => updateRow(i, { productName: e.target.value })}
+                      className="w-full px-1 py-0.5 border rounded text-[11px]"/>
+                  </td>
+                  <td className="px-1 py-0.5">
+                    <input type="number" step="0.1" value={d.quantity} onChange={(e) => updateRow(i, { quantity: e.target.value })}
+                      className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
+                  </td>
+                  <td className="px-1 py-0.5">
+                    <input type="number" value={d.unitPrice} onChange={(e) => updateRow(i, { unitPrice: Number(e.target.value) })}
+                      className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
+                  </td>
+                  <td className="px-1 py-0.5">
+                    <input type="number" value={d.totalPrice}
+                      onChange={(e) => updateRow(i, { totalPrice: Number(e.target.value), totalPriceManual: true })}
+                      className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
+                  </td>
+                  <td className="px-1 py-0.5 text-center">
+                    <button onClick={() => removeRow(i)} className="text-gray-300 hover:text-red-500" title="행 삭제">
+                      <Trash2 className="w-3 h-3"/>
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* 하단: 제약사별 합계 + 저장 */}
+      <div className="border-t bg-gray-50 px-4 py-3 space-y-2">
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={addRow} className="text-xs" disabled={saving}>
+            <Plus className="w-3.5 h-3.5 mr-1"/>행 추가
+          </Button>
+          <span className="text-[10px] text-gray-400">매출 = 수량 × 단가 자동. 직접 수정 가능.</span>
+          <Button onClick={handleSave} disabled={saving || !dirty} className="ml-auto bg-orange-600 hover:bg-orange-700">
+            <Save className="w-3.5 h-3.5 mr-1"/>
+            {saving ? "저장 중..." : dirty ? "저장 (DB + 시트)" : "변경 없음"}
+          </Button>
+        </div>
+
+        {/* 제약사별 합계 */}
+        <div className="flex flex-wrap gap-2 text-[11px]">
+          {byCompany.map((c) => (
+            <span key={c.name} className="px-2 py-0.5 bg-white border border-gray-200 rounded">
+              <span className="text-gray-700">{c.name}</span>
+              <span className="text-gray-400 ml-1">{c.rowCount}건</span>
+              <span className="text-gray-800 font-semibold ml-1">{c.revenue.toLocaleString()}원</span>
+            </span>
+          ))}
+          <span className="ml-auto px-2 py-0.5 bg-orange-100 text-orange-900 font-bold rounded">
+            총 {totalRevenue.toLocaleString()}원
+          </span>
+        </div>
+
+        {saveError && (
+          <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1.5">
+            {saveError}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
