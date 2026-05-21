@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { extractRxStatsFromImage } from "../src/lib/gemini-rx-stats-extract";
+import { appendRxStats } from "../src/lib/google-sheets-rx-append";
 
 async function main() {
   const imgPath = process.argv[2];
@@ -91,7 +92,29 @@ async function main() {
   console.log("\n## debug");
   console.log(`- 모델: ${debug.model}`);
   console.log(`- Gemini 응답 시간: ${debug.durationMs}ms`);
-  console.log(`- 전체 wall time: ${totalMs}ms\n`);
+  console.log(`- 전체 wall time: ${totalMs}ms`);
+
+  // GOOGLE_DRIVE_* env 가 다 있으면 시트 append 까지 자동 수행 — 끝까지 검증용.
+  // 셋 중 하나라도 빠지면 추출 결과만 출력하고 종료.
+  const hasSheetsEnv =
+    !!process.env.GOOGLE_DRIVE_CLIENT_EMAIL &&
+    !!process.env.GOOGLE_DRIVE_PRIVATE_KEY;
+  if (hasSheetsEnv) {
+    console.error("\n[2/2] 구글 시트 append 중...");
+    try {
+      const sheet = await appendRxStats(data, "manual");
+      console.log("\n## 시트 기록 완료");
+      console.log(`- 시트 URL: ${sheet.spreadsheetUrl}`);
+      console.log(`- 요약 행: ${sheet.summaryRange}`);
+      console.log(`- 약품 행: ${sheet.drugsRange}`);
+      console.log(`- batchId: ${sheet.batchId}`);
+    } catch (e) {
+      console.error(`\n[시트 append 실패] ${String(e).slice(0, 500)}`);
+    }
+  } else {
+    console.error("\n(GOOGLE_DRIVE_* env 누락 — 시트 append 스킵)");
+  }
+  console.log("");
 }
 
 main().catch((e) => {
