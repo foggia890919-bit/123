@@ -21,8 +21,33 @@ import { requireSession, isNextResponse } from "@/lib/auth-guard";
 
 interface FinalDrugRecord {
   insuranceCode?: string;
+  productName?: string;
+  quantity?: string;
   matchedMedicationId?: string | null;
   mismatch?: unknown;
+}
+
+// 사진별 약품 fingerprint — (보험코드 또는 제품명) + 수량 set.
+// Jaccard 유사도로 두 사진의 약품 겹침 비율 계산 → 70%+ 면 중복 의심.
+// SHA-256 사진 hash 는 다르지만 다른 각도로 찍은 같은 사진 또는 옛 데이터 중복 검출.
+function fingerprintDrugs(drugs: FinalDrugRecord[]): Set<string> {
+  const set = new Set<string>();
+  for (const d of drugs) {
+    const code = (d.insuranceCode || "").replace(/\D/g, "");
+    const nameKey = (d.productName || "").trim().replace(/\s+/g, "").toLowerCase();
+    const key = code.length === 9 ? code : nameKey;
+    if (!key) continue;
+    const qty = String(d.quantity || "").replace(/\s+/g, "");
+    set.add(`${key}|${qty}`);
+  }
+  return set;
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const x of a) if (b.has(x)) intersection++;
+  return intersection / Math.min(a.size, b.size);
 }
 
 interface OcrDataRecord {
@@ -138,6 +163,31 @@ export async function GET(req: NextRequest) {
     const metrics = computeMetrics(typedReports.map((r) => ({ ocrData: r.ocrData, totalFee: r.totalFee, status: r.status })));
     const submitted = typedReports.length > 0 && typedReports.every((r) => r.status === "SUBMITTED");
 
+    // 중복 의심 분석 — 같은 그룹 안에서 사진 짝지어 약품 fingerprint 비교
+    const reportFingerprints = typedReports.map((r) => {
+      const ocr = (r.ocrData ?? {}) as OcrDataRecord;
+      const drugs = ocr.finalDrugs ?? ocr.aiDrugs ?? [];
+      return { id: r.id, fp: fingerprintDrugs(drugs) };
+    });
+    interface DupSimilar { reportId: string; similarity: number }
+    const duplicateBy: Record<string, DupSimilar[]> = {};
+    for (let i = 0; i < reportFingerprints.length; i++) {
+      const matches: DupSimilar[] = [];
+      for (let j = 0; j < reportFingerprints.length; j++) {
+        if (i === j) continue;
+        const sim = jaccardSimilarity(reportFingerprints[i].fp, reportFingerprints[j].fp);
+        if (sim >= 0.7) {
+          matches.push({ reportId: reportFingerprints[j].id, similarity: Math.round(sim * 100) });
+        }
+      }
+      if (matches.length > 0) {
+        // 유사도 높은 순
+        matches.sort((a, b) => b.similarity - a.similarity);
+        duplicateBy[reportFingerprints[i].id] = matches;
+      }
+    }
+    const duplicateCount = Object.keys(duplicateBy).length;
+
     return NextResponse.json({
       clientId: clientIdParam,
       clientName: typedReports[0]?.client?.clientName ?? null,
@@ -145,6 +195,8 @@ export async function GET(req: NextRequest) {
       month,
       submitted,
       metrics,
+      duplicateCount,
+      duplicateBy,
       reports: typedReports.map((r) => ({
         id: r.id,
         hospitalName: r.hospitalName,
