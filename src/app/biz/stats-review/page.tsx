@@ -100,6 +100,16 @@ export default function StatsReviewPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // 사진별 선택 — 체크박스로 토글, "선택한 N장 제출완료" 일괄 적용
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
 
   // 그룹 목록 조회
   function refreshGroups() {
@@ -149,16 +159,22 @@ export default function StatsReviewPage() {
     }
   }
 
-  async function handleSubmit(action: "submit" | "reopen") {
+  async function handleSubmit(action: "submit" | "reopen", scope: "all" | "selected") {
     if (!selected) return;
+    const reportIds = scope === "selected" ? Array.from(selectedIds) : undefined;
+    if (scope === "selected" && (!reportIds || reportIds.length === 0)) {
+      setError("선택된 사진이 없습니다");
+      return;
+    }
     const label = action === "submit" ? "제출완료로 마킹" : "다시 검수 가능 상태로";
-    if (!confirm(`정말 ${label} 하시겠습니까?`)) return;
+    const target = scope === "selected" ? `선택한 ${reportIds!.length}장을 ${label}` : `이 그룹 전체를 ${label}`;
+    if (!confirm(`정말 ${target} 하시겠습니까?`)) return;
     setBusy(true);
     try {
       const res = await fetch("/api/stats", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...selected, action }),
+        body: JSON.stringify({ ...selected, action, reportIds }),
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error || `상태 변경 실패: HTTP ${res.status}`); return; }
@@ -166,6 +182,7 @@ export default function StatsReviewPage() {
       const r = await fetch(`/api/stats/submissions?clientId=${selected.clientId}&year=${selected.year}&month=${selected.month}`);
       setDetail(await r.json());
       refreshGroups();
+      setSelectedIds(new Set());   // 선택 해제
     } catch (e) {
       setError(`상태 변경 실패: ${String(e).slice(0, 200)}`);
     } finally {
@@ -209,17 +226,33 @@ export default function StatsReviewPage() {
             color={detail.metrics.mismatchCount + detail.metrics.partialExtractionCount > 0 ? "amber" : "gray"} />
         </div>
 
-        {/* 액션 */}
-        <div className="flex gap-2">
-          {!detail.submitted ? (
-            <Button onClick={() => handleSubmit("submit")} disabled={busy} className="bg-green-600 hover:bg-green-700">
-              <CheckCircle className="w-4 h-4 mr-1" />제출완료로 마킹
-            </Button>
-          ) : (
-            <Button onClick={() => handleSubmit("reopen")} disabled={busy} variant="outline">
-              다시 검수 가능 상태로
-            </Button>
-          )}
+        {/* 액션 — 선택된 사진들 또는 그룹 전체 */}
+        <div className="flex flex-wrap gap-2 items-center">
+          <Button onClick={() => handleSubmit("submit", "selected")}
+            disabled={busy || selectedIds.size === 0}
+            className="bg-green-600 hover:bg-green-700">
+            <CheckCircle className="w-4 h-4 mr-1" />
+            선택한 {selectedIds.size}장 제출완료로 마킹
+          </Button>
+          <Button onClick={() => setSelectedIds(new Set(detail.reports.map((r) => r.id)))}
+            disabled={busy} variant="outline" size="sm">
+            전체 선택
+          </Button>
+          <Button onClick={() => setSelectedIds(new Set())}
+            disabled={busy || selectedIds.size === 0} variant="outline" size="sm">
+            선택 해제
+          </Button>
+          <span className="ml-auto flex gap-2">
+            {!detail.submitted ? (
+              <Button onClick={() => handleSubmit("submit", "all")} disabled={busy} variant="outline" size="sm">
+                전체 그룹을 한 번에 제출완료
+              </Button>
+            ) : (
+              <Button onClick={() => handleSubmit("reopen", "all")} disabled={busy} variant="outline" size="sm">
+                전체 그룹을 다시 검수 가능 상태로
+              </Button>
+            )}
+          </span>
         </div>
 
         {error && (
@@ -233,6 +266,11 @@ export default function StatsReviewPage() {
               key={r.id}
               report={r}
               busy={busy}
+              clientName={detail.clientName ?? ""}
+              year={detail.year}
+              month={detail.month}
+              selected={selectedIds.has(r.id)}
+              onToggleSelect={() => toggleSelect(r.id)}
               onDelete={() => handleDelete(r.id)}
               onSaved={async () => {
                 // 저장 후 상세 재조회 (지표 갱신)
@@ -321,11 +359,21 @@ interface EditableDrugRow {
 function ReviewPhotoCard({
   report,
   busy,
+  clientName,
+  year,
+  month,
+  selected,
+  onToggleSelect,
   onDelete,
   onSaved,
 }: {
   report: ReportRow;
   busy: boolean;
+  clientName: string;
+  year: number;
+  month: number;
+  selected: boolean;
+  onToggleSelect: () => void;
   onDelete: () => void;
   onSaved: () => void | Promise<void>;
 }) {
@@ -355,16 +403,16 @@ function ReviewPhotoCard({
   const [saveError, setSaveError] = useState("");
   const [dirty, setDirty] = useState(false);
 
-  // 사진 로드 — readFileAsDataUri endpoint 가 JSON dataUri 반환
+  // 사진 로드 — submissions API 의 hasImage 가 imageKey 만 봐서 false negative 가능.
+  // 무조건 fetch 시도 후 응답에서 판단 (imageData 가 null 이면 그제서야 "없음" 표시).
   useEffect(() => {
-    if (!report.hasImage) return;
     setImgLoading(true);
     fetch(`/api/files/prescription-report/${report.id}`)
       .then((r) => r.ok ? r.json() : null)
       .then((d: { imageData?: string } | null) => setImgData(d?.imageData ?? null))
       .catch(() => setImgData(null))
       .finally(() => setImgLoading(false));
-  }, [report.id, report.hasImage]);
+  }, [report.id]);
 
   const totalRevenue = rows.reduce((s, r) => s + (Number(r.totalPrice) || 0), 0);
 
@@ -452,11 +500,21 @@ function ReviewPhotoCard({
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-      {/* 헤더 */}
+      {/* 헤더 — 체크박스 + 거래처/월 + 메타 */}
       <div className="flex items-center gap-3 px-4 py-2 border-b bg-gray-50 flex-wrap">
+        <input type="checkbox" checked={selected} onChange={onToggleSelect}
+          className="w-4 h-4 accent-orange-600 cursor-pointer"
+          title="선택해서 일괄 제출완료 마킹용" />
+        <span className="text-xs font-bold text-gray-800">{clientName} · {year}년 {month}월</span>
+        <span className="text-xs text-gray-400">|</span>
         <span className="text-xs text-gray-500">{new Date(report.createdAt).toLocaleString()}</span>
         <span className="text-xs font-semibold">{report.companyName || "(제약사 미상)"}</span>
         <span className="text-xs text-gray-500">· {rows.length}건 · {totalRevenue.toLocaleString()}원</span>
+        {report.status === "SUBMITTED" && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700 border border-green-300 font-semibold">
+            제출완료
+          </span>
+        )}
         {partial && (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">
             <AlertTriangle className="w-3 h-3 inline mr-0.5" />부분추출 {detected}→{rows.length}

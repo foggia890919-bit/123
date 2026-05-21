@@ -170,13 +170,19 @@ export async function DELETE(req: NextRequest) {
   return NextResponse.json({ success: true });
 }
 
-// 거래처×월 단위 제출완료 마킹 — 그 그룹의 모든 row status 를 SUBMITTED 로 일괄 변경.
-// 이후 같은 거래처×월에 새 업로드 차단.
+// 거래처×월 단위 제출완료 마킹.
+// reportIds 가 있으면 그 행들만, 없으면 그룹 전체 일괄 변경.
 export async function PUT(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
-  const body = await req.json() as { clientId?: string; year?: number; month?: number; action?: "submit" | "reopen" };
-  const { clientId, year, month, action } = body;
+  const body = await req.json() as {
+    clientId?: string;
+    year?: number;
+    month?: number;
+    action?: "submit" | "reopen";
+    reportIds?: string[];
+  };
+  const { clientId, year, month, action, reportIds } = body;
   if (!clientId || !year || !month || !action) {
     return NextResponse.json({ error: "clientId/year/month/action 필수" }, { status: 400 });
   }
@@ -194,6 +200,7 @@ export async function PUT(req: NextRequest) {
       clientId,
       year,
       month,
+      ...(reportIds && reportIds.length > 0 ? { id: { in: reportIds } } : {}),
       ...(user.role !== "ADMIN" ? { userId: user.id } : {}),
     },
     data: { status: newStatus, updatedAt: new Date() },
