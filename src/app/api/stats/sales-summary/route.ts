@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
         { year: prevPrev.year, month: prevPrev.month },
       ],
     },
-    select: { ocrData: true, year: true, month: true, status: true },
+    select: { ocrData: true, year: true, month: true, status: true, companyName: true },
   });
 
   // 거래가능 제약사 목록 (SubmissionRoute active)
@@ -107,7 +107,11 @@ export async function GET(req: NextRequest) {
     // 사진 1장에 들어있는 제약사들 (set) — 사진 수 카운트용
     const photoCompanies = new Set<string>();
     for (const d of drugs) {
-      const name = (d.companyName || "(미분류)").trim();
+      // 행별 companyName 이 비어있으면 사진 전체 제약사 (report.companyName, Gemini meta) 로 fallback.
+      // 마스터 매칭 실패한 행은 companyName 빈 채로 들어와 "(미분류)" 로 잡히던 문제.
+      const rowCompany = (d.companyName || "").trim();
+      const reportCompany = (r.companyName || "").trim();
+      const name = rowCompany || reportCompany || "(미분류)";
       const qty = parseFloat(d.quantity ?? "") || 0;
       const unit = d.unitPrice ?? 0;
       const sales = qty * unit;
