@@ -110,3 +110,13 @@ CREATE INDEX IF NOT EXISTS "UserClient_isRateTarget_idx"        ON "UserClient"(
   - ENV `GEMINI_SELFVALIDATE_ENABLED=true` (Vercel 추가 필요)
   - DB 스키마 변경 없음 (ocrData Json 안에 reviewReason/validation 저장)
 2026-05-24 12:47 | qa-crosscheck | Phase 3 양방향 자가검증 Plan | CONDITIONAL_PASS
+
+- 2026-05-24 13:30 | stats-extract | Phase 3 — 양방향 자가검증 (e9ee858)
+  - 마스터DB 와 독립 — 모든 행 검증 (사용자 요구: 사진 자체 정확도 판별)
+  - 한 호출에 byCode + byName 양방향 cross-check
+  - 약품명 실존 X (hallucination 의심) → 보험코드 답 채택
+  - OCR 약가=0 → unitPrice 검증 skip
+  - byCode/byName 둘 다 모름 → 마킹 안 함 (false positive 통제)
+  - 100-row kill switch + pLimit(2) 안전마진
+  - QA B2 픽스: productName 공백/대소문자 정규화
+  - ENV `GEMINI_SELFVALIDATE_ENABLED=true` + 옵션 `GEMINI_SELFVALIDATE_DEBUG=true`
