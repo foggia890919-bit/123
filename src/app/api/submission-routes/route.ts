@@ -55,12 +55,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "거래처명, 제약사명, 제출처는 필수입니다." }, { status: 400 });
   const rt = requestType === "이관" ? "이관" : "신규";
 
-  const row = await prisma.submissionRoute.upsert({
-    where: { ownerId_clientName_companyName: { ownerId: user.id, clientName, companyName } },
-    create: { id: crypto.randomUUID(), ownerId: user.id, clientName, companyName, submissionEntity, submissionEmail: submissionEmail || null, requestType: rt, memo: memo || null, updatedAt: new Date() },
-    update: { submissionEntity, submissionEmail: submissionEmail || null, requestType: rt, memo: memo || null, active: true, updatedAt: new Date() },
-  });
-  return NextResponse.json(row, { status: 201 });
+  try {
+    const row = await prisma.submissionRoute.upsert({
+      where: { ownerId_clientName_companyName: { ownerId: user.id, clientName, companyName } },
+      create: { ownerId: user.id, clientName, companyName, submissionEntity, submissionEmail: submissionEmail || null, requestType: rt, memo: memo || null },
+      update: { submissionEntity, submissionEmail: submissionEmail || null, requestType: rt, memo: memo || null, active: true },
+    });
+    return NextResponse.json(row, { status: 201 });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[submission-routes POST]", msg);
+    return NextResponse.json({ error: msg.slice(0, 300) }, { status: 500 });
+  }
 }
 
 export async function PATCH(req: NextRequest) {
