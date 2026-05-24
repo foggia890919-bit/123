@@ -102,6 +102,9 @@ export default function ClientsPage() {
   /* ── 상위법인 (필터링 시 선택 — 통계제출처 자동 등록용) ── */
   const [selectedSubmissionEntity, setSelectedSubmissionEntity] = useState("");
   const [entitySuggestions, setEntitySuggestions] = useState<string[]>([]);
+  const [entityMenuOpen, setEntityMenuOpen] = useState(false);
+  const [entityQuery, setEntityQuery] = useState("");
+  const entityMenuRef = useRef<HTMLDivElement>(null);
 
   /* ── 초기 로드 ── */
   useEffect(() => {
@@ -138,13 +141,14 @@ export default function ClientsPage() {
   useEffect(() => {
     const h = (e: MouseEvent) => {
       if (proposalMenuRef.current && !proposalMenuRef.current.contains(e.target as Node)) setShowProposalMenu(false);
+      if (entityMenuOpen && entityMenuRef.current && !entityMenuRef.current.contains(e.target as Node)) setEntityMenuOpen(false);
       if (!clientMenuOpen && !companyMenuOpen) return;
       if (clientMenuRef.current && !clientMenuRef.current.contains(e.target as Node)) setClientMenuOpen(false);
       if (companyMenuRef.current && !companyMenuRef.current.contains(e.target as Node)) setCompanyMenuOpen(false);
     };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
-  }, [clientMenuOpen, companyMenuOpen]);
+  }, [clientMenuOpen, companyMenuOpen, entityMenuOpen]);
 
   async function loadMyRequests(uid: string) {
     setRequestsLoading(true);
@@ -510,19 +514,76 @@ export default function ClientsPage() {
                     </div>
                   )}
 
-                  {/* 상위법인 선택 — 조회 등록 시 통계제출처에도 자동 등록 */}
+                  {/* 상위법인 선택 — 거래처/제약사 선택과 동일한 검색 가능 드롭다운 패턴 */}
                   <div className="space-y-1">
                     <label className="text-xs font-medium text-gray-600">상위법인 선택 <span className="text-red-500">*</span></label>
-                    <input
-                      list="filter-entity-suggestions"
-                      value={selectedSubmissionEntity}
-                      onChange={(e) => setSelectedSubmissionEntity(e.target.value)}
-                      placeholder="목록에서 선택 또는 직접 입력"
-                      className="w-full h-10 px-3 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
-                    />
-                    <datalist id="filter-entity-suggestions">
-                      {entitySuggestions.map((v) => <option key={v} value={v} />)}
-                    </datalist>
+                    <div className="relative" ref={entityMenuRef}>
+                      <button type="button" onClick={() => setEntityMenuOpen((v) => !v)}
+                        className="w-full h-10 px-3 border border-gray-300 rounded-md bg-white hover:bg-gray-50 text-left text-sm flex items-center justify-between gap-2">
+                        {selectedSubmissionEntity ? (
+                          <span className="flex items-center gap-2 flex-1 min-w-0">
+                            <CheckCircle2 className="w-4 h-4 text-blue-500 shrink-0" />
+                            <span className="font-medium text-gray-800 truncate">{selectedSubmissionEntity}</span>
+                          </span>
+                        ) : (
+                          <span className="text-gray-400 flex items-center gap-1.5"><Search className="w-3.5 h-3.5" />상위법인 검색 및 선택</span>
+                        )}
+                        <div className="flex items-center gap-1 shrink-0">
+                          {selectedSubmissionEntity && (
+                            <span onClick={(e) => { e.stopPropagation(); setSelectedSubmissionEntity(""); setEntityQuery(""); }}
+                              className="p-0.5 text-gray-400 hover:text-gray-600 rounded">
+                              <X className="w-3.5 h-3.5" />
+                            </span>
+                          )}
+                          <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${entityMenuOpen ? "rotate-180" : ""}`} />
+                        </div>
+                      </button>
+                      {entityMenuOpen && (() => {
+                        const q = entityQuery.trim();
+                        const filtered = q
+                          ? entitySuggestions.filter((s) => s.toLowerCase().includes(q.toLowerCase()))
+                          : entitySuggestions;
+                        const exactMatch = entitySuggestions.some((s) => s.toLowerCase() === q.toLowerCase());
+                        return (
+                          <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg">
+                            <div className="p-2 border-b border-gray-100">
+                              <div className="relative">
+                                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+                                <input autoFocus value={entityQuery} onChange={(e) => setEntityQuery(e.target.value)}
+                                  placeholder="상위법인명 검색 또는 직접 입력..."
+                                  className="w-full h-8 pl-8 pr-2 border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                              </div>
+                            </div>
+                            <div className="max-h-56 overflow-y-auto">
+                              {filtered.length > 0 && (
+                                <>
+                                  {!q && <p className="px-3 py-1.5 text-[11px] text-gray-400 border-b border-gray-50">등록된 상위법인</p>}
+                                  {filtered.map((name) => (
+                                    <button key={name} type="button"
+                                      onClick={() => { setSelectedSubmissionEntity(name); setEntityMenuOpen(false); setEntityQuery(""); }}
+                                      className="w-full text-left px-3 py-2.5 text-xs hover:bg-gray-50 border-b border-gray-50 last:border-0">
+                                      <p className="font-medium text-gray-800">{name}</p>
+                                    </button>
+                                  ))}
+                                </>
+                              )}
+                              {q && !exactMatch && (
+                                <button type="button"
+                                  onClick={() => { setSelectedSubmissionEntity(q); setEntityMenuOpen(false); setEntityQuery(""); }}
+                                  className="w-full text-left px-3 py-2.5 text-xs hover:bg-blue-50 bg-blue-50/40 border-t border-blue-100">
+                                  <p className="font-medium text-blue-700">+ &ldquo;{q}&rdquo; 직접 입력으로 사용</p>
+                                </button>
+                              )}
+                              {filtered.length === 0 && !q && (
+                                <div className="py-5 px-3 text-center">
+                                  <p className="text-xs text-gray-400">등록된 상위법인이 없어요. 위에서 새 이름을 입력하세요.</p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
                     <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-1.5 leading-relaxed">
                       필터링 시 체크하는 상위법인은 <span className="font-semibold">통계제출처에 자동 등록</span>됩니다.<br />
                       이후 수정은 <Link href="/submission-routes" className="underline font-semibold hover:text-blue-900">통계제출처 메뉴</Link>에서 가능합니다.
