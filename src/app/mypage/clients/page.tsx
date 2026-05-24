@@ -99,11 +99,12 @@ export default function ClientsPage() {
   const [requestFilter, setRequestFilter] = useState<string>("all");
   const [requestsLoading, setRequestsLoading] = useState(false);
 
-  /* ── 상위법인 (필터링 시 선택 — 통계제출처 자동 등록용) ── */
-  const [selectedSubmissionEntity, setSelectedSubmissionEntity] = useState("");
-  const [entitySuggestions, setEntitySuggestions] = useState<string[]>([]);
+  /* ── 상위법인 (필터링 시 선택 — DB 매칭된 dealer 만 선택 가능, 자유 입력 금지) ── */
+  const [selectedSubmissionEntity, setSelectedSubmissionEntity] = useState<{ clientName: string; bizNumber: string } | null>(null);
   const [entityMenuOpen, setEntityMenuOpen] = useState(false);
   const [entityQuery, setEntityQuery] = useState("");
+  const [entityResults, setEntityResults] = useState<{ clientName: string; bizNumber: string; dealerType: string | null }[]>([]);
+  const [entitySearching, setEntitySearching] = useState(false);
   const entityMenuRef = useRef<HTMLDivElement>(null);
 
   /* ── 초기 로드 ── */
@@ -113,12 +114,21 @@ export default function ClientsPage() {
     fetch("/api/medications/companies").then((r) => r.json()).then(setCompanies);
     fetch(`/api/proposals?userId=${session.user.id}`).then((r) => r.json()).then((d) => setProposals(Array.isArray(d) ? d : []));
     fetch(`/api/filter-request/company-status?userId=${session.user.id}`).then((r) => r.json()).then(setCompanyStatuses);
-    // 상위법인 자동완성 후보 (본인 history + FilterMapping 표준)
-    fetch("/api/submission-routes/suggestions?type=submissionEntity")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((d) => setEntitySuggestions(Array.isArray(d) ? d : []));
     loadMyRequests(session.user.id);
   }, [session?.user?.id]);
+
+  /* 상위법인 검색 — debounce 후 /api/dealers/search 호출. 빈 쿼리면 결과 비움. */
+  useEffect(() => {
+    if (!entityMenuOpen) return;
+    const t = setTimeout(() => {
+      setEntitySearching(true);
+      fetch(`/api/dealers/search?q=${encodeURIComponent(entityQuery)}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((d) => setEntityResults(Array.isArray(d) ? d : []))
+        .finally(() => setEntitySearching(false));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [entityQuery, entityMenuOpen]);
 
   useEffect(() => {
     fetch("/api/user-clients").then((r) => r.json()).then((d) => setMyClients(Array.isArray(d) ? d : []));
@@ -263,14 +273,14 @@ export default function ClientsPage() {
     e.preventDefault(); setFilterError("");
     if (selected.size === 0) { setFilterError("제약사를 1개 이상 선택해주세요."); return; }
     if (!selectedFilterClient) { setFilterError("거래처를 선택해주세요."); return; }
-    if (!selectedSubmissionEntity.trim()) { setFilterError("상위법인을 선택해주세요."); return; }
+    if (!selectedSubmissionEntity) { setFilterError("상위법인을 선택해주세요. (DB 에 등록된 법인만 선택 가능)"); return; }
     setFilterLoading(true);
     try {
       const res = await fetch("/api/filter-request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId: session!.user.id, userName: session!.user.name || session!.user.email, clientName: selectedFilterClient.clientName, bizNumber: selectedFilterClient.bizNumber, companies: Array.from(selected) }) });
       if (!res.ok) { setFilterError((await res.json()).error || "요청 중 오류가 발생했어요."); return; }
 
-      // 통계제출처 자동 등록 — 선택된 각 제약사마다. 실패해도 filter-request 자체는 성공으로 처리.
-      const entity = normalizeCompanyName(selectedSubmissionEntity);
+      // 통계제출처 자동 등록 — 선택된 각 제약사마다. 실패해도 filter-request 자체는 성공.
+      const entity = normalizeCompanyName(selectedSubmissionEntity.clientName);
       const routeResults = await Promise.all(
         Array.from(selected).map((companyName) =>
           fetch("/api/submission-routes", {
@@ -292,12 +302,8 @@ export default function ClientsPage() {
 
       setFilterSuccess(true);
       setSelected(new Set());
-      setSelectedSubmissionEntity("");
+      setSelectedSubmissionEntity(null);
       fetch(`/api/filter-request/company-status?userId=${session!.user.id}`).then((r) => r.json()).then(setCompanyStatuses);
-      // 자동 등록 후 본인 history 갱신 (다음 요청 자동완성 후보에 반영)
-      fetch("/api/submission-routes/suggestions?type=submissionEntity")
-        .then((r) => (r.ok ? r.json() : []))
-        .then((d) => setEntitySuggestions(Array.isArray(d) ? d : []));
       loadMyRequests(session!.user.id);
     } finally {
       setFilterLoading(false);
@@ -514,7 +520,7 @@ export default function ClientsPage() {
                     </div>
                   )}
 
-                  {/* 상위법인 선택 — 거래처/제약사 선택과 동일한 검색 가능 드롭다운 패턴 */}
+                  {/* 상위법인 선택 — DB 에 등록된 dealer 만 선택 가능. 자유 입력 금지. */}
                   <div className="space-y-1">
                     <label className="text-xs font-medium text-gray-600">상위법인 선택 <span className="text-red-500">*</span></label>
                     <div className="relative" ref={entityMenuRef}>
@@ -523,14 +529,15 @@ export default function ClientsPage() {
                         {selectedSubmissionEntity ? (
                           <span className="flex items-center gap-2 flex-1 min-w-0">
                             <CheckCircle2 className="w-4 h-4 text-blue-500 shrink-0" />
-                            <span className="font-medium text-gray-800 truncate">{selectedSubmissionEntity}</span>
+                            <span className="font-medium text-gray-800 truncate">{selectedSubmissionEntity.clientName}</span>
+                            <span className="text-gray-400 font-mono text-xs shrink-0">{selectedSubmissionEntity.bizNumber}</span>
                           </span>
                         ) : (
-                          <span className="text-gray-400 flex items-center gap-1.5"><Search className="w-3.5 h-3.5" />상위법인 검색 및 선택</span>
+                          <span className="text-gray-400 flex items-center gap-1.5"><Search className="w-3.5 h-3.5" />상위법인 검색 (사업자번호 또는 이름)</span>
                         )}
                         <div className="flex items-center gap-1 shrink-0">
                           {selectedSubmissionEntity && (
-                            <span onClick={(e) => { e.stopPropagation(); setSelectedSubmissionEntity(""); setEntityQuery(""); }}
+                            <span onClick={(e) => { e.stopPropagation(); setSelectedSubmissionEntity(null); setEntityQuery(""); }}
                               className="p-0.5 text-gray-400 hover:text-gray-600 rounded">
                               <X className="w-3.5 h-3.5" />
                             </span>
@@ -538,51 +545,43 @@ export default function ClientsPage() {
                           <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${entityMenuOpen ? "rotate-180" : ""}`} />
                         </div>
                       </button>
-                      {entityMenuOpen && (() => {
-                        const q = entityQuery.trim();
-                        const filtered = q
-                          ? entitySuggestions.filter((s) => s.toLowerCase().includes(q.toLowerCase()))
-                          : entitySuggestions;
-                        const exactMatch = entitySuggestions.some((s) => s.toLowerCase() === q.toLowerCase());
-                        return (
-                          <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg">
-                            <div className="p-2 border-b border-gray-100">
-                              <div className="relative">
-                                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
-                                <input autoFocus value={entityQuery} onChange={(e) => setEntityQuery(e.target.value)}
-                                  placeholder="상위법인명 검색 또는 직접 입력..."
-                                  className="w-full h-8 pl-8 pr-2 border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                              </div>
-                            </div>
-                            <div className="max-h-56 overflow-y-auto">
-                              {filtered.length > 0 && (
-                                <>
-                                  {!q && <p className="px-3 py-1.5 text-[11px] text-gray-400 border-b border-gray-50">등록된 상위법인</p>}
-                                  {filtered.map((name) => (
-                                    <button key={name} type="button"
-                                      onClick={() => { setSelectedSubmissionEntity(name); setEntityMenuOpen(false); setEntityQuery(""); }}
-                                      className="w-full text-left px-3 py-2.5 text-xs hover:bg-gray-50 border-b border-gray-50 last:border-0">
-                                      <p className="font-medium text-gray-800">{name}</p>
-                                    </button>
-                                  ))}
-                                </>
-                              )}
-                              {q && !exactMatch && (
-                                <button type="button"
-                                  onClick={() => { setSelectedSubmissionEntity(q); setEntityMenuOpen(false); setEntityQuery(""); }}
-                                  className="w-full text-left px-3 py-2.5 text-xs hover:bg-blue-50 bg-blue-50/40 border-t border-blue-100">
-                                  <p className="font-medium text-blue-700">+ &ldquo;{q}&rdquo; 직접 입력으로 사용</p>
-                                </button>
-                              )}
-                              {filtered.length === 0 && !q && (
-                                <div className="py-5 px-3 text-center">
-                                  <p className="text-xs text-gray-400">등록된 상위법인이 없어요. 위에서 새 이름을 입력하세요.</p>
-                                </div>
-                              )}
+                      {entityMenuOpen && (
+                        <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg">
+                          <div className="p-2 border-b border-gray-100">
+                            <div className="relative">
+                              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+                              <input autoFocus value={entityQuery} onChange={(e) => setEntityQuery(e.target.value)}
+                                placeholder="상위법인명 또는 사업자번호 검색..."
+                                className="w-full h-8 pl-8 pr-8 border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                              {entitySearching && <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 animate-spin text-gray-400" />}
                             </div>
                           </div>
-                        );
-                      })()}
+                          <div className="max-h-56 overflow-y-auto">
+                            {entityResults.length === 0 ? (
+                              entityQuery.trim() && !entitySearching ? (
+                                <div className="py-4 px-3 text-center bg-red-50 border-t border-red-100">
+                                  <AlertCircle className="w-5 h-5 text-red-500 mx-auto mb-1.5" />
+                                  <p className="text-xs font-semibold text-red-700 mb-0.5">등록되지 않은 상위법인입니다</p>
+                                  <p className="text-[11px] text-red-600">DB 에 매칭되는 법인이 없어요.<br />관리자에게 문의하세요.</p>
+                                </div>
+                              ) : (
+                                <div className="py-5 px-3 text-center">
+                                  <p className="text-xs text-gray-400">{entityQuery.trim() ? "검색 중..." : "상위법인명 또는 사업자번호를 입력하세요"}</p>
+                                </div>
+                              )
+                            ) : (
+                              entityResults.map((d) => (
+                                <button key={`${d.clientName}-${d.bizNumber}`} type="button"
+                                  onClick={() => { setSelectedSubmissionEntity({ clientName: d.clientName, bizNumber: d.bizNumber }); setEntityMenuOpen(false); setEntityQuery(""); }}
+                                  className="w-full text-left px-3 py-2.5 text-xs hover:bg-gray-50 border-b border-gray-50 last:border-0">
+                                  <p className="font-medium text-gray-800">{d.clientName}</p>
+                                  <p className="text-gray-400 font-mono">{d.bizNumber}</p>
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                     <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-1.5 leading-relaxed">
                       필터링 시 체크하는 상위법인은 <span className="font-semibold">통계제출처에 자동 등록</span>됩니다.<br />
@@ -591,7 +590,7 @@ export default function ClientsPage() {
                   </div>
 
                   {filterError && <p className="text-sm text-red-600 bg-red-50 p-3 rounded-lg">{filterError}</p>}
-                  <Button type="submit" className="w-full" disabled={filterLoading || selected.size === 0 || !selectedFilterClient || !selectedSubmissionEntity.trim()}>
+                  <Button type="submit" className="w-full" disabled={filterLoading || selected.size === 0 || !selectedFilterClient || !selectedSubmissionEntity}>
                     <Send className="w-4 h-4 mr-2" />{filterLoading ? "요청 중..." : `${selected.size}개 제약사 조회 등록`}
                   </Button>
                 </form>
