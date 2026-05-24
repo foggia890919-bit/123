@@ -742,7 +742,11 @@ function ReviewPhotoCard({
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>, idx: number, field: string) {
     if (e.key !== "ArrowUp" && e.key !== "ArrowDown" && e.key !== "Enter") return;
+    // 3중 차단 — React preventDefault + native preventDefault + stopPropagation
+    // 페이지 window scroll 절대 안 일어나게.
     e.preventDefault();
+    e.stopPropagation();
+    e.nativeEvent.preventDefault();
     const dir = e.key === "ArrowUp" ? -1 : 1;
     const nextIdx = idx + dir;
     if (nextIdx < 0 || nextIdx >= rows.length) return;
@@ -1084,8 +1088,14 @@ function ReviewPhotoCard({
           )}
         </div>
 
-        {/* 아래: 편집 가능 표 — ref 잡아서 키보드 화살표 시 표 안에서만 scroll */}
-        <div ref={tableScrollRef} className="overflow-auto max-h-[55vh]">
+        {/* 아래: 편집 가능 표 — ref 잡아서 키보드 화살표 시 표 안에서만 scroll.
+            onKeyDownCapture — capture phase 에서 한 번 더 ArrowUp/Down default 차단. */}
+        <div ref={tableScrollRef} className="overflow-auto max-h-[55vh]"
+          onKeyDownCapture={(e) => {
+            if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+              e.preventDefault();
+            }
+          }}>
           <table className="w-full text-xs">
             <thead className="bg-gray-50 text-gray-500 sticky top-0 z-10">
               <tr>
