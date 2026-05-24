@@ -34,6 +34,9 @@ interface FusionDrug {
     | null;
   // 행별 4가지 검증 결과 — 검수 UI 가 빨강/노랑 강조하기 위한 데이터.
   qualityChecks: RowQualityChecks;
+  // Case B 자동 교체된 약품명의 원본 OCR 값 (호버 툴팁 노출용).
+  originalProductName: string;
+  nameAutoReplaced: boolean;
   // Gemini bbox [x1, y1, x2, y2] 비율 0~1 — 검수 페이지에서 표 행 ↔ 사진 위치 매칭용
   bbox: [number, number, number, number];
 }
@@ -185,7 +188,8 @@ export async function extractStatsLikeFusion(
     const { checks, score } = computeRowQuality({
       matchedMedicationId: match.matchedMedicationId,
       codeOk,
-      nameSimilar: match.nameCodeMismatch == null && !!match.matchedMedicationId,
+      // 자동 교체된 case B 는 마스터값으로 교체되어 최종 이름은 일치 — nameSimilar=true.
+      nameSimilar: !!match.matchedMedicationId && (match.nameCodeMismatch == null || match.nameAutoReplaced),
       masterProductName: match.productName,
       ocrProductName: d.name,
       quantity: d.quantity ?? 0,
@@ -238,6 +242,8 @@ export async function extractStatsLikeFusion(
         : null,
       companyNameMismatch,
       qualityChecks: checks,
+      originalProductName: match.originalProductName,
+      nameAutoReplaced: match.nameAutoReplaced,
       bbox: d.bbox,
     };
   });

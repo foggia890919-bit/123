@@ -100,6 +100,10 @@ export interface MatchResult {
   matchedMedicationId: string | null;
   matchConfidence: number;
   nameCodeMismatch: { masterProductName: string; ocrProductName: string } | null;
+  // Case B (보험코드 매칭 + 이름 불일치) 에서 마스터 이름으로 자동 교체된 경우 true.
+  // 검수 UI 가 originalProductName 을 호버 툴팁으로 노출.
+  originalProductName: string;
+  nameAutoReplaced: boolean;
 }
 
 // 보험코드 9자리로 마스터 매칭 + 한글 첫 3자 sanity check.
@@ -134,17 +138,23 @@ export function matchMedication(
         matchedMedicationId: m.id,
         matchConfidence: 100,
         nameCodeMismatch: null,
+        originalProductName: item.productName,
+        nameAutoReplaced: false,
       };
     }
+    // Case B — 보험코드 9자리 정확 매칭 + 이름 sanity check 실패.
+    // 사용자 요구: 코드를 신뢰하고 마스터 이름으로 자동 교체. 원본은 originalProductName 에 보존.
     return {
       insuranceCode: code,
-      productName: item.productName,
-      companyName: item.companyName,
+      productName: m.productName,
+      companyName: item.companyName || m.companyName,
       unitPrice: m.price,
       commissionRate: m.commissionRate,
       matchedMedicationId: m.id,
-      matchConfidence: 80,
+      matchConfidence: 95,
       nameCodeMismatch: { masterProductName: m.productName, ocrProductName: item.productName },
+      originalProductName: item.productName,
+      nameAutoReplaced: true,
     };
   }
 
@@ -162,6 +172,8 @@ export function matchMedication(
         matchedMedicationId: found.id,
         matchConfidence: 70,        // 제품명 매칭은 코드 매칭(100) 보다 신뢰도 낮음
         nameCodeMismatch: null,
+        originalProductName: item.productName,
+        nameAutoReplaced: false,
       };
     }
   }
@@ -176,6 +188,8 @@ export function matchMedication(
     matchedMedicationId: null,
     matchConfidence: 0,
     nameCodeMismatch: null,
+    originalProductName: item.productName,
+    nameAutoReplaced: false,
   };
 }
 

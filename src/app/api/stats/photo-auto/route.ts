@@ -195,7 +195,7 @@ export async function POST(req: NextRequest) {
         const { checks, score } = computeRowQuality({
           matchedMedicationId: match.matchedMedicationId,
           codeOk,
-          nameSimilar: match.nameCodeMismatch == null && !!match.matchedMedicationId,
+          nameSimilar: !!match.matchedMedicationId && (match.nameCodeMismatch == null || match.nameAutoReplaced),
           masterProductName: match.productName,
           ocrProductName: d.name,
           quantity: d.quantity ?? 0,
@@ -231,6 +231,8 @@ export async function POST(req: NextRequest) {
             : null,
           companyNameMismatch,
           qualityChecks: checks,
+          originalProductName: match.originalProductName,
+          nameAutoReplaced: match.nameAutoReplaced,
         };
       });
 

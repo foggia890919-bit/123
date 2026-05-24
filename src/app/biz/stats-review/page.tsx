@@ -62,6 +62,8 @@ interface ReportRow {
       matchedMedicationId?: string | null;
       mismatch?: unknown;
       companyNameMismatch?: { geminiCompanyName?: string; masterCompanyName?: string } | null;
+      originalProductName?: string;
+      nameAutoReplaced?: boolean;
       finalConfidence?: number;
       qualityChecks?: {
         masterMatch?: { applicable?: boolean; matched?: boolean; detail?: string };
@@ -550,6 +552,9 @@ interface EditableDrugRow {
   prefixCheckBad: boolean;
   // Gemini 가 추출한 행별 제약사와 마스터 매칭 제약사가 다른 경우. 검수에서 사람이 결정.
   companyNameMismatch: { geminiCompanyName: string; masterCompanyName: string } | null;
+  // Case B 자동 교체 — 사용자가 약품명 편집 안 했지만 매칭값과 OCR 원본이 다른 경우.
+  originalProductName: string;
+  nameAutoReplaced: boolean;
   bbox: [number, number, number, number];        // 사진 highlight overlay 좌표
 }
 
@@ -610,6 +615,8 @@ function ReviewPhotoCard({
               masterCompanyName: d.companyNameMismatch.masterCompanyName,
             }
           : null,
+        originalProductName: d.originalProductName ?? "",
+        nameAutoReplaced: !!d.nameAutoReplaced,
         bbox,
       };
     })
@@ -749,6 +756,8 @@ function ReviewPhotoCard({
       revenueCheckBad: false,
       prefixCheckBad: false,
       companyNameMismatch: null,
+      originalProductName: "",
+      nameAutoReplaced: false,
       bbox: [0, 0, 0, 0],
     }]);
     setDirty(true);
@@ -1071,12 +1080,20 @@ function ReviewPhotoCard({
                       </div>
                     </td>
                     <td className="px-1 py-0.5">
-                      <input ref={(el) => { inputRefs.current[`${i}:productName`] = el; }}
-                        value={d.productName}
-                        onChange={(e) => updateRow(i, { productName: e.target.value })}
-                        onFocus={() => setFocusedIdx(i)}
-                        onKeyDown={(e) => handleKeyDown(e, i, "productName")}
-                        className="w-full px-1 py-0.5 border rounded text-[11px]"/>
+                      <div className="relative">
+                        <input ref={(el) => { inputRefs.current[`${i}:productName`] = el; }}
+                          value={d.productName}
+                          onChange={(e) => updateRow(i, { productName: e.target.value, nameAutoReplaced: false })}
+                          onFocus={() => setFocusedIdx(i)}
+                          onKeyDown={(e) => handleKeyDown(e, i, "productName")}
+                          title={d.nameAutoReplaced && d.originalProductName && d.originalProductName !== d.productName
+                            ? `자동 교체됨\nOCR 원본: ${d.originalProductName}\n→ 마스터: ${d.productName}\n(보험코드 매칭으로 교정)`
+                            : undefined}
+                          className={`w-full px-1 py-0.5 border rounded text-[11px] ${d.nameAutoReplaced ? "pr-7 bg-blue-50 border-blue-300" : ""}`}/>
+                        {d.nameAutoReplaced && d.originalProductName && d.originalProductName !== d.productName && (
+                          <span className="absolute right-0.5 top-1/2 -translate-y-1/2 text-[8px] font-bold text-blue-700 bg-blue-100 px-1 py-0.5 rounded pointer-events-none">AI</span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-1 py-0.5">
                       <input ref={(el) => { inputRefs.current[`${i}:quantity`] = el; }}
