@@ -109,3 +109,4 @@ CREATE INDEX IF NOT EXISTS "UserClient_isRateTarget_idx"        ON "UserClient"(
   - UI: 노란 "검증대상" 배지 + "검증대상만 보기" 필터 + 색상 중첩 가드
   - ENV `GEMINI_SELFVALIDATE_ENABLED=true` (Vercel 추가 필요)
   - DB 스키마 변경 없음 (ocrData Json 안에 reviewReason/validation 저장)
+2026-05-24 12:47 | qa-crosscheck | Phase 3 양방향 자가검증 Plan | CONDITIONAL_PASS
