@@ -103,6 +103,45 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json(user);
   }
 
+  if ("name" in body) {
+    const updated = await prisma.user.update({
+      where: { id: body.userId },
+      data: { name: String(body.name ?? "").trim() || null, updatedAt: new Date() },
+      select: { id: true, name: true },
+    });
+    return NextResponse.json(updated);
+  }
+
+  if ("bizUpdate" in body) {
+    const { clientName, bizNumber, address } = body.bizUpdate as {
+      clientName?: string; bizNumber?: string; address?: string;
+    };
+    // 본인 대표 사업자 (dealerType=null) 수정
+    const biz = await prisma.userClient.findFirst({
+      where: { userId: body.userId, dealerType: null },
+      select: { id: true },
+      orderBy: { createdAt: "asc" },
+    });
+    if (!biz) {
+      return NextResponse.json({ error: "사업자 정보가 등록되지 않은 회원입니다." }, { status: 404 });
+    }
+    const data: Record<string, unknown> = {};
+    if (clientName !== undefined) data.clientName = String(clientName).trim();
+    if (bizNumber !== undefined) data.bizNumber = String(bizNumber).replace(/\D/g, "");
+    if (address !== undefined) data.address = String(address).trim() || null;
+    if (Object.keys(data).length === 0) {
+      return NextResponse.json({ error: "변경할 항목이 없어요." }, { status: 400 });
+    }
+    try {
+      const updated = await prisma.userClient.update({ where: { id: biz.id }, data });
+      return NextResponse.json({ success: true, clientName: updated.clientName, bizNumber: updated.bizNumber });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("Unique constraint")) return NextResponse.json({ error: "이미 등록된 사업자번호예요." }, { status: 409 });
+      return NextResponse.json({ error: msg.slice(0, 200) }, { status: 500 });
+    }
+  }
+
   if ("newPassword" in body) {
     if (typeof body.newPassword !== "string" || body.newPassword.length < 8) {
       return NextResponse.json({ error: "비밀번호는 8자 이상이어야 합니다." }, { status: 400 });

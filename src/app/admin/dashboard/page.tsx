@@ -1669,7 +1669,20 @@ function MembersTab() {
           <tbody className="divide-y divide-gray-100">
             {users.map((user) => (
               <tr key={user.id} className="hover:bg-gray-50">
-                <td className="px-4 py-3 font-medium text-gray-900">{user.name || "-"}</td>
+                <td className="px-4 py-3 font-medium text-gray-900 cursor-pointer hover:text-blue-600"
+                  title="클릭해서 이름 수정"
+                  onClick={() => {
+                    const newName = prompt("이름 수정:", user.name || "");
+                    if (newName === null) return;
+                    fetch("/api/admin/users", {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ userId: user.id, name: newName.trim() }),
+                    }).then(async (r) => {
+                      if (r.ok) setUsers((prev) => prev.map((u) => u.id === user.id ? { ...u, name: newName.trim() } : u));
+                      else alert("수정 실패");
+                    });
+                  }}>{user.name || "-"}</td>
                 <td className="px-4 py-3 text-gray-500 text-xs">{user.email}</td>
                 <td className="px-4 py-3 text-gray-500 text-xs">
                   <div>{user.carrier || "-"}</div>
@@ -1708,8 +1721,33 @@ function MembersTab() {
                       </button>
                     ) : <span className="text-xs text-gray-300">없음</span>}
                     {user.userClients && user.userClients[0] && (
-                      <div className="text-[10px] text-gray-500 text-center">
-                        <div>{user.userClients[0].clientName}</div>
+                      <div className="text-[10px] text-gray-500 text-center space-y-0.5">
+                        <div className="cursor-pointer hover:text-blue-600" title="클릭해서 수정"
+                          onClick={() => {
+                            const newName = prompt("상호명 수정:", user.userClients![0].clientName);
+                            if (newName === null) return;
+                            const newBiz = prompt("사업자번호 수정:", user.userClients![0].bizNumber);
+                            if (newBiz === null) return;
+                            fetch("/api/admin/users", {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ userId: user.id, bizUpdate: { clientName: newName, bizNumber: newBiz } }),
+                            }).then(async (r) => {
+                              if (r.ok) {
+                                const d = await r.json();
+                                setUsers((prev) => prev.map((u) =>
+                                  u.id === user.id && u.userClients?.[0]
+                                    ? { ...u, userClients: [{ ...u.userClients[0], clientName: d.clientName ?? newName, bizNumber: d.bizNumber ?? newBiz }] }
+                                    : u
+                                ));
+                              } else {
+                                const d = await r.json().catch(() => ({}));
+                                alert(d.error || "수정 실패");
+                              }
+                            });
+                          }}>
+                          {user.userClients[0].clientName}
+                        </div>
                         <div className="font-mono">{user.userClients[0].bizNumber}</div>
                         {user.userClients[0].bizFileName && (
                           <a href={`/api/files/user-client-biz/${user.userClients[0].id}`} target="_blank" rel="noreferrer"
