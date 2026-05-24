@@ -107,11 +107,10 @@ export async function GET(req: NextRequest) {
   ];
   const PHARMACY_KEYWORDS = ["약국", "약방"];
   function classify(role: string, clientName: string): "ADMIN" | "DOCTOR" | "PHARMACIST" | "BUSINESS_APPROVED" | "GENERAL" {
+    // 의료기관 키워드 최우선 (role 무관) — ADMIN/BUSINESS 가 실수로 병원 이름 등록한 데이터 방어
+    if (role === "DOCTOR" || MEDICAL_KEYWORDS.some((kw) => clientName.includes(kw))) return "DOCTOR";
+    if (role === "PHARMACIST" || PHARMACY_KEYWORDS.some((kw) => clientName.includes(kw))) return "PHARMACIST";
     if (role === "ADMIN") return "ADMIN";
-    if (role === "DOCTOR") return "DOCTOR";
-    if (role === "PHARMACIST") return "PHARMACIST";
-    if (MEDICAL_KEYWORDS.some((kw) => clientName.includes(kw))) return "DOCTOR";
-    if (PHARMACY_KEYWORDS.some((kw) => clientName.includes(kw))) return "PHARMACIST";
     return "GENERAL";
   }
 
