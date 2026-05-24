@@ -71,6 +71,10 @@ export default function ClientsPage() {
   const [name, setName] = useState("");
   const [biz, setBiz] = useState("");
   const [address, setAddress] = useState("");
+  // 한글 IME 입력 직후 즉시 버튼 클릭 시 state 미반영 케이스 대비 — DOM 값 직접 읽기
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const bizInputRef = useRef<HTMLInputElement>(null);
+  const addressInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [registering, setRegistering] = useState(false);
   const [regError, setRegError] = useState("");
@@ -241,10 +245,14 @@ export default function ClientsPage() {
 
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault(); setRegError("");
-    if (!name.trim() || !biz.trim()) { setRegError("거래처명과 사업자번호를 입력해주세요."); return; }
+    // input 의 실제 DOM 값을 우선 읽음 — 한글 IME 미반영 케이스 방어
+    const nameVal = (nameInputRef.current?.value ?? name).trim();
+    const bizVal = (bizInputRef.current?.value ?? biz).trim();
+    const addressVal = (addressInputRef.current?.value ?? address).trim();
+    if (!nameVal || !bizVal) { setRegError("거래처명과 사업자번호를 입력해주세요."); return; }
     if (bizError) { setRegError(bizError); return; }
     if (dupChecked === "dup") { setRegError("이미 등록된 사업자번호예요."); return; }
-    const digits = biz.replace(/\D/g, "");
+    const digits = bizVal.replace(/\D/g, "");
     if (!validateBizNumber(digits)) { setRegError("유효하지 않은 사업자등록번호예요."); return; }
     setRegistering(true);
     let bizDocument: string | null = null, bizFileName: string | null = null;
@@ -252,7 +260,7 @@ export default function ClientsPage() {
       bizDocument = await new Promise<string>((resolve) => { const r = new FileReader(); r.readAsDataURL(file); r.onload = () => resolve(r.result as string); });
       bizFileName = file.name;
     }
-    const res = await fetch("/api/user-clients", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientName: name.trim(), bizNumber: digits, address: address.trim() || null, bizDocument, bizFileName, dealerType: null }) });
+    const res = await fetch("/api/user-clients", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientName: nameVal, bizNumber: digits, address: addressVal || null, bizDocument, bizFileName, dealerType: null }) });
     if (res.ok) {
       const newClient = await res.json();
       setClients((prev) => [newClient, ...prev]);
@@ -347,7 +355,7 @@ export default function ClientsPage() {
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-600">사업자등록번호 <span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <Input value={biz} onChange={(e) => handleBizChange(e.target.value)} placeholder="000-00-00000" maxLength={12}
+                    <Input ref={bizInputRef} value={biz} onChange={(e) => handleBizChange(e.target.value)} placeholder="000-00-00000" maxLength={12}
                       className={bizError || dupChecked === "dup" || dupChecked === "corp" ? "border-red-400 pr-9" : dupChecked === "ok" ? "border-green-400 pr-9" : "pr-9"} />
                     {dupChecked === "checking" && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-gray-400" />}
                     {dupChecked === "ok" && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-green-500" />}
@@ -364,11 +372,11 @@ export default function ClientsPage() {
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-600">거래처명 <span className="text-red-500">*</span></label>
-                  <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="상호명" />
+                  <Input ref={nameInputRef} value={name} onChange={(e) => setName(e.target.value)} placeholder="상호명" />
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-600">주소 <span className="text-gray-400 font-normal">(선택)</span></label>
-                  <Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="예: 서울시 강남구 테헤란로 123" />
+                  <Input ref={addressInputRef} value={address} onChange={(e) => setAddress(e.target.value)} placeholder="예: 서울시 강남구 테헤란로 123" />
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-600">사업자등록증 <span className="text-gray-400 font-normal">(선택)</span></label>
