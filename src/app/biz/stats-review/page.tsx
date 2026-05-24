@@ -945,10 +945,33 @@ function ReviewPhotoCard({
           </span>
         )}
         {report.status === "ERROR" && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-300 font-semibold"
-            title={(report.ocrData as { error?: string })?.error ?? "처리 실패"}>
-            처리 실패 ⓘ
-          </span>
+          <>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-300 font-semibold"
+              title={(report.ocrData as { error?: string })?.error ?? "처리 실패"}>
+              처리 실패 ⓘ
+            </span>
+            <button onClick={async () => {
+              const res = await fetch("/api/stats/photo-retry", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ reportId: report.id }),
+              });
+              if (res.ok) {
+                alert("다시 분석을 시작했어요. 잠시 후 새로고침하면 결과를 볼 수 있어요.");
+                onSaved();
+              } else {
+                const d = await res.json().catch(() => ({}));
+                alert(`재분석 실패: ${d.error || res.status}`);
+              }
+            }}
+              disabled={busy || saving}
+              className="text-[10px] px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-300 font-semibold hover:bg-blue-100 disabled:opacity-50">
+              다시 분석
+            </button>
+          </>
+        )}
+        {report.status === "PROCESSING" && (report.ocrData as { retryCount?: number })?.retryCount !== undefined && (
+          <span className="text-[10px] text-amber-700">재분석 중...</span>
         )}
         {/* 중복 의심 — 같은 그룹 다른 사진과 약품 70%+ 일치 */}
         {duplicateMatches.length > 0 && (
