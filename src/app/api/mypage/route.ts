@@ -14,7 +14,7 @@ export async function GET(_req: NextRequest) {
     where: { id: session.id },
     select: {
       id: true, name: true, email: true, phone: true, carrier: true, role: true,
-      canBeParent: true,
+      isBusinessApproved: true,
       parent: { select: { id: true, name: true, email: true } },
     },
   });
@@ -134,12 +134,10 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ success: true });
   }
 
-  // 프로필 수정 (이름, 직업, 상위 노출 토글)
+  // 프로필 수정 (이름, 직업)
   const data: Record<string, unknown> = {};
   if (name !== undefined) data.name = String(name).trim();
   if (role !== undefined && VALID_ROLES.includes(role)) data.role = role;
-  // canBeParent — 다른 회원이 나를 상위 회원으로 검색·연결할 수 있게 허용.
-  if (typeof body.canBeParent === "boolean") data.canBeParent = body.canBeParent;
 
   if (Object.keys(data).length === 0) {
     return NextResponse.json({ error: "변경할 항목이 없어요." }, { status: 400 });

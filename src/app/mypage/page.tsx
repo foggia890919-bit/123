@@ -30,7 +30,7 @@ interface BizClient {
 interface ProfileInfo {
   name: string; email: string; phone: string | null;
   carrier: string | null; role: string;
-  canBeParent: boolean;
+  isBusinessApproved: boolean;
   parent: { id: string; name: string | null; email: string } | null;
   documents: { id: string; docType: string; fileName: string; createdAt: string }[];
   bizClient: BizClient | null;
@@ -96,9 +96,6 @@ export default function MyPage() {
   const [bizSaving, setBizSaving] = useState(false);
   const [bizError, setBizError] = useState("");
   const [bizSuccess, setBizSuccess] = useState(false);
-
-  // 상위 노출 토글 저장 중 표시
-  const [canBeParentSaving, setCanBeParentSaving] = useState(false);
 
   // 비밀번호 변경
   const [currentPw, setCurrentPw] = useState("");
@@ -214,22 +211,6 @@ export default function MyPage() {
       setBizError("저장 중 오류가 발생했어요.");
     } finally {
       setBizSaving(false);
-    }
-  }
-
-  async function handleCanBeParentToggle(next: boolean) {
-    setCanBeParentSaving(true);
-    try {
-      const res = await fetch("/api/mypage", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ canBeParent: next }),
-      });
-      if (res.ok) {
-        setProfileInfo((prev) => (prev ? { ...prev, canBeParent: next } : prev));
-      }
-    } finally {
-      setCanBeParentSaving(false);
     }
   }
 
@@ -410,48 +391,42 @@ export default function MyPage() {
         </div>
       </div>
 
-      {/* 딜러 분류 / 상위 회원 연결 */}
+      {/* 회원 등급 — 일반회원 vs 사업자회원 */}
       <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
         <div className="flex items-center gap-2">
           <Network className="w-5 h-5 text-gray-600" />
-          <h2 className="text-lg font-semibold text-gray-800">딜러 분류 / 상위 회원 연결</h2>
+          <h2 className="text-lg font-semibold text-gray-800">회원 등급</h2>
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 items-center">
+          {profileInfo?.isBusinessApproved ? (
+            <span className="px-2.5 py-1 text-xs font-semibold bg-emerald-100 text-emerald-700 border border-emerald-300 rounded">
+              사업자회원 (인증 완료)
+            </span>
+          ) : (
+            <span className="px-2.5 py-1 text-xs font-semibold bg-gray-100 text-gray-600 border border-gray-300 rounded">
+              일반회원
+            </span>
+          )}
           {profileInfo?.parent && (
             <span className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded">
               하위 회원 (상위: {profileInfo.parent.name || profileInfo.parent.email})
             </span>
           )}
-          {profileInfo?.canBeParent && (
-            <span className="px-2 py-1 text-xs bg-emerald-100 text-emerald-700 rounded">
-              상위로 검색 노출 중
-            </span>
-          )}
-          {!profileInfo?.parent && !profileInfo?.canBeParent && (
-            <span className="px-2 py-1 text-xs bg-gray-100 text-gray-500 rounded">미분류</span>
-          )}
         </div>
 
-        <label className="flex items-start gap-2.5 p-3 bg-gray-50 border border-gray-200 rounded-md cursor-pointer hover:border-blue-300">
-          <input
-            type="checkbox"
-            checked={!!profileInfo?.canBeParent}
-            disabled={canBeParentSaving}
-            onChange={(e) => handleCanBeParentToggle(e.target.checked)}
-            className="mt-0.5 w-4 h-4 rounded border-gray-300 text-blue-600"
-          />
-          <div className="flex-1">
-            <p className="text-sm font-medium text-gray-800">상위 회원으로 검색 노출 허용</p>
-            <p className="text-xs text-gray-500 mt-0.5">
-              켜면 다른 회원이 통계제출처에서 나를 <span className="font-semibold">상위법인으로 선택</span>할 수 있어요.
-              {!profileInfo?.bizClient && (
-                <span className="block mt-1 text-amber-700">⚠ 사업자 정보가 비어있어요. 검색 결과에 상호명·사업자번호가 노출되도록 위에서 사업자 정보를 먼저 등록해주세요.</span>
-              )}
+        {!profileInfo?.isBusinessApproved && (
+          <div className="text-xs text-gray-600 bg-amber-50 border border-amber-200 rounded p-3 space-y-1">
+            <p className="font-medium text-amber-800">📌 사업자회원이 되면</p>
+            <ul className="list-disc list-inside text-amber-700 space-y-0.5">
+              <li>다른 회원의 상위·하위법인 검색에 <span className="font-semibold">우선 노출</span></li>
+              <li>통계제출처 자동 라우팅 등 사업자 전용 기능 사용 가능</li>
+            </ul>
+            <p className="text-amber-700 mt-1">
+              위 <span className="font-semibold">사업자 정보</span> 카드에서 상호명·사업자번호·사업자등록증을 등록하면 관리자 승인 후 사업자회원으로 전환됩니다.
             </p>
           </div>
-          {canBeParentSaving && <Loader2 className="w-4 h-4 animate-spin text-gray-400" />}
-        </label>
+        )}
 
         <div className="text-xs text-gray-600 bg-blue-50 border border-blue-200 rounded p-3 space-y-1">
           <p className="font-medium text-blue-700">상위 회원과 연결하려면?</p>

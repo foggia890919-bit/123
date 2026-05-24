@@ -33,8 +33,6 @@ export default function RegisterPage() {
   const [bizAddress, setBizAddress] = useState("");
   const [bizFile, setBizFile] = useState<File | null>(null);
   const [bizNumberError, setBizNumberError] = useState("");
-  // 다른 회원이 나를 상위 회원으로 검색·연결할 수 있게 허용 (기본 false).
-  const [canBeParent, setCanBeParent] = useState(false);
 
   // SMS 인증 상태
   const [otpCode, setOtpCode] = useState("");
@@ -243,7 +241,6 @@ export default function RegisterPage() {
               address: bizAddress.trim() || null,
             } : null,
             bizDocument: bizDocumentPayload,
-            canBeParent,
           }),
           signal: controller.signal,
         });
@@ -444,22 +441,12 @@ export default function RegisterPage() {
               </div>
             </div>
 
-            {/* 상위 노출 토글 — 다른 회원이 통계제출처에서 나를 상위법인으로 검색·연결 가능 */}
-            <label className="flex items-start gap-2.5 p-3 bg-white border border-gray-200 rounded-md cursor-pointer hover:border-blue-300">
-              <input
-                type="checkbox"
-                checked={canBeParent}
-                onChange={(e) => setCanBeParent(e.target.checked)}
-                className="mt-0.5 w-4 h-4 rounded border-gray-300 text-blue-600"
-              />
-              <div className="flex-1">
-                <p className="text-sm font-medium text-gray-800">상위 회원으로 검색 노출 허용</p>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  다른 회원이 통계제출처에서 나를 <span className="font-semibold">상위법인으로 선택</span>할 수 있게 합니다.
-                  가입 후 마이페이지에서 언제든 변경 가능합니다.
-                </p>
-              </div>
-            </label>
+            {/* 안내 — 사업자 인증 후 검색 우선 노출됨 */}
+            <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-2 leading-relaxed">
+              가입 직후엔 <span className="font-semibold">일반회원</span>으로 시작합니다.
+              사업자등록증 제출 + 관리자 승인 후 <span className="font-semibold">사업자회원</span>으로 전환되어
+              다른 회원의 상위·하위법인 검색에 우선 노출됩니다.
+            </p>
           </div>
 
           <div className="space-y-1">

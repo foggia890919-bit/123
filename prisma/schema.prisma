@@ -21,8 +21,9 @@ model User {
   parentUserId String?
   parent       User?                @relation("UserHierarchy", fields: [parentUserId], references: [id], onDelete: SetNull)
   children     User[]               @relation("UserHierarchy")
-  // 다른 회원이 나를 "상위 회원" 으로 검색·연결할 수 있게 허용. 회원가입/마이페이지에서 토글.
-  canBeParent  Boolean              @default(false)
+  // 사업자 인증 완료 여부 — 마이페이지에서 사업자등록증 제출 + 관리자 승인 후 true.
+  // 상위/하위법인 검색에서 우선 노출됨.
+  isBusinessApproved  Boolean       @default(false)
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
   proposals             Proposal[]
@@ -49,7 +50,7 @@ model User {
   parentLinkRequestsReceived ParentLinkRequest[]   @relation("PLRTarget")
 
   @@index([parentUserId])
-  @@index([canBeParent])
+  @@index([isBusinessApproved])
 }
 
 

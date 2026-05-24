@@ -7,7 +7,7 @@ import { BUCKETS, persistDataUri } from "@/lib/storage";
 export async function POST(req: NextRequest) {
   try {
     await ensureSmsOtpTable();
-    const { email, password, name, role, phone, carrier, document, biz, bizDocument, canBeParent } = await req.json();
+    const { email, password, name, role, phone, carrier, document, biz, bizDocument } = await req.json();
 
     if (!email || !password || !name) {
       return NextResponse.json({ error: "필수 항목을 입력해주세요." }, { status: 400 });
@@ -52,8 +52,8 @@ export async function POST(req: NextRequest) {
         phone: phone || null,
         carrier: carrier || null,
         approved: true,
-        // 다른 회원이 나를 상위 회원으로 검색·연결할 수 있게 허용. 기본 false.
-        canBeParent: Boolean(canBeParent),
+        // 신규 회원은 default 일반회원 (isBusinessApproved=false).
+        // 가입 후 마이페이지에서 사업자등록증 제출 + 관리자 승인 시 true 로 전환.
         updatedAt: new Date(),
       },
       select: { id: true, email: true, name: true, role: true },
