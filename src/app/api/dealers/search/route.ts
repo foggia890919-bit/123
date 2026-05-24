@@ -66,7 +66,12 @@ export async function GET(req: NextRequest) {
     where: {
       // 본인 제외
       id: { not: user.id },
-      // 사업자 정보(상호명·사업자번호) 등록된 회원만 — 이름만 등록된 회원은 상위법인 후보 X
+      // 사업자 인증된 회원만 노출 (관리자가 어드민 대시보드에서 승인한 회원).
+      // 일반회원은 상위법인 후보 X.
+      isBusinessApproved: true,
+      // 의사/약사 role 자동 제외 — 병원/약국 회원
+      role: { notIn: ["DOCTOR", "PHARMACIST"] },
+      // 사업자 정보(상호명·사업자번호) 등록된 회원만 — 이름만 등록된 회원 자동 제외
       userClients: { some: { dealerType: null } },
       ...(orConditions ? { OR: orConditions } : {}),
     },
@@ -103,22 +108,25 @@ export async function GET(req: NextRequest) {
     return "GENERAL";
   }
 
-  const results = users.map((u) => {
-    const rep = u.userClients[0];
-    const clientName = rep?.clientName ?? u.name ?? u.email;
-    const category = classify(u.role, clientName);
-    return {
-      userId: u.id,
-      email: u.email,
-      name: u.name ?? "",
-      clientName,
-      bizNumber: rep?.bizNumber ?? "",
-      dealerType: "UPPER" as const,
-      isBusinessApproved: u.isBusinessApproved,
-      role: u.role,
-      category, // "DOCTOR" | "PHARMACIST" | "BUSINESS_APPROVED" | "GENERAL"
-    };
-  });
+  const results = users
+    .map((u) => {
+      const rep = u.userClients[0];
+      const clientName = rep?.clientName ?? u.name ?? u.email;
+      const category = classify(u.role, clientName);
+      return {
+        userId: u.id,
+        email: u.email,
+        name: u.name ?? "",
+        clientName,
+        bizNumber: rep?.bizNumber ?? "",
+        dealerType: "UPPER" as const,
+        isBusinessApproved: u.isBusinessApproved,
+        role: u.role,
+        category,
+      };
+    })
+    // 상호명에 병원/약국 키워드 있으면 자동 제외 (BUSINESS role 로 가입한 의사·약사 케이스 방어)
+    .filter((r) => r.category !== "DOCTOR" && r.category !== "PHARMACIST");
 
   return NextResponse.json(results);
 }
