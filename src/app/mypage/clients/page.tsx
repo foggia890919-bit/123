@@ -109,7 +109,7 @@ export default function ClientsPage() {
   const [selectedSubmissionEntity, setSelectedSubmissionEntity] = useState<{ clientName: string; bizNumber: string; userId?: string } | null>(null);
   const [entityMenuOpen, setEntityMenuOpen] = useState(false);
   const [entityQuery, setEntityQuery] = useState("");
-  const [entityResults, setEntityResults] = useState<{ clientName: string; bizNumber: string; dealerType: string | null; userId?: string; email?: string; name?: string }[]>([]);
+  const [entityResults, setEntityResults] = useState<{ clientName: string; bizNumber: string; dealerType: string | null; userId?: string; email?: string; name?: string; isBusinessApproved?: boolean; role?: string; category?: "DOCTOR" | "PHARMACIST" | "BUSINESS_APPROVED" | "GENERAL" }[]>([]);
   const [entitySearching, setEntitySearching] = useState(false);
   const entityMenuRef = useRef<HTMLDivElement>(null);
 
@@ -590,14 +590,27 @@ export default function ClientsPage() {
                                 </div>
                               )
                             ) : (
-                              entityResults.map((d) => (
-                                <button key={`${d.clientName}-${d.bizNumber}`} type="button"
-                                  onClick={() => { setSelectedSubmissionEntity({ clientName: d.clientName, bizNumber: d.bizNumber, userId: d.userId }); setEntityMenuOpen(false); setEntityQuery(""); }}
-                                  className="w-full text-left px-3 py-2.5 text-xs hover:bg-gray-50 border-b border-gray-50 last:border-0">
-                                  <p className="font-medium text-gray-800">{d.clientName}</p>
-                                  <p className="text-gray-400 font-mono">{d.bizNumber}</p>
-                                </button>
-                              ))
+                              entityResults.map((d) => {
+                                const cat = d.category;
+                                const badge = cat === "DOCTOR"
+                                  ? { label: "병원", color: "bg-rose-100 text-rose-700" }
+                                  : cat === "PHARMACIST"
+                                  ? { label: "약국", color: "bg-emerald-100 text-emerald-700" }
+                                  : d.isBusinessApproved
+                                  ? { label: "사업자 인증", color: "bg-blue-100 text-blue-700" }
+                                  : { label: "일반회원", color: "bg-gray-100 text-gray-600" };
+                                return (
+                                  <button key={`${d.clientName}-${d.bizNumber}`} type="button"
+                                    onClick={() => { setSelectedSubmissionEntity({ clientName: d.clientName, bizNumber: d.bizNumber, userId: d.userId }); setEntityMenuOpen(false); setEntityQuery(""); }}
+                                    className="w-full text-left px-3 py-2.5 text-xs hover:bg-gray-50 border-b border-gray-50 last:border-0">
+                                    <div className="flex items-center gap-1.5 mb-0.5">
+                                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0 ${badge.color}`}>{badge.label}</span>
+                                      <p className="font-medium text-gray-800 truncate">{d.clientName}</p>
+                                    </div>
+                                    <p className="text-gray-400 font-mono">{d.bizNumber}</p>
+                                  </button>
+                                );
+                              })
                             )}
                           </div>
                         </div>

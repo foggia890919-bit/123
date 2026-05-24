@@ -64,8 +64,6 @@ export async function GET(req: NextRequest) {
 
   const users = await prisma.user.findMany({
     where: {
-      // 의사/약사(병원·약국) 회원은 상위법인 후보 X
-      role: { notIn: ["DOCTOR", "PHARMACIST"] },
       // 본인 제외
       id: { not: user.id },
       // 사업자 정보(상호명·사업자번호) 등록된 회원만 — 이름만 등록된 회원은 상위법인 후보 X
@@ -76,6 +74,7 @@ export async function GET(req: NextRequest) {
       id: true,
       email: true,
       name: true,
+      role: true,
       isBusinessApproved: true,
       userClients: {
         where: { dealerType: null },
@@ -88,32 +87,38 @@ export async function GET(req: NextRequest) {
     take: 30,
   });
 
-  // 의료기관 키워드 — 상호명에 포함되면 상위법인 후보에서 자동 제외 (휴리스틱).
-  // 의사가 BUSINESS role 로 가입하면서 병원 이름을 사업자 정보로 등록한 케이스 방어.
+  // 회원 분류 카테고리 — UI 뱃지용. 사용자가 누가 누구인지 한눈에 판단.
+  // 우선순위: 의사/약사 role → 상호명 키워드 → 사업자 인증 → 일반
   const MEDICAL_KEYWORDS = [
     "병원", "의원", "내과", "외과", "한의원", "치과", "정신과", "산부인과",
     "소아과", "이비인후과", "안과", "비뇨기과", "정형외과", "피부과",
     "신경과", "재활의학과", "가정의학과", "마취과", "영상의학과", "검진센터",
-    "약국", "약방",
   ];
-  function isMedicalName(name: string): boolean {
-    return MEDICAL_KEYWORDS.some((kw) => name.includes(kw));
+  const PHARMACY_KEYWORDS = ["약국", "약방"];
+  function classify(role: string, clientName: string): "DOCTOR" | "PHARMACIST" | "BUSINESS_APPROVED" | "GENERAL" {
+    if (role === "DOCTOR") return "DOCTOR";
+    if (role === "PHARMACIST") return "PHARMACIST";
+    if (MEDICAL_KEYWORDS.some((kw) => clientName.includes(kw))) return "DOCTOR";
+    if (PHARMACY_KEYWORDS.some((kw) => clientName.includes(kw))) return "PHARMACIST";
+    return "GENERAL";
   }
 
-  const results = users
-    .map((u) => {
-      const rep = u.userClients[0];
-      return {
-        userId: u.id,
-        email: u.email,
-        name: u.name ?? "",
-        clientName: rep?.clientName ?? u.name ?? u.email,
-        bizNumber: rep?.bizNumber ?? "",
-        dealerType: "UPPER" as const,
-        isBusinessApproved: u.isBusinessApproved,
-      };
-    })
-    .filter((r) => !isMedicalName(r.clientName));
+  const results = users.map((u) => {
+    const rep = u.userClients[0];
+    const clientName = rep?.clientName ?? u.name ?? u.email;
+    const category = classify(u.role, clientName);
+    return {
+      userId: u.id,
+      email: u.email,
+      name: u.name ?? "",
+      clientName,
+      bizNumber: rep?.bizNumber ?? "",
+      dealerType: "UPPER" as const,
+      isBusinessApproved: u.isBusinessApproved,
+      role: u.role,
+      category, // "DOCTOR" | "PHARMACIST" | "BUSINESS_APPROVED" | "GENERAL"
+    };
+  });
 
   return NextResponse.json(results);
 }
