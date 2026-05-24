@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle, AlertTriangle, ExternalLink, Trash2, ChevronRight, ArrowLeft, BarChart3, Loader2, Plus, Save, ZoomIn, ZoomOut, Maximize2, Filter } from "lucide-react";
 import { useRef } from "react";
+import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 
 // AI 처방통계 사진 검수 페이지. 관리자/BIZ 가 사용자들의 업로드를 거래처×월 단위로
@@ -794,6 +795,11 @@ function ReviewPhotoCard({
   priceMissingOnly: boolean;
   reviewOnly: boolean;
 }) {
+  // ADMIN 만 호버 툴팁(브라우저 native title 박스) 노출 — 일반 유저 노이즈 제거
+  const { data: session } = useSession();
+  const isAdmin = (session?.user as { role?: string } | undefined)?.role === "ADMIN";
+  const titleIfAdmin = (s: string | undefined): string | undefined => (isAdmin ? s : undefined);
+
   const initialDrugs = report.ocrData?.finalDrugs ?? [];
 
   const [rows, setRows] = useState<EditableDrugRow[]>(() =>
@@ -1099,7 +1105,7 @@ function ReviewPhotoCard({
         <span className="text-xs font-semibold">{report.companyName || "(제약사 미상)"}</span>
         {(report.ocrData?.companiesInPhoto?.length ?? 0) > 1 && (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 border border-purple-300 font-semibold"
-            title={`행별 제약사: ${report.ocrData?.companiesInPhoto?.join(", ")}`}>
+            title={titleIfAdmin(`행별 제약사: ${report.ocrData?.companiesInPhoto?.join(", ")}`)}>
             N제약사 {report.ocrData?.companiesInPhoto?.length}곳
           </span>
         )}
@@ -1117,7 +1123,7 @@ function ReviewPhotoCard({
         {report.status === "ERROR" && (
           <>
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-300 font-semibold"
-              title={(report.ocrData as { error?: string })?.error ?? "처리 실패"}>
+              title={titleIfAdmin((report.ocrData as { error?: string })?.error ?? "처리 실패")}>
               처리 실패 ⓘ
             </span>
             <button onClick={async () => {
@@ -1146,12 +1152,12 @@ function ReviewPhotoCard({
         {/* 중복 의심 — 같은 그룹 다른 사진과 약품 70%+ 일치 */}
         {duplicateMatches.length > 0 && (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 font-semibold"
-            title={duplicateMatches.map((m) => {
+            title={titleIfAdmin(duplicateMatches.map((m) => {
               const other = allReports.find((rr) => rr.id === m.reportId);
               const otherIdx = allReports.findIndex((rr) => rr.id === m.reportId);
               const label = other ? `사진 #${otherIdx + 1} (${new Date(other.createdAt).toLocaleString()})` : m.reportId.slice(0, 8);
               return `${label} 와 ${m.similarity}% 일치`;
-            }).join("\n")}>
+            }).join("\n"))}>
             ⚠ 중복 의심 {duplicateMatches[0].similarity}%
             {duplicateMatches.length > 1 && ` (+${duplicateMatches.length - 1})`}
           </span>
@@ -1193,7 +1199,7 @@ function ReviewPhotoCard({
         )}
         {sumCheckBad && (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 border border-orange-300"
-            title={`사진 합계 검증 실패: ${sumCheck?.detail ?? ""}`}>
+            title={titleIfAdmin(`사진 합계 검증 실패: ${sumCheck?.detail ?? ""}`)}>
             합계 ❌
           </span>
         )}
@@ -1359,7 +1365,7 @@ function ReviewPhotoCard({
                     <td className="px-1 py-0">
                       <div className="flex items-center gap-1">
                         <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${scoreDotClass(d.finalConfidence)}`}
-                          title={scoreTooltip} />
+                          title={titleIfAdmin(scoreTooltip)} />
                         <input ref={(el) => { inputRefs.current[`${i}:insuranceCode`] = el; }}
                           value={d.insuranceCode}
                           onChange={(e) => updateRow(i, { insuranceCode: e.target.value })}
@@ -1371,9 +1377,9 @@ function ReviewPhotoCard({
                     <td className="px-1 py-0">
                       <div className="flex items-center gap-1">
                         <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${companyColor(d.companyName)}`}
-                          title={d.companyNameMismatch
+                          title={titleIfAdmin(d.companyNameMismatch
                             ? `Gemini "${d.companyNameMismatch.geminiCompanyName}" vs 마스터 "${d.companyNameMismatch.masterCompanyName}"`
-                            : (d.companyName || "(제약사 미상)")} />
+                            : (d.companyName || "(제약사 미상)"))} />
                         <input ref={(el) => { inputRefs.current[`${i}:companyName`] = el; }}
                           value={d.companyName}
                           onChange={(e) => updateRow(i, { companyName: e.target.value })}
@@ -1411,7 +1417,7 @@ function ReviewPhotoCard({
                                 onChange={(e) => updateRow(i, { productName: e.target.value, nameAutoReplaced: false })}
                                 onFocus={() => setFocusedIdx(i)}
                                 onKeyDown={(e) => handleKeyDown(e, i, "productName")}
-                                title={autoReplaceTooltip ?? reviewTooltip}
+                                title={titleIfAdmin(autoReplaceTooltip ?? reviewTooltip)}
                                 className={`w-full px-1 py-0.5 border rounded text-[11px] ${
                                   showAiBadge ? "pr-7 bg-blue-50 border-blue-300"
                                   : showReviewBadge ? "pr-12 bg-amber-50 border-amber-400"
