@@ -159,6 +159,9 @@ export default function StatsReviewPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   // 자동 일괄 재시도 한 번만 실행하도록 group key 추적
   const [autoRetryDone, setAutoRetryDone] = useState<Set<string>>(new Set());
+  // 그룹 목록에서 체크박스로 선택한 그룹 key 들 (외부 일괄 재시도용)
+  const [selectedGroupKeys, setSelectedGroupKeys] = useState<Set<string>>(new Set());
+  const [groupRetryBusy, setGroupRetryBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // 일괄 작업 진행 상태 — N/M 표시 + 완료 알림용
@@ -259,6 +262,40 @@ export default function StatsReviewPage() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail?.reports, selected]);
+
+  // 그룹 목록 화면에서 선택한 그룹들의 처리 실패 사진 일괄 재시도.
+  // 그룹 안 진입 없이 외부에서 한 번에 처리.
+  async function handleGroupBulkRetry() {
+    if (selectedGroupKeys.size === 0) return;
+    if (!confirm(`선택한 ${selectedGroupKeys.size}개 그룹의 처리 실패 사진을 모두 다시 분석할까요?`)) return;
+    setGroupRetryBusy(true);
+    let totalRetried = 0;
+    let totalFailed = 0;
+    try {
+      for (const key of Array.from(selectedGroupKeys)) {
+        const [clientId, yearStr, monthStr] = key.split("|");
+        const res = await fetch(`/api/stats/submissions?clientId=${clientId}&year=${yearStr}&month=${monthStr}`);
+        if (!res.ok) continue;
+        const detail = await res.json() as { reports?: { id: string; status: string }[] };
+        const errorReports = (detail.reports ?? []).filter((r) => r.status === "ERROR");
+        for (const r of errorReports) {
+          try {
+            const rr = await fetch("/api/stats/photo-retry", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ reportId: r.id }),
+            });
+            if (rr.ok) totalRetried++; else totalFailed++;
+          } catch { totalFailed++; }
+        }
+      }
+      alert(`재분석 요청 완료 — 성공 ${totalRetried}장${totalFailed > 0 ? ` / 실패 ${totalFailed}장` : ""}\n잠시 후 그룹별로 결과 확인 가능합니다.`);
+      setSelectedGroupKeys(new Set());
+      refreshGroups();
+    } finally {
+      setGroupRetryBusy(false);
+    }
+  }
 
   // 선택된 사진들 일괄 삭제 — 순차 DELETE (서버 부담 방지) + 진행 상태 + 완료 알림
   async function handleBulkRetry() {
@@ -604,10 +641,55 @@ export default function StatsReviewPage() {
         <div className="text-center py-12 text-gray-400">아직 등록된 처방통계 사진이 없습니다.</div>
       ) : (
         <div className="space-y-2">
-          {filteredGroups.map((g) => (
-            <button key={`${g.clientId}|${g.year}|${g.month}`}
-              onClick={() => setSelected({ clientId: g.clientId, year: g.year, month: g.month })}
-              className="w-full bg-white border border-gray-200 rounded-lg p-4 text-left hover:border-orange-300 transition-colors">
+          {/* 일괄 액션 — ERROR 가 있는 그룹 1개라도 선택돼 있으면 활성 */}
+          {filteredGroups.some((g) => (g.metrics.errorCount ?? 0) > 0) && (
+            <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg flex-wrap">
+              <button onClick={() => {
+                const allErrorKeys = filteredGroups
+                  .filter((g) => (g.metrics.errorCount ?? 0) > 0)
+                  .map((g) => `${g.clientId}|${g.year}|${g.month}`);
+                setSelectedGroupKeys(new Set(allErrorKeys));
+              }}
+                className="text-xs px-2 py-1 bg-white border border-gray-300 rounded hover:bg-gray-100">
+                실패 있는 그룹 전체 선택
+              </button>
+              <button onClick={() => setSelectedGroupKeys(new Set())}
+                disabled={selectedGroupKeys.size === 0}
+                className="text-xs px-2 py-1 bg-white border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-40">
+                선택 해제
+              </button>
+              <Button onClick={handleGroupBulkRetry}
+                disabled={selectedGroupKeys.size === 0 || groupRetryBusy}
+                size="sm"
+                className="ml-auto bg-blue-600 hover:bg-blue-700">
+                {groupRetryBusy ? "재분석 요청 중..." : `선택 ${selectedGroupKeys.size}개 그룹의 처리 실패 다시 분석`}
+              </Button>
+            </div>
+          )}
+          {filteredGroups.map((g) => {
+            const groupKey = `${g.clientId}|${g.year}|${g.month}`;
+            const isChecked = selectedGroupKeys.has(groupKey);
+            const hasError = (g.metrics.errorCount ?? 0) > 0;
+            return (
+            <div key={groupKey}
+              className="w-full bg-white border border-gray-200 rounded-lg p-4 hover:border-orange-300 transition-colors flex gap-3">
+              {/* 체크박스 — ERROR 있는 그룹만 활성 */}
+              <div className="pt-1">
+                <input type="checkbox"
+                  checked={isChecked}
+                  disabled={!hasError}
+                  onChange={(e) => {
+                    setSelectedGroupKeys((prev) => {
+                      const next = new Set(prev);
+                      if (e.target.checked) next.add(groupKey); else next.delete(groupKey);
+                      return next;
+                    });
+                  }}
+                  className="w-4 h-4 rounded border-gray-300 disabled:opacity-30" />
+              </div>
+              <button
+                onClick={() => setSelected({ clientId: g.clientId, year: g.year, month: g.month })}
+                className="flex-1 text-left">
               <div className="flex items-center gap-2 mb-2 flex-wrap">
                 <h3 className="text-sm font-bold text-gray-900">{g.clientName}</h3>
                 <span className="text-xs text-gray-500">{g.year}년 {g.month}월</span>
@@ -637,8 +719,10 @@ export default function StatsReviewPage() {
                 <MetricBadge label="이슈" value={`${g.metrics.mismatchCount + g.metrics.partialExtractionCount}건`}
                   color={g.metrics.mismatchCount + g.metrics.partialExtractionCount > 0 ? "amber" : "gray"} />
               </div>
-            </button>
-          ))}
+              </button>
+            </div>
+            );
+          })}
         </div>
       )}
 
