@@ -163,6 +163,8 @@ export async function POST(req: NextRequest) {
       return {
         name: r.productName,
         code: r.insuranceCode,
+        // 행별 제약사 — 사용자가 검수에서 수정한 값 우선, 없으면 Gemini 원본
+        companyName: r.companyName || orig?.companyName || "",
         quantity: parseFloat(r.quantity) || 0,
         prescriptions: orig?.prescriptions ?? 0,
         unitPrice: r.unitPrice,

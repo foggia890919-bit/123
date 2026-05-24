@@ -15,7 +15,7 @@ import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 const KAKAO_URL = "https://open.kakao.com/me/ykmedi";
 
 const editableRoles = [
-  { value: "SALES_REP",  label: "영업사원 (CSO)" },
+  { value: "BUSINESS",  label: "사업자" },
   { value: "DOCTOR",     label: "의사" },
   { value: "PHARMACIST", label: "약사" },
   { value: "BASIC",      label: "일반회원" },
@@ -394,6 +394,11 @@ export default function MyPage() {
           <FileText className="w-5 h-5 text-gray-600" />
           <h2 className="text-lg font-semibold text-gray-800">서류 관리</h2>
         </div>
+        {profileInfo?.role === "BUSINESS" && !profileInfo.documents.some((d) => d.docType === "사업자등록증") && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm p-3 rounded-lg">
+            사업자등록증을 아직 업로드하지 않으셨어요. 아래 &quot;새 서류 첨부&quot; 에서 종류를 &quot;사업자등록증&quot; 으로 선택해 업로드해주세요.
+          </div>
+        )}
         {profileInfo && profileInfo.documents.length > 0 ? (
           <div className="space-y-2">
             <p className="text-xs font-medium text-gray-500">등록된 서류</p>

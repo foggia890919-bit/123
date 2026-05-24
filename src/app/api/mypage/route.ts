@@ -4,7 +4,7 @@ import bcrypt from "bcryptjs";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 import { BUCKETS, persistDataUri } from "@/lib/storage";
 
-const VALID_ROLES = ["SALES_REP", "BASIC", "DOCTOR", "PHARMACIST"];
+const VALID_ROLES = ["BUSINESS", "BASIC", "DOCTOR", "PHARMACIST"];
 
 export async function GET(_req: NextRequest) {
   const session = await requireSession();
@@ -12,7 +12,10 @@ export async function GET(_req: NextRequest) {
 
   const user = await prisma.user.findUnique({
     where: { id: session.id },
-    select: { id: true, name: true, email: true, phone: true, carrier: true, role: true },
+    select: {
+      id: true, name: true, email: true, phone: true, carrier: true, role: true,
+      parent: { select: { id: true, name: true, email: true } },
+    },
   });
   if (!user) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
 

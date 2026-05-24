@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle, AlertTriangle, ExternalLink, Trash2, ChevronRight, ArrowLeft, BarChart3, Loader2, Plus, Save, ZoomIn, ZoomOut, Maximize2 } from "lucide-react";
+import { CheckCircle, AlertTriangle, ExternalLink, Trash2, ChevronRight, ArrowLeft, BarChart3, Loader2, Plus, Save, ZoomIn, ZoomOut, Maximize2, Filter } from "lucide-react";
 import { useRef } from "react";
 import { Button } from "@/components/ui/button";
 
@@ -25,6 +25,14 @@ interface Metrics {
   partialExtractionCount: number;
   processingCount?: number;
   errorCount?: number;
+  // 검증 강화 (A) 지표
+  lowQualityRowCount?: number;
+  priceMismatchCount?: number;
+  revenueMismatchCount?: number;
+  companyMismatchCount?: number;
+  totalSumMismatchCount?: number;
+  // Gemini 자가검증 — 마스터DB 가 못 잡은 행을 Gemini 텍스트로 cross-check 한 결과
+  selfValidateMismatchCount?: number;
 }
 
 interface GroupListItem {
@@ -52,12 +60,36 @@ interface ReportRow {
       productName?: string;
       quantity?: string;
       unitPrice?: number;
+      totalPrice?: number;
       matchedMedicationId?: string | null;
       mismatch?: unknown;
+      companyNameMismatch?: { geminiCompanyName?: string; masterCompanyName?: string } | null;
+      originalProductName?: string;
+      nameAutoReplaced?: boolean;
+      finalConfidence?: number;
+      // Gemini 자가검증 결과. "selfValidateMismatch" 면 노란 "검증대상" 마킹.
+      reviewReason?: string | null;
+      validation?: {
+        source?: string;
+        mismatchFields?: string[];
+        suggestion?: {
+          productName?: string;
+          insuranceCode?: string;
+          unitPrice?: number;
+        };
+      } | null;
+      qualityChecks?: {
+        masterMatch?: { applicable?: boolean; matched?: boolean; detail?: string };
+        prefixMatch?: { applicable?: boolean; matched?: boolean; detail?: string };
+        priceMatch?: { applicable?: boolean; matched?: boolean; detail?: string };
+        revenueMatch?: { applicable?: boolean; matched?: boolean; detail?: string };
+      };
       bbox?: [number, number, number, number];
     }>;
     avgConfidence?: number;
     sheetUrl?: string;
+    totalSumCheck?: { applicable?: boolean; matched?: boolean; detail?: string };
+    companiesInPhoto?: string[];
     geminiMeta?: {
       summary?: { drugCount?: number; totalAmountWon?: number };
     };
@@ -98,6 +130,27 @@ function confidenceColor(n: number): "green" | "amber" | "red" {
   return "red";
 }
 
+// 행별 점수 dot — 보험코드 셀 옆 작은 컬러 동그라미.
+function scoreDotClass(score: number): string {
+  if (score === 0) return "bg-gray-300";
+  if (score >= 90) return "bg-green-500";
+  if (score >= 75) return "bg-amber-500";
+  return "bg-red-500";
+}
+
+// 한 사진 안에 여러 제약사가 섞일 때 시각 그룹화용 — 제약사명 → 결정적 색상.
+function companyColor(name: string): string {
+  if (!name) return "bg-gray-400";
+  const palette = [
+    "bg-blue-500", "bg-green-500", "bg-purple-500", "bg-pink-500",
+    "bg-orange-500", "bg-cyan-500", "bg-yellow-500", "bg-red-500",
+    "bg-indigo-500", "bg-teal-500", "bg-rose-500", "bg-lime-500",
+  ];
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
+  return palette[Math.abs(h) % palette.length];
+}
+
 export default function StatsReviewPage() {
   const [groups, setGroups] = useState<GroupListItem[]>([]);
   const [groupsLoading, setGroupsLoading] = useState(true);
@@ -111,6 +164,11 @@ export default function StatsReviewPage() {
   const [bulkSuccess, setBulkSuccess] = useState<string>("");
   // 사진별 선택 — 체크박스로 토글, "선택한 N장 제출완료" 일괄 적용
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // 단가 0 행 (마스터 매칭 실패 = 직접 입력 필요) 만 보기 토글.
+  // 검수자가 채워야 할 행만 빠르게 찾아 채우려는 용도.
+  const [priceMissingOnly, setPriceMissingOnly] = useState(false);
+  // Gemini 자가검증으로 잡힌 "검증대상" 행만 보기 토글. (priceMissingOnly 와 OR 결합)
+  const [reviewOnly, setReviewOnly] = useState(false);
 
   function toggleSelect(id: string) {
     setSelectedIds((prev) => {
@@ -249,6 +307,15 @@ export default function StatsReviewPage() {
 
   const filteredGroups = useMemo(() => groups, [groups]);
 
+  // 상세 화면 — 단가 0 (마스터 매칭 실패) 인 행 합계. 검수자가 채워야 할 행 수.
+  const priceMissingCount = useMemo(() => {
+    if (!detail) return 0;
+    return detail.reports.reduce((acc, r) => {
+      const drugs = r.ocrData?.finalDrugs ?? [];
+      return acc + drugs.filter((d) => (d.unitPrice ?? 0) === 0).length;
+    }, 0);
+  }, [detail]);
+
   // ── 상세 화면 ──
   if (selected && detail) {
     return (
@@ -281,6 +348,27 @@ export default function StatsReviewPage() {
           <MetricBadge label="마스터 매칭률" value={`${detail.metrics.masterMatchRate}%`} color={confidenceColor(detail.metrics.masterMatchRate)} />
           <MetricBadge label="불일치 / 부분추출" value={`${detail.metrics.mismatchCount} / ${detail.metrics.partialExtractionCount}`}
             color={detail.metrics.mismatchCount + detail.metrics.partialExtractionCount > 0 ? "amber" : "gray"} />
+        </div>
+        {/* 검증 강화 (A) — 행 단위 품질 지표. 검수자가 우선 봐야 할 행 안내. */}
+        <div className="grid grid-cols-6 gap-2">
+          <MetricBadge label="낮은 점수 행"
+            value={`${detail.metrics.lowQualityRowCount ?? 0}건`}
+            color={(detail.metrics.lowQualityRowCount ?? 0) > 0 ? "red" : "gray"} />
+          <MetricBadge label="단가 불일치"
+            value={`${detail.metrics.priceMismatchCount ?? 0}건`}
+            color={(detail.metrics.priceMismatchCount ?? 0) > 0 ? "amber" : "gray"} />
+          <MetricBadge label="매출 불일치"
+            value={`${detail.metrics.revenueMismatchCount ?? 0}건`}
+            color={(detail.metrics.revenueMismatchCount ?? 0) > 0 ? "amber" : "gray"} />
+          <MetricBadge label="제약사 불일치"
+            value={`${detail.metrics.companyMismatchCount ?? 0}건`}
+            color={(detail.metrics.companyMismatchCount ?? 0) > 0 ? "amber" : "gray"} />
+          <MetricBadge label="합계 검증 실패"
+            value={`${detail.metrics.totalSumMismatchCount ?? 0}장`}
+            color={(detail.metrics.totalSumMismatchCount ?? 0) > 0 ? "amber" : "gray"} />
+          <MetricBadge label="검증대상 (AI 재검)"
+            value={`${detail.metrics.selfValidateMismatchCount ?? 0}건`}
+            color={(detail.metrics.selfValidateMismatchCount ?? 0) > 0 ? "amber" : "gray"} />
         </div>
 
         {/* 중복 의심 알림 — 사진 hash 는 다른데 약품 데이터가 70%+ 일치 */}
@@ -320,6 +408,29 @@ export default function StatsReviewPage() {
             {bulkProgress?.label === "삭제" ? `삭제 중... ${bulkProgress.current}/${bulkProgress.total}`
               : `선택한 ${selectedIds.size}장 삭제`}
           </Button>
+          {/* 단가 0 (마스터 매칭 실패) 행 필터 — 검수자가 채워야 할 행만 빠르게 본다.
+              매칭 실패 0 건이면 버튼 자체 숨김 (불필요한 UI) */}
+          {priceMissingCount > 0 && (
+            <Button onClick={() => setPriceMissingOnly((v) => !v)} variant="outline" size="sm"
+              className={priceMissingOnly
+                ? "bg-yellow-100 border-yellow-400 text-yellow-900 hover:bg-yellow-200"
+                : "border-yellow-300 text-yellow-800 hover:bg-yellow-50"}>
+              <Filter className="w-3.5 h-3.5 mr-1" />
+              {priceMissingOnly ? `매칭 실패만 ${priceMissingCount}건 표시 중 (전체 보기)` : `단가 미입력 ${priceMissingCount}건만 보기`}
+            </Button>
+          )}
+          {/* 검증대상(AI 재검 불일치) 행 필터 — Gemini 텍스트 자가검증으로 잡힌 행. 0 건이면 숨김. */}
+          {(detail.metrics.selfValidateMismatchCount ?? 0) > 0 && (
+            <Button onClick={() => setReviewOnly((v) => !v)} variant="outline" size="sm"
+              className={reviewOnly
+                ? "bg-amber-100 border-amber-400 text-amber-900 hover:bg-amber-200"
+                : "border-amber-300 text-amber-800 hover:bg-amber-50"}>
+              <Filter className="w-3.5 h-3.5 mr-1" />
+              {reviewOnly
+                ? `검증대상만 ${detail.metrics.selfValidateMismatchCount}건 표시 중 (전체 보기)`
+                : `검증대상 ${detail.metrics.selfValidateMismatchCount}건만 보기`}
+            </Button>
+          )}
           <span className="ml-auto flex gap-2">
             {!detail.submitted ? (
               <Button onClick={() => handleSubmit("submit", "all")} disabled={busy} variant="outline" size="sm">
@@ -371,6 +482,8 @@ export default function StatsReviewPage() {
               onDelete={() => handleDelete(r.id)}
               duplicateMatches={detail.duplicateBy?.[r.id] ?? []}
               allReports={detail.reports}
+              priceMissingOnly={priceMissingOnly}
+              reviewOnly={reviewOnly}
               onSaved={async () => {
                 // 저장 후 상세 재조회 (지표 갱신)
                 if (selected) {
@@ -463,6 +576,22 @@ interface EditableDrugRow {
   totalPriceManual: boolean;
   matched: boolean;
   hasMismatch: boolean;
+  // 행 단위 검증 — 0~100 점수 + 4개 check 결과. 표에서 색상/툴팁 강조.
+  finalConfidence: number;
+  priceCheckBad: boolean;        // priceMatch applicable && !matched
+  revenueCheckBad: boolean;
+  prefixCheckBad: boolean;
+  // Gemini 가 추출한 행별 제약사와 마스터 매칭 제약사가 다른 경우. 검수에서 사람이 결정.
+  companyNameMismatch: { geminiCompanyName: string; masterCompanyName: string } | null;
+  // Case B 자동 교체 — 사용자가 약품명 편집 안 했지만 매칭값과 OCR 원본이 다른 경우.
+  originalProductName: string;
+  nameAutoReplaced: boolean;
+  // Gemini 자가검증 결과. "selfValidateMismatch" 면 노란 "검증대상" 마킹.
+  reviewReason: string;
+  validation: {
+    mismatchFields: string[];
+    suggestion: { productName?: string; insuranceCode?: string; unitPrice?: number };
+  } | null;
   bbox: [number, number, number, number];        // 사진 highlight overlay 좌표
 }
 
@@ -478,6 +607,8 @@ function ReviewPhotoCard({
   onSaved,
   duplicateMatches,
   allReports,
+  priceMissingOnly,
+  reviewOnly,
 }: {
   report: ReportRow;
   busy: boolean;
@@ -490,6 +621,8 @@ function ReviewPhotoCard({
   onSaved: () => void | Promise<void>;
   duplicateMatches: Array<{ reportId: string; similarity: number }>;
   allReports: ReportRow[];
+  priceMissingOnly: boolean;
+  reviewOnly: boolean;
 }) {
   const initialDrugs = report.ocrData?.finalDrugs ?? [];
 
@@ -500,16 +633,36 @@ function ReviewPhotoCard({
       const bbox: [number, number, number, number] = Array.isArray(d.bbox) && d.bbox.length === 4
         ? [d.bbox[0], d.bbox[1], d.bbox[2], d.bbox[3]]
         : [0, 0, 0, 0];
+      const q = d.qualityChecks;
       return {
         insuranceCode: d.insuranceCode ?? "",
         companyName: d.companyName ?? "",
         productName: d.productName ?? "",
         quantity: d.quantity ?? "",
         unitPrice: unit,
-        totalPrice: Math.round(qty * unit),
+        totalPrice: d.totalPrice ?? Math.round(qty * unit),
         totalPriceManual: false,
         matched: !!d.matchedMedicationId,
         hasMismatch: d.mismatch != null,
+        finalConfidence: typeof d.finalConfidence === "number" ? d.finalConfidence : 0,
+        priceCheckBad: !!(q?.priceMatch?.applicable && q.priceMatch.matched === false),
+        revenueCheckBad: !!(q?.revenueMatch?.applicable && q.revenueMatch.matched === false),
+        prefixCheckBad: !!(q?.prefixMatch?.applicable && q.prefixMatch.matched === false),
+        companyNameMismatch: d.companyNameMismatch?.geminiCompanyName && d.companyNameMismatch?.masterCompanyName
+          ? {
+              geminiCompanyName: d.companyNameMismatch.geminiCompanyName,
+              masterCompanyName: d.companyNameMismatch.masterCompanyName,
+            }
+          : null,
+        originalProductName: d.originalProductName ?? "",
+        nameAutoReplaced: !!d.nameAutoReplaced,
+        reviewReason: typeof d.reviewReason === "string" ? d.reviewReason : "",
+        validation: d.validation
+          ? {
+              mismatchFields: Array.isArray(d.validation.mismatchFields) ? d.validation.mismatchFields : [],
+              suggestion: d.validation.suggestion ?? {},
+            }
+          : null,
         bbox,
       };
     })
@@ -528,6 +681,9 @@ function ReviewPhotoCard({
   // 사진 영역 스크롤 컨테이너 + img 요소 ref — focus 행 bbox 로 자동 스크롤
   const imgScrollRef = useRef<HTMLDivElement | null>(null);
   const imgElRef = useRef<HTMLImageElement | null>(null);
+  // 표 영역 스크롤 컨테이너 — 키보드 화살표로 행 이동 시 표 안에서만 scroll
+  // (페이지 전체 scroll 막아서 위쪽 사진 영역이 안 가려지게).
+  const tableScrollRef = useRef<HTMLDivElement | null>(null);
 
   // 마우스 드래그로 사진 영역 panning — 확대 후 다른 영역 빠르게 보기.
   // mousedown 위치 기억 → mousemove 차이만큼 scrollLeft/scrollTop 역방향 이동.
@@ -586,15 +742,33 @@ function ReviewPhotoCard({
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>, idx: number, field: string) {
     if (e.key !== "ArrowUp" && e.key !== "ArrowDown" && e.key !== "Enter") return;
+    // 3중 차단 — React preventDefault + native preventDefault + stopPropagation
+    // 페이지 window scroll 절대 안 일어나게.
     e.preventDefault();
+    e.stopPropagation();
+    e.nativeEvent.preventDefault();
     const dir = e.key === "ArrowUp" ? -1 : 1;
     const nextIdx = idx + dir;
     if (nextIdx < 0 || nextIdx >= rows.length) return;
     const target = inputRefs.current[`${nextIdx}:${field}`];
-    target?.focus();
-    target?.select();
-    if (target) {
-      target.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (!target) return;
+    // preventScroll: true — focus 호출 시 브라우저 native auto-scroll 차단.
+    // 이걸 빼면 페이지 window 자체가 scroll 되어 상단 사진 영역이 위로 밀려남.
+    target.focus({ preventScroll: true });
+    target.select();
+    // 표 wrapper 안에서만 scroll — 페이지 전체는 안 움직임 (사진 영역 가려짐 방지).
+    // 다음 input 이 wrapper viewport 밖일 때만 scroll, 안에 있으면 그대로.
+    const scroller = tableScrollRef.current;
+    if (scroller) {
+      const targetRect = target.getBoundingClientRect();
+      const scrollerRect = scroller.getBoundingClientRect();
+      const visibleTop = targetRect.top >= scrollerRect.top + 24;            // 24px sticky header 여유
+      const visibleBottom = targetRect.bottom <= scrollerRect.bottom - 8;
+      if (!visibleTop || !visibleBottom) {
+        const relativeY = targetRect.top - scrollerRect.top + scroller.scrollTop;
+        const desiredTop = relativeY - scroller.clientHeight / 2 + target.clientHeight / 2;
+        scroller.scrollTo({ top: Math.max(0, desiredTop), behavior: "smooth" });
+      }
     }
     setFocusedIdx(nextIdx);
   }
@@ -635,6 +809,14 @@ function ReviewPhotoCard({
         const qty = parseFloat(next.quantity) || 0;
         next.totalPrice = Math.round(qty * next.unitPrice);
       }
+      // 검증대상으로 마킹됐던 행을 검수자가 보험코드/약품명/단가 중 하나라도 직접 편집하면
+      // 그 신호 자체를 클리어 (서버 저장 시에도 finalDrugs 재구성으로 사라짐. UI 도 즉시 노란 제거).
+      const userTouchedValidatedField =
+        patch.insuranceCode !== undefined || patch.productName !== undefined || patch.unitPrice !== undefined;
+      if (userTouchedValidatedField && r.reviewReason === "selfValidateMismatch") {
+        next.reviewReason = "";
+        next.validation = null;
+      }
       return next;
     }));
     setDirty(true);
@@ -644,6 +826,15 @@ function ReviewPhotoCard({
     setRows((prev) => [...prev, {
       insuranceCode: "", companyName: "", productName: "", quantity: "0",
       unitPrice: 0, totalPrice: 0, totalPriceManual: false, matched: false, hasMismatch: false,
+      finalConfidence: 0,
+      priceCheckBad: false,
+      revenueCheckBad: false,
+      prefixCheckBad: false,
+      companyNameMismatch: null,
+      originalProductName: "",
+      nameAutoReplaced: false,
+      reviewReason: "",
+      validation: null,
       bbox: [0, 0, 0, 0],
     }]);
     setDirty(true);
@@ -694,6 +885,16 @@ function ReviewPhotoCard({
   const partial = detected > 0 && detected !== rows.length;
   const mismatchCount = rows.filter((r) => r.hasMismatch).length;
   const matchedCount = rows.filter((r) => r.matched).length;
+  // 단가 0 = 마스터 매칭 실패 OR 비급여 — 검수자가 직접 채워야 할 행
+  const priceMissingCount = rows.filter((r) => r.unitPrice === 0).length;
+  // 검증 강화 (A) — 행 단위 품질 지표
+  const lowQualityCount = rows.filter((r) => r.finalConfidence > 0 && r.finalConfidence < 75).length;
+  const priceMismatchCount = rows.filter((r) => r.priceCheckBad).length;
+  const revenueMismatchCount = rows.filter((r) => r.revenueCheckBad).length;
+  const companyMismatchCount = rows.filter((r) => r.companyNameMismatch != null).length;
+  // 사진 단위 합계 검증
+  const sumCheck = report.ocrData?.totalSumCheck;
+  const sumCheckBad = !!(sumCheck?.applicable && sumCheck?.matched === false);
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
@@ -706,6 +907,12 @@ function ReviewPhotoCard({
         <span className="text-xs text-gray-400">|</span>
         <span className="text-xs text-gray-500">{new Date(report.createdAt).toLocaleString()}</span>
         <span className="text-xs font-semibold">{report.companyName || "(제약사 미상)"}</span>
+        {(report.ocrData?.companiesInPhoto?.length ?? 0) > 1 && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 border border-purple-300 font-semibold"
+            title={`행별 제약사: ${report.ocrData?.companiesInPhoto?.join(", ")}`}>
+            N제약사 {report.ocrData?.companiesInPhoto?.length}곳
+          </span>
+        )}
         <span className="text-xs text-gray-500">· {rows.length}건 · {totalRevenue.toLocaleString()}원</span>
         {report.status === "SUBMITTED" && (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700 border border-green-300 font-semibold">
@@ -746,6 +953,37 @@ function ReviewPhotoCard({
             불일치 {mismatchCount}
           </span>
         )}
+        {priceMissingCount > 0 && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-800 border border-yellow-400 font-semibold"
+            title="단가 0 — 보험코드 마스터 매칭 실패 또는 비급여. 표에서 직접 단가 입력 필요.">
+            💰 단가 미입력 {priceMissingCount}
+          </span>
+        )}
+        {/* 검증 강화 (A) 배지 — 행별 검사 결과 요약 */}
+        {lowQualityCount > 0 && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-300"
+            title="finalConfidence < 75 (점수가 낮은 행). 표에서 ◯ 색상이 빨강인 행 확인.">
+            낮은 점수 {lowQualityCount}
+          </span>
+        )}
+        {(priceMismatchCount + revenueMismatchCount) > 0 && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300"
+            title="단가/매출 검증 실패 행. 마스터 단가나 수량×단가=매출 등식이 안 맞음.">
+            단가/매출 ❌ {priceMismatchCount + revenueMismatchCount}
+          </span>
+        )}
+        {companyMismatchCount > 0 && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-300"
+            title="Gemini 가 추출한 제약사와 마스터 매칭 제약사가 다른 행. 사진 보고 사람이 결정 필요.">
+            제약사 불일치 {companyMismatchCount}
+          </span>
+        )}
+        {sumCheckBad && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 border border-orange-300"
+            title={`사진 합계 검증 실패: ${sumCheck?.detail ?? ""}`}>
+            합계 ❌
+          </span>
+        )}
         <span className="text-[10px] text-gray-400 ml-auto">매칭 {matchedCount}/{rows.length}</span>
         {report.ocrData?.sheetUrl && (
           <a href={report.ocrData.sheetUrl} target="_blank" rel="noreferrer"
@@ -759,7 +997,7 @@ function ReviewPhotoCard({
         </button>
       </div>
 
-      {/* 상하 분할 — 위에 사진 (60vh) / 아래에 편집 표 (스크롤) */}
+      {/* 상하 분할 — 위에 사진 (45vh) / 아래에 편집 표 (45vh) — 한 viewport 안에 둘 다 보임 */}
       <div className="flex flex-col">
         {/* 위: 사진 + zoom 컨트롤 */}
         <div className="bg-gray-100 border-b border-gray-200">
@@ -808,7 +1046,7 @@ function ReviewPhotoCard({
             onMouseUp={onPanEnd}
             onMouseLeave={onPanEnd}
             style={{ cursor: imgData ? (isDragging ? "grabbing" : "grab") : "default" }}
-            className="p-3 overflow-auto max-h-[60vh] select-none">
+            className="p-3 overflow-auto max-h-[45vh] select-none">
             {imgLoading ? (
               <div className="aspect-[3/4] flex items-center justify-center text-gray-400">
                 <Loader2 className="w-5 h-5 animate-spin" />
@@ -850,8 +1088,14 @@ function ReviewPhotoCard({
           )}
         </div>
 
-        {/* 아래: 편집 가능 표 */}
-        <div className="overflow-auto max-h-[55vh]">
+        {/* 아래: 편집 가능 표 — ref 잡아서 키보드 화살표 시 표 안에서만 scroll.
+            onKeyDownCapture — capture phase 에서 한 번 더 ArrowUp/Down default 차단. */}
+        <div ref={tableScrollRef} className="overflow-auto max-h-[45vh]"
+          onKeyDownCapture={(e) => {
+            if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+              e.preventDefault();
+            }
+          }}>
           <table className="w-full text-xs">
             <thead className="bg-gray-50 text-gray-500 sticky top-0 z-10">
               <tr>
@@ -866,38 +1110,112 @@ function ReviewPhotoCard({
             </thead>
             <tbody>
               {rows.map((d, i) => {
-                const rowClass = d.hasMismatch
+                // 강조 우선순위 (검증 강화 후):
+                //   mismatch (코드↔이름) || companyName 불일치 → red (사람 확인 필요)
+                //   focused                                      → orange
+                //   selfValidateMismatch (AI 자가검증)            → amber (Gemini 텍스트가 OCR 과 다르다고 판단)
+                //   price/revenue/prefix check 실패              → yellow (자동 검증 실패)
+                //   단가 0 (마스터 미매칭)                       → yellow
+                const qualityBad = d.priceCheckBad || d.revenueCheckBad || d.prefixCheckBad;
+                const isSelfValidateMismatch = d.reviewReason === "selfValidateMismatch";
+                const rowClass = (d.hasMismatch || d.companyNameMismatch != null)
                   ? "bg-red-50"
                   : focusedIdx === i
                   ? "bg-orange-50"
+                  : isSelfValidateMismatch
+                  ? "bg-amber-50 border-l-4 border-amber-400"
+                  : qualityBad
+                  ? "bg-yellow-50"
+                  : d.unitPrice === 0
+                  ? "bg-yellow-50"
                   : "";
+                const tooltipParts: string[] = [];
+                if (d.finalConfidence > 0) tooltipParts.push(`점수 ${d.finalConfidence}/100`);
+                if (d.prefixCheckBad) tooltipParts.push("약품명 prefix 불일치");
+                if (d.priceCheckBad) tooltipParts.push("단가 검증 실패");
+                if (d.revenueCheckBad) tooltipParts.push("매출=수량×단가 검증 실패");
+                if (d.companyNameMismatch) tooltipParts.push(`제약사 불일치: ${d.companyNameMismatch.geminiCompanyName} vs ${d.companyNameMismatch.masterCompanyName}`);
+                if (isSelfValidateMismatch) tooltipParts.push("AI 자가검증 불일치 — 검수 필요");
+                const scoreTooltip = tooltipParts.join(" · ") || "검증 데이터 없음";
+                // 필터: priceMissingOnly + reviewOnly 두 토글 — 둘 다 활성화면 둘 중 하나라도 매칭되는 행만 표시 (OR).
+                const matchesPriceFilter = !priceMissingOnly || d.unitPrice === 0;
+                const matchesReviewFilter = !reviewOnly || isSelfValidateMismatch;
+                const hiddenByFilter = !(matchesPriceFilter && matchesReviewFilter);
                 return (
-                  <tr key={i} className={`border-t ${rowClass}`}>
-                    <td className="px-1 py-0.5">
-                      <input ref={(el) => { inputRefs.current[`${i}:insuranceCode`] = el; }}
-                        value={d.insuranceCode}
-                        onChange={(e) => updateRow(i, { insuranceCode: e.target.value })}
-                        onFocus={() => setFocusedIdx(i)}
-                        onKeyDown={(e) => handleKeyDown(e, i, "insuranceCode")}
-                        className="w-full px-1 py-0.5 border rounded text-[11px] font-mono"/>
+                  <tr key={i} className={`border-t ${rowClass} ${hiddenByFilter ? "hidden" : ""}`}>
+                    <td className="px-1 py-0">
+                      <div className="flex items-center gap-1">
+                        <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${scoreDotClass(d.finalConfidence)}`}
+                          title={scoreTooltip} />
+                        <input ref={(el) => { inputRefs.current[`${i}:insuranceCode`] = el; }}
+                          value={d.insuranceCode}
+                          onChange={(e) => updateRow(i, { insuranceCode: e.target.value })}
+                          onFocus={() => setFocusedIdx(i)}
+                          onKeyDown={(e) => handleKeyDown(e, i, "insuranceCode")}
+                          className="w-full px-1 py-0.5 border rounded text-[11px] font-mono"/>
+                      </div>
                     </td>
-                    <td className="px-1 py-0.5">
-                      <input ref={(el) => { inputRefs.current[`${i}:companyName`] = el; }}
-                        value={d.companyName}
-                        onChange={(e) => updateRow(i, { companyName: e.target.value })}
-                        onFocus={() => setFocusedIdx(i)}
-                        onKeyDown={(e) => handleKeyDown(e, i, "companyName")}
-                        className="w-full px-1 py-0.5 border rounded text-[11px]"/>
+                    <td className="px-1 py-0">
+                      <div className="flex items-center gap-1">
+                        <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${companyColor(d.companyName)}`}
+                          title={d.companyNameMismatch
+                            ? `Gemini "${d.companyNameMismatch.geminiCompanyName}" vs 마스터 "${d.companyNameMismatch.masterCompanyName}"`
+                            : (d.companyName || "(제약사 미상)")} />
+                        <input ref={(el) => { inputRefs.current[`${i}:companyName`] = el; }}
+                          value={d.companyName}
+                          onChange={(e) => updateRow(i, { companyName: e.target.value })}
+                          onFocus={() => setFocusedIdx(i)}
+                          onKeyDown={(e) => handleKeyDown(e, i, "companyName")}
+                          className={`w-full px-1 py-0.5 border rounded text-[11px] ${d.companyNameMismatch ? "border-red-400 bg-red-50" : ""}`}/>
+                      </div>
                     </td>
-                    <td className="px-1 py-0.5">
-                      <input ref={(el) => { inputRefs.current[`${i}:productName`] = el; }}
-                        value={d.productName}
-                        onChange={(e) => updateRow(i, { productName: e.target.value })}
-                        onFocus={() => setFocusedIdx(i)}
-                        onKeyDown={(e) => handleKeyDown(e, i, "productName")}
-                        className="w-full px-1 py-0.5 border rounded text-[11px]"/>
+                    <td className="px-1 py-0">
+                      <div className="relative">
+                        {(() => {
+                          // 우선순위: 파랑 (자동교체) > 노랑 (AI 검증대상) — User Advocate 색상 중첩 가드.
+                          // hasMismatch 인 row 는 row 전체가 빨강이므로 셀 배지는 안 띄움.
+                          const showAiBadge = d.nameAutoReplaced && d.originalProductName && d.originalProductName !== d.productName;
+                          const showReviewBadge = !showAiBadge && isSelfValidateMismatch;
+                          const sg = d.validation?.suggestion;
+                          const mf = d.validation?.mismatchFields ?? [];
+                          // 어긋난 필드만 호버에 노출 — suggestion 의 다른 필드가 PASS 였는데 같이 보이면 검수자 혼란 (QA E2 fix).
+                          const reviewTooltip = showReviewBadge
+                            ? [
+                                "AI 자가검증 — 검증대상으로 마킹됨",
+                                mf.includes("productName") && sg?.productName ? `제미나이 추정 약품명: ${sg.productName}` : null,
+                                mf.includes("insuranceCode") && sg?.insuranceCode ? `제미나이 추정 보험코드: ${sg.insuranceCode}` : null,
+                                mf.includes("unitPrice") && sg?.unitPrice ? `제미나이 추정 약가: ${sg.unitPrice.toLocaleString()}원` : null,
+                                "셀을 수정하면 이 표시는 사라집니다.",
+                              ].filter(Boolean).join("\n")
+                            : undefined;
+                          const autoReplaceTooltip = showAiBadge
+                            ? `자동 교체됨\nOCR 원본: ${d.originalProductName}\n→ 마스터: ${d.productName}\n(보험코드 매칭으로 교정)`
+                            : undefined;
+                          return (
+                            <>
+                              <input ref={(el) => { inputRefs.current[`${i}:productName`] = el; }}
+                                value={d.productName}
+                                onChange={(e) => updateRow(i, { productName: e.target.value, nameAutoReplaced: false })}
+                                onFocus={() => setFocusedIdx(i)}
+                                onKeyDown={(e) => handleKeyDown(e, i, "productName")}
+                                title={autoReplaceTooltip ?? reviewTooltip}
+                                className={`w-full px-1 py-0.5 border rounded text-[11px] ${
+                                  showAiBadge ? "pr-7 bg-blue-50 border-blue-300"
+                                  : showReviewBadge ? "pr-12 bg-amber-50 border-amber-400"
+                                  : ""
+                                }`}/>
+                              {showAiBadge && (
+                                <span className="absolute right-0.5 top-1/2 -translate-y-1/2 text-[8px] font-bold text-blue-700 bg-blue-100 px-1 py-0.5 rounded pointer-events-none">AI</span>
+                              )}
+                              {showReviewBadge && (
+                                <span className="absolute right-0.5 top-1/2 -translate-y-1/2 text-[8px] font-bold text-amber-800 bg-amber-200 px-1 py-0.5 rounded pointer-events-none">검증대상</span>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
                     </td>
-                    <td className="px-1 py-0.5">
+                    <td className="px-1 py-0">
                       <input ref={(el) => { inputRefs.current[`${i}:quantity`] = el; }}
                         type="number" step="0.1" value={d.quantity}
                         onChange={(e) => updateRow(i, { quantity: e.target.value })}
@@ -905,7 +1223,7 @@ function ReviewPhotoCard({
                         onKeyDown={(e) => handleKeyDown(e, i, "quantity")}
                         className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
                     </td>
-                    <td className="px-1 py-0.5">
+                    <td className="px-1 py-0">
                       <input ref={(el) => { inputRefs.current[`${i}:unitPrice`] = el; }}
                         type="number" value={d.unitPrice}
                         onChange={(e) => updateRow(i, { unitPrice: Number(e.target.value) })}
@@ -913,7 +1231,7 @@ function ReviewPhotoCard({
                         onKeyDown={(e) => handleKeyDown(e, i, "unitPrice")}
                         className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
                     </td>
-                    <td className="px-1 py-0.5">
+                    <td className="px-1 py-0">
                       <input ref={(el) => { inputRefs.current[`${i}:totalPrice`] = el; }}
                         type="number" value={d.totalPrice}
                         onChange={(e) => updateRow(i, { totalPrice: Number(e.target.value), totalPriceManual: true })}

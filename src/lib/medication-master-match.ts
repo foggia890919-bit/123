@@ -91,6 +91,20 @@ function findByNameAndDose(
   return candidates[0];
 }
 
+// 검증 결과 별도 레이어 — MatchResult fat 화 방지 (Architect 권장).
+// source: 어디서 온 검증 신호인가. master = 마스터DB 매칭 시점, gemini-self = Gemini 텍스트 자가검증.
+// mismatchFields: OCR 값과 검증값이 어긋난 필드. UI 가 어느 셀을 강조할지 결정.
+// suggestion: 검증자가 제안하는 정답(부분/전체). 검수자가 채택 결정.
+export interface ValidationResult {
+  source: "master" | "gemini-self";
+  mismatchFields: ("productName" | "insuranceCode" | "unitPrice")[];
+  suggestion: {
+    productName?: string;
+    insuranceCode?: string;
+    unitPrice?: number;
+  };
+}
+
 export interface MatchResult {
   insuranceCode: string;
   productName: string;
@@ -100,9 +114,15 @@ export interface MatchResult {
   matchedMedicationId: string | null;
   matchConfidence: number;
   nameCodeMismatch: { masterProductName: string; ocrProductName: string } | null;
+  // Case B (보험코드 매칭 + 이름 불일치) 에서 마스터 이름으로 자동 교체된 경우 true.
+  // 검수 UI 가 originalProductName 을 호버 툴팁으로 노출.
+  originalProductName: string;
+  nameAutoReplaced: boolean;
+  // Gemini 자가검증 결과 (별도 단계에서 채움). matchMedication 본체는 건드리지 않음.
+  validation?: ValidationResult;
 }
 
-// 보험코드 9자리로 마스터 매칭 + 한글 첫 2자 sanity check.
+// 보험코드 9자리로 마스터 매칭 + 한글 첫 3자 sanity check.
 // 정확 매칭 시 단가/수수료/companyName 마스터값 채워줌. 보험코드 매칭 실패 시
 // byNamePrefix 가 주어지면 제품명 prefix + dose 매칭으로 폴백 (사용자 요구).
 export function matchMedication(
@@ -119,7 +139,7 @@ export function matchMedication(
     const masterKorean = parseDrugName(m.productName).korean;
     let nameSimilar = ocrKorean.length < 2 || masterKorean.length < 2;
     if (!nameSimilar) {
-      const limit = Math.min(2, ocrKorean.length, masterKorean.length);
+      const limit = Math.min(3, ocrKorean.length, masterKorean.length);
       for (let i = 0; i < limit; i++) {
         if (ocrKorean[i] === masterKorean[i]) { nameSimilar = true; break; }
       }
@@ -134,17 +154,23 @@ export function matchMedication(
         matchedMedicationId: m.id,
         matchConfidence: 100,
         nameCodeMismatch: null,
+        originalProductName: item.productName,
+        nameAutoReplaced: false,
       };
     }
+    // Case B — 보험코드 9자리 정확 매칭 + 이름 sanity check 실패.
+    // 사용자 요구: 코드를 신뢰하고 마스터 이름으로 자동 교체. 원본은 originalProductName 에 보존.
     return {
       insuranceCode: code,
-      productName: item.productName,
-      companyName: item.companyName,
+      productName: m.productName,
+      companyName: item.companyName || m.companyName,
       unitPrice: m.price,
       commissionRate: m.commissionRate,
       matchedMedicationId: m.id,
-      matchConfidence: 80,
+      matchConfidence: 95,
       nameCodeMismatch: { masterProductName: m.productName, ocrProductName: item.productName },
+      originalProductName: item.productName,
+      nameAutoReplaced: true,
     };
   }
 
@@ -162,6 +188,8 @@ export function matchMedication(
         matchedMedicationId: found.id,
         matchConfidence: 70,        // 제품명 매칭은 코드 매칭(100) 보다 신뢰도 낮음
         nameCodeMismatch: null,
+        originalProductName: item.productName,
+        nameAutoReplaced: false,
       };
     }
   }
@@ -176,6 +204,8 @@ export function matchMedication(
     matchedMedicationId: null,
     matchConfidence: 0,
     nameCodeMismatch: null,
+    originalProductName: item.productName,
+    nameAutoReplaced: false,
   };
 }
 

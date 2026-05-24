@@ -49,7 +49,7 @@ export async function requireRole(minRole: string): Promise<SessionUser | NextRe
   if (!user) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
   const hierarchy: Record<string, number> = {
     BASIC: 0, DOCTOR: 0, PHARMACIST: 0,
-    SALES_REP: 1, BIZ: 2, ADMIN: 99,
+    BUSINESS: 1, BIZ: 2, ADMIN: 99,
   };
   if (user.role === "ADMIN") return user;
   if ((hierarchy[user.role] ?? -1) < (hierarchy[minRole] ?? 99)) {
@@ -60,6 +60,12 @@ export async function requireRole(minRole: string): Promise<SessionUser | NextRe
 
 export function isNextResponse(v: unknown): v is NextResponse {
   return v instanceof NextResponse;
+}
+
+// 통계제출처 접근 허용 role — DOCTOR/PHARMACIST 차단.
+// HIERARCHY 가 BASIC/DOCTOR/PHARMACIST/BUSINESS/BIZ 모두 동일 레벨이라 minRole 만으로 차단 불가 → explicit 화이트리스트.
+export function canManageSubmissionRoutes(role: string): boolean {
+  return role === "ADMIN" || role === "BIZ" || role === "BUSINESS" || role === "BASIC";
 }
 
 export function safeParseInt(v: string | null | undefined, fallback: number, min = 0, max = 1_000_000): number {

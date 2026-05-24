@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { signOut } from "next-auth/react";
-import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut, Building2, Search, X, Mail, Phone, Send, Inbox, Copy, MessageCircle, Loader2 } from "lucide-react";
+import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut, Building2, Search, X, Mail, Phone, Send, Inbox, Copy, MessageCircle, Menu, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import * as XLSX from "xlsx";
@@ -86,11 +86,11 @@ interface User {
 }
 
 const roleLabel: Record<string, string> = {
-  ADMIN: "관리자", SALES_REP: "영맨회원", BIZ: "비즈회원", BASIC: "일반회원", DOCTOR: "의사", PHARMACIST: "약사",
+  ADMIN: "관리자", BUSINESS: "사업자", BIZ: "비즈회원", BASIC: "일반회원", DOCTOR: "의사", PHARMACIST: "약사",
 };
 const roleColor: Record<string, string> = {
   BASIC: "bg-gray-100 text-gray-600",
-  SALES_REP: "bg-blue-100 text-blue-700",
+  BUSINESS: "bg-blue-100 text-blue-700",
   BIZ: "bg-purple-100 text-purple-700",
   ADMIN: "bg-red-100 text-red-700",
   DOCTOR: "bg-green-100 text-green-700",
@@ -99,14 +99,35 @@ const roleColor: Record<string, string> = {
 
 export default function AdminDashboardPage() {
   const [tab, setTab] = useState<Tab>("upload");
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   function handleLogout() {
     signOut({ callbackUrl: "/login" });
   }
 
   return (
+    <>
+      <button
+        type="button"
+        aria-label="메뉴 토글"
+        onClick={() => setMobileOpen((v) => !v)}
+        className="md:hidden fixed top-3 left-3 z-40 p-2 bg-white border border-gray-200 rounded-md shadow-sm"
+      >
+        {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+      </button>
+      {mobileOpen && (
+        <div
+          className="md:hidden fixed inset-0 bg-black/40 z-20"
+          onClick={() => setMobileOpen(false)}
+          aria-hidden="true"
+        />
+      )}
     <div className="flex gap-6 max-w-7xl mx-auto">
-      <aside className="w-56 shrink-0 space-y-6 sticky top-4 self-start">
+      <aside
+        className={`w-56 shrink-0 space-y-6 bg-white p-4 overflow-y-auto fixed inset-y-0 left-0 z-30 transition-transform ${
+          mobileOpen ? "translate-x-0" : "-translate-x-full"
+        } md:relative md:inset-auto md:translate-x-0 md:bg-transparent md:p-0 md:overflow-visible md:sticky md:top-4 md:self-start md:z-auto md:transition-none`}
+      >
         <div className="flex items-center gap-2">
           <ShieldCheck className="w-6 h-6 text-gray-800" />
           <div>
@@ -123,7 +144,7 @@ export default function AdminDashboardPage() {
                 {group.items.map(({ key, label, icon: Icon }) => (
                   <button
                     key={key}
-                    onClick={() => setTab(key)}
+                    onClick={() => { setTab(key); setMobileOpen(false); }}
                     className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-sm transition-colors text-left ${
                       tab === key
                         ? "bg-blue-50 text-blue-700 font-medium"
@@ -168,6 +189,7 @@ export default function AdminDashboardPage() {
         {tab === "boards" && <BoardsTab />}
       </main>
     </div>
+    </>
   );
 }
 
@@ -1654,7 +1676,7 @@ function MembersTab() {
                     className={`text-xs font-medium rounded px-2 py-1 border-0 cursor-pointer ${roleColor[user.role] || "bg-gray-100 text-gray-600"}`}
                   >
                     <option value="BASIC">일반회원</option>
-                    <option value="SALES_REP">영맨회원</option>
+                    <option value="BUSINESS">사업자</option>
                     <option value="BIZ">비즈회원</option>
                     <option value="ADMIN">관리자</option>
                     <option value="DOCTOR">의사</option>

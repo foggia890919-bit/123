@@ -1,4 +1,4 @@
-export type Role = "ADMIN" | "SALES_REP" | "DOCTOR" | "PHARMACIST";
+export type Role = "ADMIN" | "BUSINESS" | "BIZ" | "BASIC" | "DOCTOR" | "PHARMACIST";
 
 /**
  * HIRA 주성분코드 정밀 매칭 레벨

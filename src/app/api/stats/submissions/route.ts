@@ -22,9 +22,20 @@ import { requireSession, isNextResponse } from "@/lib/auth-guard";
 interface FinalDrugRecord {
   insuranceCode?: string;
   productName?: string;
+  companyName?: string;
   quantity?: string;
   matchedMedicationId?: string | null;
   mismatch?: unknown;
+  companyNameMismatch?: unknown;
+  finalConfidence?: number;
+  // Gemini 자가검증 결과 ("selfValidateMismatch" | "nameCodeMismatch" | null).
+  // 검수자가 셀 편집 후 저장하면 finalDrugs 재구성으로 자동 클리어됨.
+  reviewReason?: string | null;
+  qualityChecks?: {
+    priceMatch?: { applicable?: boolean; matched?: boolean };
+    revenueMatch?: { applicable?: boolean; matched?: boolean };
+    prefixMatch?: { applicable?: boolean; matched?: boolean };
+  };
 }
 
 // 사진별 약품 fingerprint — (보험코드 또는 제품명) + 수량 set.
@@ -54,6 +65,7 @@ interface OcrDataRecord {
   finalDrugs?: FinalDrugRecord[];
   aiDrugs?: FinalDrugRecord[];
   avgConfidence?: number;
+  totalSumCheck?: { applicable?: boolean; matched?: boolean };
   geminiMeta?: {
     summary?: { drugCount?: number };
   };
@@ -79,6 +91,13 @@ function computeMetrics(reports: Array<{ ocrData: unknown; totalFee: number | nu
   let partialExtractionCount = 0;
   let processingCount = 0;
   let errorCount = 0;
+  // 검증 강화로 추가된 행 단위 지표 — 검수자가 어떤 사진을 우선 봐야 할지 판단용.
+  let lowQualityRowCount = 0;        // finalConfidence < 75
+  let priceMismatchCount = 0;        // priceCheck applicable && !matched
+  let revenueMismatchCount = 0;      // revenueCheck applicable && !matched
+  let companyMismatchCount = 0;      // Gemini companyName vs 마스터 companyName 불일치
+  let totalSumMismatchCount = 0;     // 사진 단위 합계 불일치 (사진 수)
+  let selfValidateMismatchCount = 0; // Gemini 텍스트 자가검증으로 잡힌 행 수
   const confidenceSum: number[] = [];
 
   for (const r of reports) {
@@ -93,8 +112,19 @@ function computeMetrics(reports: Array<{ ocrData: unknown; totalFee: number | nu
     for (const d of drugs) {
       if (d.matchedMedicationId) masterMatched++;
       if (d.mismatch != null) mismatchCount++;
+      if (d.companyNameMismatch != null) companyMismatchCount++;
+      if (typeof d.finalConfidence === "number" && d.finalConfidence < 75) lowQualityRowCount++;
+      if (d.reviewReason === "selfValidateMismatch") selfValidateMismatchCount++;
+      const pq = d.qualityChecks?.priceMatch;
+      if (pq?.applicable && pq?.matched === false) priceMismatchCount++;
+      const rq = d.qualityChecks?.revenueMatch;
+      if (rq?.applicable && rq?.matched === false) revenueMismatchCount++;
     }
     if (typeof ocr.avgConfidence === "number") confidenceSum.push(ocr.avgConfidence);
+
+    if (ocr.totalSumCheck?.applicable && ocr.totalSumCheck?.matched === false) {
+      totalSumMismatchCount++;
+    }
 
     const detected = ocr.geminiMeta?.summary?.drugCount ?? 0;
     if (detected > 0 && detected !== drugs.length) {
@@ -114,6 +144,12 @@ function computeMetrics(reports: Array<{ ocrData: unknown; totalFee: number | nu
     partialExtractionCount,
     processingCount,
     errorCount,
+    lowQualityRowCount,
+    priceMismatchCount,
+    revenueMismatchCount,
+    companyMismatchCount,
+    totalSumMismatchCount,
+    selfValidateMismatchCount,
   };
 }
 

@@ -11,7 +11,7 @@ model User {
   email        String               @unique
   name         String?
   password     String
-  role         Role                 @default(SALES_REP)
+  role         Role                 @default(BUSINESS)
   approved     Boolean              @default(false)
   phone        String?
   carrier      String?
@@ -42,6 +42,9 @@ model User {
   salesRepEpharmsAccounts    EpharmsAccount[]      @relation("SalesRepEpharmsAccounts")
   inhouseOrders              InhouseOrder[]
   statImages                 StatImage[]
+  submissionRoutes           SubmissionRoute[]     @relation("SubmissionRouteOwner")
+  parentLinkRequestsSent     ParentLinkRequest[]   @relation("PLRRequester")
+  parentLinkRequestsReceived ParentLinkRequest[]   @relation("PLRTarget")
 
   @@index([parentUserId])
 }
@@ -124,7 +127,7 @@ model UserClient {
 
 enum Role {
   ADMIN
-  SALES_REP
+  BUSINESS
   BIZ
   BASIC
   DOCTOR
@@ -525,8 +528,11 @@ model SettlementDocument {
 }
 
 // 통계 제출처 관리: 거래처 × 제약사 → 제출 법인 + 이메일
+// ownerId: 회원별 본인 row 관리. ADMIN owner 인 row 는 모든 회원에게 글로벌 master 로 노출.
 model SubmissionRoute {
   id               String   @id @default(cuid())
+  ownerId          String
+  owner            User     @relation("SubmissionRouteOwner", fields: [ownerId], references: [id], onDelete: Cascade)
   clientName       String
   companyName      String
   submissionEntity String
@@ -539,7 +545,8 @@ model SubmissionRoute {
 
   monthlyLogs      MonthlySubmissionLog[]
 
-  @@unique([clientName, companyName])
+  @@unique([ownerId, clientName, companyName])
+  @@index([ownerId])
   @@index([clientName])
   @@index([companyName])
   @@index([submissionEntity])
@@ -945,4 +952,29 @@ model StatImage {
   @@index([clientId])
   @@index([batchKey])
   @@index([year, month])
+}
+
+// 상위 회원 연결 요청 — 하위가 상위에게 요청, 상위가 승인 시 User.parentUserId set.
+enum ParentLinkStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELED
+}
+
+model ParentLinkRequest {
+  id                  String           @id @default(cuid())
+  requesterId         String
+  requester           User             @relation("PLRRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  targetId            String
+  target              User             @relation("PLRTarget", fields: [targetId], references: [id], onDelete: Cascade)
+  targetEmailSnapshot String
+  status              ParentLinkStatus @default(PENDING)
+  decidedAt           DateTime?
+  reason              String?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  @@index([requesterId, status])
+  @@index([targetId, status])
 }

@@ -147,7 +147,7 @@ export default function SubmissionPackagePage() {
 └── _미매핑.txt                     ← SubmissionRoute 미등록 (제약사,거래처) 목록`}
           </pre>
           <p>
-            제출처 매핑은 <a href="/biz/submission-routes" className="text-blue-600 hover:underline">통계 제출처 관리</a> 메뉴에서 (거래처 × 제약사 → 제출처) 형태로 등록합니다.
+            제출처 매핑은 <a href="/submission-routes" className="text-blue-600 hover:underline">통계 제출처 관리</a> 메뉴에서 (거래처 × 제약사 → 제출처) 형태로 등록합니다.
           </p>
         </section>
       </div>

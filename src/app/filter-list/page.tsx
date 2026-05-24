@@ -25,7 +25,7 @@ function StatusBadge({ status }: { status: string }) {
 
 export default function FilterListPage() {
   const { data: session } = useSession();
-  const isSalesRep = session?.user?.role === "SALES_REP" || session?.user?.role === "ADMIN";
+  const isSalesRep = session?.user?.role === "BUSINESS" || session?.user?.role === "ADMIN";
 
   const companyMenuRef = useRef<HTMLDivElement>(null);
   const proposalMenuRef = useRef<HTMLDivElement>(null);
@@ -194,7 +194,7 @@ export default function FilterListPage() {
   }
 
   return (
-    <RequireRole minRole="SALES_REP">
+    <RequireRole minRole="BUSINESS">
       <div className="space-y-5">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>

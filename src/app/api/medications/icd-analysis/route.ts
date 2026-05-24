@@ -11,7 +11,7 @@ export interface IcdResult {
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole("SALES_REP");
+  const guard = await requireRole("BUSINESS");
   if (isNextResponse(guard)) return guard;
 
   const { productName, ingredientName, type } = await req.json();

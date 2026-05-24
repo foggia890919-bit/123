@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
   );
 
   const users = await prisma.user.findMany({
-    where: { role: "SALES_REP", approved: true },
+    where: { role: "BUSINESS", approved: true },
     select: {
       id: true,
       name: true,

@@ -71,12 +71,16 @@ export default function StatsPhotoPage() {
   } | null>(null);
 
   // 제약사별 매출 요약 (당월/전월/전전월) — 거래처 선택 시 자동 fetch + 백그라운드 처리 중 polling.
+  // 매출 = 단가×수량 합계 (원). 수량 = 처방수량 합계 (정). 비급여는 단가 0 이라 매출만으론 불충분.
   interface SalesSummaryRow {
     companyName: string;
     isAllowed: boolean;
     currentSales: number;
+    currentQuantity: number;
     prevSales: number;
+    prevQuantity: number;
     prevPrevSales: number;
+    prevPrevQuantity: number;
     currentPhotoCount: number;
   }
   interface SalesSummary {
@@ -381,20 +385,32 @@ export default function StatsPhotoPage() {
             {salesSummary.byCompany.length === 0 ? (
               <div className="px-3 py-4 text-[11px] text-gray-500 text-center">
                 거래가능 제약사도 매출 실적도 없음.{" "}
-                <a href="/biz/submission-routes" className="text-blue-600 underline">통계제출처 관리</a> 에서 제약사 등록.
+                <a href="/submission-routes" className="text-blue-600 underline">통계제출처 관리</a> 에서 제약사 등록.
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead className="bg-gray-50 text-gray-500">
                     <tr>
-                      <th className="text-left px-3 py-1.5">제약사</th>
-                      <th className="text-right px-3 py-1.5 w-28">{salesSummary.prevPrevYear}.{String(salesSummary.prevPrevMonth).padStart(2, "0")}</th>
-                      <th className="text-right px-3 py-1.5 w-28">{salesSummary.prevYear}.{String(salesSummary.prevMonth).padStart(2, "0")}</th>
-                      <th className="text-right px-3 py-1.5 w-28 bg-orange-50 text-orange-700 font-semibold">
+                      <th className="text-left px-3 py-1.5" rowSpan={2}>제약사</th>
+                      <th className="text-center px-3 py-1 border-l" colSpan={2}>
+                        {salesSummary.prevPrevYear}.{String(salesSummary.prevPrevMonth).padStart(2, "0")}
+                      </th>
+                      <th className="text-center px-3 py-1 border-l" colSpan={2}>
+                        {salesSummary.prevYear}.{String(salesSummary.prevMonth).padStart(2, "0")}
+                      </th>
+                      <th className="text-center px-3 py-1 border-l bg-orange-50 text-orange-700 font-semibold" colSpan={2}>
                         {salesSummary.year}.{String(salesSummary.month).padStart(2, "0")} (당월)
                       </th>
-                      <th className="text-center px-2 py-1.5 w-14">사진</th>
+                      <th className="text-center px-2 py-1.5 w-14 border-l" rowSpan={2}>사진</th>
+                    </tr>
+                    <tr>
+                      <th className="text-right px-2 py-1 w-20 border-l font-normal text-[10px]">수량</th>
+                      <th className="text-right px-2 py-1 w-24 font-normal text-[10px]">금액</th>
+                      <th className="text-right px-2 py-1 w-20 border-l font-normal text-[10px]">수량</th>
+                      <th className="text-right px-2 py-1 w-24 font-normal text-[10px]">금액</th>
+                      <th className="text-right px-2 py-1 w-20 border-l bg-orange-50 font-normal text-[10px] text-orange-700">수량</th>
+                      <th className="text-right px-2 py-1 w-24 bg-orange-50 font-normal text-[10px] text-orange-700">금액</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -406,32 +422,50 @@ export default function StatsPhotoPage() {
                             <span className="ml-1.5 text-[10px] text-amber-700 font-semibold">⚠ 거래 외</span>
                           )}
                         </td>
-                        <td className="px-3 py-1.5 text-right font-mono text-gray-500">
+                        <td className="px-2 py-1.5 text-right font-mono text-gray-500 border-l">
+                          {c.prevPrevQuantity > 0 ? c.prevPrevQuantity.toLocaleString() : "-"}
+                        </td>
+                        <td className="px-2 py-1.5 text-right font-mono text-gray-500">
                           {c.prevPrevSales > 0 ? c.prevPrevSales.toLocaleString() : "-"}
                         </td>
-                        <td className="px-3 py-1.5 text-right font-mono text-gray-500">
+                        <td className="px-2 py-1.5 text-right font-mono text-gray-500 border-l">
+                          {c.prevQuantity > 0 ? c.prevQuantity.toLocaleString() : "-"}
+                        </td>
+                        <td className="px-2 py-1.5 text-right font-mono text-gray-500">
                           {c.prevSales > 0 ? c.prevSales.toLocaleString() : "-"}
                         </td>
-                        <td className="px-3 py-1.5 text-right font-mono font-bold bg-orange-50 text-orange-900">
+                        <td className="px-2 py-1.5 text-right font-mono font-bold bg-orange-50 text-orange-900 border-l">
+                          {c.currentQuantity > 0 ? c.currentQuantity.toLocaleString() : "-"}
+                        </td>
+                        <td className="px-2 py-1.5 text-right font-mono font-bold bg-orange-50 text-orange-900">
                           {c.currentSales > 0 ? c.currentSales.toLocaleString() : "-"}
                         </td>
-                        <td className="px-2 py-1.5 text-center text-[11px] text-gray-500">
+                        <td className="px-2 py-1.5 text-center text-[11px] text-gray-500 border-l">
                           {c.currentPhotoCount > 0 ? `${c.currentPhotoCount}장` : "-"}
                         </td>
                       </tr>
                     ))}
                     <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
                       <td className="px-3 py-2 text-gray-700">합계</td>
-                      <td className="px-3 py-2 text-right font-mono text-gray-600">
+                      <td className="px-2 py-2 text-right font-mono text-gray-600 border-l">
+                        {salesSummary.byCompany.reduce((s, c) => s + c.prevPrevQuantity, 0).toLocaleString()}
+                      </td>
+                      <td className="px-2 py-2 text-right font-mono text-gray-600">
                         {salesSummary.byCompany.reduce((s, c) => s + c.prevPrevSales, 0).toLocaleString()}원
                       </td>
-                      <td className="px-3 py-2 text-right font-mono text-gray-600">
+                      <td className="px-2 py-2 text-right font-mono text-gray-600 border-l">
+                        {salesSummary.byCompany.reduce((s, c) => s + c.prevQuantity, 0).toLocaleString()}
+                      </td>
+                      <td className="px-2 py-2 text-right font-mono text-gray-600">
                         {salesSummary.byCompany.reduce((s, c) => s + c.prevSales, 0).toLocaleString()}원
                       </td>
-                      <td className="px-3 py-2 text-right font-mono text-orange-900 bg-orange-100">
+                      <td className="px-2 py-2 text-right font-mono text-orange-900 bg-orange-100 border-l">
+                        {salesSummary.byCompany.reduce((s, c) => s + c.currentQuantity, 0).toLocaleString()}
+                      </td>
+                      <td className="px-2 py-2 text-right font-mono text-orange-900 bg-orange-100">
                         {salesSummary.byCompany.reduce((s, c) => s + c.currentSales, 0).toLocaleString()}원
                       </td>
-                      <td className="px-2 py-2 text-center text-[11px] text-gray-500">
+                      <td className="px-2 py-2 text-center text-[11px] text-gray-500 border-l">
                         {salesSummary.byCompany.reduce((s, c) => s + c.currentPhotoCount, 0)}장
                       </td>
                     </tr>

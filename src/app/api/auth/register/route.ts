@@ -40,8 +40,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "이미 사용 중인 이메일이에요." }, { status: 409 });
     }
 
-    const validRoles = ["SALES_REP", "BIZ", "BASIC", "DOCTOR", "PHARMACIST"];
-    const safeRole = validRoles.includes(role) ? role : "SALES_REP";
+    const validRoles = ["BUSINESS", "BIZ", "BASIC", "DOCTOR", "PHARMACIST"];
+    const safeRole = validRoles.includes(role) ? role : "BUSINESS";
 
     const hashed = await bcrypt.hash(password, 12);
 

@@ -1,6 +1,7 @@
 import { extractRxStatsFromImage, type RxExtractResult, type RxDrugRow } from "./gemini-rx-stats-extract";
 import { fetchMasterByCodes, fetchMasterByNamePrefixes, matchMedication, type MergedDrug } from "./medication-master-match";
 import { fetchRateEntries } from "./rate-utils";
+import { computeRowQuality, checkTotalSum, type RowQualityChecks, type QualityCheck } from "./rx-quality-checks";
 
 // stats/page.tsx 가 자체 재정의해서 쓰는 JSON 응답 형식. import 의존성 없음 — 응답 형식만 호환.
 // 핵심 필드: drugs[].{insuranceCode, companyName, productName, quantity (Field), unitPrice,
@@ -18,6 +19,8 @@ interface FusionDrug {
   commissionRate: number | null;
   additionalRate: number | null;
   matchedMedicationId: string | null;
+  // 0~100 가중 평균 점수 — 마스터 매칭(50) + prefix(15) + 단가검증(20) + 매출검증(15).
+  // 검수 UI confidenceColor() threshold 90/75 와 호환.
   finalConfidence: number;
   manualCheck: boolean;
   bboxYPercent: number | null;
@@ -25,6 +28,15 @@ interface FusionDrug {
   mismatch:
     | { kind: "code-name-mismatch"; masterProductName: string; ocrProductName: string }
     | null;
+  // Gemini 추출 companyName 과 마스터 매칭 companyName 이 다를 때만 표시. 검수에서 사람이 판단.
+  companyNameMismatch:
+    | { geminiCompanyName: string; masterCompanyName: string }
+    | null;
+  // 행별 4가지 검증 결과 — 검수 UI 가 빨강/노랑 강조하기 위한 데이터.
+  qualityChecks: RowQualityChecks;
+  // Case B 자동 교체된 약품명의 원본 OCR 값 (호버 툴팁 노출용).
+  originalProductName: string;
+  nameAutoReplaced: boolean;
   // Gemini bbox [x1, y1, x2, y2] 비율 0~1 — 검수 페이지에서 표 행 ↔ 사진 위치 매칭용
   bbox: [number, number, number, number];
 }
@@ -48,6 +60,10 @@ export interface FusionResultJson {
   partialExtraction:
     | { detected: number; extracted: number }
     | null;
+  // 사진 단위 합계 검증 — Gemini summary.totalAmountWon 과 행 합산 매출. 5% 허용.
+  totalSumCheck: QualityCheck;
+  // 사진 안에 등장한 모든 제약사 (행별 companyName 의 set). N제약사 사진 진단용.
+  companiesInPhoto: string[];
   // 새 /stats/photo 페이지가 시트 append 시 카테고리/효능/처방횟수 원본 보존하려고 사용.
   // 기존 /stats 페이지는 이 필드 무시 (5컬럼만 보고 무관).
   rawDrugs: RxDrugRow[];
@@ -152,7 +168,9 @@ export async function extractStatsLikeFusion(
     const merged: MergedDrug = {
       insuranceCode: d.code,
       productName: d.name,
-      companyName: "",          // Gemini 가 약품별 제약사 별도로 안 뽑음 — 마스터 매칭이 보강
+      // Gemini 행별 companyName 우선. 비어 있으면 마스터 매칭이 채워줌.
+      // 둘 다 있고 다르면 아래에서 mismatch flag 켜고 검수에서 사람이 판단.
+      companyName: d.companyName,
       quantity: String(d.quantity ?? ""),
       confidence: d.code ? 90 : 60,
       priceHint: d.unitPrice || undefined,
@@ -161,15 +179,37 @@ export async function extractStatsLikeFusion(
 
     if (match.matchedMedicationId) matchedCount++; else unmatchedCount++;
 
-    const codeOk = match.matchedMedicationId !== null;
+    const codeOk = match.matchedMedicationId !== null && d.code.replace(/\D/g, "").length === 9;
     const hasName = !!match.productName;
     const hasQty = (d.quantity ?? 0) > 0;
-    // 단순 3단계: 코드+이름+수량 다 있으면 95, 코드만 있으면 70, 아무것도 없으면 40
-    const finalConfidence = codeOk
-      ? 95
-      : (d.code && hasName ? 70 : 40);
+    const finalUnitPrice = match.unitPrice ?? (d.unitPrice || null);
+
+    // 0~100 가중 평균 — 마스터(50) + prefix(15) + 단가(20) + 매출(15)
+    const { checks, score } = computeRowQuality({
+      matchedMedicationId: match.matchedMedicationId,
+      codeOk,
+      // 자동 교체된 case B 는 마스터값으로 교체되어 최종 이름은 일치 — nameSimilar=true.
+      nameSimilar: !!match.matchedMedicationId && (match.nameCodeMismatch == null || match.nameAutoReplaced),
+      masterProductName: match.productName,
+      ocrProductName: d.name,
+      quantity: d.quantity ?? 0,
+      geminiUnitPrice: d.unitPrice || undefined,
+      masterUnitPrice: match.unitPrice,
+      geminiTotalPrice: d.totalPrice || undefined,
+      finalUnitPrice,
+    });
 
     const additionalRate = additionalByCompany.get(normCompany(match.companyName)) ?? null;
+
+    // companyName mismatch: Gemini 가 추출한 값과 마스터 매칭값이 둘 다 있는데 다른 경우.
+    // 검수에서 사람이 결정 — 자동 선택 X.
+    const geminiCompany = d.companyName.trim();
+    const masterCompany = (match.companyName || "").trim();
+    const companyNameMismatch =
+      geminiCompany && masterCompany &&
+      normCompany(geminiCompany) !== normCompany(masterCompany)
+        ? { geminiCompanyName: geminiCompany, masterCompanyName: masterCompany }
+        : null;
 
     return {
       insuranceCode: {
@@ -177,8 +217,9 @@ export async function extractStatsLikeFusion(
         confidence: codeOk ? 95 : (d.code ? 60 : 0),
       },
       companyName: {
-        value: match.companyName,
-        confidence: match.companyName ? 90 : 0,
+        // Gemini 가 추출한 값 우선 (사진 실제). 없으면 마스터 매칭값.
+        value: geminiCompany || masterCompany,
+        confidence: geminiCompany ? 90 : (masterCompany ? 60 : 0),
       },
       productName: {
         value: match.productName,
@@ -188,17 +229,21 @@ export async function extractStatsLikeFusion(
         value: String(d.quantity ?? ""),
         confidence: hasQty ? 90 : 30,
       },
-      unitPrice: match.unitPrice ?? (d.unitPrice || null),
+      unitPrice: finalUnitPrice,
       commissionRate: match.commissionRate,
       additionalRate,
       matchedMedicationId: match.matchedMedicationId,
-      finalConfidence,
-      manualCheck: finalConfidence < 95,
+      finalConfidence: score.overall,
+      manualCheck: score.overall < 90,
       bboxYPercent: fallbackY(i, n),
       debug: null,
       mismatch: match.nameCodeMismatch
         ? { kind: "code-name-mismatch" as const, ...match.nameCodeMismatch }
         : null,
+      companyNameMismatch,
+      qualityChecks: checks,
+      originalProductName: match.originalProductName,
+      nameAutoReplaced: match.nameAutoReplaced,
       bbox: d.bbox,
     };
   });
@@ -213,6 +258,18 @@ export async function extractStatsLikeFusion(
   const extracted = drugs.length;
   const partialExtraction =
     detected > 0 && detected !== extracted ? { detected, extracted } : null;
+
+  // 사진 단위 합계 검증 — Gemini summary.totalAmountWon 과 행 합산 매출 비교 (Gemini 추출값 기준).
+  const rowSumFromGemini = rx.drugs.reduce((s, d) => s + (d.totalPrice || 0), 0);
+  const totalSumCheck = checkTotalSum(rowSumFromGemini, rx.summary.totalAmountWon);
+
+  // 사진 안에 등장한 모든 제약사 — N제약사 사진 진단용 (Gemini 행별 companyName + 마스터 보강값 둘 다).
+  const companySet = new Set<string>();
+  for (const fd of drugs) {
+    const v = fd.companyName.value.trim();
+    if (v) companySet.add(v);
+  }
+  const companiesInPhoto = Array.from(companySet);
 
   return {
     source: "gemini-direct",
@@ -230,6 +287,8 @@ export async function extractStatsLikeFusion(
     prescriptionDate: { value: "", confidence: 0 },
     patientName: { value: "", confidence: 0 },
     partialExtraction,
+    totalSumCheck,
+    companiesInPhoto,
     rawDrugs: rx.drugs,
     geminiMeta: {
       pharma: rx.pharma,
