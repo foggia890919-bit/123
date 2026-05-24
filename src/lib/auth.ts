@@ -87,9 +87,12 @@ export const authOptions: NextAuthOptions = {
         try {
           const dbUser = await prisma.user.findUnique({
             where: { id: token.id as string },
-            select: { role: true, approved: true },
+            select: { role: true, approved: true, isBusinessApproved: true },
           });
-          if (dbUser) token.role = dbUser.role;
+          if (dbUser) {
+            token.role = dbUser.role;
+            token.isBusinessApproved = dbUser.isBusinessApproved;
+          }
           token.roleCheckedAt = Date.now();
         } catch {}
       }
@@ -99,6 +102,7 @@ export const authOptions: NextAuthOptions = {
       if (token && session.user) {
         (session.user as { id?: string }).id = token.id as string;
         (session.user as { role?: string }).role = token.role as string;
+        (session.user as { isBusinessApproved?: boolean }).isBusinessApproved = !!token.isBusinessApproved;
       }
       return session;
     },

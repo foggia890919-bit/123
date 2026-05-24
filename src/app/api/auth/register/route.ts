@@ -112,6 +112,17 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // 가입 직후 사업자 인증 안내 알람 즉시 생성 — 가입자가 다음 로그인 시 종 아이콘에 빨강 배지로 확인.
+    await prisma.notification.create({
+      data: {
+        userId: user.id,
+        type: "BUSINESS_PROMPT",
+        title: "사업자 등록하고 모든 기능을 사용해보세요",
+        body: "지금은 통합검색만 이용 가능해요. 마이페이지에서 사업자등록증을 등록하고 관리자 승인을 받으면 제약사 필터링·통계제출처·제안서·통계 업로드 등 모든 기능을 사용할 수 있어요.",
+        link: "/mypage",
+      },
+    }).catch(() => undefined);
+
     await prisma.$executeRawUnsafe(`DELETE FROM "SmsOtp" WHERE "phone"=$1`, digits);
 
     return NextResponse.json(user, { status: 201 });

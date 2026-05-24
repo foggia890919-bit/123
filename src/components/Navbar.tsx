@@ -5,7 +5,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
-import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck, ShoppingCart, ClipboardList, MessageCircle, TrendingUp, Wallet, Users, Sparkles, Bell, Check, Trash2 } from "lucide-react";
+import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck, ShoppingCart, ClipboardList, MessageCircle, TrendingUp, Wallet, Users, Sparkles, Bell, Check, Trash2, Lock } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
 interface NavLeaf {
@@ -69,7 +70,16 @@ const navItems: NavItem[] = [
 
 export default function Navbar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { data: session } = useSession();
+  // 일반회원 (사업자 미인증) 은 통합검색 외 모든 메뉴 차단 + 안내
+  const isBusinessApproved = !!(session?.user as { isBusinessApproved?: boolean } | undefined)?.isBusinessApproved;
+  function handleLockedNavClick(e: React.MouseEvent, label: string) {
+    e.preventDefault();
+    if (confirm(`'${label}' 은(는) 사업자 인증이 필요한 기능이에요.\n\n마이페이지에서 사업자등록증을 등록하고 관리자 승인을 받으면 사용할 수 있어요.\n\n마이페이지로 이동할까요?`)) {
+      router.push("/mypage");
+    }
+  }
   const [userOpen, setUserOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [openGroup, setOpenGroup] = useState<string | null>(null);
@@ -165,8 +175,18 @@ export default function Navbar() {
           {/* 데스크톱 네비 */}
           <div className="hidden md:flex items-center gap-1">
             {navItems.map((item) => {
+              // 일반회원이면 통합검색(/search) 외 모든 메뉴 잠금
+              const isLocked = !!session && !isBusinessApproved && (item.kind === "link" ? item.href !== "/search" : true);
               if (item.kind === "link") {
                 const Icon = item.icon;
+                if (isLocked) {
+                  return (
+                    <button key={item.href} onClick={(e) => handleLockedNavClick(e, item.label)}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-gray-400 hover:bg-gray-50 cursor-not-allowed">
+                      <Lock className="w-3.5 h-3.5" />{item.label}
+                    </button>
+                  );
+                }
                 return (
                   <Link key={item.href} href={item.href}
                     className={cn(
@@ -175,6 +195,16 @@ export default function Navbar() {
                     )}>
                     <Icon className="w-4 h-4" />{item.label}
                   </Link>
+                );
+              }
+              // 그룹 (제안서, 통계, 원내거래) — 일반회원이면 전체 잠금
+              if (isLocked) {
+                const Icon = item.icon;
+                return (
+                  <button key={item.label} onClick={(e) => handleLockedNavClick(e, item.label)}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-gray-400 hover:bg-gray-50 cursor-not-allowed">
+                    <Lock className="w-3.5 h-3.5" />{item.label}
+                  </button>
                 );
               }
               // group
@@ -385,8 +415,17 @@ export default function Navbar() {
         <div className="md:hidden border-t border-gray-100 bg-white shadow-lg">
           <div className="px-4 py-2 space-y-0.5">
             {navItems.map((item) => {
+              const isLocked = !!session && !isBusinessApproved && (item.kind === "link" ? item.href !== "/search" : true);
               if (item.kind === "link") {
                 const Icon = item.icon;
+                if (isLocked) {
+                  return (
+                    <button key={item.href} onClick={(e) => { setMobileOpen(false); handleLockedNavClick(e, item.label); }}
+                      className="w-full flex items-center gap-3 px-3 py-3 rounded-md text-sm font-medium text-gray-400 text-left cursor-not-allowed">
+                      <Lock className="w-3.5 h-3.5 shrink-0" />{item.label}
+                    </button>
+                  );
+                }
                 return (
                   <Link key={item.href} href={item.href} onClick={() => setMobileOpen(false)}
                     className={cn(
@@ -395,6 +434,15 @@ export default function Navbar() {
                     )}>
                     <Icon className="w-4 h-4 shrink-0" />{item.label}
                   </Link>
+                );
+              }
+              if (isLocked) {
+                const Icon = item.icon;
+                return (
+                  <button key={item.label} onClick={(e) => { setMobileOpen(false); handleLockedNavClick(e, item.label); }}
+                    className="w-full flex items-center gap-3 px-3 py-3 rounded-md text-sm font-medium text-gray-400 text-left cursor-not-allowed">
+                    <Lock className="w-3.5 h-3.5 shrink-0" />{item.label}
+                  </button>
                 );
               }
               const Icon = item.icon;
