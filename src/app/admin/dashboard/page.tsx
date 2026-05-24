@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useMemo } from "react";
 import { signOut } from "next-auth/react";
-import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut, Building2, Search, X, Mail, Phone, Send, Inbox, Copy, MessageCircle, Menu, Loader2, Network, ChevronRight } from "lucide-react";
+import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut, Building2, Search, X, Mail, Phone, Send, Inbox, Copy, MessageCircle, Menu, Loader2, Network, ChevronRight, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import * as XLSX from "xlsx";
@@ -3349,14 +3349,61 @@ function BizManagementTab() {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [subTab, setSubTab] = useState<BizSubTab>("all");
+  // 삭제 진행 상태 — 동일 행 더블 클릭 방지. 삭제 직전 GET 으로 연결 카운트 받아와서 confirm.
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  useEffect(() => {
+  function reload() {
     setLoading(true);
     fetch("/api/user-clients?all=true")
       .then((r) => r.json())
       .then((d) => setRows(Array.isArray(d) ? d : []))
       .finally(() => setLoading(false));
-  }, []);
+  }
+  useEffect(() => { reload(); }, []);
+
+  async function handleDelete(row: AdminUserClient) {
+    if (deletingId) return;
+    setDeletingId(row.id);
+    try {
+      // 연결된 보고서/제안서 카운트 미리 받아서 사용자에게 알리기.
+      let reportCount = 0, proposalCount = 0;
+      try {
+        const r = await fetch(`/api/user-clients/${row.id}`);
+        if (r.ok) {
+          const d = await r.json();
+          reportCount = d.reportCount ?? 0;
+          proposalCount = d.proposalCount ?? 0;
+        }
+      } catch { /* 카운트 못 받아도 진행 가능 */ }
+
+      const lines = [
+        `정말 삭제할까요?`,
+        ``,
+        `거래처명: ${row.clientName}`,
+        `사업자번호: ${row.bizNumber}`,
+        `담당자: ${row.user.name || row.user.email}`,
+      ];
+      if (reportCount > 0 || proposalCount > 0) {
+        lines.push(``, `⚠️ 이 거래처에 연결된 항목:`);
+        if (reportCount > 0) lines.push(`  - 처방통계 보고서 ${reportCount}건`);
+        if (proposalCount > 0) lines.push(`  - 제안서 ${proposalCount}건`);
+        lines.push(`삭제해도 보고서/제안서 자체는 남지만 거래처 연결이 끊깁니다.`);
+      }
+      if (!confirm(lines.join("\n"))) return;
+
+      const del = await fetch(`/api/user-clients/${row.id}`, { method: "DELETE" });
+      if (!del.ok) {
+        const err = await del.json().catch(() => ({}));
+        alert(`삭제 실패: ${err.error || del.status}`);
+        return;
+      }
+      // 로컬 state 에서도 즉시 제거 (네트워크 reload 동시에).
+      setRows((prev) => prev.filter((x) => x.id !== row.id));
+      reload();
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   const SUB_TABS: { key: BizSubTab; label: string }[] = [
     { key: "all", label: "전체" },
@@ -3470,6 +3517,7 @@ function BizManagementTab() {
                             <th className="text-left py-1">사업자번호</th>
                             <th className="text-left py-1">등록일</th>
                             <th className="text-left py-1">상태</th>
+                            <th className="text-center py-1 w-12">삭제</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
@@ -3482,6 +3530,18 @@ function BizManagementTab() {
                                 {idx === 0
                                   ? <span className="px-1.5 py-0.5 rounded bg-green-100 text-green-700 font-semibold text-[10px]">마이페이지 표시</span>
                                   : <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold text-[10px]">숨김 — 저장 시 충돌</span>}
+                              </td>
+                              <td className="py-1.5 text-center">
+                                <button
+                                  onClick={() => handleDelete(r)}
+                                  disabled={deletingId === r.id}
+                                  title="이 거래처 행 삭제"
+                                  className="text-gray-400 hover:text-red-600 disabled:opacity-30 inline-flex items-center justify-center w-6 h-6 rounded hover:bg-red-50"
+                                >
+                                  {deletingId === r.id
+                                    ? <Loader2 className="w-3 h-3 animate-spin" />
+                                    : <Trash2 className="w-3 h-3" />}
+                                </button>
                               </td>
                             </tr>
                           ))}
@@ -3540,6 +3600,7 @@ function BizManagementTab() {
                 <th className="px-4 py-3 text-left">이메일</th>
                 <th className="px-4 py-3 text-center">승인</th>
                 <th className="px-4 py-3 text-center">등록일</th>
+                <th className="px-4 py-3 text-center">삭제</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -3575,6 +3636,18 @@ function BizManagementTab() {
                   </td>
                   <td className="px-4 py-3 text-center text-xs text-gray-400">
                     {new Date(c.createdAt).toLocaleDateString("ko-KR")}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <button
+                      onClick={() => handleDelete(c)}
+                      disabled={deletingId === c.id}
+                      title="이 거래처 행 삭제"
+                      className="text-gray-400 hover:text-red-600 disabled:opacity-30 inline-flex items-center justify-center w-7 h-7 rounded hover:bg-red-50"
+                    >
+                      {deletingId === c.id
+                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        : <Trash2 className="w-3.5 h-3.5" />}
+                    </button>
                   </td>
                 </tr>
                 );
