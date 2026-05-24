@@ -385,7 +385,7 @@ export default function StatsPhotoPage() {
             {salesSummary.byCompany.length === 0 ? (
               <div className="px-3 py-4 text-[11px] text-gray-500 text-center">
                 거래가능 제약사도 매출 실적도 없음.{" "}
-                <a href="/biz/submission-routes" className="text-blue-600 underline">통계제출처 관리</a> 에서 제약사 등록.
+                <a href="/submission-routes" className="text-blue-600 underline">통계제출처 관리</a> 에서 제약사 등록.
               </div>
             ) : (
               <div className="overflow-x-auto">
