@@ -157,6 +157,8 @@ export default function StatsReviewPage() {
   const [selected, setSelected] = useState<{ clientId: string; year: number; month: number } | null>(null);
   const [detail, setDetail] = useState<GroupDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  // 자동 일괄 재시도 한 번만 실행하도록 group key 추적
+  const [autoRetryDone, setAutoRetryDone] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // 일괄 작업 진행 상태 — N/M 표시 + 완료 알림용
@@ -225,6 +227,38 @@ export default function StatsReviewPage() {
       setBusy(false);
     }
   }
+
+  // 페이지 진입 시 ERROR 사진이 있고 자동 재시도 미실행 그룹이면 자동으로 일괄 재시도.
+  // group key 별 1회만 실행 (autoRetryDone) — 같은 그룹 재진입해도 또 안 함.
+  useEffect(() => {
+    if (!detail || !selected) return;
+    const groupKey = `${selected.clientId}|${selected.year}|${selected.month}`;
+    if (autoRetryDone.has(groupKey)) return;
+    const errorReports = detail.reports.filter((r) => r.status === "ERROR");
+    if (errorReports.length === 0) return;
+    // 즉시 자동 재시도 시작 — 사용자 클릭 불필요
+    setAutoRetryDone((prev) => new Set(prev).add(groupKey));
+    (async () => {
+      const total = errorReports.length;
+      setBulkProgress({ current: 0, total, label: "자동 재시도" });
+      for (let i = 0; i < total; i++) {
+        setBulkProgress({ current: i + 1, total, label: "자동 재시도" });
+        try {
+          await fetch("/api/stats/photo-retry", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reportId: errorReports[i].id }),
+          });
+        } catch { /* graceful — 다음 사진 진행 */ }
+      }
+      setBulkProgress(null);
+      setBulkSuccess(`처리 실패 ${total}장 자동 재시도 요청 완료 — 잠시 후 결과 확인`);
+      // 결과 자동 새로고침
+      const r = await fetch(`/api/stats/submissions?clientId=${selected.clientId}&year=${selected.year}&month=${selected.month}`);
+      if (r.ok) setDetail(await r.json());
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail?.reports, selected]);
 
   // 선택된 사진들 일괄 삭제 — 순차 DELETE (서버 부담 방지) + 진행 상태 + 완료 알림
   async function handleBulkRetry() {
