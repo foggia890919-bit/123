@@ -299,28 +299,40 @@ export default function ClientsPage() {
       const res = await fetch("/api/filter-request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId: session!.user.id, userName: session!.user.name || session!.user.email, clientName: selectedFilterClient.clientName, bizNumber: selectedFilterClient.bizNumber, companies: Array.from(selected) }) });
       if (!res.ok) { setFilterError((await res.json()).error || "요청 중 오류가 발생했어요."); return; }
 
-      // 통계제출처 자동 등록 — 선택된 각 제약사마다. 실패해도 filter-request 자체는 성공.
+      // 통계제출처 자동 등록 — 선택된 각 제약사마다. 실패 시 사용자에게 명확히 표시.
       const entity = normalizeCompanyName(selectedSubmissionEntity.clientName);
       const routeResults = await Promise.all(
-        Array.from(selected).map((companyName) =>
-          fetch("/api/submission-routes", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              clientName: selectedFilterClient.clientName.trim(),
-              companyName: normalizeCompanyName(companyName),
-              submissionEntity: entity,
-              requestType: "신규",
-            }),
-          }).then((r) => r.ok),
-        ),
+        Array.from(selected).map(async (companyName) => {
+          try {
+            const r = await fetch("/api/submission-routes", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                clientName: selectedFilterClient.clientName.trim(),
+                companyName: normalizeCompanyName(companyName),
+                submissionEntity: entity,
+                requestType: "신규",
+              }),
+            });
+            if (r.ok) return { ok: true, companyName, error: null };
+            const body = await r.json().catch(() => ({}));
+            return { ok: false, companyName, error: body?.error || `HTTP ${r.status}` };
+          } catch (e) {
+            return { ok: false, companyName, error: String(e).slice(0, 100) };
+          }
+        }),
       );
-      const routeFailed = routeResults.filter((ok) => !ok).length;
-      if (routeFailed > 0) {
-        console.warn(`[filter-submit] 통계제출처 자동 등록 ${routeFailed}/${routeResults.length} 건 실패 — 통계제출처 메뉴에서 직접 추가 가능`);
+      const failures = routeResults.filter((r) => !r.ok);
+      if (failures.length > 0) {
+        const detail = failures.map((f) => `${f.companyName}: ${f.error}`).join(" / ");
+        setFilterError(
+          `필터링 요청은 성공했지만 통계제출처 자동 등록 ${failures.length}/${routeResults.length}건 실패\n→ ${detail}\n통계제출처 메뉴에서 직접 등록해주세요.`
+        );
+        // 실패 있으면 success 표시 안 함 (사용자가 에러를 봐야)
+      } else {
+        setFilterSuccess(true);
       }
 
-      setFilterSuccess(true);
       setSelected(new Set());
       setSelectedSubmissionEntity(null);
       fetch(`/api/filter-request/company-status?userId=${session!.user.id}`).then((r) => r.json()).then(setCompanyStatuses);
