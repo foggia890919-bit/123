@@ -1,8 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { requireSession, isNextResponse, canManageSubmissionRoutes } from "@/lib/auth-guard";
 import { BUCKETS, parseDataUri, extensionFromMime } from "@/lib/storage";
+import { getViewableUserIds } from "@/lib/hierarchy";
 import JSZip from "jszip";
+
+async function visibleOwnerIds(user: { id: string; role: string }): Promise<string[] | null> {
+  if (user.role === "ADMIN") return null;
+  const [viewable, admins] = await Promise.all([
+    getViewableUserIds(user.id),
+    prisma.user.findMany({ where: { role: "ADMIN" }, select: { id: true } }),
+  ]);
+  return [...new Set([...viewable, ...admins.map((a) => a.id)])];
+}
 
 // GET /api/submission-routes/download?submissionEntity=XXX&companyName=YYY(optional)
 // 제출처(+선택적 제약사)에 해당하는 사업자등록증을 ZIP으로 반환
@@ -37,7 +47,7 @@ function dataUriToBuffer(dataUri: string): { buf: Buffer; ext: string } | null {
 export async function GET(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
-  if (user.role !== "BIZ" && user.role !== "ADMIN")
+  if (!canManageSubmissionRoutes(user.role))
     return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
   const submissionEntity = req.nextUrl.searchParams.get("submissionEntity");
@@ -46,11 +56,12 @@ export async function GET(req: NextRequest) {
   if (!submissionEntity)
     return NextResponse.json({ error: "submissionEntity 파라미터 필요" }, { status: 400 });
 
-  // 해당 제출처의 활성 제출처 설정 조회
+  const owners = await visibleOwnerIds(user);
   const routes = await prisma.submissionRoute.findMany({
     where: {
       active: true,
       submissionEntity,
+      ...(owners ? { ownerId: { in: owners } } : {}),
       ...(companyNameFilter ? { companyName: companyNameFilter } : {}),
     },
     select: { clientName: true, companyName: true },

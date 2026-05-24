@@ -62,6 +62,12 @@ export function isNextResponse(v: unknown): v is NextResponse {
   return v instanceof NextResponse;
 }
 
+// 통계제출처 접근 허용 role — DOCTOR/PHARMACIST 차단.
+// HIERARCHY 가 BASIC/DOCTOR/PHARMACIST/BUSINESS/BIZ 모두 동일 레벨이라 minRole 만으로 차단 불가 → explicit 화이트리스트.
+export function canManageSubmissionRoutes(role: string): boolean {
+  return role === "ADMIN" || role === "BIZ" || role === "BUSINESS" || role === "BASIC";
+}
+
 export function safeParseInt(v: string | null | undefined, fallback: number, min = 0, max = 1_000_000): number {
   if (!v) return fallback;
   const n = parseInt(v, 10);

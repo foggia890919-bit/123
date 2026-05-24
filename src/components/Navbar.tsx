@@ -29,6 +29,7 @@ type NavItem = NavLeaf | NavGroup;
 const navItems: NavItem[] = [
   { kind: "link",  href: "/search",            label: "통합검색",        icon: Search,    minRole: "BASIC"     },
   { kind: "link",  href: "/filter",            label: "제약사 필터링",   icon: Filter,    minRole: "BIZ"       },
+  { kind: "link",  href: "/submission-routes", label: "통계제출처",      icon: ClipboardList, minRole: "BUSINESS" },
   {
     kind: "group",
     label: "제안서",
