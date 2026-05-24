@@ -102,6 +102,8 @@ export default function ClientsPage() {
   const [showProposalMenu, setShowProposalMenu] = useState(false);
   const [companyStatuses, setCompanyStatuses] = useState<Record<string, string>>({});
   const [myRequests, setMyRequests] = useState<MyRequest[]>([]);
+  // SubmissionRoute 매칭 — 조회 요청 표에 어느 상위법인에 등록됐는지 표시용
+  const [myRoutes, setMyRoutes] = useState<{ clientName: string; companyName: string; submissionEntity: string }[]>([]);
   const [requestFilter, setRequestFilter] = useState<string>("all");
   const [requestsLoading, setRequestsLoading] = useState(false);
 
@@ -173,9 +175,16 @@ export default function ClientsPage() {
   async function loadMyRequests(uid: string) {
     setRequestsLoading(true);
     try {
-      const res = await fetch(`/api/filter-request?userId=${uid}`);
+      const [res, routesRes] = await Promise.all([
+        fetch(`/api/filter-request?userId=${uid}`),
+        fetch("/api/submission-routes"),
+      ]);
       const data = await res.json();
       setMyRequests(Array.isArray(data) ? data : []);
+      if (routesRes.ok) {
+        const r = await routesRes.json();
+        setMyRoutes(Array.isArray(r) ? r.map((x: { clientName: string; companyName: string; submissionEntity: string }) => ({ clientName: x.clientName, companyName: x.companyName, submissionEntity: x.submissionEntity })) : []);
+      }
     } finally {
       setRequestsLoading(false);
     }
@@ -674,17 +683,24 @@ export default function ClientsPage() {
                     <tr className="text-xs text-gray-500 font-semibold">
                       <th className="px-4 py-2.5 text-left">거래처명</th>
                       <th className="px-4 py-2.5 text-left">제약사명</th>
+                      <th className="px-4 py-2.5 text-left">상위법인</th>
                       <th className="px-4 py-2.5 text-center">거래가능</th>
                       <th className="px-4 py-2.5 text-center">거래불가</th>
                       <th className="px-4 py-2.5 text-left">날짜</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {filteredRequests.map((r) => (
+                    {filteredRequests.map((r) => {
+                      // 같은 거래처+제약사 매핑된 상위법인 찾기 (SubmissionRoute)
+                      const matchedRoute = myRoutes.find((mr) => mr.clientName === r.clientName && mr.companyName === r.companyName);
+                      return (
                       <Fragment key={r.id}>
                         <tr className="hover:bg-gray-50">
                           <td className="px-4 py-2.5 text-gray-700 text-xs">{r.clientName}</td>
                           <td className="px-4 py-2.5 text-gray-800 text-xs">{r.companyName}</td>
+                          <td className="px-4 py-2.5 text-gray-700 text-xs">
+                            {matchedRoute ? matchedRoute.submissionEntity : <span className="text-gray-300">—</span>}
+                          </td>
                           <td className="px-4 py-2.5 text-center">
                             {r.status === "APPROVED" && <span className="text-green-600 font-bold text-sm">✓</span>}
                           </td>
@@ -698,14 +714,15 @@ export default function ClientsPage() {
                         </tr>
                         {r.replyText && (
                           <tr className="bg-blue-50/40">
-                            <td colSpan={5} className="px-4 py-2">
+                            <td colSpan={6} className="px-4 py-2">
                               <div className="text-xs text-blue-800"><span className="font-semibold">관리자 회신</span>{r.repliedAt && <span className="text-blue-400 ml-2">({new Date(r.repliedAt).toLocaleString("ko-KR")})</span>}</div>
                               <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap">{r.replyText}</p>
                             </td>
                           </tr>
                         )}
                       </Fragment>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
