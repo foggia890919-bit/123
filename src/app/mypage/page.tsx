@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import {
   User, KeyRound, CheckCircle, ArrowUpCircle, ChevronRight,
   Building2, FileSpreadsheet, FileText, Upload, Pencil, Loader2, Briefcase,
+  Network,
 } from "lucide-react";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
@@ -29,6 +30,8 @@ interface BizClient {
 interface ProfileInfo {
   name: string; email: string; phone: string | null;
   carrier: string | null; role: string;
+  canBeParent: boolean;
+  parent: { id: string; name: string | null; email: string } | null;
   documents: { id: string; docType: string; fileName: string; createdAt: string }[];
   bizClient: BizClient | null;
 }
@@ -93,6 +96,9 @@ export default function MyPage() {
   const [bizSaving, setBizSaving] = useState(false);
   const [bizError, setBizError] = useState("");
   const [bizSuccess, setBizSuccess] = useState(false);
+
+  // 상위 노출 토글 저장 중 표시
+  const [canBeParentSaving, setCanBeParentSaving] = useState(false);
 
   // 비밀번호 변경
   const [currentPw, setCurrentPw] = useState("");
@@ -208,6 +214,22 @@ export default function MyPage() {
       setBizError("저장 중 오류가 발생했어요.");
     } finally {
       setBizSaving(false);
+    }
+  }
+
+  async function handleCanBeParentToggle(next: boolean) {
+    setCanBeParentSaving(true);
+    try {
+      const res = await fetch("/api/mypage", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ canBeParent: next }),
+      });
+      if (res.ok) {
+        setProfileInfo((prev) => (prev ? { ...prev, canBeParent: next } : prev));
+      }
+    } finally {
+      setCanBeParentSaving(false);
     }
   }
 
@@ -385,6 +407,58 @@ export default function MyPage() {
           <Button onClick={handleBizSave} disabled={bizSaving} className="w-full">
             {bizSaving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />저장 중...</> : profileInfo?.bizClient ? "사업자 정보 수정" : "사업자 정보 등록"}
           </Button>
+        </div>
+      </div>
+
+      {/* 딜러 분류 / 상위 회원 연결 */}
+      <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
+        <div className="flex items-center gap-2">
+          <Network className="w-5 h-5 text-gray-600" />
+          <h2 className="text-lg font-semibold text-gray-800">딜러 분류 / 상위 회원 연결</h2>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {profileInfo?.parent && (
+            <span className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded">
+              하위 회원 (상위: {profileInfo.parent.name || profileInfo.parent.email})
+            </span>
+          )}
+          {profileInfo?.canBeParent && (
+            <span className="px-2 py-1 text-xs bg-emerald-100 text-emerald-700 rounded">
+              상위로 검색 노출 중
+            </span>
+          )}
+          {!profileInfo?.parent && !profileInfo?.canBeParent && (
+            <span className="px-2 py-1 text-xs bg-gray-100 text-gray-500 rounded">미분류</span>
+          )}
+        </div>
+
+        <label className="flex items-start gap-2.5 p-3 bg-gray-50 border border-gray-200 rounded-md cursor-pointer hover:border-blue-300">
+          <input
+            type="checkbox"
+            checked={!!profileInfo?.canBeParent}
+            disabled={canBeParentSaving}
+            onChange={(e) => handleCanBeParentToggle(e.target.checked)}
+            className="mt-0.5 w-4 h-4 rounded border-gray-300 text-blue-600"
+          />
+          <div className="flex-1">
+            <p className="text-sm font-medium text-gray-800">상위 회원으로 검색 노출 허용</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              켜면 다른 회원이 통계제출처에서 나를 <span className="font-semibold">상위법인으로 선택</span>할 수 있어요.
+              {!profileInfo?.bizClient && (
+                <span className="block mt-1 text-amber-700">⚠ 사업자 정보가 비어있어요. 검색 결과에 상호명·사업자번호가 노출되도록 위에서 사업자 정보를 먼저 등록해주세요.</span>
+              )}
+            </p>
+          </div>
+          {canBeParentSaving && <Loader2 className="w-4 h-4 animate-spin text-gray-400" />}
+        </label>
+
+        <div className="text-xs text-gray-600 bg-blue-50 border border-blue-200 rounded p-3 space-y-1">
+          <p className="font-medium text-blue-700">상위 회원과 연결하려면?</p>
+          <p>
+            <Link href="/submission-routes" className="underline font-semibold text-blue-700 hover:text-blue-900">통계제출처 메뉴</Link>
+            에서 상위 회원에게 이메일로 연결 요청을 보내거나, 거래처관리(의료기관) &gt; 제약사 필터링 탭에서 상위법인을 검색·선택하세요.
+          </p>
         </div>
       </div>
 

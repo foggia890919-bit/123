@@ -21,6 +21,8 @@ model User {
   parentUserId String?
   parent       User?                @relation("UserHierarchy", fields: [parentUserId], references: [id], onDelete: SetNull)
   children     User[]               @relation("UserHierarchy")
+  // 다른 회원이 나를 "상위 회원" 으로 검색·연결할 수 있게 허용. 회원가입/마이페이지에서 토글.
+  canBeParent  Boolean              @default(false)
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
   proposals             Proposal[]
@@ -47,6 +49,7 @@ model User {
   parentLinkRequestsReceived ParentLinkRequest[]   @relation("PLRTarget")
 
   @@index([parentUserId])
+  @@index([canBeParent])
 }
 
 

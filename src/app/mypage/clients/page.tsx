@@ -100,10 +100,10 @@ export default function ClientsPage() {
   const [requestsLoading, setRequestsLoading] = useState(false);
 
   /* ── 상위법인 (필터링 시 선택 — DB 매칭된 dealer 만 선택 가능, 자유 입력 금지) ── */
-  const [selectedSubmissionEntity, setSelectedSubmissionEntity] = useState<{ clientName: string; bizNumber: string } | null>(null);
+  const [selectedSubmissionEntity, setSelectedSubmissionEntity] = useState<{ clientName: string; bizNumber: string; userId?: string } | null>(null);
   const [entityMenuOpen, setEntityMenuOpen] = useState(false);
   const [entityQuery, setEntityQuery] = useState("");
-  const [entityResults, setEntityResults] = useState<{ clientName: string; bizNumber: string; dealerType: string | null }[]>([]);
+  const [entityResults, setEntityResults] = useState<{ clientName: string; bizNumber: string; dealerType: string | null; userId?: string; email?: string; name?: string }[]>([]);
   const [entitySearching, setEntitySearching] = useState(false);
   const entityMenuRef = useRef<HTMLDivElement>(null);
 
@@ -533,7 +533,7 @@ export default function ClientsPage() {
                             <span className="text-gray-400 font-mono text-xs shrink-0">{selectedSubmissionEntity.bizNumber}</span>
                           </span>
                         ) : (
-                          <span className="text-gray-400 flex items-center gap-1.5"><Search className="w-3.5 h-3.5" />상위법인 검색 (사업자번호 또는 이름)</span>
+                          <span className="text-gray-400 flex items-center gap-1.5"><Search className="w-3.5 h-3.5" />상위법인 검색 (아이디·이름·사업자번호·업체명)</span>
                         )}
                         <div className="flex items-center gap-1 shrink-0">
                           {selectedSubmissionEntity && (
@@ -551,7 +551,7 @@ export default function ClientsPage() {
                             <div className="relative">
                               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
                               <input autoFocus value={entityQuery} onChange={(e) => setEntityQuery(e.target.value)}
-                                placeholder="상위법인명 또는 사업자번호 검색..."
+                                placeholder="아이디(이메일)·이름·사업자번호·업체명 검색..."
                                 className="w-full h-8 pl-8 pr-8 border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
                               {entitySearching && <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 animate-spin text-gray-400" />}
                             </div>
@@ -562,7 +562,7 @@ export default function ClientsPage() {
                                 <div className="py-4 px-3 text-center bg-red-50 border-t border-red-100">
                                   <AlertCircle className="w-5 h-5 text-red-500 mx-auto mb-1.5" />
                                   <p className="text-xs font-semibold text-red-700 mb-0.5">등록되지 않은 상위법인입니다</p>
-                                  <p className="text-[11px] text-red-600">DB 에 매칭되는 법인이 없어요.<br />관리자에게 문의하세요.</p>
+                                  <p className="text-[11px] text-red-600">검색 결과에 해당 회원이 없거나,<br />그 회원이 상위 노출을 허용하지 않았어요.<br />관리자에게 문의하세요.</p>
                                 </div>
                               ) : (
                                 <div className="py-5 px-3 text-center">
@@ -572,7 +572,7 @@ export default function ClientsPage() {
                             ) : (
                               entityResults.map((d) => (
                                 <button key={`${d.clientName}-${d.bizNumber}`} type="button"
-                                  onClick={() => { setSelectedSubmissionEntity({ clientName: d.clientName, bizNumber: d.bizNumber }); setEntityMenuOpen(false); setEntityQuery(""); }}
+                                  onClick={() => { setSelectedSubmissionEntity({ clientName: d.clientName, bizNumber: d.bizNumber, userId: d.userId }); setEntityMenuOpen(false); setEntityQuery(""); }}
                                   className="w-full text-left px-3 py-2.5 text-xs hover:bg-gray-50 border-b border-gray-50 last:border-0">
                                   <p className="font-medium text-gray-800">{d.clientName}</p>
                                   <p className="text-gray-400 font-mono">{d.bizNumber}</p>
