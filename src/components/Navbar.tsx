@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
-import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck, ShoppingCart, ClipboardList, MessageCircle, TrendingUp, Wallet, Users, Sparkles } from "lucide-react";
+import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck, ShoppingCart, ClipboardList, MessageCircle, TrendingUp, Wallet, Users, Sparkles, Bell, Check, Trash2 } from "lucide-react";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
 interface NavLeaf {
@@ -76,10 +76,62 @@ export default function Navbar() {
   const userRef = useRef<HTMLDivElement>(null);
   const groupRef = useRef<HTMLDivElement>(null);
 
+  // ── 알람 종 ──
+  interface NotifItem { id: string; type: string; title: string; body: string | null; link: string | null; isRead: boolean; createdAt: string }
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [notifList, setNotifList] = useState<NotifItem[]>([]);
+  const [notifUnreadCount, setNotifUnreadCount] = useState(0);
+  const notifRef = useRef<HTMLDivElement>(null);
+
+  async function refreshNotifications() {
+    if (!session) return;
+    try {
+      const res = await fetch("/api/notifications");
+      if (!res.ok) return;
+      const data = await res.json() as { list: NotifItem[]; unreadCount: number };
+      setNotifList(data.list);
+      setNotifUnreadCount(data.unreadCount);
+    } catch { /* network */ }
+  }
+
+  useEffect(() => {
+    if (!session) return;
+    refreshNotifications();
+    // 60 초마다 폴링
+    const interval = setInterval(refreshNotifications, 60_000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user?.email]);
+
+  async function markRead(id: string) {
+    await fetch("/api/notifications", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, isRead: true }),
+    });
+    setNotifList((prev) => prev.map((n) => n.id === id ? { ...n, isRead: true } : n));
+    setNotifUnreadCount((c) => Math.max(0, c - 1));
+  }
+  async function markAllRead() {
+    await fetch("/api/notifications", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ allRead: true }),
+    });
+    setNotifList((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    setNotifUnreadCount(0);
+  }
+  async function deleteNotif(id: string) {
+    await fetch(`/api/notifications?id=${id}`, { method: "DELETE" });
+    setNotifList((prev) => prev.filter((n) => n.id !== id));
+    refreshNotifications();
+  }
+
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (userRef.current && !userRef.current.contains(e.target as Node)) setUserOpen(false);
       if (groupRef.current && !groupRef.current.contains(e.target as Node)) setOpenGroup(null);
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) setNotifOpen(false);
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
@@ -166,6 +218,70 @@ export default function Navbar() {
 
           {/* 우측 버튼 */}
           <div className="flex items-center gap-2">
+            {session && (
+              <div className="relative" ref={notifRef}>
+                <button onClick={() => setNotifOpen((p) => !p)}
+                  className="relative p-2 rounded-md text-gray-600 hover:bg-gray-100"
+                  title="알람">
+                  <Bell className="w-5 h-5" />
+                  {notifUnreadCount > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                      {notifUnreadCount > 99 ? "99+" : notifUnreadCount}
+                    </span>
+                  )}
+                </button>
+                {notifOpen && (
+                  <div className="absolute right-0 mt-2 w-80 bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden">
+                    <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between bg-gray-50">
+                      <p className="text-sm font-semibold text-gray-800">알람 {notifUnreadCount > 0 && <span className="text-red-500">({notifUnreadCount})</span>}</p>
+                      {notifUnreadCount > 0 && (
+                        <button onClick={markAllRead} className="text-[11px] text-blue-600 hover:underline flex items-center gap-0.5">
+                          <Check className="w-3 h-3" />모두 읽음
+                        </button>
+                      )}
+                    </div>
+                    <div className="max-h-96 overflow-y-auto">
+                      {notifList.length === 0 ? (
+                        <div className="py-8 px-4 text-center text-xs text-gray-400">알람이 없어요</div>
+                      ) : (
+                        notifList.map((n) => (
+                          <div key={n.id} className={`px-4 py-3 border-b border-gray-50 last:border-0 ${n.isRead ? "bg-white" : "bg-blue-50/40"}`}>
+                            <div className="flex items-start gap-2">
+                              {!n.isRead && <span className="w-1.5 h-1.5 mt-1.5 bg-red-500 rounded-full shrink-0" />}
+                              <div className="flex-1 min-w-0">
+                                {n.link ? (
+                                  <Link href={n.link} onClick={() => { setNotifOpen(false); if (!n.isRead) markRead(n.id); }}
+                                    className="block">
+                                    <p className={`text-sm ${n.isRead ? "font-normal text-gray-700" : "font-semibold text-gray-900"} truncate`}>{n.title}</p>
+                                    {n.body && <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.body}</p>}
+                                  </Link>
+                                ) : (
+                                  <>
+                                    <p className={`text-sm ${n.isRead ? "font-normal text-gray-700" : "font-semibold text-gray-900"} truncate`}>{n.title}</p>
+                                    {n.body && <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.body}</p>}
+                                  </>
+                                )}
+                                <p className="text-[10px] text-gray-400 mt-1">{new Date(n.createdAt).toLocaleString("ko-KR")}</p>
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                {!n.isRead && (
+                                  <button onClick={() => markRead(n.id)} className="p-1 text-gray-300 hover:text-blue-600" title="읽음 처리">
+                                    <Check className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                                <button onClick={() => deleteNotif(n.id)} className="p-1 text-gray-300 hover:text-red-500" title="삭제">
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             {session ? (
               <div className="relative" ref={userRef}>
                 <button onClick={() => setUserOpen((p) => !p)}
