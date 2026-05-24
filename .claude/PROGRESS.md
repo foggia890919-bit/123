@@ -101,3 +101,11 @@ CREATE INDEX IF NOT EXISTS "UserClient_isRateTarget_idx"        ON "UserClient"(
 - 2026-05-24 00:00 | qa-crosscheck | SubmissionRoute ownerId + ParentLinkRequest Plan (7-step) | FAIL
 
 - 2026-05-24 10:00 | qa-crosscheck | Gemini self-check + resolveDrugIdentity 9-step Plan | CONDITIONAL_PASS
+
+- 2026-05-24 12:00 | stats-extract | Phase 2 — Gemini 자가검증 + 검증대상 UI (15982d2)
+  - 신규 `src/lib/gemini-self-validate.ts` — 텍스트 API 자가검증 + 8s timeout + pLimit(3)
+  - ValidationResult 별도 인터페이스 (Architect 권장)
+  - 마스터DB miss row 만 self-validate (Skeptic 우려 흡수)
+  - UI: 노란 "검증대상" 배지 + "검증대상만 보기" 필터 + 색상 중첩 가드
+  - ENV `GEMINI_SELFVALIDATE_ENABLED=true` (Vercel 추가 필요)
+  - DB 스키마 변경 없음 (ocrData Json 안에 reviewReason/validation 저장)
