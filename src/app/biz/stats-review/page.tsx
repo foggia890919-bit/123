@@ -740,6 +740,26 @@ function ReviewPhotoCard({
     return () => scroller.removeEventListener("wheel", handleWheel);
   }, []);
 
+  // 최후 안전망 — 표 영역 안에서 화살표 키 누르면 window scroll 위치 즉시 원복.
+  // input preventDefault / capture phase 가 작동 안 한 케이스에서도 페이지가 안 움직이게.
+  useEffect(() => {
+    function lockScrollOnTableArrow(e: KeyboardEvent) {
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      const target = e.target as Node | null;
+      if (!target || !tableScrollRef.current) return;
+      if (!tableScrollRef.current.contains(target)) return;
+      const savedX = window.scrollX;
+      const savedY = window.scrollY;
+      requestAnimationFrame(() => {
+        if (window.scrollX !== savedX || window.scrollY !== savedY) {
+          window.scrollTo(savedX, savedY);
+        }
+      });
+    }
+    window.addEventListener("keydown", lockScrollOnTableArrow, true);
+    return () => window.removeEventListener("keydown", lockScrollOnTableArrow, true);
+  }, []);
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>, idx: number, field: string) {
     if (e.key !== "ArrowUp" && e.key !== "ArrowDown" && e.key !== "Enter") return;
     // 3중 차단 — React preventDefault + native preventDefault + stopPropagation
