@@ -64,7 +64,12 @@ export async function GET(req: NextRequest) {
 
   const users = await prisma.user.findMany({
     where: {
+      // 의사/약사(병원·약국) 회원은 상위법인 후보 X
+      role: { notIn: ["DOCTOR", "PHARMACIST"] },
+      // 본인 제외
       id: { not: user.id },
+      // 사업자 정보(상호명·사업자번호) 등록된 회원만 — 이름만 등록된 회원은 상위법인 후보 X
+      userClients: { some: { dealerType: null } },
       ...(orConditions ? { OR: orConditions } : {}),
     },
     select: {
