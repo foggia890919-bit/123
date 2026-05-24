@@ -1150,12 +1150,14 @@ function ReviewPhotoCard({
                           const showAiBadge = d.nameAutoReplaced && d.originalProductName && d.originalProductName !== d.productName;
                           const showReviewBadge = !showAiBadge && isSelfValidateMismatch;
                           const sg = d.validation?.suggestion;
+                          const mf = d.validation?.mismatchFields ?? [];
+                          // 어긋난 필드만 호버에 노출 — suggestion 의 다른 필드가 PASS 였는데 같이 보이면 검수자 혼란 (QA E2 fix).
                           const reviewTooltip = showReviewBadge
                             ? [
                                 "AI 자가검증 — 검증대상으로 마킹됨",
-                                sg?.productName ? `제미나이 추정 약품명: ${sg.productName}` : null,
-                                sg?.insuranceCode ? `제미나이 추정 보험코드: ${sg.insuranceCode}` : null,
-                                sg?.unitPrice ? `제미나이 추정 약가: ${sg.unitPrice.toLocaleString()}원` : null,
+                                mf.includes("productName") && sg?.productName ? `제미나이 추정 약품명: ${sg.productName}` : null,
+                                mf.includes("insuranceCode") && sg?.insuranceCode ? `제미나이 추정 보험코드: ${sg.insuranceCode}` : null,
+                                mf.includes("unitPrice") && sg?.unitPrice ? `제미나이 추정 약가: ${sg.unitPrice.toLocaleString()}원` : null,
                                 "셀을 수정하면 이 표시는 사라집니다.",
                               ].filter(Boolean).join("\n")
                             : undefined;

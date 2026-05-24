@@ -250,8 +250,9 @@ export async function POST(req: NextRequest) {
       });
 
       // ── Gemini 자가검증 (ENV gate) ── B2 fix: 별도 try/catch 로 OCR 보호 ──
-      // 마스터DB 가 못 잡은 row (matchedMedicationId === null) 에만 적용. 마스터 매칭된 row 는
-      // 결정론적 결과를 신뢰 — Skeptic 우려 흡수, 비용 절감.
+      // Phase 3 — 마스터DB 매칭 여부와 무관하게 모든 행이 검증 대상 (사용자 명시).
+      // self-validate 내부에서 양방향 (보험코드↔약품명) cross-check 후 mismatchFields 도출.
+      // 사진 row > 100 이면 lib 안 kill-switch 가 발동, self-validate 자체 skip.
       // 실패 (timeout/parse/API down) 시 rethrow 절대 안 함 — OCR 결과는 그대로 저장.
       let selfValidateMeta: SelfValidateMeta | null = null;
       try {
@@ -259,6 +260,8 @@ export async function POST(req: NextRequest) {
           rx.drugs.map((d, idx) => ({
             index: idx,
             matchResult: matchResults[idx],
+            ocrInsuranceCode: d.code,
+            ocrProductName: d.name,
             ocrUnitPrice: d.unitPrice || null,
           })),
         );
