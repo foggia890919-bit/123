@@ -97,3 +97,5 @@ CREATE INDEX IF NOT EXISTS "UserClient_isRateTarget_idx"        ON "UserClient"(
 - 2026-05-18 12:23 | qa-crosscheck | epharms forceResetSync plan | CONDITIONAL_PASS
 
 - 2026-05-21 14:40 | qa-crosscheck | AI처방통계 A/B/C plan (행정확도/N제약사분리/zip다운) | CONDITIONAL_PASS
+
+- 2026-05-24 00:00 | qa-crosscheck | SubmissionRoute ownerId + ParentLinkRequest Plan (7-step) | FAIL
