@@ -1309,7 +1309,7 @@ function ReviewPhotoCard({
               e.preventDefault();
             }
           }}>
-          <table className="w-full text-xs">
+          <table className="w-full text-[10px] [&_input]:text-[10px] [&_input]:px-0.5 [&_input]:py-0 [&_input]:h-5 [&_input]:focus:outline-none [&_input]:focus:ring-1 [&_input]:focus:ring-orange-300 [&_td]:py-0 [&_th]:py-1">
             <thead className="bg-gray-50 text-gray-500 sticky top-0 z-10">
               <tr>
                 <th className="text-left px-2 py-1.5 w-[110px]">보험코드</th>
@@ -1336,7 +1336,7 @@ function ReviewPhotoCard({
                   : focusedIdx === i
                   ? "bg-orange-50"
                   : isSelfValidateMismatch
-                  ? "bg-amber-50 border-l-4 border-amber-400"
+                  ? "bg-amber-50 border-l-2 border-amber-400"
                   : qualityBad
                   ? "bg-yellow-50"
                   : d.unitPrice === 0
