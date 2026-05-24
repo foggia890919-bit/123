@@ -63,6 +63,8 @@ export default function ClientsPage() {
 
   /* ── 거래처 등록 state ── */
   const [clients, setClients] = useState<UserClient[]>([]);
+  // 본인 대표 사업자 (마이페이지 "사업자 정보" 카드와 같은 row) — 거래처 list 에서 제외용
+  const [myBizClientId, setMyBizClientId] = useState<string | null>(null);
   const [listLoading, setListLoading] = useState(true);
   const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
   const [editingAddressVal, setEditingAddressVal] = useState("");
@@ -114,6 +116,10 @@ export default function ClientsPage() {
     fetch("/api/medications/companies").then((r) => r.json()).then(setCompanies);
     fetch(`/api/proposals?userId=${session.user.id}`).then((r) => r.json()).then((d) => setProposals(Array.isArray(d) ? d : []));
     fetch(`/api/filter-request/company-status?userId=${session.user.id}`).then((r) => r.json()).then(setCompanyStatuses);
+    // 본인 대표 사업자 id — 거래처 list 에서 자동 제외용 (회원가입 시 자동 생성된 UserClient).
+    fetch("/api/mypage").then((r) => (r.ok ? r.json() : null)).then((d) => {
+      if (d?.bizClient?.id) setMyBizClientId(d.bizClient.id);
+    }).catch(() => undefined);
     loadMyRequests(session.user.id);
   }, [session?.user?.id]);
 
@@ -668,18 +674,21 @@ export default function ClientsPage() {
           </div>
         )}
 
-        {/* 등록된 거래처 목록 */}
+        {/* 등록된 거래처 목록 — 본인 대표 사업자 (마이페이지 "사업자 정보") 는 자동 제외 */}
+        {(() => {
+          const externalClients = clients.filter((c) => c.id !== myBizClientId);
+          return (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
-            <h2 className="font-semibold text-gray-800">등록된 거래처<span className="ml-2 text-sm font-normal text-gray-400">({clients.length}개)</span></h2>
+            <h2 className="font-semibold text-gray-800">등록된 거래처<span className="ml-2 text-sm font-normal text-gray-400">({externalClients.length}개)</span></h2>
           </div>
           {listLoading ? (
             <div className="flex justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>
-          ) : clients.length === 0 ? (
+          ) : externalClients.length === 0 ? (
             <div className="text-center py-12"><Building2 className="w-8 h-8 text-gray-200 mx-auto mb-2" /><p className="text-sm text-gray-400">아직 등록된 거래처가 없어요</p></div>
           ) : (
             <div className="divide-y divide-gray-100">
-              {clients.map((c) => (
+              {externalClients.map((c) => (
                 <div key={c.id} className="flex items-center gap-3 px-5 py-3.5 hover:bg-gray-50">
                   <Stethoscope className="w-4 h-4 text-gray-300 shrink-0" />
                   <div className="flex-1 min-w-0">
@@ -714,6 +723,8 @@ export default function ClientsPage() {
             </div>
           )}
         </div>
+          );
+        })()}
       </div>
     </RequireRole>
   );
