@@ -997,7 +997,7 @@ function ReviewPhotoCard({
         </button>
       </div>
 
-      {/* 상하 분할 — 위에 사진 (60vh) / 아래에 편집 표 (스크롤) */}
+      {/* 상하 분할 — 위에 사진 (45vh) / 아래에 편집 표 (45vh) — 한 viewport 안에 둘 다 보임 */}
       <div className="flex flex-col">
         {/* 위: 사진 + zoom 컨트롤 */}
         <div className="bg-gray-100 border-b border-gray-200">
@@ -1046,7 +1046,7 @@ function ReviewPhotoCard({
             onMouseUp={onPanEnd}
             onMouseLeave={onPanEnd}
             style={{ cursor: imgData ? (isDragging ? "grabbing" : "grab") : "default" }}
-            className="p-3 overflow-auto max-h-[60vh] select-none">
+            className="p-3 overflow-auto max-h-[45vh] select-none">
             {imgLoading ? (
               <div className="aspect-[3/4] flex items-center justify-center text-gray-400">
                 <Loader2 className="w-5 h-5 animate-spin" />
@@ -1090,7 +1090,7 @@ function ReviewPhotoCard({
 
         {/* 아래: 편집 가능 표 — ref 잡아서 키보드 화살표 시 표 안에서만 scroll.
             onKeyDownCapture — capture phase 에서 한 번 더 ArrowUp/Down default 차단. */}
-        <div ref={tableScrollRef} className="overflow-auto max-h-[55vh]"
+        <div ref={tableScrollRef} className="overflow-auto max-h-[45vh]"
           onKeyDownCapture={(e) => {
             if (e.key === "ArrowUp" || e.key === "ArrowDown") {
               e.preventDefault();
@@ -1143,7 +1143,7 @@ function ReviewPhotoCard({
                 const hiddenByFilter = !(matchesPriceFilter && matchesReviewFilter);
                 return (
                   <tr key={i} className={`border-t ${rowClass} ${hiddenByFilter ? "hidden" : ""}`}>
-                    <td className="px-1 py-0.5">
+                    <td className="px-1 py-0">
                       <div className="flex items-center gap-1">
                         <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${scoreDotClass(d.finalConfidence)}`}
                           title={scoreTooltip} />
@@ -1155,7 +1155,7 @@ function ReviewPhotoCard({
                           className="w-full px-1 py-0.5 border rounded text-[11px] font-mono"/>
                       </div>
                     </td>
-                    <td className="px-1 py-0.5">
+                    <td className="px-1 py-0">
                       <div className="flex items-center gap-1">
                         <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${companyColor(d.companyName)}`}
                           title={d.companyNameMismatch
@@ -1169,7 +1169,7 @@ function ReviewPhotoCard({
                           className={`w-full px-1 py-0.5 border rounded text-[11px] ${d.companyNameMismatch ? "border-red-400 bg-red-50" : ""}`}/>
                       </div>
                     </td>
-                    <td className="px-1 py-0.5">
+                    <td className="px-1 py-0">
                       <div className="relative">
                         {(() => {
                           // 우선순위: 파랑 (자동교체) > 노랑 (AI 검증대상) — User Advocate 색상 중첩 가드.
@@ -1215,7 +1215,7 @@ function ReviewPhotoCard({
                         })()}
                       </div>
                     </td>
-                    <td className="px-1 py-0.5">
+                    <td className="px-1 py-0">
                       <input ref={(el) => { inputRefs.current[`${i}:quantity`] = el; }}
                         type="number" step="0.1" value={d.quantity}
                         onChange={(e) => updateRow(i, { quantity: e.target.value })}
@@ -1223,7 +1223,7 @@ function ReviewPhotoCard({
                         onKeyDown={(e) => handleKeyDown(e, i, "quantity")}
                         className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
                     </td>
-                    <td className="px-1 py-0.5">
+                    <td className="px-1 py-0">
                       <input ref={(el) => { inputRefs.current[`${i}:unitPrice`] = el; }}
                         type="number" value={d.unitPrice}
                         onChange={(e) => updateRow(i, { unitPrice: Number(e.target.value) })}
@@ -1231,7 +1231,7 @@ function ReviewPhotoCard({
                         onKeyDown={(e) => handleKeyDown(e, i, "unitPrice")}
                         className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
                     </td>
-                    <td className="px-1 py-0.5">
+                    <td className="px-1 py-0">
                       <input ref={(el) => { inputRefs.current[`${i}:totalPrice`] = el; }}
                         type="number" value={d.totalPrice}
                         onChange={(e) => updateRow(i, { totalPrice: Number(e.target.value), totalPriceManual: true })}
