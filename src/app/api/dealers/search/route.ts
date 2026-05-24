@@ -66,14 +66,20 @@ export async function GET(req: NextRequest) {
     where: {
       // 본인 제외
       id: { not: user.id },
-      // 사업자 인증된 회원만 노출 (관리자가 어드민 대시보드에서 승인한 회원).
-      // 일반회원은 상위법인 후보 X.
-      isBusinessApproved: true,
-      // 의사/약사 role 자동 제외 — 병원/약국 회원
-      role: { notIn: ["DOCTOR", "PHARMACIST"] },
-      // 사업자 정보(상호명·사업자번호) 등록된 회원만 — 이름만 등록된 회원 자동 제외
-      userClients: { some: { dealerType: null } },
-      ...(orConditions ? { OR: orConditions } : {}),
+      AND: [
+        {
+          // ADMIN 은 항상 노출 (마스터 관리자), 그 외는 사업자 인증 + 사업자 정보 + 의사·약사 아님
+          OR: [
+            { role: "ADMIN" },
+            {
+              isBusinessApproved: true,
+              role: { notIn: ["DOCTOR", "PHARMACIST"] },
+              userClients: { some: { dealerType: null } },
+            },
+          ],
+        },
+        ...(orConditions ? [{ OR: orConditions }] : []),
+      ],
     },
     select: {
       id: true,
@@ -87,8 +93,8 @@ export async function GET(req: NextRequest) {
         take: 1,
       },
     },
-    // 사업자 인증된 회원 우선 → 그 다음 이름 가나다순.
-    orderBy: [{ isBusinessApproved: "desc" }, { name: "asc" }, { email: "asc" }],
+    // ADMIN 최상단 → 사업자 인증 → 이름 가나다순
+    orderBy: [{ role: "asc" }, { isBusinessApproved: "desc" }, { name: "asc" }, { email: "asc" }],
     take: 30,
   });
 
@@ -100,7 +106,8 @@ export async function GET(req: NextRequest) {
     "신경과", "재활의학과", "가정의학과", "마취과", "영상의학과", "검진센터",
   ];
   const PHARMACY_KEYWORDS = ["약국", "약방"];
-  function classify(role: string, clientName: string): "DOCTOR" | "PHARMACIST" | "BUSINESS_APPROVED" | "GENERAL" {
+  function classify(role: string, clientName: string): "ADMIN" | "DOCTOR" | "PHARMACIST" | "BUSINESS_APPROVED" | "GENERAL" {
+    if (role === "ADMIN") return "ADMIN";
     if (role === "DOCTOR") return "DOCTOR";
     if (role === "PHARMACIST") return "PHARMACIST";
     if (MEDICAL_KEYWORDS.some((kw) => clientName.includes(kw))) return "DOCTOR";

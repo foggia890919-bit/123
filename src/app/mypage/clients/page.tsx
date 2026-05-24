@@ -111,7 +111,7 @@ export default function ClientsPage() {
   const [selectedSubmissionEntity, setSelectedSubmissionEntity] = useState<{ clientName: string; bizNumber: string; userId?: string } | null>(null);
   const [entityMenuOpen, setEntityMenuOpen] = useState(false);
   const [entityQuery, setEntityQuery] = useState("");
-  const [entityResults, setEntityResults] = useState<{ clientName: string; bizNumber: string; dealerType: string | null; userId?: string; email?: string; name?: string; isBusinessApproved?: boolean; role?: string; category?: "DOCTOR" | "PHARMACIST" | "BUSINESS_APPROVED" | "GENERAL" }[]>([]);
+  const [entityResults, setEntityResults] = useState<{ clientName: string; bizNumber: string; dealerType: string | null; userId?: string; email?: string; name?: string; isBusinessApproved?: boolean; role?: string; category?: "ADMIN" | "DOCTOR" | "PHARMACIST" | "BUSINESS_APPROVED" | "GENERAL" }[]>([]);
   const [entitySearching, setEntitySearching] = useState(false);
   const entityMenuRef = useRef<HTMLDivElement>(null);
 
@@ -614,7 +614,9 @@ export default function ClientsPage() {
                             ) : (
                               entityResults.map((d) => {
                                 const cat = d.category;
-                                const badge = cat === "DOCTOR"
+                                const badge = cat === "ADMIN"
+                                  ? { label: "관리자", color: "bg-purple-100 text-purple-700 border border-purple-300" }
+                                  : cat === "DOCTOR"
                                   ? { label: "병원", color: "bg-rose-100 text-rose-700" }
                                   : cat === "PHARMACIST"
                                   ? { label: "약국", color: "bg-emerald-100 text-emerald-700" }
