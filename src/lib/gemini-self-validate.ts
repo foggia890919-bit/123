@@ -20,7 +20,6 @@ import type { ValidationResult } from "./medication-master-match";
 const MODEL = "gemini-3.5-flash";
 const TIMEOUT_MS = 8000;
 const ROW_KILL_SWITCH = 100;
-const PRICE_TOLERANCE = 0.1;  // ±10% 차이 안이면 PASS
 
 interface SelfValidatePayload {
   insuranceCode: string;
@@ -94,6 +93,23 @@ function normalizeForCompare(s: string): string {
 
 // 양방향 답 + OCR 값으로 ValidationResult 만들기. mismatchFields/suggestion 결정 룰을 한 곳에 집중
 // (Architect 권장 — selfValidateDrug 내부에 가둠).
+//
+// 분기 (사용자 명시 룰):
+//   ① byName.exists=false + byCode.exists=false → 검증 불가, 마킹 안 함 (null)
+//   ② byName.exists=false + byCode.exists=true  → 약품명 hallucination 의심.
+//        - OCR 약가 == byCode 약가 (또는 OCR 약가 0)
+//          → 보험코드 정확함 → byCode.productName 채택 (productName mismatch)
+//        - OCR 약가 != byCode 약가
+//          → 보험코드도 의심 → 약품명·약가 둘 다 mismatch (suggestion 은 byCode 참고용)
+//   ③ byName.exists=true  + byCode.exists=true  → 정상 양방향 비교
+//        - OCR.name != byCode.productName (정규화 후) → productName mismatch
+//        - OCR.code != byName.insuranceCode         → insuranceCode mismatch
+//        - OCR.price > 0 + OCR.price != byCode.price → unitPrice mismatch (사용자: "약가는 틀리면 안 됨")
+//   ④ byName.exists=true  + byCode.exists=false → 보험코드가 OCR 잘못 인식 가능성.
+//        - byName.insuranceCode 신뢰 → insuranceCode mismatch + suggestion
+//        - byName.unitPrice 와 OCR.unitPrice 다르면 unitPrice mismatch
+//
+// OCR 약가 = 0 케이스 (사진에 약가 없음) → unitPrice 검증 자체 skip — 모든 분기에 공통.
 function reduceToValidation(
   payload: SelfValidatePayload,
   byCode: DrugAnswer,
@@ -102,51 +118,75 @@ function reduceToValidation(
   const hasOcrCode = payload.insuranceCode.replace(/\D/g, "").length > 0;
   const hasOcrName = payload.productName.trim().length > 0;
   const ocrPrice = payload.unitPrice ?? 0;
+  const ocrCodeNorm = payload.insuranceCode.replace(/\D/g, "");
 
-  // 규칙 d (첫 절): byCode 도 byName 도 둘 다 모름 → 검증 불가, 마킹 안 함.
-  // (신약/희귀약 false positive 방지 — Risk Manager 우려 흡수)
+  // ① 둘 다 모름 → 검증 불가
   if (!byCode.exists && !byName.exists) return null;
 
   const mismatchFields: ("productName" | "insuranceCode" | "unitPrice")[] = [];
   const suggestion: { productName?: string; insuranceCode?: string; unitPrice?: number } = {};
 
-  // 규칙 e + d 의 둘째 절 통합:
-  //   byCode 가 실존하는 약을 안다 + OCR 약품명이 있으면 두 표기 비교 (정규화 후).
-  //   다르면 productName mismatch + 마스터 답을 suggestion 으로.
-  //   byName.exists=false 인 경우 (약품명 hallucination 의심) 도 같은 분기로 처리 — 결과 같음.
-  if (hasOcrName && byCode.exists && byCode.productName) {
-    if (normalizeForCompare(byCode.productName) !== normalizeForCompare(payload.productName)) {
+  if (!byName.exists && byCode.exists) {
+    // ② 약품명 정보 없음 (실존 안 함 의심) + 보험코드 정보 있음
+    //   사용자 명시: "보험코드 기준 약가가 동일하면 약품명은 보험코드가 맞을 확률 높음 → 약품명 가져오기"
+    //                "약가가 틀리면 보험코드도 의심 → 약품명·약가 둘 다 mismatch"
+    const priceMatchesByCode = ocrPrice === 0
+      ? true
+      : byCode.unitPrice > 0 && byCode.unitPrice === ocrPrice;
+
+    if (priceMatchesByCode) {
+      // 보험코드 신뢰 — 약품명만 채택
+      if (hasOcrName && byCode.productName &&
+          normalizeForCompare(byCode.productName) !== normalizeForCompare(payload.productName)) {
+        mismatchFields.push("productName");
+        suggestion.productName = byCode.productName;
+      }
+    } else {
+      // 약가 불일치 → 보험코드도 의심. 약품명·약가 둘 다 mismatch (suggestion 은 참고용)
+      mismatchFields.push("productName", "unitPrice");
+      if (byCode.productName) suggestion.productName = byCode.productName;
+      if (byCode.unitPrice > 0) suggestion.unitPrice = byCode.unitPrice;
+    }
+  } else if (byName.exists && byCode.exists) {
+    // ③ 정상 — 양방향 다 안다. 각 필드 완전 일치 검사.
+    if (hasOcrName && byCode.productName &&
+        normalizeForCompare(byCode.productName) !== normalizeForCompare(payload.productName)) {
       mismatchFields.push("productName");
       suggestion.productName = byCode.productName;
     }
-  }
-
-  // 규칙 f: byName 가 실존하는 약을 안다 + OCR 보험코드가 있으면 두 코드 비교 (숫자만).
-  if (hasOcrCode && byName.exists && byName.insuranceCode) {
-    const ocrCodeNorm = payload.insuranceCode.replace(/\D/g, "");
-    const byNameCodeNorm = byName.insuranceCode.replace(/\D/g, "");
-    if (byNameCodeNorm.length === 9 && byNameCodeNorm !== ocrCodeNorm) {
-      mismatchFields.push("insuranceCode");
-      suggestion.insuranceCode = byNameCodeNorm;
+    if (hasOcrCode && byName.insuranceCode) {
+      const byNameCodeNorm = byName.insuranceCode.replace(/\D/g, "");
+      if (byNameCodeNorm.length === 9 && byNameCodeNorm !== ocrCodeNorm) {
+        mismatchFields.push("insuranceCode");
+        suggestion.insuranceCode = byNameCodeNorm;
+      }
     }
-  }
-
-  // 규칙 g: OCR 약가 > 0 + byCode 가 약가 안다 + 10% 이상 차이 → unitPrice mismatch.
-  // 사용자 명시: OCR.price=0 이면 약가 검증 skip (final strip 에서 한 번 더 보장).
-  if (ocrPrice > 0 && byCode.exists && byCode.unitPrice > 0) {
-    const diff = Math.abs(byCode.unitPrice - ocrPrice) / ocrPrice;
-    if (diff > PRICE_TOLERANCE) {
+    // 약가는 완전 일치 (사용자 명시 — 10% tolerance 제거)
+    if (ocrPrice > 0 && byCode.unitPrice > 0 && byCode.unitPrice !== ocrPrice) {
       mismatchFields.push("unitPrice");
       suggestion.unitPrice = byCode.unitPrice;
     }
+  } else if (byName.exists && !byCode.exists) {
+    // ④ 약품명만 안다 — 보험코드가 OCR 잘못 가능성.
+    if (hasOcrCode && byName.insuranceCode) {
+      const byNameCodeNorm = byName.insuranceCode.replace(/\D/g, "");
+      if (byNameCodeNorm.length === 9 && byNameCodeNorm !== ocrCodeNorm) {
+        mismatchFields.push("insuranceCode");
+        suggestion.insuranceCode = byNameCodeNorm;
+      }
+    }
+    if (ocrPrice > 0 && byName.unitPrice > 0 && byName.unitPrice !== ocrPrice) {
+      mismatchFields.push("unitPrice");
+      suggestion.unitPrice = byName.unitPrice;
+    }
   }
 
-  // 규칙 c (final strip): OCR 약가 0 이면 unitPrice mismatch 강제 제거 — belt-and-suspenders.
+  // OCR 약가 0 → unitPrice mismatch 강제 제거 (belt-and-suspenders, 사용자 명시)
   const finalMismatch = ocrPrice === 0
     ? mismatchFields.filter((f) => f !== "unitPrice")
     : mismatchFields;
 
-  // 규칙 h: 어긋난 필드가 없으면 PASS — null 반환, 노란 마킹 안 함.
+  // 어긋난 필드 없으면 PASS
   if (finalMismatch.length === 0) return null;
 
   return {
