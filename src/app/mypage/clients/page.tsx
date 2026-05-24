@@ -186,7 +186,8 @@ export default function ClientsPage() {
   }
 
   const filteredCompanies = companies.filter((c) => !companySearch.trim() || c.name.toLowerCase().includes(companySearch.toLowerCase()));
-  const displayClients = clientQuery.trim() ? clientResults : myClients;
+  // 본인 대표 사업자 (마이페이지 사업자 정보) 는 거래처 선택 후보에서도 제외
+  const displayClients = (clientQuery.trim() ? clientResults : myClients).filter((c) => c.id !== myBizClientId);
 
   // 선택된 거래처의 제약사별 필터링 요청 맵
   const clientRequestMap = useMemo(() => {
