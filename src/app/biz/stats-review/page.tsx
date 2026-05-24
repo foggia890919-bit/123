@@ -748,7 +748,9 @@ function ReviewPhotoCard({
     if (nextIdx < 0 || nextIdx >= rows.length) return;
     const target = inputRefs.current[`${nextIdx}:${field}`];
     if (!target) return;
-    target.focus();
+    // preventScroll: true — focus 호출 시 브라우저 native auto-scroll 차단.
+    // 이걸 빼면 페이지 window 자체가 scroll 되어 상단 사진 영역이 위로 밀려남.
+    target.focus({ preventScroll: true });
     target.select();
     // 표 wrapper 안에서만 scroll — 페이지 전체는 안 움직임 (사진 영역 가려짐 방지).
     // 다음 input 이 wrapper viewport 밖일 때만 scroll, 안에 있으면 그대로.
