@@ -265,6 +265,11 @@ export default function ClientsPage() {
       const newClient = await res.json();
       setClients((prev) => [newClient, ...prev]);
       setName(""); setBiz(""); setAddress(""); setFile(null); setDupChecked("none");
+      // ref 의 DOM value 도 강제 정리 — controlled value 와 동기화 (IME 케이스 방어)
+      if (nameInputRef.current) nameInputRef.current.value = "";
+      if (bizInputRef.current) bizInputRef.current.value = "";
+      if (addressInputRef.current) addressInputRef.current.value = "";
+      setRegError("");
     } else { setRegError((await res.json()).error || "등록 중 오류가 발생했어요."); }
     setRegistering(false);
   }
