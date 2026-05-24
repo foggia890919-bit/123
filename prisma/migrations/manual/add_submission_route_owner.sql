@@ -23,8 +23,8 @@ ALTER TABLE "SubmissionRoute"
   ADD CONSTRAINT "SubmissionRoute_ownerId_fkey"
   FOREIGN KEY ("ownerId") REFERENCES "User"(id) ON DELETE CASCADE ON UPDATE CASCADE;
 
--- 기존 unique 제거 + 새 compound unique
-DROP INDEX IF EXISTS "SubmissionRoute_clientName_companyName_key";
+-- 기존 unique 제거 (Prisma @@unique 는 CONSTRAINT 로 만들어지므로 DROP INDEX 불가) + 새 compound unique
+ALTER TABLE "SubmissionRoute" DROP CONSTRAINT IF EXISTS "SubmissionRoute_clientName_companyName_key";
 CREATE UNIQUE INDEX IF NOT EXISTS "SubmissionRoute_ownerId_clientName_companyName_key"
   ON "SubmissionRoute"("ownerId", "clientName", "companyName");
 
