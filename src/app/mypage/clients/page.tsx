@@ -320,6 +320,7 @@ export default function ClientsPage() {
                 clientName: selectedFilterClient.clientName.trim(),
                 companyName: normalizeCompanyName(companyName),
                 submissionEntity: entity,
+                parentUserId: selectedSubmissionEntity.userId ?? null,
                 requestType: "신규",
               }),
             });

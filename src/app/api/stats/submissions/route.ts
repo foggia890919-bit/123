@@ -163,11 +163,24 @@ export async function GET(req: NextRequest) {
   const yearParam = sp.get("year");
   const monthParam = sp.get("month");
 
-  // 본인 + 모든 하위 회원 데이터 (상위법인 자동 라우팅) — ADMIN/BIZ 는 전체.
-  // hierarchy 트리는 User.parentUserId 로 형성. 상위 회원이 자기 하위들의 통계를 다 봄.
-  const viewableIds = user.role === "ADMIN" || user.role === "BIZ"
-    ? null
-    : await getViewableUserIds(user.id);
+  // 상위법인 자동 라우팅 — ADMIN/BIZ 는 전체. 그 외는:
+  //   본인 ownerId
+  //   + 본인 parentUserId hierarchy (User.parentUserId 기반)
+  //   + 본인이 SubmissionRoute.parentUserId 인 매핑들의 ownerId (사용자 의도)
+  // SubmissionRoute.parentUserId 가 핵심 — 거래처관리에서 상위법인으로 본인을 매핑한
+  // 회원들의 통계도 본인이 봄 (단일 hierarchy 아닌 다대다 매핑).
+  let viewableIds: string[] | null = null;
+  if (user.role !== "ADMIN" && user.role !== "BIZ") {
+    const [hierarchyIds, routesAsParent] = await Promise.all([
+      getViewableUserIds(user.id),
+      prisma.submissionRoute.findMany({
+        where: { parentUserId: user.id, active: true },
+        select: { ownerId: true },
+        distinct: ["ownerId"],
+      }),
+    ]);
+    viewableIds = Array.from(new Set([...hierarchyIds, ...routesAsParent.map((r) => r.ownerId)]));
+  }
   const baseWhere = viewableIds === null
     ? {}
     : { userId: { in: viewableIds } };

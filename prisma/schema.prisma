@@ -46,6 +46,7 @@ model User {
   inhouseOrders              InhouseOrder[]
   statImages                 StatImage[]
   submissionRoutes           SubmissionRoute[]     @relation("SubmissionRouteOwner")
+  submissionRoutesAsParent   SubmissionRoute[]     @relation("SubmissionRouteParent")
   parentLinkRequestsSent     ParentLinkRequest[]   @relation("PLRRequester")
   parentLinkRequestsReceived ParentLinkRequest[]   @relation("PLRTarget")
   notifications              Notification[]
@@ -557,6 +558,11 @@ model SubmissionRoute {
   clientName       String
   companyName      String
   submissionEntity String
+  // 상위법인 = 회원(User). 사용자 의도: SubmissionRoute 등록 = 그 매핑의 상위법인 지정.
+  // 한 회원이 여러 매핑마다 다른 상위법인 가질 수 있음 (User.parentUserId 단일 hierarchy 와 별개).
+  // null 이면 상위법인 미연결 (자유 입력으로만 등록된 경우).
+  parentUserId     String?
+  parentUser       User?    @relation("SubmissionRouteParent", fields: [parentUserId], references: [id], onDelete: SetNull)
   submissionEmail  String?
   requestType      String   @default("신규")  // "신규" | "이관" — 추가수수료 적용 여부
   memo             String?
@@ -570,6 +576,7 @@ model SubmissionRoute {
   @@index([ownerId])
   @@index([clientName])
   @@index([companyName])
+  @@index([parentUserId])
   @@index([submissionEntity])
 }
 

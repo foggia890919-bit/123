@@ -51,6 +51,9 @@ export async function POST(req: NextRequest) {
   const companyName = normalizeCompanyName(String(body.companyName ?? "").trim());
   const submissionEntity = normalizeCompanyName(String(body.submissionEntity ?? "").trim());
   const { submissionEmail, requestType, memo } = body;
+  // 상위법인 회원 id (선택) — 거래처관리에서 상위법인 선택 시 회원 정보까지 받음.
+  // 이걸 저장하면 통계 사진 자동 라우팅 가능 (상위법인 회원이 본인 매핑된 통계 모아봄).
+  const parentUserId = typeof body.parentUserId === "string" && body.parentUserId.trim() ? body.parentUserId.trim() : null;
   if (!clientName || !companyName || !submissionEntity)
     return NextResponse.json({ error: "거래처명, 제약사명, 제출처는 필수입니다." }, { status: 400 });
   const rt = requestType === "이관" ? "이관" : "신규";
@@ -58,8 +61,8 @@ export async function POST(req: NextRequest) {
   try {
     const row = await prisma.submissionRoute.upsert({
       where: { ownerId_clientName_companyName: { ownerId: user.id, clientName, companyName } },
-      create: { ownerId: user.id, clientName, companyName, submissionEntity, submissionEmail: submissionEmail || null, requestType: rt, memo: memo || null },
-      update: { submissionEntity, submissionEmail: submissionEmail || null, requestType: rt, memo: memo || null, active: true },
+      create: { ownerId: user.id, clientName, companyName, submissionEntity, parentUserId, submissionEmail: submissionEmail || null, requestType: rt, memo: memo || null },
+      update: { submissionEntity, parentUserId, submissionEmail: submissionEmail || null, requestType: rt, memo: memo || null, active: true },
     });
     return NextResponse.json(row, { status: 201 });
   } catch (e) {
