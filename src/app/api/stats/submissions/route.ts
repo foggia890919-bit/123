@@ -29,6 +29,9 @@ interface FinalDrugRecord {
   mismatch?: unknown;
   companyNameMismatch?: unknown;
   finalConfidence?: number;
+  // OCR 원본 약가 + 자동 교체 여부 — 검수 UI 단가 셀 dot 표시용
+  originalUnitPrice?: number | null;
+  priceAutoReplaced?: boolean;
   // Gemini 자가검증 결과 ("selfValidateMismatch" | "nameCodeMismatch" | null).
   // 검수자가 셀 편집 후 저장하면 finalDrugs 재구성으로 자동 클리어됨.
   reviewReason?: string | null;

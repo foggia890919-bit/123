@@ -118,6 +118,9 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
         productName: match.productName,
         quantity: String(d.quantity ?? ""),
         unitPrice: finalUnitPrice,
+        // OCR 원본 약가 (Gemini Vision 이 사진에서 직접 읽은 값) — 단가 셀 dot 표시용
+        originalUnitPrice: d.unitPrice || null,
+        priceAutoReplaced: !!(match.unitPrice && d.unitPrice && match.unitPrice !== d.unitPrice),
         commissionRate: match.commissionRate,
         additionalRate,
         matchedMedicationId: match.matchedMedicationId,

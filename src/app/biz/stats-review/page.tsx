@@ -67,6 +67,8 @@ interface ReportRow {
       companyNameMismatch?: { geminiCompanyName?: string; masterCompanyName?: string } | null;
       originalProductName?: string;
       nameAutoReplaced?: boolean;
+      originalUnitPrice?: number | null;
+      priceAutoReplaced?: boolean;
       finalConfidence?: number;
       // Gemini 자가검증 결과. "selfValidateMismatch" 면 노란 "검증대상" 마킹.
       reviewReason?: string | null;
@@ -757,6 +759,8 @@ interface EditableDrugRow {
   // Case B 자동 교체 — 사용자가 약품명 편집 안 했지만 매칭값과 OCR 원본이 다른 경우.
   originalProductName: string;
   nameAutoReplaced: boolean;
+  originalUnitPrice: number | null;       // OCR 원본 약가 (사진에서 읽은 값)
+  priceAutoReplaced: boolean;              // 마스터DB 약가로 자동 교체됨
   // Gemini 자가검증 결과. "selfValidateMismatch" 면 노란 "검증대상" 마킹.
   reviewReason: string;
   validation: {
@@ -832,6 +836,8 @@ function ReviewPhotoCard({
           : null,
         originalProductName: d.originalProductName ?? "",
         nameAutoReplaced: !!d.nameAutoReplaced,
+        originalUnitPrice: d.originalUnitPrice ?? null,
+        priceAutoReplaced: !!d.priceAutoReplaced,
         reviewReason: typeof d.reviewReason === "string" ? d.reviewReason : "",
         validation: d.validation
           ? {
@@ -1029,6 +1035,8 @@ function ReviewPhotoCard({
       companyNameMismatch: null,
       originalProductName: "",
       nameAutoReplaced: false,
+      originalUnitPrice: null,
+      priceAutoReplaced: false,
       reviewReason: "",
       validation: null,
       bbox: [0, 0, 0, 0],
@@ -1443,12 +1451,34 @@ function ReviewPhotoCard({
                         className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
                     </td>
                     <td className="px-1 py-0">
-                      <input ref={(el) => { inputRefs.current[`${i}:unitPrice`] = el; }}
-                        type="number" value={d.unitPrice}
-                        onChange={(e) => updateRow(i, { unitPrice: Number(e.target.value) })}
-                        onFocus={() => setFocusedIdx(i)}
-                        onKeyDown={(e) => handleKeyDown(e, i, "unitPrice")}
-                        className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
+                      <div className="flex items-center gap-1">
+                        {(() => {
+                          // 단가 신호등 dot:
+                          //   회색 — OCR 그대로 (수정 안 됨)
+                          //   파란 — 마스터DB 약가로 자동 교체됨 (priceAutoReplaced)
+                          //   주황 — 검수자가 수동 수정 (현재 값이 OCR 원본 및 마스터 둘 다와 다름)
+                          const ocr = d.originalUnitPrice;
+                          const cur = d.unitPrice;
+                          const dotColor = ocr === null || ocr === cur
+                            ? "bg-gray-300"
+                            : d.priceAutoReplaced && cur !== ocr && !d.totalPriceManual
+                              ? "bg-blue-500"
+                              : "bg-amber-500";
+                          const dotTitle = ocr === null || ocr === cur
+                            ? "수정 없음"
+                            : d.priceAutoReplaced
+                              ? `자동 교체: OCR ${ocr} → 마스터 ${cur}`
+                              : `수정됨: OCR ${ocr} → 현재 ${cur}`;
+                          return <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${dotColor}`}
+                            title={titleIfAdmin(dotTitle)} />;
+                        })()}
+                        <input ref={(el) => { inputRefs.current[`${i}:unitPrice`] = el; }}
+                          type="number" value={d.unitPrice}
+                          onChange={(e) => updateRow(i, { unitPrice: Number(e.target.value) })}
+                          onFocus={() => setFocusedIdx(i)}
+                          onKeyDown={(e) => handleKeyDown(e, i, "unitPrice")}
+                          className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
+                      </div>
                     </td>
                     <td className="px-1 py-0">
                       <input ref={(el) => { inputRefs.current[`${i}:totalPrice`] = el; }}
