@@ -681,6 +681,9 @@ function ReviewPhotoCard({
   // 사진 영역 스크롤 컨테이너 + img 요소 ref — focus 행 bbox 로 자동 스크롤
   const imgScrollRef = useRef<HTMLDivElement | null>(null);
   const imgElRef = useRef<HTMLImageElement | null>(null);
+  // 표 영역 스크롤 컨테이너 — 키보드 화살표로 행 이동 시 표 안에서만 scroll
+  // (페이지 전체 scroll 막아서 위쪽 사진 영역이 안 가려지게).
+  const tableScrollRef = useRef<HTMLDivElement | null>(null);
 
   // 마우스 드래그로 사진 영역 panning — 확대 후 다른 영역 빠르게 보기.
   // mousedown 위치 기억 → mousemove 차이만큼 scrollLeft/scrollTop 역방향 이동.
@@ -744,10 +747,22 @@ function ReviewPhotoCard({
     const nextIdx = idx + dir;
     if (nextIdx < 0 || nextIdx >= rows.length) return;
     const target = inputRefs.current[`${nextIdx}:${field}`];
-    target?.focus();
-    target?.select();
-    if (target) {
-      target.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (!target) return;
+    target.focus();
+    target.select();
+    // 표 wrapper 안에서만 scroll — 페이지 전체는 안 움직임 (사진 영역 가려짐 방지).
+    // 다음 input 이 wrapper viewport 밖일 때만 scroll, 안에 있으면 그대로.
+    const scroller = tableScrollRef.current;
+    if (scroller) {
+      const targetRect = target.getBoundingClientRect();
+      const scrollerRect = scroller.getBoundingClientRect();
+      const visibleTop = targetRect.top >= scrollerRect.top + 24;            // 24px sticky header 여유
+      const visibleBottom = targetRect.bottom <= scrollerRect.bottom - 8;
+      if (!visibleTop || !visibleBottom) {
+        const relativeY = targetRect.top - scrollerRect.top + scroller.scrollTop;
+        const desiredTop = relativeY - scroller.clientHeight / 2 + target.clientHeight / 2;
+        scroller.scrollTo({ top: Math.max(0, desiredTop), behavior: "smooth" });
+      }
     }
     setFocusedIdx(nextIdx);
   }
@@ -1067,8 +1082,8 @@ function ReviewPhotoCard({
           )}
         </div>
 
-        {/* 아래: 편집 가능 표 */}
-        <div className="overflow-auto max-h-[55vh]">
+        {/* 아래: 편집 가능 표 — ref 잡아서 키보드 화살표 시 표 안에서만 scroll */}
+        <div ref={tableScrollRef} className="overflow-auto max-h-[55vh]">
           <table className="w-full text-xs">
             <thead className="bg-gray-50 text-gray-500 sticky top-0 z-10">
               <tr>
