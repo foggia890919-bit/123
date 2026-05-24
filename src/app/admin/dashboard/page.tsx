@@ -80,9 +80,10 @@ const MENU_GROUPS: MenuGroup[] = [
 interface UserDoc { id: string; docType: string; fileName: string; fileData?: string; }
 interface User {
   id: string; email: string; name: string | null;
-  role: string; approved: boolean; createdAt: string;
+  role: string; approved: boolean; isBusinessApproved?: boolean; createdAt: string;
   phone?: string | null; carrier?: string | null;
   documents?: UserDoc[];
+  userClients?: { id: string; clientName: string; bizNumber: string; address: string | null; bizFileName: string | null; bizFileKey: string | null }[];
 }
 
 const roleLabel: Record<string, string> = {
@@ -1574,6 +1575,11 @@ function MembersTab() {
     setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, approved } : u));
   }
 
+  async function toggleBusinessApproval(userId: string, isBusinessApproved: boolean) {
+    await fetch("/api/admin/users", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId, isBusinessApproved }) });
+    setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, isBusinessApproved } : u));
+  }
+
   async function resetPassword() {
     if (!newPw || newPw.length < 4) return alert("4자 이상 입력해주세요.");
     setPwLoading(true);
@@ -1685,20 +1691,47 @@ function MembersTab() {
                 </td>
                 <td className="px-4 py-3 text-center text-gray-400 text-xs">{new Date(user.createdAt).toLocaleDateString("ko-KR")}</td>
                 <td className="px-4 py-3 text-center">
-                  <Badge variant={user.approved ? "success" : "warning"}>{user.approved ? "승인됨" : "대기중"}</Badge>
+                  <div className="flex flex-col items-center gap-1">
+                    <Badge variant={user.approved ? "success" : "warning"}>{user.approved ? "가입 승인" : "가입 대기"}</Badge>
+                    {user.isBusinessApproved
+                      ? <Badge variant="success">사업자 인증</Badge>
+                      : (user.userClients && user.userClients.length > 0
+                          ? <Badge variant="warning">사업자 대기</Badge>
+                          : <span className="text-[10px] text-gray-400">사업자 정보 없음</span>)}
+                  </div>
                 </td>
                 <td className="px-4 py-3 text-center">
-                  {user.documents && user.documents.length > 0 ? (
-                    <button onClick={() => setDocUser(user)} className="text-xs text-blue-600 hover:underline">
-                      보기 ({user.documents.length})
+                  <div className="flex flex-col items-center gap-1">
+                    {user.documents && user.documents.length > 0 ? (
+                      <button onClick={() => setDocUser(user)} className="text-xs text-blue-600 hover:underline">
+                        가입서류 ({user.documents.length})
+                      </button>
+                    ) : <span className="text-xs text-gray-300">없음</span>}
+                    {user.userClients && user.userClients[0] && (
+                      <div className="text-[10px] text-gray-500 text-center">
+                        <div>{user.userClients[0].clientName}</div>
+                        <div className="font-mono">{user.userClients[0].bizNumber}</div>
+                        {user.userClients[0].bizFileName && (
+                          <a href={`/api/files/user-client-biz/${user.userClients[0].id}`} target="_blank" rel="noreferrer"
+                            className="text-blue-600 hover:underline">사업자등록증</a>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </td>
+                <td className="px-4 py-3 text-center">
+                  <div className="flex flex-col items-center gap-1.5">
+                    <button onClick={() => toggleApproval(user.id, !user.approved)}
+                      className={`text-xs px-2.5 py-1 rounded font-medium transition-colors w-full ${user.approved ? "bg-red-50 text-red-600 hover:bg-red-100" : "bg-green-50 text-green-700 hover:bg-green-100"}`}>
+                      가입 {user.approved ? "취소" : "승인"}
                     </button>
-                  ) : <span className="text-xs text-gray-300">없음</span>}
-                </td>
-                <td className="px-4 py-3 text-center">
-                  <button onClick={() => toggleApproval(user.id, !user.approved)}
-                    className={`text-xs px-2.5 py-1.5 rounded font-medium transition-colors ${user.approved ? "bg-red-50 text-red-600 hover:bg-red-100" : "bg-green-50 text-green-700 hover:bg-green-100"}`}>
-                    {user.approved ? "취소" : "승인"}
-                  </button>
+                    {user.userClients && user.userClients.length > 0 && (
+                      <button onClick={() => toggleBusinessApproval(user.id, !user.isBusinessApproved)}
+                        className={`text-xs px-2.5 py-1 rounded font-medium transition-colors w-full ${user.isBusinessApproved ? "bg-red-50 text-red-600 hover:bg-red-100" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"}`}>
+                        사업자 {user.isBusinessApproved ? "취소" : "승인"}
+                      </button>
+                    )}
+                  </div>
                 </td>
                 <td className="px-4 py-3 text-center">
                   <button onClick={() => { setResetUserId(user.id); setNewPw(""); }}

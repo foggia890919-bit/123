@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { getViewableUserIds } from "@/lib/hierarchy";
 
 // 거래처×월 단위 제출 상태 + 검수 지표 API.
 //
@@ -162,10 +163,14 @@ export async function GET(req: NextRequest) {
   const yearParam = sp.get("year");
   const monthParam = sp.get("month");
 
-  // 본인 데이터만 (ADMIN/BIZ 는 전체)
-  const baseWhere = user.role === "ADMIN" || user.role === "BIZ"
+  // 본인 + 모든 하위 회원 데이터 (상위법인 자동 라우팅) — ADMIN/BIZ 는 전체.
+  // hierarchy 트리는 User.parentUserId 로 형성. 상위 회원이 자기 하위들의 통계를 다 봄.
+  const viewableIds = user.role === "ADMIN" || user.role === "BIZ"
+    ? null
+    : await getViewableUserIds(user.id);
+  const baseWhere = viewableIds === null
     ? {}
-    : { userId: user.id };
+    : { userId: { in: viewableIds } };
 
   // ── 모드 1: 특정 거래처×월 상세 ──
   if (clientIdParam && yearParam && monthParam) {

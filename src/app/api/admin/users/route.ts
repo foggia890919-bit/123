@@ -29,8 +29,14 @@ export async function GET(req: NextRequest) {
       skip,
       select: {
         id: true, email: true, name: true, role: true,
-        approved: true, phone: true, carrier: true, createdAt: true,
+        approved: true, isBusinessApproved: true, phone: true, carrier: true, createdAt: true,
         documents: { select: { id: true, docType: true, fileName: true } },
+        userClients: {
+          where: { dealerType: null },
+          select: { id: true, clientName: true, bizNumber: true, address: true, bizFileName: true, bizFileKey: true },
+          orderBy: { createdAt: "asc" },
+          take: 1,
+        },
       },
     }),
     prisma.user.count({ where }),
@@ -55,6 +61,33 @@ export async function PATCH(req: NextRequest) {
       select: { id: true, approved: true },
     });
     return NextResponse.json(user);
+  }
+
+  if ("isBusinessApproved" in body) {
+    const next = !!body.isBusinessApproved;
+    const updated = await prisma.user.update({
+      where: { id: body.userId },
+      data: { isBusinessApproved: next, updatedAt: new Date() },
+      select: { id: true, isBusinessApproved: true },
+    });
+    // 승인 시 알람 자동 생성. 취소 시는 안 보냄 (관리자가 의도적으로 끄는 경우).
+    if (next) {
+      await prisma.notification.create({
+        data: {
+          userId: body.userId,
+          type: "BUSINESS_APPROVED",
+          title: "사업자 인증이 승인되었습니다",
+          body: "이제 사업자회원 전용 기능을 이용할 수 있어요. 상위·하위법인 검색에도 우선 노출됩니다.",
+          link: "/mypage",
+        },
+      }).catch(() => undefined);
+      // 기존 BUSINESS_PROMPT 미읽음 알람도 정리 (안내 의미 사라짐)
+      await prisma.notification.updateMany({
+        where: { userId: body.userId, type: "BUSINESS_PROMPT", isRead: false },
+        data: { isRead: true },
+      }).catch(() => undefined);
+    }
+    return NextResponse.json(updated);
   }
 
   if ("role" in body) {
