@@ -62,6 +62,7 @@ export async function POST(req: NextRequest) {
   // 2) DB 의 ocrData 갱신 — 수정된 데이터로 행별 quality 재계산.
   // 검수자가 단가 채워주거나 행 추가했으면 그에 맞춰 점수도 갱신.
   // 마스터 매칭은 다시 안 함 (검수자가 이미 봤다는 전제) — codeOk=false, nameSimilar=false 로 보존성 유지.
+  // 검수자가 행을 편집/저장하면 reviewReason 은 finalDrugs 재구성으로 자동 클리어 — 새로 self-validate 하지 않음.
   const finalDrugs = rows.map((r) => {
     const qtyNum = parseFloat(r.quantity) || 0;
     const { checks, score } = computeRowQuality({
@@ -183,6 +184,8 @@ export async function POST(req: NextRequest) {
       companyName: dominantCompany,
       ocrData: {
         ...prevOcr,
+        // 행별 reviewReason 은 finalDrugs 재구성으로 이미 클리어. 루트 요약도 stale 방지로 null.
+        selfValidate: null,
         finalDrugs,
         aiDrugs: finalDrugs,
         avgConfidence,

@@ -31,6 +31,8 @@ interface Metrics {
   revenueMismatchCount?: number;
   companyMismatchCount?: number;
   totalSumMismatchCount?: number;
+  // Gemini 자가검증 — 마스터DB 가 못 잡은 행을 Gemini 텍스트로 cross-check 한 결과
+  selfValidateMismatchCount?: number;
 }
 
 interface GroupListItem {
@@ -65,6 +67,17 @@ interface ReportRow {
       originalProductName?: string;
       nameAutoReplaced?: boolean;
       finalConfidence?: number;
+      // Gemini 자가검증 결과. "selfValidateMismatch" 면 노란 "검증대상" 마킹.
+      reviewReason?: string | null;
+      validation?: {
+        source?: string;
+        mismatchFields?: string[];
+        suggestion?: {
+          productName?: string;
+          insuranceCode?: string;
+          unitPrice?: number;
+        };
+      } | null;
       qualityChecks?: {
         masterMatch?: { applicable?: boolean; matched?: boolean; detail?: string };
         prefixMatch?: { applicable?: boolean; matched?: boolean; detail?: string };
@@ -154,6 +167,8 @@ export default function StatsReviewPage() {
   // 단가 0 행 (마스터 매칭 실패 = 직접 입력 필요) 만 보기 토글.
   // 검수자가 채워야 할 행만 빠르게 찾아 채우려는 용도.
   const [priceMissingOnly, setPriceMissingOnly] = useState(false);
+  // Gemini 자가검증으로 잡힌 "검증대상" 행만 보기 토글. (priceMissingOnly 와 OR 결합)
+  const [reviewOnly, setReviewOnly] = useState(false);
 
   function toggleSelect(id: string) {
     setSelectedIds((prev) => {
@@ -335,7 +350,7 @@ export default function StatsReviewPage() {
             color={detail.metrics.mismatchCount + detail.metrics.partialExtractionCount > 0 ? "amber" : "gray"} />
         </div>
         {/* 검증 강화 (A) — 행 단위 품질 지표. 검수자가 우선 봐야 할 행 안내. */}
-        <div className="grid grid-cols-5 gap-2">
+        <div className="grid grid-cols-6 gap-2">
           <MetricBadge label="낮은 점수 행"
             value={`${detail.metrics.lowQualityRowCount ?? 0}건`}
             color={(detail.metrics.lowQualityRowCount ?? 0) > 0 ? "red" : "gray"} />
@@ -351,6 +366,9 @@ export default function StatsReviewPage() {
           <MetricBadge label="합계 검증 실패"
             value={`${detail.metrics.totalSumMismatchCount ?? 0}장`}
             color={(detail.metrics.totalSumMismatchCount ?? 0) > 0 ? "amber" : "gray"} />
+          <MetricBadge label="검증대상 (AI 재검)"
+            value={`${detail.metrics.selfValidateMismatchCount ?? 0}건`}
+            color={(detail.metrics.selfValidateMismatchCount ?? 0) > 0 ? "amber" : "gray"} />
         </div>
 
         {/* 중복 의심 알림 — 사진 hash 는 다른데 약품 데이터가 70%+ 일치 */}
@@ -399,6 +417,18 @@ export default function StatsReviewPage() {
                 : "border-yellow-300 text-yellow-800 hover:bg-yellow-50"}>
               <Filter className="w-3.5 h-3.5 mr-1" />
               {priceMissingOnly ? `매칭 실패만 ${priceMissingCount}건 표시 중 (전체 보기)` : `단가 미입력 ${priceMissingCount}건만 보기`}
+            </Button>
+          )}
+          {/* 검증대상(AI 재검 불일치) 행 필터 — Gemini 텍스트 자가검증으로 잡힌 행. 0 건이면 숨김. */}
+          {(detail.metrics.selfValidateMismatchCount ?? 0) > 0 && (
+            <Button onClick={() => setReviewOnly((v) => !v)} variant="outline" size="sm"
+              className={reviewOnly
+                ? "bg-amber-100 border-amber-400 text-amber-900 hover:bg-amber-200"
+                : "border-amber-300 text-amber-800 hover:bg-amber-50"}>
+              <Filter className="w-3.5 h-3.5 mr-1" />
+              {reviewOnly
+                ? `검증대상만 ${detail.metrics.selfValidateMismatchCount}건 표시 중 (전체 보기)`
+                : `검증대상 ${detail.metrics.selfValidateMismatchCount}건만 보기`}
             </Button>
           )}
           <span className="ml-auto flex gap-2">
@@ -453,6 +483,7 @@ export default function StatsReviewPage() {
               duplicateMatches={detail.duplicateBy?.[r.id] ?? []}
               allReports={detail.reports}
               priceMissingOnly={priceMissingOnly}
+              reviewOnly={reviewOnly}
               onSaved={async () => {
                 // 저장 후 상세 재조회 (지표 갱신)
                 if (selected) {
@@ -555,6 +586,12 @@ interface EditableDrugRow {
   // Case B 자동 교체 — 사용자가 약품명 편집 안 했지만 매칭값과 OCR 원본이 다른 경우.
   originalProductName: string;
   nameAutoReplaced: boolean;
+  // Gemini 자가검증 결과. "selfValidateMismatch" 면 노란 "검증대상" 마킹.
+  reviewReason: string;
+  validation: {
+    mismatchFields: string[];
+    suggestion: { productName?: string; insuranceCode?: string; unitPrice?: number };
+  } | null;
   bbox: [number, number, number, number];        // 사진 highlight overlay 좌표
 }
 
@@ -571,6 +608,7 @@ function ReviewPhotoCard({
   duplicateMatches,
   allReports,
   priceMissingOnly,
+  reviewOnly,
 }: {
   report: ReportRow;
   busy: boolean;
@@ -584,6 +622,7 @@ function ReviewPhotoCard({
   duplicateMatches: Array<{ reportId: string; similarity: number }>;
   allReports: ReportRow[];
   priceMissingOnly: boolean;
+  reviewOnly: boolean;
 }) {
   const initialDrugs = report.ocrData?.finalDrugs ?? [];
 
@@ -617,6 +656,13 @@ function ReviewPhotoCard({
           : null,
         originalProductName: d.originalProductName ?? "",
         nameAutoReplaced: !!d.nameAutoReplaced,
+        reviewReason: typeof d.reviewReason === "string" ? d.reviewReason : "",
+        validation: d.validation
+          ? {
+              mismatchFields: Array.isArray(d.validation.mismatchFields) ? d.validation.mismatchFields : [],
+              suggestion: d.validation.suggestion ?? {},
+            }
+          : null,
         bbox,
       };
     })
@@ -742,6 +788,14 @@ function ReviewPhotoCard({
         const qty = parseFloat(next.quantity) || 0;
         next.totalPrice = Math.round(qty * next.unitPrice);
       }
+      // 검증대상으로 마킹됐던 행을 검수자가 보험코드/약품명/단가 중 하나라도 직접 편집하면
+      // 그 신호 자체를 클리어 (서버 저장 시에도 finalDrugs 재구성으로 사라짐. UI 도 즉시 노란 제거).
+      const userTouchedValidatedField =
+        patch.insuranceCode !== undefined || patch.productName !== undefined || patch.unitPrice !== undefined;
+      if (userTouchedValidatedField && r.reviewReason === "selfValidateMismatch") {
+        next.reviewReason = "";
+        next.validation = null;
+      }
       return next;
     }));
     setDirty(true);
@@ -758,6 +812,8 @@ function ReviewPhotoCard({
       companyNameMismatch: null,
       originalProductName: "",
       nameAutoReplaced: false,
+      reviewReason: "",
+      validation: null,
       bbox: [0, 0, 0, 0],
     }]);
     setDirty(true);
@@ -1030,13 +1086,17 @@ function ReviewPhotoCard({
                 // 강조 우선순위 (검증 강화 후):
                 //   mismatch (코드↔이름) || companyName 불일치 → red (사람 확인 필요)
                 //   focused                                      → orange
+                //   selfValidateMismatch (AI 자가검증)            → amber (Gemini 텍스트가 OCR 과 다르다고 판단)
                 //   price/revenue/prefix check 실패              → yellow (자동 검증 실패)
                 //   단가 0 (마스터 미매칭)                       → yellow
                 const qualityBad = d.priceCheckBad || d.revenueCheckBad || d.prefixCheckBad;
+                const isSelfValidateMismatch = d.reviewReason === "selfValidateMismatch";
                 const rowClass = (d.hasMismatch || d.companyNameMismatch != null)
                   ? "bg-red-50"
                   : focusedIdx === i
                   ? "bg-orange-50"
+                  : isSelfValidateMismatch
+                  ? "bg-amber-50 border-l-4 border-amber-400"
                   : qualityBad
                   ? "bg-yellow-50"
                   : d.unitPrice === 0
@@ -1048,9 +1108,12 @@ function ReviewPhotoCard({
                 if (d.priceCheckBad) tooltipParts.push("단가 검증 실패");
                 if (d.revenueCheckBad) tooltipParts.push("매출=수량×단가 검증 실패");
                 if (d.companyNameMismatch) tooltipParts.push(`제약사 불일치: ${d.companyNameMismatch.geminiCompanyName} vs ${d.companyNameMismatch.masterCompanyName}`);
+                if (isSelfValidateMismatch) tooltipParts.push("AI 자가검증 불일치 — 검수 필요");
                 const scoreTooltip = tooltipParts.join(" · ") || "검증 데이터 없음";
-                // 필터 ON + 단가 0 아닌 row → 숨김 (DOM 유지, bbox/focus 인덱스 보존)
-                const hiddenByFilter = priceMissingOnly && d.unitPrice !== 0;
+                // 필터: priceMissingOnly + reviewOnly 두 토글 — 둘 다 활성화면 둘 중 하나라도 매칭되는 행만 표시 (OR).
+                const matchesPriceFilter = !priceMissingOnly || d.unitPrice === 0;
+                const matchesReviewFilter = !reviewOnly || isSelfValidateMismatch;
+                const hiddenByFilter = !(matchesPriceFilter && matchesReviewFilter);
                 return (
                   <tr key={i} className={`border-t ${rowClass} ${hiddenByFilter ? "hidden" : ""}`}>
                     <td className="px-1 py-0.5">
@@ -1081,18 +1144,46 @@ function ReviewPhotoCard({
                     </td>
                     <td className="px-1 py-0.5">
                       <div className="relative">
-                        <input ref={(el) => { inputRefs.current[`${i}:productName`] = el; }}
-                          value={d.productName}
-                          onChange={(e) => updateRow(i, { productName: e.target.value, nameAutoReplaced: false })}
-                          onFocus={() => setFocusedIdx(i)}
-                          onKeyDown={(e) => handleKeyDown(e, i, "productName")}
-                          title={d.nameAutoReplaced && d.originalProductName && d.originalProductName !== d.productName
+                        {(() => {
+                          // 우선순위: 파랑 (자동교체) > 노랑 (AI 검증대상) — User Advocate 색상 중첩 가드.
+                          // hasMismatch 인 row 는 row 전체가 빨강이므로 셀 배지는 안 띄움.
+                          const showAiBadge = d.nameAutoReplaced && d.originalProductName && d.originalProductName !== d.productName;
+                          const showReviewBadge = !showAiBadge && isSelfValidateMismatch;
+                          const sg = d.validation?.suggestion;
+                          const reviewTooltip = showReviewBadge
+                            ? [
+                                "AI 자가검증 — 검증대상으로 마킹됨",
+                                sg?.productName ? `제미나이 추정 약품명: ${sg.productName}` : null,
+                                sg?.insuranceCode ? `제미나이 추정 보험코드: ${sg.insuranceCode}` : null,
+                                sg?.unitPrice ? `제미나이 추정 약가: ${sg.unitPrice.toLocaleString()}원` : null,
+                                "셀을 수정하면 이 표시는 사라집니다.",
+                              ].filter(Boolean).join("\n")
+                            : undefined;
+                          const autoReplaceTooltip = showAiBadge
                             ? `자동 교체됨\nOCR 원본: ${d.originalProductName}\n→ 마스터: ${d.productName}\n(보험코드 매칭으로 교정)`
-                            : undefined}
-                          className={`w-full px-1 py-0.5 border rounded text-[11px] ${d.nameAutoReplaced ? "pr-7 bg-blue-50 border-blue-300" : ""}`}/>
-                        {d.nameAutoReplaced && d.originalProductName && d.originalProductName !== d.productName && (
-                          <span className="absolute right-0.5 top-1/2 -translate-y-1/2 text-[8px] font-bold text-blue-700 bg-blue-100 px-1 py-0.5 rounded pointer-events-none">AI</span>
-                        )}
+                            : undefined;
+                          return (
+                            <>
+                              <input ref={(el) => { inputRefs.current[`${i}:productName`] = el; }}
+                                value={d.productName}
+                                onChange={(e) => updateRow(i, { productName: e.target.value, nameAutoReplaced: false })}
+                                onFocus={() => setFocusedIdx(i)}
+                                onKeyDown={(e) => handleKeyDown(e, i, "productName")}
+                                title={autoReplaceTooltip ?? reviewTooltip}
+                                className={`w-full px-1 py-0.5 border rounded text-[11px] ${
+                                  showAiBadge ? "pr-7 bg-blue-50 border-blue-300"
+                                  : showReviewBadge ? "pr-12 bg-amber-50 border-amber-400"
+                                  : ""
+                                }`}/>
+                              {showAiBadge && (
+                                <span className="absolute right-0.5 top-1/2 -translate-y-1/2 text-[8px] font-bold text-blue-700 bg-blue-100 px-1 py-0.5 rounded pointer-events-none">AI</span>
+                              )}
+                              {showReviewBadge && (
+                                <span className="absolute right-0.5 top-1/2 -translate-y-1/2 text-[8px] font-bold text-amber-800 bg-amber-200 px-1 py-0.5 rounded pointer-events-none">검증대상</span>
+                              )}
+                            </>
+                          );
+                        })()}
                       </div>
                     </td>
                     <td className="px-1 py-0.5">

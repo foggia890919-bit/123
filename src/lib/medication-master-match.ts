@@ -91,6 +91,20 @@ function findByNameAndDose(
   return candidates[0];
 }
 
+// 검증 결과 별도 레이어 — MatchResult fat 화 방지 (Architect 권장).
+// source: 어디서 온 검증 신호인가. master = 마스터DB 매칭 시점, gemini-self = Gemini 텍스트 자가검증.
+// mismatchFields: OCR 값과 검증값이 어긋난 필드. UI 가 어느 셀을 강조할지 결정.
+// suggestion: 검증자가 제안하는 정답(부분/전체). 검수자가 채택 결정.
+export interface ValidationResult {
+  source: "master" | "gemini-self";
+  mismatchFields: ("productName" | "insuranceCode" | "unitPrice")[];
+  suggestion: {
+    productName?: string;
+    insuranceCode?: string;
+    unitPrice?: number;
+  };
+}
+
 export interface MatchResult {
   insuranceCode: string;
   productName: string;
@@ -104,6 +118,8 @@ export interface MatchResult {
   // 검수 UI 가 originalProductName 을 호버 툴팁으로 노출.
   originalProductName: string;
   nameAutoReplaced: boolean;
+  // Gemini 자가검증 결과 (별도 단계에서 채움). matchMedication 본체는 건드리지 않음.
+  validation?: ValidationResult;
 }
 
 // 보험코드 9자리로 마스터 매칭 + 한글 첫 3자 sanity check.

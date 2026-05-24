@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { createHash } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 import { BUCKETS, persistDataUri } from "@/lib/storage";
 import { extractRxStatsFromImage } from "@/lib/gemini-rx-stats-extract";
-import { fetchMasterByCodes, fetchMasterByNamePrefixes, matchMedication, type MergedDrug } from "@/lib/medication-master-match";
+import { fetchMasterByCodes, fetchMasterByNamePrefixes, matchMedication, type MergedDrug, type MatchResult, type ValidationResult } from "@/lib/medication-master-match";
+import { runSelfValidateBatch, type SelfValidateMeta } from "@/lib/gemini-self-validate";
 import { appendRxStats } from "@/lib/google-sheets-rx-append";
 import { fetchRateEntries } from "@/lib/rate-utils";
 import { computeRowQuality, checkTotalSum } from "@/lib/rx-quality-checks";
@@ -178,7 +180,9 @@ export async function POST(req: NextRequest) {
         rateEntries.map((r) => [normCompany(r.companyName), r.additionalRate]),
       );
 
-      const finalDrugs = rx.drugs.map((d) => {
+      // match 결과를 self-validate 단계에서 재사용하려 별도 배열에 저장.
+      const matchResults: MatchResult[] = [];
+      const finalDrugs = rx.drugs.map((d, idx) => {
         const merged: MergedDrug = {
           insuranceCode: d.code,
           productName: d.name,
@@ -188,6 +192,7 @@ export async function POST(req: NextRequest) {
           priceHint: d.unitPrice || undefined,
         };
         const match = matchMedication(merged, masterByCode, masterByName);
+        matchResults[idx] = match;
         const additionalRate = additionalByCompany.get(normCompany(match.companyName)) ?? null;
         const codeOk = match.matchedMedicationId !== null && d.code.replace(/\D/g, "").length === 9;
         const finalUnitPrice = match.unitPrice ?? (d.unitPrice || null);
@@ -213,6 +218,12 @@ export async function POST(req: NextRequest) {
             ? { geminiCompanyName: geminiCompany, masterCompanyName: masterCompany }
             : null;
 
+        // Phase 1 의 Case B (nameAutoReplaced=true) 는 마스터 매칭이 코드를 신뢰하고 이름을 교체한
+        // 케이스로, 이미 결정론적 검증 완료. 노란 "검증대상" 마킹 대상 아님 (UI 도 파란 우선).
+        // 자동교체 안 됐는데 nameCodeMismatch 만 있는 케이스는 현재 흐름상 발생 안 하지만 방어용 분기.
+        const initReviewReason: string | null =
+          match.nameCodeMismatch && !match.nameAutoReplaced ? "nameCodeMismatch" : null;
+
         return {
           insuranceCode: match.insuranceCode,
           // Gemini 행별 추출값 우선 — 사진의 실제 제약사 보존
@@ -233,8 +244,33 @@ export async function POST(req: NextRequest) {
           qualityChecks: checks,
           originalProductName: match.originalProductName,
           nameAutoReplaced: match.nameAutoReplaced,
+          reviewReason: initReviewReason as string | null,
+          validation: null as ValidationResult | null,
         };
       });
+
+      // ── Gemini 자가검증 (ENV gate) ── B2 fix: 별도 try/catch 로 OCR 보호 ──
+      // 마스터DB 가 못 잡은 row (matchedMedicationId === null) 에만 적용. 마스터 매칭된 row 는
+      // 결정론적 결과를 신뢰 — Skeptic 우려 흡수, 비용 절감.
+      // 실패 (timeout/parse/API down) 시 rethrow 절대 안 함 — OCR 결과는 그대로 저장.
+      let selfValidateMeta: SelfValidateMeta | null = null;
+      try {
+        const batchResult = await runSelfValidateBatch(
+          rx.drugs.map((d, idx) => ({
+            index: idx,
+            matchResult: matchResults[idx],
+            ocrUnitPrice: d.unitPrice || null,
+          })),
+        );
+        selfValidateMeta = batchResult.meta;
+        for (const [idx, v] of batchResult.validations) {
+          finalDrugs[idx].reviewReason = "selfValidateMismatch";
+          finalDrugs[idx].validation = v;
+        }
+      } catch (selfErr) {
+        // graceful — 절대 throw 위로 안 넘김. OCR row 는 PENDING_REVIEW 로 그대로 저장됨.
+        console.error("[photo-auto self-validate]", report.id, String(selfErr).slice(0, 300));
+      }
 
       const totalFee = finalDrugs.reduce((s, d) => {
         const qty = parseFloat(d.quantity) || 0;
@@ -325,7 +361,9 @@ export async function POST(req: NextRequest) {
             sheetWarning,
             fileName,
             processingEndedAt: new Date().toISOString(),
-          },
+            // Gemini 자가검증 메타 (ENV gate off 면 null). 행별 reviewReason 은 finalDrugs[i] 에.
+            selfValidate: selfValidateMeta,
+          } as unknown as Prisma.InputJsonObject,
           updatedAt: new Date(),
         },
       });

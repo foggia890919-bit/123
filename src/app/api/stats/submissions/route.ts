@@ -28,6 +28,9 @@ interface FinalDrugRecord {
   mismatch?: unknown;
   companyNameMismatch?: unknown;
   finalConfidence?: number;
+  // Gemini 자가검증 결과 ("selfValidateMismatch" | "nameCodeMismatch" | null).
+  // 검수자가 셀 편집 후 저장하면 finalDrugs 재구성으로 자동 클리어됨.
+  reviewReason?: string | null;
   qualityChecks?: {
     priceMatch?: { applicable?: boolean; matched?: boolean };
     revenueMatch?: { applicable?: boolean; matched?: boolean };
@@ -94,6 +97,7 @@ function computeMetrics(reports: Array<{ ocrData: unknown; totalFee: number | nu
   let revenueMismatchCount = 0;      // revenueCheck applicable && !matched
   let companyMismatchCount = 0;      // Gemini companyName vs 마스터 companyName 불일치
   let totalSumMismatchCount = 0;     // 사진 단위 합계 불일치 (사진 수)
+  let selfValidateMismatchCount = 0; // Gemini 텍스트 자가검증으로 잡힌 행 수
   const confidenceSum: number[] = [];
 
   for (const r of reports) {
@@ -110,6 +114,7 @@ function computeMetrics(reports: Array<{ ocrData: unknown; totalFee: number | nu
       if (d.mismatch != null) mismatchCount++;
       if (d.companyNameMismatch != null) companyMismatchCount++;
       if (typeof d.finalConfidence === "number" && d.finalConfidence < 75) lowQualityRowCount++;
+      if (d.reviewReason === "selfValidateMismatch") selfValidateMismatchCount++;
       const pq = d.qualityChecks?.priceMatch;
       if (pq?.applicable && pq?.matched === false) priceMismatchCount++;
       const rq = d.qualityChecks?.revenueMatch;
@@ -144,6 +149,7 @@ function computeMetrics(reports: Array<{ ocrData: unknown; totalFee: number | nu
     revenueMismatchCount,
     companyMismatchCount,
     totalSumMismatchCount,
+    selfValidateMismatchCount,
   };
 }
 
