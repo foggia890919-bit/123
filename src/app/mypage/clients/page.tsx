@@ -7,6 +7,7 @@ import { Building2, Plus, Trash2, FileText, CheckCircle2, XCircle, Loader2, Aler
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import RequireRole from "@/components/RequireRole";
+import { normalizeCompanyName } from "@/lib/company-name";
 import Link from "next/link";
 
 /* ───── 거래처 등록 타입 ───── */
@@ -98,6 +99,10 @@ export default function ClientsPage() {
   const [requestFilter, setRequestFilter] = useState<string>("all");
   const [requestsLoading, setRequestsLoading] = useState(false);
 
+  /* ── 상위법인 (필터링 시 선택 — 통계제출처 자동 등록용) ── */
+  const [selectedSubmissionEntity, setSelectedSubmissionEntity] = useState("");
+  const [entitySuggestions, setEntitySuggestions] = useState<string[]>([]);
+
   /* ── 초기 로드 ── */
   useEffect(() => {
     if (!session?.user?.id) return;
@@ -105,6 +110,10 @@ export default function ClientsPage() {
     fetch("/api/medications/companies").then((r) => r.json()).then(setCompanies);
     fetch(`/api/proposals?userId=${session.user.id}`).then((r) => r.json()).then((d) => setProposals(Array.isArray(d) ? d : []));
     fetch(`/api/filter-request/company-status?userId=${session.user.id}`).then((r) => r.json()).then(setCompanyStatuses);
+    // 상위법인 자동완성 후보 (본인 history + FilterMapping 표준)
+    fetch("/api/submission-routes/suggestions?type=submissionEntity")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setEntitySuggestions(Array.isArray(d) ? d : []));
     loadMyRequests(session.user.id);
   }, [session?.user?.id]);
 
@@ -243,18 +252,52 @@ export default function ClientsPage() {
   }
 
   /* ── 필터링 제출 ── */
+  // 1) /api/filter-request 호출 — 기존 필터링 요청 등록
+  // 2) 선택된 각 제약사마다 SubmissionRoute upsert — 통계제출처 자동 등록
+  //    (사용자 요구: "필터링시 선택한 상위법인은 통계제출처에 자동 등록, 수정은 통계제출처 메뉴에서")
   async function handleFilterSubmit(e: React.FormEvent) {
     e.preventDefault(); setFilterError("");
     if (selected.size === 0) { setFilterError("제약사를 1개 이상 선택해주세요."); return; }
     if (!selectedFilterClient) { setFilterError("거래처를 선택해주세요."); return; }
+    if (!selectedSubmissionEntity.trim()) { setFilterError("상위법인을 선택해주세요."); return; }
     setFilterLoading(true);
-    const res = await fetch("/api/filter-request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId: session!.user.id, userName: session!.user.name || session!.user.email, clientName: selectedFilterClient.clientName, bizNumber: selectedFilterClient.bizNumber, companies: Array.from(selected) }) });
-    if (res.ok) {
-      setFilterSuccess(true); setSelected(new Set());
+    try {
+      const res = await fetch("/api/filter-request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId: session!.user.id, userName: session!.user.name || session!.user.email, clientName: selectedFilterClient.clientName, bizNumber: selectedFilterClient.bizNumber, companies: Array.from(selected) }) });
+      if (!res.ok) { setFilterError((await res.json()).error || "요청 중 오류가 발생했어요."); return; }
+
+      // 통계제출처 자동 등록 — 선택된 각 제약사마다. 실패해도 filter-request 자체는 성공으로 처리.
+      const entity = normalizeCompanyName(selectedSubmissionEntity);
+      const routeResults = await Promise.all(
+        Array.from(selected).map((companyName) =>
+          fetch("/api/submission-routes", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              clientName: selectedFilterClient.clientName.trim(),
+              companyName: normalizeCompanyName(companyName),
+              submissionEntity: entity,
+              requestType: "신규",
+            }),
+          }).then((r) => r.ok),
+        ),
+      );
+      const routeFailed = routeResults.filter((ok) => !ok).length;
+      if (routeFailed > 0) {
+        console.warn(`[filter-submit] 통계제출처 자동 등록 ${routeFailed}/${routeResults.length} 건 실패 — 통계제출처 메뉴에서 직접 추가 가능`);
+      }
+
+      setFilterSuccess(true);
+      setSelected(new Set());
+      setSelectedSubmissionEntity("");
       fetch(`/api/filter-request/company-status?userId=${session!.user.id}`).then((r) => r.json()).then(setCompanyStatuses);
+      // 자동 등록 후 본인 history 갱신 (다음 요청 자동완성 후보에 반영)
+      fetch("/api/submission-routes/suggestions?type=submissionEntity")
+        .then((r) => (r.ok ? r.json() : []))
+        .then((d) => setEntitySuggestions(Array.isArray(d) ? d : []));
       loadMyRequests(session!.user.id);
-    } else { setFilterError((await res.json()).error || "요청 중 오류가 발생했어요."); }
-    setFilterLoading(false);
+    } finally {
+      setFilterLoading(false);
+    }
   }
 
 
@@ -467,8 +510,27 @@ export default function ClientsPage() {
                     </div>
                   )}
 
+                  {/* 상위법인 선택 — 조회 등록 시 통계제출처에도 자동 등록 */}
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-gray-600">상위법인 선택 <span className="text-red-500">*</span></label>
+                    <input
+                      list="filter-entity-suggestions"
+                      value={selectedSubmissionEntity}
+                      onChange={(e) => setSelectedSubmissionEntity(e.target.value)}
+                      placeholder="목록에서 선택 또는 직접 입력"
+                      className="w-full h-10 px-3 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    />
+                    <datalist id="filter-entity-suggestions">
+                      {entitySuggestions.map((v) => <option key={v} value={v} />)}
+                    </datalist>
+                    <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-1.5 leading-relaxed">
+                      필터링 시 체크하는 상위법인은 <span className="font-semibold">통계제출처에 자동 등록</span>됩니다.<br />
+                      이후 수정은 <Link href="/submission-routes" className="underline font-semibold hover:text-blue-900">통계제출처 메뉴</Link>에서 가능합니다.
+                    </p>
+                  </div>
+
                   {filterError && <p className="text-sm text-red-600 bg-red-50 p-3 rounded-lg">{filterError}</p>}
-                  <Button type="submit" className="w-full" disabled={filterLoading || selected.size === 0 || !selectedFilterClient}>
+                  <Button type="submit" className="w-full" disabled={filterLoading || selected.size === 0 || !selectedFilterClient || !selectedSubmissionEntity.trim()}>
                     <Send className="w-4 h-4 mr-2" />{filterLoading ? "요청 중..." : `${selected.size}개 제약사 조회 등록`}
                   </Button>
                 </form>
