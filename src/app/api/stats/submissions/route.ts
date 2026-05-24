@@ -273,7 +273,7 @@ export async function GET(req: NextRequest) {
     orderBy: { createdAt: "desc" },
     select: {
       clientId: true, year: true, month: true, ocrData: true, status: true,
-      totalFee: true, createdAt: true,
+      totalFee: true, createdAt: true, userId: true,
       client: { select: { id: true, clientName: true } },
     },
   });
@@ -285,6 +285,7 @@ export async function GET(req: NextRequest) {
     year: number;
     month: number;
     reports: ReportInGroup[];
+    uploaderIds: Set<string>;
   }
   const groups = new Map<string, GroupAcc>();
 
@@ -297,18 +298,39 @@ export async function GET(req: NextRequest) {
       year: r.year,
       month: r.month,
       reports: [],
+      uploaderIds: new Set<string>(),
     };
     existing.reports.push({
       ocrData: r.ocrData, status: r.status, totalFee: r.totalFee, createdAt: r.createdAt,
     });
+    if (r.userId) existing.uploaderIds.add(r.userId);
     groups.set(key, existing);
   }
+
+  // 그룹 전반에서 등장한 모든 업로더 user id → name/email 한 번에 lookup.
+  const allUploaderIds = Array.from(new Set(
+    Array.from(groups.values()).flatMap((g) => Array.from(g.uploaderIds)),
+  ));
+  type UploaderUser = { id: string; name: string | null; email: string };
+  const uploaderUsers: UploaderUser[] = allUploaderIds.length > 0
+    ? await prisma.user.findMany({
+        where: { id: { in: allUploaderIds } },
+        select: { id: true, name: true, email: true },
+      })
+    : [];
+  const uploaderById = new Map(uploaderUsers.map((u) => [u.id, u] as const));
 
   const list = Array.from(groups.values()).map((g) => {
     const metrics = computeMetrics(g.reports);
     const submitted = g.reports.every((r) => r.status === "SUBMITTED");
     const latestAt = g.reports.reduce<Date | null>((a, r) =>
       !a || r.createdAt > a ? r.createdAt : a, null);
+    // 업로더 목록 — 그룹 카드에 노출. 한 그룹에 여러 영업사원이 사진 올렸을 수 있음.
+    const uploaders = Array.from(g.uploaderIds)
+      .map((id) => uploaderById.get(id))
+      .filter((u): u is { id: string; name: string | null; email: string } => !!u)
+      .map((u) => ({ name: u.name, email: u.email }))
+      .sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email));
     return {
       clientId: g.clientId,
       clientName: g.clientName,
@@ -317,6 +339,7 @@ export async function GET(req: NextRequest) {
       submitted,
       latestAt,
       metrics,
+      uploaders,
     };
   });
 
