@@ -227,6 +227,47 @@ export default function StatsReviewPage() {
   }
 
   // 선택된 사진들 일괄 삭제 — 순차 DELETE (서버 부담 방지) + 진행 상태 + 완료 알림
+  async function handleBulkRetry() {
+    if (!detail) return;
+    const errorReports = detail.reports.filter((r) => r.status === "ERROR");
+    if (errorReports.length === 0) { setError("처리 실패한 사진이 없습니다"); return; }
+    if (!confirm(`처리 실패한 ${errorReports.length}장을 모두 다시 분석할까요?`)) return;
+    setBusy(true);
+    setError("");
+    setBulkSuccess("");
+    const total = errorReports.length;
+    setBulkProgress({ current: 0, total, label: "재분석 요청" });
+    const failed: string[] = [];
+    let succeeded = 0;
+    for (let i = 0; i < errorReports.length; i++) {
+      const r = errorReports[i];
+      setBulkProgress({ current: i + 1, total, label: "재분석 요청" });
+      try {
+        const res = await fetch("/api/stats/photo-retry", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reportId: r.id }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          failed.push(`${r.id.slice(0, 8)}: ${d.error || `HTTP ${res.status}`}`);
+        } else {
+          succeeded++;
+        }
+      } catch (e) {
+        failed.push(`${r.id.slice(0, 8)}: ${String(e).slice(0, 100)}`);
+      }
+    }
+    setBulkProgress(null);
+    if (selected) {
+      const r = await fetch(`/api/stats/submissions?clientId=${selected.clientId}&year=${selected.year}&month=${selected.month}`);
+      setDetail(await r.json());
+    }
+    setBulkSuccess(`재분석 ${succeeded}장 요청 완료 — 잠시 후 새로고침하면 결과 확인 가능`);
+    if (failed.length > 0) setError(`재분석 요청 실패 ${failed.length}장:\n${failed.slice(0, 5).join("\n")}`);
+    setBusy(false);
+  }
+
   async function handleBulkDelete() {
     if (selectedIds.size === 0) { setError("선택된 사진이 없습니다"); return; }
     if (!confirm(`정말 선택한 ${selectedIds.size}장의 사진과 데이터를 모두 삭제하시겠습니까? Storage 파일도 함께 삭제됩니다.`)) return;
@@ -408,6 +449,17 @@ export default function StatsReviewPage() {
             {bulkProgress?.label === "삭제" ? `삭제 중... ${bulkProgress.current}/${bulkProgress.total}`
               : `선택한 ${selectedIds.size}장 삭제`}
           </Button>
+          {/* 처리 실패한 모든 사진 일괄 재분석 — ERROR row 가 있을 때만 노출 */}
+          {detail.reports.filter((r) => r.status === "ERROR").length > 0 && (
+            <Button onClick={handleBulkRetry}
+              disabled={busy}
+              variant="outline" size="sm"
+              className="text-blue-700 border-blue-300 hover:bg-blue-50">
+              {bulkProgress?.label === "재분석 요청"
+                ? `재분석 ${bulkProgress.current}/${bulkProgress.total}`
+                : `처리 실패 ${detail.reports.filter((r) => r.status === "ERROR").length}장 모두 다시 분석`}
+            </Button>
+          )}
           {/* 단가 0 (마스터 매칭 실패) 행 필터 — 검수자가 채워야 할 행만 빠르게 본다.
               매칭 실패 0 건이면 버튼 자체 숨김 (불필요한 UI) */}
           {priceMissingCount > 0 && (
