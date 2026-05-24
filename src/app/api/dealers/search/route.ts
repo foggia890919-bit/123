@@ -88,18 +88,32 @@ export async function GET(req: NextRequest) {
     take: 30,
   });
 
-  const results = users.map((u) => {
-    const rep = u.userClients[0];
-    return {
-      userId: u.id,
-      email: u.email,
-      name: u.name ?? "",
-      clientName: rep?.clientName ?? u.name ?? u.email,
-      bizNumber: rep?.bizNumber ?? "",
-      dealerType: "UPPER" as const,
-      isBusinessApproved: u.isBusinessApproved,
-    };
-  });
+  // 의료기관 키워드 — 상호명에 포함되면 상위법인 후보에서 자동 제외 (휴리스틱).
+  // 의사가 BUSINESS role 로 가입하면서 병원 이름을 사업자 정보로 등록한 케이스 방어.
+  const MEDICAL_KEYWORDS = [
+    "병원", "의원", "내과", "외과", "한의원", "치과", "정신과", "산부인과",
+    "소아과", "이비인후과", "안과", "비뇨기과", "정형외과", "피부과",
+    "신경과", "재활의학과", "가정의학과", "마취과", "영상의학과", "검진센터",
+    "약국", "약방",
+  ];
+  function isMedicalName(name: string): boolean {
+    return MEDICAL_KEYWORDS.some((kw) => name.includes(kw));
+  }
+
+  const results = users
+    .map((u) => {
+      const rep = u.userClients[0];
+      return {
+        userId: u.id,
+        email: u.email,
+        name: u.name ?? "",
+        clientName: rep?.clientName ?? u.name ?? u.email,
+        bizNumber: rep?.bizNumber ?? "",
+        dealerType: "UPPER" as const,
+        isBusinessApproved: u.isBusinessApproved,
+      };
+    })
+    .filter((r) => !isMedicalName(r.clientName));
 
   return NextResponse.json(results);
 }
