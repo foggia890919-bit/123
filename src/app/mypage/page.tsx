@@ -205,7 +205,11 @@ export default function MyPage() {
         }),
       });
       const data = await res.json();
-      if (!res.ok) { setBizError(data.error || "저장 실패"); }
+      if (!res.ok) {
+        // 저장 실패 — 폼 state 를 서버 실제값으로 되돌려서 사용자가 "저장된 줄 알고 새로고침" 하는 혼란 방지.
+        setBizError(data.error || "저장 실패");
+        await loadProfile();
+      }
       else { setBizSuccess(true); setBizDocFile(null); await loadProfile(); }
     } catch {
       setBizError("저장 중 오류가 발생했어요.");

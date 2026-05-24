@@ -3405,7 +3405,100 @@ function BizManagementTab() {
     "lower-corp": rows.filter((r) => r.dealerType === "LOWER_CORP").length,
   };
 
+  // 본인 대표 사업자 진단 — 마이페이지 사업자 정보 카드는 dealerType=null 중 가장 오래된 1행만 가져옴.
+  // 한 회원이 dealerType=null 행을 여러 개 가지면 마이페이지에선 안 보이는 사업자가 생기고
+  // 저장 시 "이미 같은 사업자번호로 등록된 거래처" 오류로 막힘. 이를 자동 감지.
+  const mypageDiag = useMemo(() => {
+    const byUser = new Map<string, AdminUserClient[]>();
+    for (const r of rows) {
+      if (r.dealerType != null) continue;
+      const list = byUser.get(r.userId) ?? [];
+      list.push(r);
+      byUser.set(r.userId, list);
+    }
+    const mypagePrimaryIds = new Set<string>();
+    const duplicateUserIds = new Set<string>();
+    for (const [uid, list] of byUser.entries()) {
+      list.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      mypagePrimaryIds.add(list[0].id);
+      if (list.length >= 2) duplicateUserIds.add(uid);
+    }
+    return { mypagePrimaryIds, duplicateUserIds, byUser };
+  }, [rows]);
+
+  // 중복 회원 펼침 토글
+  const [diagOpen, setDiagOpen] = useState(false);
+
   return (
+    <div className="space-y-4">
+      {/* 진단 패널 — 본인 대표 사업자 중복 (dealerType=null 행이 한 회원에 2개+) */}
+      {mypageDiag.duplicateUserIds.size > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-lg overflow-hidden">
+          <button
+            onClick={() => setDiagOpen((v) => !v)}
+            className="w-full px-4 py-3 flex items-center gap-3 hover:bg-red-100/50 text-left"
+          >
+            <AlertCircle className="w-5 h-5 text-red-500 shrink-0" />
+            <div className="flex-1">
+              <div className="text-sm font-bold text-red-800">
+                마이페이지 사업자 정보 충돌 — {mypageDiag.duplicateUserIds.size}명 감지
+              </div>
+              <div className="text-xs text-red-600 mt-0.5">
+                같은 회원이 &quot;본인 대표 사업자&quot; 후보 행(병의원 유형) 을 2개 이상 가지고 있어요.
+                마이페이지는 그중 가장 오래된 1행만 보여주고, 나머지는 사업자번호 충돌로 저장 안 됨.
+              </div>
+            </div>
+            <ChevronDown className={`w-4 h-4 text-red-500 transition-transform ${diagOpen ? "rotate-180" : ""}`} />
+          </button>
+          {diagOpen && (
+            <div className="px-4 pb-4 space-y-3 border-t border-red-200 pt-3 bg-red-50/30">
+              {Array.from(mypageDiag.byUser.entries())
+                .filter(([uid]) => mypageDiag.duplicateUserIds.has(uid))
+                .map(([uid, list]) => {
+                  const owner = list[0]; // any row has user info
+                  return (
+                    <div key={uid} className="bg-white border border-red-200 rounded p-3">
+                      <div className="flex items-center gap-2 mb-2 flex-wrap">
+                        <span className="text-sm font-bold text-gray-900">{owner.user.name || owner.user.email.split("@")[0]}</span>
+                        <span className="text-xs text-gray-500">{owner.user.email}</span>
+                        <span className="ml-auto text-[10px] text-red-700">중복 {list.length}건</span>
+                      </div>
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-gray-500">
+                            <th className="text-left py-1">거래처명</th>
+                            <th className="text-left py-1">사업자번호</th>
+                            <th className="text-left py-1">등록일</th>
+                            <th className="text-left py-1">상태</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {list.map((r, idx) => (
+                            <tr key={r.id} className={idx === 0 ? "bg-green-50/40" : ""}>
+                              <td className="py-1.5 font-medium">{r.clientName}</td>
+                              <td className="py-1.5 font-mono">{r.bizNumber}</td>
+                              <td className="py-1.5 text-gray-500">{new Date(r.createdAt).toLocaleDateString("ko-KR")}</td>
+                              <td className="py-1.5">
+                                {idx === 0
+                                  ? <span className="px-1.5 py-0.5 rounded bg-green-100 text-green-700 font-semibold text-[10px]">마이페이지 표시</span>
+                                  : <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold text-[10px]">숨김 — 저장 시 충돌</span>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })}
+              <p className="text-[11px] text-red-700 px-1">
+                해결: 어드민에서 불필요한 행을 정리하거나, 회원에게 거래처관리(의료기관) 페이지에서 직접 삭제 안내.
+                마이페이지 사업자 정보 수정으로는 이 충돌을 풀 수 없어요.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3">
         <div>
@@ -3450,9 +3543,20 @@ function BizManagementTab() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {filtered.map((c) => (
-                <tr key={c.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 font-medium text-gray-900">{c.clientName}</td>
+              {filtered.map((c) => {
+                const isMypagePrimary = mypageDiag.mypagePrimaryIds.has(c.id);
+                const isHiddenConflict = !c.dealerType && !isMypagePrimary && mypageDiag.duplicateUserIds.has(c.userId);
+                return (
+                <tr key={c.id} className={`hover:bg-gray-50 ${isHiddenConflict ? "bg-amber-50/40" : ""}`}>
+                  <td className="px-4 py-3 font-medium text-gray-900">
+                    {c.clientName}
+                    {isMypagePrimary && c.dealerType == null && (
+                      <span className="ml-2 inline-block px-1.5 py-0.5 rounded bg-green-100 text-green-700 text-[10px] font-semibold align-middle">마이페이지 표시</span>
+                    )}
+                    {isHiddenConflict && (
+                      <span className="ml-2 inline-block px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-semibold align-middle">숨김 — 저장 충돌</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-gray-600 text-xs font-mono">{c.bizNumber}</td>
                   <td className="px-4 py-3">
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${dealerColor(c.dealerType)}`}>
@@ -3473,11 +3577,13 @@ function BizManagementTab() {
                     {new Date(c.createdAt).toLocaleDateString("ko-KR")}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
+    </div>
     </div>
   );
 }
