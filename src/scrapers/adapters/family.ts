@@ -166,8 +166,16 @@ export const family: WholesaleAdapter = {
     const rows = await page.locator(SEL.resultRows).all();
     const items: InventoryItem[] = [];
 
-    // 빈 결과 진단 — 결과 행이 0이면 페이지에 어떤 안내 메시지가 떴는지,
-    // 또는 결과 표 자체가 안 그려졌는지 한 줄로 기록.
+    // 항상 진단 — 행 수 + 첫 행의 셀 내용까지 같이 찍어서 표 구조 변경/빈 표 모두 추적.
+    console.log(`[family] code=${insuranceCode} rows=${rows.length}`);
+    if (rows.length > 0) {
+      const firstCells = (await rows[0].locator("td").allTextContents()).map(c => c.trim());
+      console.log(`[family] code=${insuranceCode} row[0] cells=${JSON.stringify(firstCells)}`);
+      if (rows.length > 1) {
+        const secondCells = (await rows[1].locator("td").allTextContents()).map(c => c.trim());
+        console.log(`[family] code=${insuranceCode} row[1] cells=${JSON.stringify(secondCells)}`);
+      }
+    }
     if (rows.length === 0) {
       const bodyText = await page.locator("body").innerText().catch(() => "");
       const snippet = bodyText.replace(/\s+/g, " ").slice(0, 250);
@@ -223,10 +231,8 @@ export const family: WholesaleAdapter = {
       });
     }
 
-    // 결과 카운트 1줄 요약
-    if (items.length > 0) {
-      console.log(`[family] code=${insuranceCode} OK items=${items.length} firstStock=${items[0].stock}`);
-    }
+    // 결과 카운트 1줄 요약 — 항상 출력 (0건도 포함). 0건이면 위 row[0] 로그로 원인 파악.
+    console.log(`[family] code=${insuranceCode} DONE items=${items.length}` + (items.length > 0 ? ` firstStock=${items[0].stock}` : ""));
     return items;
   },
 };
