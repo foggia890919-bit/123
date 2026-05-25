@@ -123,24 +123,36 @@ export const family: WholesaleAdapter = {
       await page.waitForTimeout(800);
     }
 
-    // Switch the dropdown to 보험코드 — value, label, evaluate fallback 순으로 시도.
-    const select = page.locator(SEL.searchTypeSelect).first();
+    // 드롭다운을 "보험코드" 로 강제 — 페이지의 모든 select 를 순회하며
+    // "보험코드" 옵션이 있는 element 를 찾아 직접 value 설정 + change 이벤트 발생.
+    // 기존 셀렉터 기반 접근이 실패하던 케이스를 우회.
     let selectedValue = "";
-    if (await select.isVisible().catch(() => false)) {
-      await select.selectOption({ value: "yakga_cd" }).catch(async () => {
-        await select.selectOption({ label: "보험코드" }).catch(async () => {
-          await select.evaluate((el: HTMLSelectElement) => {
-            const opt = Array.from(el.options).find(o => /보험|yakga|insurance/i.test(o.text + o.value));
-            if (opt) {
-              el.value = opt.value;
-              el.dispatchEvent(new Event("change", { bubbles: true }));
-            }
-          }).catch(() => {});
-        });
-      });
-      selectedValue = await select.inputValue().catch(() => "");
-      await page.waitForTimeout(200);
+    const selectInfo = await page.evaluate(() => {
+      const selects = Array.from(document.querySelectorAll<HTMLSelectElement>("select"));
+      for (const sel of selects) {
+        const targetOpt = Array.from(sel.options).find(o => o.text.trim() === "보험코드");
+        if (!targetOpt) continue;
+        sel.value = targetOpt.value;
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
+        return { name: sel.name || "(no-name)", value: sel.value, optionText: targetOpt.text };
+      }
+      // 폴백: 옵션 텍스트에 "보험"이 부분 일치하는 것
+      for (const sel of selects) {
+        const targetOpt = Array.from(sel.options).find(o => /보험/.test(o.text));
+        if (!targetOpt) continue;
+        sel.value = targetOpt.value;
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
+        return { name: sel.name || "(no-name)", value: sel.value, optionText: targetOpt.text };
+      }
+      return null;
+    }).catch(() => null);
+    if (selectInfo) {
+      selectedValue = selectInfo.value;
+      console.log(`[family] dropdown set — select[name="${selectInfo.name}"] option="${selectInfo.optionText}" value="${selectInfo.value}"`);
+    } else {
+      console.warn(`[family] dropdown FAILED — no select with "보험코드" option found`);
     }
+    await page.waitForTimeout(200);
 
     const input = await waitAny(page, SEL.searchInput, 20_000);
     await input.click();
