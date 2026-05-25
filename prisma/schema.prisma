@@ -24,6 +24,11 @@ model User {
   // 사업자 인증 완료 여부 — 마이페이지에서 사업자등록증 제출 + 관리자 승인 후 true.
   // 상위/하위법인 검색에서 우선 노출됨.
   isBusinessApproved  Boolean       @default(false)
+  // "본인 사업자" — 회원이 회원가입 시 등록한 자기 회사를 가리킴.
+  // UserClient 테이블에 거래처들과 함께 저장되지만, 이 컬럼으로 본인 것을 명시.
+  // null = 아직 본인 사업자 미등록 상태.
+  ownerBizClientId    String?       @unique
+  ownerBizClient      UserClient?   @relation("UserOwnerBizClient", fields: [ownerBizClientId], references: [id], onDelete: SetNull)
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
   proposals             Proposal[]
@@ -140,6 +145,8 @@ model UserClient {
   statImages            StatImage[]
   prescriptionReports   PrescriptionReport[]
   corpRateFiles         CorpRateFile[]
+  // 본인 사업자로 지정된 User (반대 관계). User.ownerBizClientId 가 참조.
+  ownerUser             User?              @relation("UserOwnerBizClient")
 
   @@index([userId])
   @@index([approved])
