@@ -116,7 +116,14 @@ async function scrapeOne(adapter: WholesaleAdapter, code: string, slot = 0): Pro
   const sessionKey = `${adapter.key}:${slot}`;
   try {
     const page = await getPage(adapter, creds, slot);
-    const items = await adapter.searchByCode(page, code);
+    let items = await adapter.searchByCode(page, code);
+    // 보강: 결과 0건이면 한 번 더 시도. 사이트 일시 응답 변동 / 페이지 미로딩 케이스 보강.
+    // 진짜 품절(결과 있으나 stock=0)은 items.length>0 이라 재시도 대상 아님.
+    if (items.length === 0) {
+      await new Promise(r => setTimeout(r, 600));
+      const retry = await adapter.searchByCode(page, code).catch(() => [] as InventoryItem[]);
+      if (retry.length > 0) items = retry;
+    }
     return { siteKey: adapter.key, insuranceCode: code, items, durationMs: Date.now() - start, scrapedAt: new Date().toISOString() };
   } catch (err) {
     await invalidate(sessionKey);
