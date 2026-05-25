@@ -96,6 +96,7 @@ interface ScrapeRow {
   items: InventoryItem[];
   error?: string;
   durationMs: number;
+  scrapedAt: string;  // 응답이 만들어진 시각 — 화면이 "방금" 으로 갱신할 수 있게.
 }
 
 async function scrapeOne(adapter: WholesaleAdapter, code: string, slot = 0): Promise<ScrapeRow> {
@@ -108,6 +109,7 @@ async function scrapeOne(adapter: WholesaleAdapter, code: string, slot = 0): Pro
       items: [],
       error: "no credentials configured for this site",
       durationMs: 0,
+      scrapedAt: new Date().toISOString(),
     };
   }
   await rateLimit(adapter.key, slot);
@@ -115,7 +117,7 @@ async function scrapeOne(adapter: WholesaleAdapter, code: string, slot = 0): Pro
   try {
     const page = await getPage(adapter, creds, slot);
     const items = await adapter.searchByCode(page, code);
-    return { siteKey: adapter.key, insuranceCode: code, items, durationMs: Date.now() - start };
+    return { siteKey: adapter.key, insuranceCode: code, items, durationMs: Date.now() - start, scrapedAt: new Date().toISOString() };
   } catch (err) {
     await invalidate(sessionKey);
     return {
@@ -124,6 +126,7 @@ async function scrapeOne(adapter: WholesaleAdapter, code: string, slot = 0): Pro
       items: [],
       error: (err as Error).message,
       durationMs: Date.now() - start,
+      scrapedAt: new Date().toISOString(),
     };
   }
 }
