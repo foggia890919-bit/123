@@ -58,6 +58,8 @@ export default function StatsPhotoPage() {
   const [clients, setClients] = useState<UserClient[]>([]);
   const [selectedClientId, setSelectedClientId] = useState<string>("");
   const [, setClientQuery] = useState("");
+  // 본인 대표 사업자 (마이페이지 "사업자 정보" 카드와 같은 row) — 거래처 드롭다운에서 제외용
+  const [myBizClientId, setMyBizClientId] = useState<string | null>(null);
 
   const [error, setError] = useState<string>("");
 
@@ -118,6 +120,11 @@ export default function StatsPhotoPage() {
       .then((r) => r.json())
       .then((data) => Array.isArray(data) ? setClients(data) : setClients([]))
       .catch(() => setClients([]));
+    // 본인 대표 사업자 id — 거래처 드롭다운에서 자동 제외
+    fetch("/api/mypage")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d?.bizClient?.id) setMyBizClientId(d.bizClient.id); })
+      .catch(() => undefined);
   }, [session?.user?.id]);
 
   // 거래처 선택 시 거래가능제약사 목록 fetch
@@ -330,7 +337,7 @@ export default function StatsPhotoPage() {
               className="mt-1 w-full border rounded px-3 py-2 text-sm bg-white"
             >
               <option value="">— 거래처 선택 —</option>
-              {clients.map((c) => (
+              {clients.filter((c) => c.id !== myBizClientId).map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.clientName}{!c.approved ? " (승인전)" : ""}
                 </option>

@@ -21,6 +21,9 @@ model User {
   parentUserId String?
   parent       User?                @relation("UserHierarchy", fields: [parentUserId], references: [id], onDelete: SetNull)
   children     User[]               @relation("UserHierarchy")
+  // 사업자 인증 완료 여부 — 마이페이지에서 사업자등록증 제출 + 관리자 승인 후 true.
+  // 상위/하위법인 검색에서 우선 노출됨.
+  isBusinessApproved  Boolean       @default(false)
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
   proposals             Proposal[]
@@ -43,10 +46,29 @@ model User {
   inhouseOrders              InhouseOrder[]
   statImages                 StatImage[]
   submissionRoutes           SubmissionRoute[]     @relation("SubmissionRouteOwner")
+  submissionRoutesAsParent   SubmissionRoute[]     @relation("SubmissionRouteParent")
   parentLinkRequestsSent     ParentLinkRequest[]   @relation("PLRRequester")
   parentLinkRequestsReceived ParentLinkRequest[]   @relation("PLRTarget")
+  notifications              Notification[]
 
   @@index([parentUserId])
+  @@index([isBusinessApproved])
+}
+
+// 회원 알람 — 사업자 미인증 안내 / 공지 / 쪽지 / 연결요청 등.
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String   // "BUSINESS_PROMPT" | "ANNOUNCEMENT" | "MESSAGE" | "PARENT_LINK" 등 자유
+  title     String
+  body      String?
+  link      String?  // 클릭 시 이동할 URL (예: "/mypage")
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
 }
 
 
@@ -345,9 +367,9 @@ model InventorySnapshot {
   raw           Json?
   scrapedAt     DateTime      @default(now())
 
-  @@unique([siteKey, insuranceCode, scrapedAt])
+  // 같은 (사이트, 보험코드)는 최신 1개만 유지. 새 재고가 들어오면 덮어씀.
+  @@unique([siteKey, insuranceCode])
   @@index([insuranceCode])
-  @@index([siteKey, insuranceCode])
   @@index([scrapedAt])
 }
 
@@ -536,6 +558,11 @@ model SubmissionRoute {
   clientName       String
   companyName      String
   submissionEntity String
+  // 상위법인 = 회원(User). 사용자 의도: SubmissionRoute 등록 = 그 매핑의 상위법인 지정.
+  // 한 회원이 여러 매핑마다 다른 상위법인 가질 수 있음 (User.parentUserId 단일 hierarchy 와 별개).
+  // null 이면 상위법인 미연결 (자유 입력으로만 등록된 경우).
+  parentUserId     String?
+  parentUser       User?    @relation("SubmissionRouteParent", fields: [parentUserId], references: [id], onDelete: SetNull)
   submissionEmail  String?
   requestType      String   @default("신규")  // "신규" | "이관" — 추가수수료 적용 여부
   memo             String?
@@ -549,6 +576,7 @@ model SubmissionRoute {
   @@index([ownerId])
   @@index([clientName])
   @@index([companyName])
+  @@index([parentUserId])
   @@index([submissionEntity])
 }
 

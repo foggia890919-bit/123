@@ -120,3 +120,4 @@ CREATE INDEX IF NOT EXISTS "UserClient_isRateTarget_idx"        ON "UserClient"(
   - 100-row kill switch + pLimit(2) 안전마진
   - QA B2 픽스: productName 공백/대소문자 정규화
   - ENV `GEMINI_SELFVALIDATE_ENABLED=true` + 옵션 `GEMINI_SELFVALIDATE_DEBUG=true`
+- 2026-05-24 15:00 | qa-crosscheck | canBeParent 9-step Plan (dealer 분류+상위법인 매핑) | FAIL

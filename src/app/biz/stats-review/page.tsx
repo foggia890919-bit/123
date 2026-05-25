@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle, AlertTriangle, ExternalLink, Trash2, ChevronRight, ArrowLeft, BarChart3, Loader2, Plus, Save, ZoomIn, ZoomOut, Maximize2, Filter } from "lucide-react";
 import { useRef } from "react";
+import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 
 // AI 처방통계 사진 검수 페이지. 관리자/BIZ 가 사용자들의 업로드를 거래처×월 단위로
@@ -43,6 +44,8 @@ interface GroupListItem {
   submitted: boolean;
   latestAt: string;
   metrics: Metrics;
+  // 사진을 올린 회원들 — 한 그룹에 여러 영업사원이 사진 올렸을 수 있어 배열.
+  uploaders?: { name: string | null; email: string }[];
 }
 
 interface ReportRow {
@@ -66,6 +69,8 @@ interface ReportRow {
       companyNameMismatch?: { geminiCompanyName?: string; masterCompanyName?: string } | null;
       originalProductName?: string;
       nameAutoReplaced?: boolean;
+      originalUnitPrice?: number | null;
+      priceAutoReplaced?: boolean;
       finalConfidence?: number;
       // Gemini 자가검증 결과. "selfValidateMismatch" 면 노란 "검증대상" 마킹.
       reviewReason?: string | null;
@@ -157,6 +162,11 @@ export default function StatsReviewPage() {
   const [selected, setSelected] = useState<{ clientId: string; year: number; month: number } | null>(null);
   const [detail, setDetail] = useState<GroupDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  // 자동 일괄 재시도 한 번만 실행하도록 group key 추적
+  const [autoRetryDone, setAutoRetryDone] = useState<Set<string>>(new Set());
+  // 그룹 목록에서 체크박스로 선택한 그룹 key 들 (외부 일괄 재시도용)
+  const [selectedGroupKeys, setSelectedGroupKeys] = useState<Set<string>>(new Set());
+  const [groupRetryBusy, setGroupRetryBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // 일괄 작업 진행 상태 — N/M 표시 + 완료 알림용
@@ -226,7 +236,114 @@ export default function StatsReviewPage() {
     }
   }
 
+  // 페이지 진입 시 ERROR 사진이 있고 자동 재시도 미실행 그룹이면 자동으로 일괄 재시도.
+  // group key 별 1회만 실행 (autoRetryDone) — 같은 그룹 재진입해도 또 안 함.
+  useEffect(() => {
+    if (!detail || !selected) return;
+    const groupKey = `${selected.clientId}|${selected.year}|${selected.month}`;
+    if (autoRetryDone.has(groupKey)) return;
+    const errorReports = detail.reports.filter((r) => r.status === "ERROR");
+    if (errorReports.length === 0) return;
+    // 즉시 자동 재시도 시작 — 사용자 클릭 불필요
+    setAutoRetryDone((prev) => new Set(prev).add(groupKey));
+    (async () => {
+      const total = errorReports.length;
+      setBulkProgress({ current: 0, total, label: "자동 재시도" });
+      for (let i = 0; i < total; i++) {
+        setBulkProgress({ current: i + 1, total, label: "자동 재시도" });
+        try {
+          await fetch("/api/stats/photo-retry", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reportId: errorReports[i].id }),
+          });
+        } catch { /* graceful — 다음 사진 진행 */ }
+      }
+      setBulkProgress(null);
+      setBulkSuccess(`처리 실패 ${total}장 자동 재시도 요청 완료 — 잠시 후 결과 확인`);
+      // 결과 자동 새로고침
+      const r = await fetch(`/api/stats/submissions?clientId=${selected.clientId}&year=${selected.year}&month=${selected.month}`);
+      if (r.ok) setDetail(await r.json());
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail?.reports, selected]);
+
+  // 그룹 목록 화면에서 선택한 그룹들의 처리 실패 사진 일괄 재시도.
+  // 그룹 안 진입 없이 외부에서 한 번에 처리.
+  async function handleGroupBulkRetry() {
+    if (selectedGroupKeys.size === 0) return;
+    if (!confirm(`선택한 ${selectedGroupKeys.size}개 그룹의 처리 실패 사진을 모두 다시 분석할까요?`)) return;
+    setGroupRetryBusy(true);
+    let totalRetried = 0;
+    let totalFailed = 0;
+    try {
+      for (const key of Array.from(selectedGroupKeys)) {
+        const [clientId, yearStr, monthStr] = key.split("|");
+        const res = await fetch(`/api/stats/submissions?clientId=${clientId}&year=${yearStr}&month=${monthStr}`);
+        if (!res.ok) continue;
+        const detail = await res.json() as { reports?: { id: string; status: string }[] };
+        const errorReports = (detail.reports ?? []).filter((r) => r.status === "ERROR");
+        for (const r of errorReports) {
+          try {
+            const rr = await fetch("/api/stats/photo-retry", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ reportId: r.id }),
+            });
+            if (rr.ok) totalRetried++; else totalFailed++;
+          } catch { totalFailed++; }
+        }
+      }
+      alert(`재분석 요청 완료 — 성공 ${totalRetried}장${totalFailed > 0 ? ` / 실패 ${totalFailed}장` : ""}\n잠시 후 그룹별로 결과 확인 가능합니다.`);
+      setSelectedGroupKeys(new Set());
+      refreshGroups();
+    } finally {
+      setGroupRetryBusy(false);
+    }
+  }
+
   // 선택된 사진들 일괄 삭제 — 순차 DELETE (서버 부담 방지) + 진행 상태 + 완료 알림
+  async function handleBulkRetry() {
+    if (!detail) return;
+    const errorReports = detail.reports.filter((r) => r.status === "ERROR");
+    if (errorReports.length === 0) { setError("처리 실패한 사진이 없습니다"); return; }
+    if (!confirm(`처리 실패한 ${errorReports.length}장을 모두 다시 분석할까요?`)) return;
+    setBusy(true);
+    setError("");
+    setBulkSuccess("");
+    const total = errorReports.length;
+    setBulkProgress({ current: 0, total, label: "재분석 요청" });
+    const failed: string[] = [];
+    let succeeded = 0;
+    for (let i = 0; i < errorReports.length; i++) {
+      const r = errorReports[i];
+      setBulkProgress({ current: i + 1, total, label: "재분석 요청" });
+      try {
+        const res = await fetch("/api/stats/photo-retry", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reportId: r.id }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          failed.push(`${r.id.slice(0, 8)}: ${d.error || `HTTP ${res.status}`}`);
+        } else {
+          succeeded++;
+        }
+      } catch (e) {
+        failed.push(`${r.id.slice(0, 8)}: ${String(e).slice(0, 100)}`);
+      }
+    }
+    setBulkProgress(null);
+    if (selected) {
+      const r = await fetch(`/api/stats/submissions?clientId=${selected.clientId}&year=${selected.year}&month=${selected.month}`);
+      setDetail(await r.json());
+    }
+    setBulkSuccess(`재분석 ${succeeded}장 요청 완료 — 잠시 후 새로고침하면 결과 확인 가능`);
+    if (failed.length > 0) setError(`재분석 요청 실패 ${failed.length}장:\n${failed.slice(0, 5).join("\n")}`);
+    setBusy(false);
+  }
+
   async function handleBulkDelete() {
     if (selectedIds.size === 0) { setError("선택된 사진이 없습니다"); return; }
     if (!confirm(`정말 선택한 ${selectedIds.size}장의 사진과 데이터를 모두 삭제하시겠습니까? Storage 파일도 함께 삭제됩니다.`)) return;
@@ -408,6 +525,17 @@ export default function StatsReviewPage() {
             {bulkProgress?.label === "삭제" ? `삭제 중... ${bulkProgress.current}/${bulkProgress.total}`
               : `선택한 ${selectedIds.size}장 삭제`}
           </Button>
+          {/* 처리 실패한 모든 사진 일괄 재분석 — ERROR row 가 있을 때만 노출 */}
+          {detail.reports.filter((r) => r.status === "ERROR").length > 0 && (
+            <Button onClick={handleBulkRetry}
+              disabled={busy}
+              variant="outline" size="sm"
+              className="text-blue-700 border-blue-300 hover:bg-blue-50">
+              {bulkProgress?.label === "재분석 요청"
+                ? `재분석 ${bulkProgress.current}/${bulkProgress.total}`
+                : `처리 실패 ${detail.reports.filter((r) => r.status === "ERROR").length}장 모두 다시 분석`}
+            </Button>
+          )}
           {/* 단가 0 (마스터 매칭 실패) 행 필터 — 검수자가 채워야 할 행만 빠르게 본다.
               매칭 실패 0 건이면 버튼 자체 숨김 (불필요한 UI) */}
           {priceMissingCount > 0 && (
@@ -518,10 +646,55 @@ export default function StatsReviewPage() {
         <div className="text-center py-12 text-gray-400">아직 등록된 처방통계 사진이 없습니다.</div>
       ) : (
         <div className="space-y-2">
-          {filteredGroups.map((g) => (
-            <button key={`${g.clientId}|${g.year}|${g.month}`}
-              onClick={() => setSelected({ clientId: g.clientId, year: g.year, month: g.month })}
-              className="w-full bg-white border border-gray-200 rounded-lg p-4 text-left hover:border-orange-300 transition-colors">
+          {/* 일괄 액션 — ERROR 가 있는 그룹 1개라도 선택돼 있으면 활성 */}
+          {filteredGroups.some((g) => (g.metrics.errorCount ?? 0) > 0) && (
+            <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg flex-wrap">
+              <button onClick={() => {
+                const allErrorKeys = filteredGroups
+                  .filter((g) => (g.metrics.errorCount ?? 0) > 0)
+                  .map((g) => `${g.clientId}|${g.year}|${g.month}`);
+                setSelectedGroupKeys(new Set(allErrorKeys));
+              }}
+                className="text-xs px-2 py-1 bg-white border border-gray-300 rounded hover:bg-gray-100">
+                실패 있는 그룹 전체 선택
+              </button>
+              <button onClick={() => setSelectedGroupKeys(new Set())}
+                disabled={selectedGroupKeys.size === 0}
+                className="text-xs px-2 py-1 bg-white border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-40">
+                선택 해제
+              </button>
+              <Button onClick={handleGroupBulkRetry}
+                disabled={selectedGroupKeys.size === 0 || groupRetryBusy}
+                size="sm"
+                className="ml-auto bg-blue-600 hover:bg-blue-700">
+                {groupRetryBusy ? "재분석 요청 중..." : `선택 ${selectedGroupKeys.size}개 그룹의 처리 실패 다시 분석`}
+              </Button>
+            </div>
+          )}
+          {filteredGroups.map((g) => {
+            const groupKey = `${g.clientId}|${g.year}|${g.month}`;
+            const isChecked = selectedGroupKeys.has(groupKey);
+            const hasError = (g.metrics.errorCount ?? 0) > 0;
+            return (
+            <div key={groupKey}
+              className="w-full bg-white border border-gray-200 rounded-lg p-4 hover:border-orange-300 transition-colors flex gap-3">
+              {/* 체크박스 — ERROR 있는 그룹만 활성 */}
+              <div className="pt-1">
+                <input type="checkbox"
+                  checked={isChecked}
+                  disabled={!hasError}
+                  onChange={(e) => {
+                    setSelectedGroupKeys((prev) => {
+                      const next = new Set(prev);
+                      if (e.target.checked) next.add(groupKey); else next.delete(groupKey);
+                      return next;
+                    });
+                  }}
+                  className="w-4 h-4 rounded border-gray-300 disabled:opacity-30" />
+              </div>
+              <button
+                onClick={() => setSelected({ clientId: g.clientId, year: g.year, month: g.month })}
+                className="flex-1 text-left">
               <div className="flex items-center gap-2 mb-2 flex-wrap">
                 <h3 className="text-sm font-bold text-gray-900">{g.clientName}</h3>
                 <span className="text-xs text-gray-500">{g.year}년 {g.month}월</span>
@@ -542,6 +715,19 @@ export default function StatsReviewPage() {
                 )}
                 <ChevronRight className="w-4 h-4 text-gray-400 ml-auto" />
               </div>
+              {/* 업로드한 회원 — 한 그룹에 여러 명일 수 있어 모두 표시. 이름 없으면 이메일. */}
+              {g.uploaders && g.uploaders.length > 0 && (
+                <div className="flex items-center gap-1.5 mb-2 flex-wrap text-[11px] text-gray-500">
+                  <span className="text-gray-400">업로드:</span>
+                  {g.uploaders.map((u, i) => (
+                    <span key={u.email} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-50 border border-gray-200">
+                      <span className="font-medium text-gray-700">{u.name || u.email.split("@")[0]}</span>
+                      {u.name && <span className="text-gray-400">· {u.email}</span>}
+                      {!u.name && i === 0 && <span className="text-gray-400">@{u.email.split("@")[1]}</span>}
+                    </span>
+                  ))}
+                </div>
+              )}
               <div className="grid grid-cols-6 gap-2">
                 <MetricBadge label="사진" value={`${g.metrics.photoCount}장`} />
                 <MetricBadge label="행" value={`${g.metrics.rowCount}건`} />
@@ -551,8 +737,10 @@ export default function StatsReviewPage() {
                 <MetricBadge label="이슈" value={`${g.metrics.mismatchCount + g.metrics.partialExtractionCount}건`}
                   color={g.metrics.mismatchCount + g.metrics.partialExtractionCount > 0 ? "amber" : "gray"} />
               </div>
-            </button>
-          ))}
+              </button>
+            </div>
+            );
+          })}
         </div>
       )}
 
@@ -586,6 +774,8 @@ interface EditableDrugRow {
   // Case B 자동 교체 — 사용자가 약품명 편집 안 했지만 매칭값과 OCR 원본이 다른 경우.
   originalProductName: string;
   nameAutoReplaced: boolean;
+  originalUnitPrice: number | null;       // OCR 원본 약가 (사진에서 읽은 값)
+  priceAutoReplaced: boolean;              // 마스터DB 약가로 자동 교체됨
   // Gemini 자가검증 결과. "selfValidateMismatch" 면 노란 "검증대상" 마킹.
   reviewReason: string;
   validation: {
@@ -624,6 +814,11 @@ function ReviewPhotoCard({
   priceMissingOnly: boolean;
   reviewOnly: boolean;
 }) {
+  // ADMIN 만 호버 툴팁(브라우저 native title 박스) 노출 — 일반 유저 노이즈 제거
+  const { data: session } = useSession();
+  const isAdmin = (session?.user as { role?: string } | undefined)?.role === "ADMIN";
+  const titleIfAdmin = (s: string | undefined): string | undefined => (isAdmin ? s : undefined);
+
   const initialDrugs = report.ocrData?.finalDrugs ?? [];
 
   const [rows, setRows] = useState<EditableDrugRow[]>(() =>
@@ -656,6 +851,8 @@ function ReviewPhotoCard({
           : null,
         originalProductName: d.originalProductName ?? "",
         nameAutoReplaced: !!d.nameAutoReplaced,
+        originalUnitPrice: d.originalUnitPrice ?? null,
+        priceAutoReplaced: !!d.priceAutoReplaced,
         reviewReason: typeof d.reviewReason === "string" ? d.reviewReason : "",
         validation: d.validation
           ? {
@@ -853,6 +1050,8 @@ function ReviewPhotoCard({
       companyNameMismatch: null,
       originalProductName: "",
       nameAutoReplaced: false,
+      originalUnitPrice: null,
+      priceAutoReplaced: false,
       reviewReason: "",
       validation: null,
       bbox: [0, 0, 0, 0],
@@ -929,7 +1128,7 @@ function ReviewPhotoCard({
         <span className="text-xs font-semibold">{report.companyName || "(제약사 미상)"}</span>
         {(report.ocrData?.companiesInPhoto?.length ?? 0) > 1 && (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 border border-purple-300 font-semibold"
-            title={`행별 제약사: ${report.ocrData?.companiesInPhoto?.join(", ")}`}>
+            title={titleIfAdmin(`행별 제약사: ${report.ocrData?.companiesInPhoto?.join(", ")}`)}>
             N제약사 {report.ocrData?.companiesInPhoto?.length}곳
           </span>
         )}
@@ -945,20 +1144,43 @@ function ReviewPhotoCard({
           </span>
         )}
         {report.status === "ERROR" && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-300 font-semibold"
-            title={(report.ocrData as { error?: string })?.error ?? "처리 실패"}>
-            처리 실패 ⓘ
-          </span>
+          <>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-300 font-semibold"
+              title={titleIfAdmin((report.ocrData as { error?: string })?.error ?? "처리 실패")}>
+              처리 실패 ⓘ
+            </span>
+            <button onClick={async () => {
+              const res = await fetch("/api/stats/photo-retry", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ reportId: report.id }),
+              });
+              if (res.ok) {
+                alert("다시 분석을 시작했어요. 잠시 후 새로고침하면 결과를 볼 수 있어요.");
+                onSaved();
+              } else {
+                const d = await res.json().catch(() => ({}));
+                alert(`재분석 실패: ${d.error || res.status}`);
+              }
+            }}
+              disabled={busy || saving}
+              className="text-[10px] px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-300 font-semibold hover:bg-blue-100 disabled:opacity-50">
+              다시 분석
+            </button>
+          </>
+        )}
+        {report.status === "PROCESSING" && (report.ocrData as { retryCount?: number })?.retryCount !== undefined && (
+          <span className="text-[10px] text-amber-700">재분석 중...</span>
         )}
         {/* 중복 의심 — 같은 그룹 다른 사진과 약품 70%+ 일치 */}
         {duplicateMatches.length > 0 && (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 font-semibold"
-            title={duplicateMatches.map((m) => {
+            title={titleIfAdmin(duplicateMatches.map((m) => {
               const other = allReports.find((rr) => rr.id === m.reportId);
               const otherIdx = allReports.findIndex((rr) => rr.id === m.reportId);
               const label = other ? `사진 #${otherIdx + 1} (${new Date(other.createdAt).toLocaleString()})` : m.reportId.slice(0, 8);
               return `${label} 와 ${m.similarity}% 일치`;
-            }).join("\n")}>
+            }).join("\n"))}>
             ⚠ 중복 의심 {duplicateMatches[0].similarity}%
             {duplicateMatches.length > 1 && ` (+${duplicateMatches.length - 1})`}
           </span>
@@ -1000,7 +1222,7 @@ function ReviewPhotoCard({
         )}
         {sumCheckBad && (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 border border-orange-300"
-            title={`사진 합계 검증 실패: ${sumCheck?.detail ?? ""}`}>
+            title={titleIfAdmin(`사진 합계 검증 실패: ${sumCheck?.detail ?? ""}`)}>
             합계 ❌
           </span>
         )}
@@ -1116,7 +1338,7 @@ function ReviewPhotoCard({
               e.preventDefault();
             }
           }}>
-          <table className="w-full text-xs">
+          <table className="w-full text-[10px] [&_input]:text-[10px] [&_input]:px-0.5 [&_input]:py-0 [&_input]:h-5 [&_input]:focus:outline-none [&_input]:focus:ring-1 [&_input]:focus:ring-orange-300 [&_td]:py-0 [&_th]:py-1">
             <thead className="bg-gray-50 text-gray-500 sticky top-0 z-10">
               <tr>
                 <th className="text-left px-2 py-1.5 w-[110px]">보험코드</th>
@@ -1143,7 +1365,7 @@ function ReviewPhotoCard({
                   : focusedIdx === i
                   ? "bg-orange-50"
                   : isSelfValidateMismatch
-                  ? "bg-amber-50 border-l-4 border-amber-400"
+                  ? "bg-amber-50 border-l-2 border-amber-400"
                   : qualityBad
                   ? "bg-yellow-50"
                   : d.unitPrice === 0
@@ -1166,7 +1388,7 @@ function ReviewPhotoCard({
                     <td className="px-1 py-0">
                       <div className="flex items-center gap-1">
                         <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${scoreDotClass(d.finalConfidence)}`}
-                          title={scoreTooltip} />
+                          title={titleIfAdmin(scoreTooltip)} />
                         <input ref={(el) => { inputRefs.current[`${i}:insuranceCode`] = el; }}
                           value={d.insuranceCode}
                           onChange={(e) => updateRow(i, { insuranceCode: e.target.value })}
@@ -1178,9 +1400,9 @@ function ReviewPhotoCard({
                     <td className="px-1 py-0">
                       <div className="flex items-center gap-1">
                         <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${companyColor(d.companyName)}`}
-                          title={d.companyNameMismatch
+                          title={titleIfAdmin(d.companyNameMismatch
                             ? `Gemini "${d.companyNameMismatch.geminiCompanyName}" vs 마스터 "${d.companyNameMismatch.masterCompanyName}"`
-                            : (d.companyName || "(제약사 미상)")} />
+                            : (d.companyName || "(제약사 미상)"))} />
                         <input ref={(el) => { inputRefs.current[`${i}:companyName`] = el; }}
                           value={d.companyName}
                           onChange={(e) => updateRow(i, { companyName: e.target.value })}
@@ -1218,7 +1440,7 @@ function ReviewPhotoCard({
                                 onChange={(e) => updateRow(i, { productName: e.target.value, nameAutoReplaced: false })}
                                 onFocus={() => setFocusedIdx(i)}
                                 onKeyDown={(e) => handleKeyDown(e, i, "productName")}
-                                title={autoReplaceTooltip ?? reviewTooltip}
+                                title={titleIfAdmin(autoReplaceTooltip ?? reviewTooltip)}
                                 className={`w-full px-1 py-0.5 border rounded text-[11px] ${
                                   showAiBadge ? "pr-7 bg-blue-50 border-blue-300"
                                   : showReviewBadge ? "pr-12 bg-amber-50 border-amber-400"
@@ -1244,12 +1466,34 @@ function ReviewPhotoCard({
                         className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
                     </td>
                     <td className="px-1 py-0">
-                      <input ref={(el) => { inputRefs.current[`${i}:unitPrice`] = el; }}
-                        type="number" value={d.unitPrice}
-                        onChange={(e) => updateRow(i, { unitPrice: Number(e.target.value) })}
-                        onFocus={() => setFocusedIdx(i)}
-                        onKeyDown={(e) => handleKeyDown(e, i, "unitPrice")}
-                        className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
+                      <div className="flex items-center gap-1">
+                        {(() => {
+                          // 단가 신호등 dot:
+                          //   회색 — OCR 그대로 (수정 안 됨)
+                          //   파란 — 마스터DB 약가로 자동 교체됨 (priceAutoReplaced)
+                          //   주황 — 검수자가 수동 수정 (현재 값이 OCR 원본 및 마스터 둘 다와 다름)
+                          const ocr = d.originalUnitPrice;
+                          const cur = d.unitPrice;
+                          const dotColor = ocr === null || ocr === cur
+                            ? "bg-gray-300"
+                            : d.priceAutoReplaced && cur !== ocr && !d.totalPriceManual
+                              ? "bg-blue-500"
+                              : "bg-amber-500";
+                          const dotTitle = ocr === null || ocr === cur
+                            ? "수정 없음"
+                            : d.priceAutoReplaced
+                              ? `자동 교체: OCR ${ocr} → 마스터 ${cur}`
+                              : `수정됨: OCR ${ocr} → 현재 ${cur}`;
+                          return <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${dotColor}`}
+                            title={titleIfAdmin(dotTitle)} />;
+                        })()}
+                        <input ref={(el) => { inputRefs.current[`${i}:unitPrice`] = el; }}
+                          type="number" value={d.unitPrice}
+                          onChange={(e) => updateRow(i, { unitPrice: Number(e.target.value) })}
+                          onFocus={() => setFocusedIdx(i)}
+                          onKeyDown={(e) => handleKeyDown(e, i, "unitPrice")}
+                          className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
+                      </div>
                     </td>
                     <td className="px-1 py-0">
                       <input ref={(el) => { inputRefs.current[`${i}:totalPrice`] = el; }}

@@ -242,12 +242,11 @@ export default function SearchPage() {
     refetchWithCompanies(next);
   }
 
-  // 검색 결과 로드 시 도매상 캐시 자동 워밍업
-  // - m.stock != null (snapshot DB 에 있음): snapshot 경로로 캐시 채움 (DB 조회, 거의 무비용)
-  // - m.stock == null (snapshot DB 에 없음): 자동 라이브 스크랩 (워커 호출, 50개 한도)
-  // 두 그룹은 disjoint 라 같은 코드가 두 번 호출되지 않는다.
-  // (예전 구현은 1단계가 모든 idle 코드를 loading 으로 잡아버려서
-  //  2단계 fetchStockBatch 의 loading/done 필터에 걸려 라이브 호출이 영원히 skip 됐다.)
+  // 검색 결과 로드 시 자동 재고 워밍업.
+  // - DB 캐시 있는 코드: snapshot 경로 (빠름)
+  // - DB 캐시 없는 코드: 라이브 경로 (워커 호출, 50개 한도)
+  // 핵심: 로딩 중에도 stock-cache 가 직전 결과를 보존하므로, 화면에서 기존 숫자가
+  // 사라지지 않는다. spinner 만 옆에 돌고 새 값 도착하면 자연스럽게 교체.
   useEffect(() => {
     const codesWithSnapshot: string[] = [];
     const codesWithoutSnapshot: string[] = [];
@@ -258,11 +257,10 @@ export default function SearchPage() {
       if (m.stock == null) codesWithoutSnapshot.push(m.insuranceCode);
       else codesWithSnapshot.push(m.insuranceCode);
     }
-
     if (codesWithSnapshot.length > 0) {
       fetchStockBatch(codesWithSnapshot, false, STOCK_SITES);
     }
-    // 라이브 경로 한도가 50 이므로 최대 50개만 트리거. 나머지는 사용자가 "전체재고 새로고침"
+    // 라이브 경로 한도가 50 — 그 안에서 캐시 없는 코드만 트리거.
     const liveTargets = codesWithoutSnapshot.slice(0, 50);
     if (liveTargets.length > 0) {
       fetchStockBatch(liveTargets, true, STOCK_SITES);

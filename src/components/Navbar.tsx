@@ -5,7 +5,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
-import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck, ShoppingCart, ClipboardList, MessageCircle, TrendingUp, Wallet, Users, Sparkles } from "lucide-react";
+import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck, ShoppingCart, ClipboardList, MessageCircle, TrendingUp, Wallet, Users, Sparkles, Bell, Check, Trash2, Lock } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
 interface NavLeaf {
@@ -69,17 +70,78 @@ const navItems: NavItem[] = [
 
 export default function Navbar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { data: session } = useSession();
+  // 일반회원 (사업자 미인증) 은 통합검색 외 모든 메뉴 차단 + 안내
+  const isBusinessApproved = !!(session?.user as { isBusinessApproved?: boolean } | undefined)?.isBusinessApproved;
+  function handleLockedNavClick(e: React.MouseEvent, label: string) {
+    e.preventDefault();
+    if (confirm(`'${label}' 은(는) 사업자 인증이 필요한 기능이에요.\n\n마이페이지에서 사업자등록증을 등록하고 관리자 승인을 받으면 사용할 수 있어요.\n\n마이페이지로 이동할까요?`)) {
+      router.push("/mypage");
+    }
+  }
   const [userOpen, setUserOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [openGroup, setOpenGroup] = useState<string | null>(null);
   const userRef = useRef<HTMLDivElement>(null);
   const groupRef = useRef<HTMLDivElement>(null);
 
+  // ── 알람 종 ──
+  interface NotifItem { id: string; type: string; title: string; body: string | null; link: string | null; isRead: boolean; createdAt: string }
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [notifList, setNotifList] = useState<NotifItem[]>([]);
+  const [notifUnreadCount, setNotifUnreadCount] = useState(0);
+  const notifRef = useRef<HTMLDivElement>(null);
+
+  async function refreshNotifications() {
+    if (!session) return;
+    try {
+      const res = await fetch("/api/notifications");
+      if (!res.ok) return;
+      const data = await res.json() as { list: NotifItem[]; unreadCount: number };
+      setNotifList(data.list);
+      setNotifUnreadCount(data.unreadCount);
+    } catch { /* network */ }
+  }
+
+  useEffect(() => {
+    if (!session) return;
+    refreshNotifications();
+    // 60 초마다 폴링
+    const interval = setInterval(refreshNotifications, 60_000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user?.email]);
+
+  async function markRead(id: string) {
+    await fetch("/api/notifications", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, isRead: true }),
+    });
+    setNotifList((prev) => prev.map((n) => n.id === id ? { ...n, isRead: true } : n));
+    setNotifUnreadCount((c) => Math.max(0, c - 1));
+  }
+  async function markAllRead() {
+    await fetch("/api/notifications", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ allRead: true }),
+    });
+    setNotifList((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    setNotifUnreadCount(0);
+  }
+  async function deleteNotif(id: string) {
+    await fetch(`/api/notifications?id=${id}`, { method: "DELETE" });
+    setNotifList((prev) => prev.filter((n) => n.id !== id));
+    refreshNotifications();
+  }
+
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (userRef.current && !userRef.current.contains(e.target as Node)) setUserOpen(false);
       if (groupRef.current && !groupRef.current.contains(e.target as Node)) setOpenGroup(null);
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) setNotifOpen(false);
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
@@ -113,8 +175,18 @@ export default function Navbar() {
           {/* 데스크톱 네비 */}
           <div className="hidden md:flex items-center gap-1">
             {navItems.map((item) => {
+              // 일반회원이면 통합검색(/search) 외 모든 메뉴 잠금
+              const isLocked = !!session && !isBusinessApproved && (item.kind === "link" ? item.href !== "/search" : true);
               if (item.kind === "link") {
                 const Icon = item.icon;
+                if (isLocked) {
+                  return (
+                    <button key={item.href} onClick={(e) => handleLockedNavClick(e, item.label)}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-gray-400 hover:bg-gray-50 cursor-not-allowed">
+                      <Lock className="w-3.5 h-3.5" />{item.label}
+                    </button>
+                  );
+                }
                 return (
                   <Link key={item.href} href={item.href}
                     className={cn(
@@ -123,6 +195,16 @@ export default function Navbar() {
                     )}>
                     <Icon className="w-4 h-4" />{item.label}
                   </Link>
+                );
+              }
+              // 그룹 (제안서, 통계, 원내거래) — 일반회원이면 전체 잠금
+              if (isLocked) {
+                const Icon = item.icon;
+                return (
+                  <button key={item.label} onClick={(e) => handleLockedNavClick(e, item.label)}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-gray-400 hover:bg-gray-50 cursor-not-allowed">
+                    <Lock className="w-3.5 h-3.5" />{item.label}
+                  </button>
                 );
               }
               // group
@@ -166,6 +248,70 @@ export default function Navbar() {
 
           {/* 우측 버튼 */}
           <div className="flex items-center gap-2">
+            {session && (
+              <div className="relative" ref={notifRef}>
+                <button onClick={() => setNotifOpen((p) => !p)}
+                  className="relative p-2 rounded-md text-gray-600 hover:bg-gray-100"
+                  title="알람">
+                  <Bell className="w-5 h-5" />
+                  {notifUnreadCount > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                      {notifUnreadCount > 99 ? "99+" : notifUnreadCount}
+                    </span>
+                  )}
+                </button>
+                {notifOpen && (
+                  <div className="absolute right-0 mt-2 w-80 bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden">
+                    <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between bg-gray-50">
+                      <p className="text-sm font-semibold text-gray-800">알람 {notifUnreadCount > 0 && <span className="text-red-500">({notifUnreadCount})</span>}</p>
+                      {notifUnreadCount > 0 && (
+                        <button onClick={markAllRead} className="text-[11px] text-blue-600 hover:underline flex items-center gap-0.5">
+                          <Check className="w-3 h-3" />모두 읽음
+                        </button>
+                      )}
+                    </div>
+                    <div className="max-h-96 overflow-y-auto">
+                      {notifList.length === 0 ? (
+                        <div className="py-8 px-4 text-center text-xs text-gray-400">알람이 없어요</div>
+                      ) : (
+                        notifList.map((n) => (
+                          <div key={n.id} className={`px-4 py-3 border-b border-gray-50 last:border-0 ${n.isRead ? "bg-white" : "bg-blue-50/40"}`}>
+                            <div className="flex items-start gap-2">
+                              {!n.isRead && <span className="w-1.5 h-1.5 mt-1.5 bg-red-500 rounded-full shrink-0" />}
+                              <div className="flex-1 min-w-0">
+                                {n.link ? (
+                                  <Link href={n.link} onClick={() => { setNotifOpen(false); if (!n.isRead) markRead(n.id); }}
+                                    className="block">
+                                    <p className={`text-sm ${n.isRead ? "font-normal text-gray-700" : "font-semibold text-gray-900"} truncate`}>{n.title}</p>
+                                    {n.body && <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.body}</p>}
+                                  </Link>
+                                ) : (
+                                  <>
+                                    <p className={`text-sm ${n.isRead ? "font-normal text-gray-700" : "font-semibold text-gray-900"} truncate`}>{n.title}</p>
+                                    {n.body && <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.body}</p>}
+                                  </>
+                                )}
+                                <p className="text-[10px] text-gray-400 mt-1">{new Date(n.createdAt).toLocaleString("ko-KR")}</p>
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                {!n.isRead && (
+                                  <button onClick={() => markRead(n.id)} className="p-1 text-gray-300 hover:text-blue-600" title="읽음 처리">
+                                    <Check className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                                <button onClick={() => deleteNotif(n.id)} className="p-1 text-gray-300 hover:text-red-500" title="삭제">
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             {session ? (
               <div className="relative" ref={userRef}>
                 <button onClick={() => setUserOpen((p) => !p)}
@@ -269,8 +415,17 @@ export default function Navbar() {
         <div className="md:hidden border-t border-gray-100 bg-white shadow-lg">
           <div className="px-4 py-2 space-y-0.5">
             {navItems.map((item) => {
+              const isLocked = !!session && !isBusinessApproved && (item.kind === "link" ? item.href !== "/search" : true);
               if (item.kind === "link") {
                 const Icon = item.icon;
+                if (isLocked) {
+                  return (
+                    <button key={item.href} onClick={(e) => { setMobileOpen(false); handleLockedNavClick(e, item.label); }}
+                      className="w-full flex items-center gap-3 px-3 py-3 rounded-md text-sm font-medium text-gray-400 text-left cursor-not-allowed">
+                      <Lock className="w-3.5 h-3.5 shrink-0" />{item.label}
+                    </button>
+                  );
+                }
                 return (
                   <Link key={item.href} href={item.href} onClick={() => setMobileOpen(false)}
                     className={cn(
@@ -279,6 +434,15 @@ export default function Navbar() {
                     )}>
                     <Icon className="w-4 h-4 shrink-0" />{item.label}
                   </Link>
+                );
+              }
+              if (isLocked) {
+                const Icon = item.icon;
+                return (
+                  <button key={item.label} onClick={(e) => { setMobileOpen(false); handleLockedNavClick(e, item.label); }}
+                    className="w-full flex items-center gap-3 px-3 py-3 rounded-md text-sm font-medium text-gray-400 text-left cursor-not-allowed">
+                    <Lock className="w-3.5 h-3.5 shrink-0" />{item.label}
+                  </button>
                 );
               }
               const Icon = item.icon;

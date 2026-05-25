@@ -217,7 +217,36 @@ export async function POST(req: NextRequest) {
         }
       }
       if (snapshots.length > 0) {
-        await prisma.inventorySnapshot.createMany({ data: snapshots, skipDuplicates: true }).catch(err => {
+        // 같은 (사이트, 보험코드)는 한 줄만 유지 — UPSERT 로 덮어쓴다.
+        // createMany 는 ON CONFLICT DO UPDATE 를 지원하지 않으므로 raw SQL 로 처리.
+        const values: unknown[] = [];
+        const placeholders: string[] = [];
+        let p = 1;
+        for (const s of snapshots) {
+          values.push(
+            s.siteKey,
+            s.insuranceCode,
+            s.productName,
+            s.spec,
+            s.manufacturer,
+            s.unitPrice,
+            s.stock,
+          );
+          placeholders.push(
+            `(gen_random_uuid()::text, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, NOW())`
+          );
+        }
+        const sql = `INSERT INTO "InventorySnapshot"
+          ("id","siteKey","insuranceCode","productName","spec","manufacturer","unitPrice","stock","scrapedAt")
+          VALUES ${placeholders.join(",")}
+          ON CONFLICT ("siteKey","insuranceCode") DO UPDATE SET
+            "productName" = EXCLUDED."productName",
+            "spec" = EXCLUDED."spec",
+            "manufacturer" = EXCLUDED."manufacturer",
+            "unitPrice" = EXCLUDED."unitPrice",
+            "stock" = EXCLUDED."stock",
+            "scrapedAt" = EXCLUDED."scrapedAt"`;
+        await prisma.$executeRawUnsafe(sql, ...values).catch(err => {
           console.error("[inventory/check] persist live snapshots failed:", err);
         });
       }

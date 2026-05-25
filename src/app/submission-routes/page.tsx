@@ -5,9 +5,10 @@ import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { normalizeCompanyName } from "@/lib/company-name";
 import {
   ArrowUpCircle, UserCheck, UserPlus, Mail, Plus, Pencil, Trash2,
-  CheckCircle, XCircle, Loader2, Inbox, Send, ShieldAlert,
+  CheckCircle, Loader2, Inbox, Send, ShieldAlert,
 } from "lucide-react";
 
 const ALLOWED_ROLES = ["ADMIN", "BIZ", "BUSINESS", "BASIC"];
@@ -59,19 +60,30 @@ export default function SubmissionRoutesPage() {
   const [formError, setFormError] = useState("");
   const [formSubmitting, setFormSubmitting] = useState(false);
 
+  // 자동완성 후보 (user-scoped — 본인이 등록한 history + 표준 상위법인 list)
+  const [clientSugg, setClientSugg] = useState<string[]>([]);
+  const [companySugg, setCompanySugg] = useState<string[]>([]);
+  const [entitySugg, setEntitySugg] = useState<string[]>([]);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [mr, or, ir, rr] = await Promise.all([
+      const [mr, or, ir, rr, cs, cps, es] = await Promise.all([
         fetch("/api/mypage"),
         fetch("/api/parent-link-requests?box=outgoing"),
         fetch("/api/parent-link-requests?box=incoming"),
         fetch("/api/submission-routes"),
+        fetch("/api/submission-routes/suggestions?type=client"),
+        fetch("/api/submission-routes/suggestions?type=company"),
+        fetch("/api/submission-routes/suggestions?type=submissionEntity"),
       ]);
       if (mr.ok) setMe(await mr.json());
       if (or.ok) setOutgoing(await or.json());
       if (ir.ok) setIncoming(await ir.json());
       if (rr.ok) setRoutes(await rr.json());
+      if (cs.ok) setClientSugg(await cs.json());
+      if (cps.ok) setCompanySugg(await cps.json());
+      if (es.ok) setEntitySugg(await es.json());
     } finally {
       setLoading(false);
     }
@@ -153,11 +165,19 @@ export default function SubmissionRoutesPage() {
     e.preventDefault();
     setFormError("");
     if (!form.clientName.trim() || !form.companyName.trim() || !form.submissionEntity.trim()) {
-      setFormError("거래처명, 제약사명, 제출처는 필수예요."); return;
+      setFormError("거래처명, 제약사명, 상위법인은 필수예요."); return;
     }
     setFormSubmitting(true);
     try {
-      const body = { ...form };
+      // 표기 변형 통일 — "(주)동구바이오" / "동구바이오제약" 같은 변형으로 중복 row 양산 방지.
+      const body = {
+        ...form,
+        clientName: form.clientName.trim(),
+        companyName: normalizeCompanyName(form.companyName),
+        submissionEntity: normalizeCompanyName(form.submissionEntity),
+        submissionEmail: form.submissionEmail.trim(),
+        memo: form.memo.trim(),
+      };
       const res = editingId
         ? await fetch("/api/submission-routes", {
             method: "PATCH",
@@ -219,7 +239,7 @@ export default function SubmissionRoutesPage() {
     <div className="max-w-5xl mx-auto py-6 px-4 space-y-6">
       <header>
         <h1 className="text-2xl font-bold text-gray-900">통계제출처 관리</h1>
-        <p className="text-sm text-gray-500 mt-1">본인 거래처×제약사의 제출처 매핑 + 상위 회원 연결 요청.</p>
+        <p className="text-sm text-gray-500 mt-1">거래처 + 제약사 + 상위법인 매핑을 등록하고, 등록된 매핑을 이후 수정·삭제합니다.</p>
       </header>
 
       {/* 섹션 1: 내 상위 */}
@@ -337,35 +357,63 @@ export default function SubmissionRoutesPage() {
           <h2 className="text-base font-semibold text-gray-800">제출처 매핑</h2>
         </div>
 
-        <form onSubmit={submitRoute} className="grid grid-cols-1 md:grid-cols-2 gap-2 p-3 bg-gray-50 rounded-md">
-          <Input placeholder="거래처명 *" value={form.clientName} onChange={(e) => setForm({ ...form, clientName: e.target.value })} />
-          <Input placeholder="제약사명 *" value={form.companyName} onChange={(e) => setForm({ ...form, companyName: e.target.value })} />
-          <Input placeholder="제출 법인 *" value={form.submissionEntity} onChange={(e) => setForm({ ...form, submissionEntity: e.target.value })} />
-          <Input placeholder="제출 이메일" type="email" value={form.submissionEmail} onChange={(e) => setForm({ ...form, submissionEmail: e.target.value })} />
-          <select
-            value={form.requestType}
-            onChange={(e) => setForm({ ...form, requestType: e.target.value as "신규" | "이관" })}
-            className="border border-gray-300 rounded-md px-3 py-2 text-sm"
-          >
-            <option value="신규">신규</option>
-            <option value="이관">이관</option>
-          </select>
-          <Input placeholder="메모" value={form.memo} onChange={(e) => setForm({ ...form, memo: e.target.value })} />
-          <div className="md:col-span-2 flex gap-2 justify-end">
-            {editingId && (
-              <Button type="button" variant="outline" onClick={() => { setEditingId(null); setForm(EMPTY_FORM); setFormError(""); }}>취소</Button>
-            )}
-            <Button type="submit" disabled={formSubmitting}>
-              {formSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : editingId ? <><Pencil className="w-4 h-4 mr-1" />수정</> : <><Plus className="w-4 h-4 mr-1" />추가</>}
-            </Button>
+        {/* 신규 등록 폼 제거 — 수정 모드일 때만 폼 표시. 신규는 거래처관리에서만. */}
+        {!editingId ? (
+          <div className="text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded p-4 leading-relaxed">
+            <p className="font-semibold mb-1">📌 신규 등록은 거래처관리(의료기관) {">"} 제약사 필터링 탭에서</p>
+            <p className="text-xs text-blue-700">
+              거래처 + 제약사 + 상위법인을 선택해 <span className="font-semibold">"조회 등록"</span> 하면 통계제출처에 자동 등록됩니다.<br/>
+              이 메뉴에서는 등록된 매핑의 <span className="font-semibold">수정·삭제</span>만 가능합니다.
+            </p>
           </div>
+        ) : (
+          <form onSubmit={submitRoute} className="grid grid-cols-1 md:grid-cols-2 gap-2 p-3 bg-amber-50 border border-amber-200 rounded-md">
+            <datalist id="sugg-entity">
+              {entitySugg.map((v) => <option key={v} value={v} />)}
+            </datalist>
+            <p className="md:col-span-2 text-xs text-amber-800 font-semibold">매핑 수정 중 — 거래처/제약사는 변경 불가, 상위법인·이메일·구분·메모만 수정 가능</p>
+            <Input
+              placeholder="거래처명"
+              value={form.clientName}
+              disabled
+              className="bg-gray-100 text-gray-500"
+            />
+            <Input
+              placeholder="제약사명"
+              value={form.companyName}
+              disabled
+              className="bg-gray-100 text-gray-500"
+            />
+            <Input
+              placeholder="상위법인 * (목록에서 선택 또는 직접 입력)"
+              list="sugg-entity"
+              value={form.submissionEntity}
+              onChange={(e) => setForm({ ...form, submissionEntity: e.target.value })}
+            />
+            <Input placeholder="제출 이메일 (선택)" type="email" value={form.submissionEmail} onChange={(e) => setForm({ ...form, submissionEmail: e.target.value })} />
+            <select
+              value={form.requestType}
+              onChange={(e) => setForm({ ...form, requestType: e.target.value as "신규" | "이관" })}
+              className="border border-gray-300 rounded-md px-3 py-2 text-sm"
+            >
+              <option value="신규">신규</option>
+              <option value="이관">이관</option>
+            </select>
+            <Input placeholder="메모 (선택)" value={form.memo} onChange={(e) => setForm({ ...form, memo: e.target.value })} />
+            <div className="md:col-span-2 flex gap-2 justify-end">
+              <Button type="button" variant="outline" onClick={() => { setEditingId(null); setForm(EMPTY_FORM); setFormError(""); }}>취소</Button>
+              <Button type="submit" disabled={formSubmitting}>
+                {formSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Pencil className="w-4 h-4 mr-1" />수정 저장</>}
+              </Button>
+            </div>
           {formError && <p className="md:col-span-2 text-xs text-red-600">{formError}</p>}
-        </form>
+          </form>
+        )}
 
         {loading ? (
           <p className="text-sm text-gray-400">불러오는 중...</p>
         ) : routes.length === 0 ? (
-          <p className="text-sm text-gray-500">등록된 제출처가 없어요. 위 폼에서 추가해주세요.</p>
+          <p className="text-sm text-gray-500">등록된 제출처가 없어요. 거래처관리(의료기관) {">"} 제약사 필터링 탭에서 조회 등록 시 자동 추가됩니다.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

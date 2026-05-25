@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { getViewableUserIds } from "@/lib/hierarchy";
 
 // 거래처×월 단위 제출 상태 + 검수 지표 API.
 //
@@ -28,6 +29,9 @@ interface FinalDrugRecord {
   mismatch?: unknown;
   companyNameMismatch?: unknown;
   finalConfidence?: number;
+  // OCR 원본 약가 + 자동 교체 여부 — 검수 UI 단가 셀 dot 표시용
+  originalUnitPrice?: number | null;
+  priceAutoReplaced?: boolean;
   // Gemini 자가검증 결과 ("selfValidateMismatch" | "nameCodeMismatch" | null).
   // 검수자가 셀 편집 후 저장하면 finalDrugs 재구성으로 자동 클리어됨.
   reviewReason?: string | null;
@@ -162,10 +166,27 @@ export async function GET(req: NextRequest) {
   const yearParam = sp.get("year");
   const monthParam = sp.get("month");
 
-  // 본인 데이터만 (ADMIN/BIZ 는 전체)
-  const baseWhere = user.role === "ADMIN" || user.role === "BIZ"
+  // 상위법인 자동 라우팅 — ADMIN/BIZ 는 전체. 그 외는:
+  //   본인 ownerId
+  //   + 본인 parentUserId hierarchy (User.parentUserId 기반)
+  //   + 본인이 SubmissionRoute.parentUserId 인 매핑들의 ownerId (사용자 의도)
+  // SubmissionRoute.parentUserId 가 핵심 — 거래처관리에서 상위법인으로 본인을 매핑한
+  // 회원들의 통계도 본인이 봄 (단일 hierarchy 아닌 다대다 매핑).
+  let viewableIds: string[] | null = null;
+  if (user.role !== "ADMIN" && user.role !== "BIZ") {
+    const [hierarchyIds, routesAsParent] = await Promise.all([
+      getViewableUserIds(user.id),
+      prisma.submissionRoute.findMany({
+        where: { parentUserId: user.id, active: true },
+        select: { ownerId: true },
+        distinct: ["ownerId"],
+      }),
+    ]);
+    viewableIds = Array.from(new Set([...hierarchyIds, ...routesAsParent.map((r) => r.ownerId)]));
+  }
+  const baseWhere = viewableIds === null
     ? {}
-    : { userId: user.id };
+    : { userId: { in: viewableIds } };
 
   // ── 모드 1: 특정 거래처×월 상세 ──
   if (clientIdParam && yearParam && monthParam) {
@@ -252,7 +273,7 @@ export async function GET(req: NextRequest) {
     orderBy: { createdAt: "desc" },
     select: {
       clientId: true, year: true, month: true, ocrData: true, status: true,
-      totalFee: true, createdAt: true,
+      totalFee: true, createdAt: true, userId: true,
       client: { select: { id: true, clientName: true } },
     },
   });
@@ -264,6 +285,7 @@ export async function GET(req: NextRequest) {
     year: number;
     month: number;
     reports: ReportInGroup[];
+    uploaderIds: Set<string>;
   }
   const groups = new Map<string, GroupAcc>();
 
@@ -276,18 +298,39 @@ export async function GET(req: NextRequest) {
       year: r.year,
       month: r.month,
       reports: [],
+      uploaderIds: new Set<string>(),
     };
     existing.reports.push({
       ocrData: r.ocrData, status: r.status, totalFee: r.totalFee, createdAt: r.createdAt,
     });
+    if (r.userId) existing.uploaderIds.add(r.userId);
     groups.set(key, existing);
   }
+
+  // 그룹 전반에서 등장한 모든 업로더 user id → name/email 한 번에 lookup.
+  const allUploaderIds = Array.from(new Set(
+    Array.from(groups.values()).flatMap((g) => Array.from(g.uploaderIds)),
+  ));
+  type UploaderUser = { id: string; name: string | null; email: string };
+  const uploaderUsers: UploaderUser[] = allUploaderIds.length > 0
+    ? await prisma.user.findMany({
+        where: { id: { in: allUploaderIds } },
+        select: { id: true, name: true, email: true },
+      })
+    : [];
+  const uploaderById = new Map(uploaderUsers.map((u) => [u.id, u] as const));
 
   const list = Array.from(groups.values()).map((g) => {
     const metrics = computeMetrics(g.reports);
     const submitted = g.reports.every((r) => r.status === "SUBMITTED");
     const latestAt = g.reports.reduce<Date | null>((a, r) =>
       !a || r.createdAt > a ? r.createdAt : a, null);
+    // 업로더 목록 — 그룹 카드에 노출. 한 그룹에 여러 영업사원이 사진 올렸을 수 있음.
+    const uploaders = Array.from(g.uploaderIds)
+      .map((id) => uploaderById.get(id))
+      .filter((u): u is { id: string; name: string | null; email: string } => !!u)
+      .map((u) => ({ name: u.name, email: u.email }))
+      .sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email));
     return {
       clientId: g.clientId,
       clientName: g.clientName,
@@ -296,6 +339,7 @@ export async function GET(req: NextRequest) {
       submitted,
       latestAt,
       metrics,
+      uploaders,
     };
   });
 

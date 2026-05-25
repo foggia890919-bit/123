@@ -404,10 +404,14 @@ export async function PATCH(req: NextRequest) {
   if (!isAdmin && !isOwner) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
   const body = await req.json();
-  const { approved, bizDocument, bizFileName, address, parentCorpId } = body;
+  const { approved, bizDocument, bizFileName, address, parentCorpId, clientName, bizNumber, dealerType } = body;
 
   if (approved !== undefined && !isAdmin) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
   if (parentCorpId !== undefined && !isAdmin) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+  // 거래처명·사업자번호·유형 수정은 어드민 전용 (소유자 직접 수정은 마이페이지/거래처관리 UI 통해서만).
+  if ((clientName !== undefined || bizNumber !== undefined || dealerType !== undefined) && !isAdmin) {
+    return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+  }
   if ((bizDocument !== undefined || bizFileName !== undefined) && !isAdmin && !isOwner) {
     return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
   }
@@ -416,6 +420,25 @@ export async function PATCH(req: NextRequest) {
   if (address !== undefined) data.address = address ? String(address).trim() : null;
   if (approved !== undefined) data.approved = Boolean(approved);
   if (parentCorpId !== undefined) data.parentCorpId = parentCorpId ?? null;
+  if (clientName !== undefined) {
+    const trimmed = String(clientName).trim();
+    if (!trimmed) return NextResponse.json({ error: "거래처명은 비울 수 없어요." }, { status: 400 });
+    data.clientName = trimmed;
+  }
+  if (bizNumber !== undefined) {
+    const digits = String(bizNumber).replace(/\D/g, "");
+    if (digits.length !== 10) return NextResponse.json({ error: "사업자번호는 10자리예요." }, { status: 400 });
+    data.bizNumber = digits;
+  }
+  if (dealerType !== undefined) {
+    // null = 병의원(원외) 또는 본인 대표 사업자
+    // "UPPER_CORP" | "LOWER_CORP" | "CORPORATION" | "INDIVIDUAL"
+    const VALID = ["UPPER_CORP", "LOWER_CORP", "CORPORATION", "INDIVIDUAL"];
+    if (dealerType !== null && !VALID.includes(dealerType)) {
+      return NextResponse.json({ error: `유형이 유효하지 않아요 (null 또는 ${VALID.join(", ")}).` }, { status: 400 });
+    }
+    data.dealerType = dealerType;
+  }
   if (bizDocument !== undefined) {
     const { fileKey: bizFileKey, fileData: bizDocumentFallback } =
       await persistDataUri(BUCKETS.userClientBiz, existing.userId, bizDocument);
@@ -426,8 +449,16 @@ export async function PATCH(req: NextRequest) {
     data.bizFileName = bizFileName ?? null;
   }
 
-  const row = await prisma.userClient.update({ where: { id }, data });
-  return NextResponse.json(row);
+  try {
+    const row = await prisma.userClient.update({ where: { id }, data });
+    return NextResponse.json(row);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("Unique constraint")) {
+      return NextResponse.json({ error: "같은 회원에게 이미 등록된 사업자번호예요." }, { status: 409 });
+    }
+    return NextResponse.json({ error: msg.slice(0, 300) }, { status: 500 });
+  }
 }
 
 export async function DELETE(req: NextRequest) {

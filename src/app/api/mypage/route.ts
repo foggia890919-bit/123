@@ -14,6 +14,7 @@ export async function GET(_req: NextRequest) {
     where: { id: session.id },
     select: {
       id: true, name: true, email: true, phone: true, carrier: true, role: true,
+      isBusinessApproved: true,
       parent: { select: { id: true, name: true, email: true } },
     },
   });
@@ -95,13 +96,19 @@ export async function PATCH(req: NextRequest) {
       }
       const data: Record<string, unknown> = {
         clientName: clientName.trim(),
+        bizNumber: digits,                       // 사업자번호 update (이전 누락 fix)
         address: address?.trim() || null,
       };
       if (bizFileKey) { data.bizFileKey = bizFileKey; data.bizDocument = bizDocFallback; data.bizFileName = bizFileName; }
       try {
         await prisma.userClient.update({ where: { id: bizId }, data });
-      } catch {
-        await prisma.userClient.update({ where: { id: bizId }, data: { clientName: clientName.trim() } });
+      } catch (e) {
+        // 명확한 에러 응답 (silent fail 제거)
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.includes("Unique constraint")) {
+          return NextResponse.json({ error: "이미 같은 사업자번호로 등록된 거래처가 있어요." }, { status: 409 });
+        }
+        return NextResponse.json({ error: `수정 실패: ${msg.slice(0, 200)}` }, { status: 500 });
       }
     } else {
       // 신규 생성

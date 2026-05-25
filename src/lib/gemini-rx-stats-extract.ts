@@ -226,8 +226,12 @@ export async function extractRxStatsFromImage(
       responseMimeType: "application/json",
       responseSchema: SCHEMA,
       temperature: 0,
-      // 다행 표 추출은 단계적 추론이 정확도에 결정적. -1 = AUTOMATIC (모델이 입력 복잡도 따라 자동 조정).
-      thinkingConfig: { thinkingBudget: -1, includeThoughts: false },
+      // 사진 한 장에 100+ 행 추출 가능하도록 출력 토큰 한도 명시.
+      // Gemini 3.5 Flash 의 최대 출력 토큰. 약품 1행 ~ 80 토큰 × 200행 = 16K + summary/buffer.
+      maxOutputTokens: 32768,
+      // thinking 토큰이 maxOutputTokens 를 잠식해서 실제 응답이 잘리던 문제 방어.
+      // 사진→표 추출은 단계 추론이 도움되지만 무한대(-1) 면 thinking 만 하고 output 못 내는 케이스.
+      thinkingConfig: { thinkingBudget: 8192, includeThoughts: false },
     },
   });
 

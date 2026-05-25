@@ -440,6 +440,13 @@ export default function RegisterPage() {
                 />
               </div>
             </div>
+
+            {/* 안내 — 사업자 인증 후 검색 우선 노출됨 */}
+            <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-2 leading-relaxed">
+              가입 직후엔 <span className="font-semibold">일반회원</span>으로 시작합니다.
+              사업자등록증 제출 + 관리자 승인 후 <span className="font-semibold">사업자회원</span>으로 전환되어
+              다른 회원의 상위·하위법인 검색에 우선 노출됩니다.
+            </p>
           </div>
 
           <div className="space-y-1">

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import {
   User, KeyRound, CheckCircle, ArrowUpCircle, ChevronRight,
   Building2, FileSpreadsheet, FileText, Upload, Pencil, Loader2, Briefcase,
+  Network,
 } from "lucide-react";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
@@ -29,6 +30,8 @@ interface BizClient {
 interface ProfileInfo {
   name: string; email: string; phone: string | null;
   carrier: string | null; role: string;
+  isBusinessApproved: boolean;
+  parent: { id: string; name: string | null; email: string } | null;
   documents: { id: string; docType: string; fileName: string; createdAt: string }[];
   bizClient: BizClient | null;
 }
@@ -202,7 +205,11 @@ export default function MyPage() {
         }),
       });
       const data = await res.json();
-      if (!res.ok) { setBizError(data.error || "저장 실패"); }
+      if (!res.ok) {
+        // 저장 실패 — 폼 state 를 서버 실제값으로 되돌려서 사용자가 "저장된 줄 알고 새로고침" 하는 혼란 방지.
+        setBizError(data.error || "저장 실패");
+        await loadProfile();
+      }
       else { setBizSuccess(true); setBizDocFile(null); await loadProfile(); }
     } catch {
       setBizError("저장 중 오류가 발생했어요.");
@@ -385,6 +392,52 @@ export default function MyPage() {
           <Button onClick={handleBizSave} disabled={bizSaving} className="w-full">
             {bizSaving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />저장 중...</> : profileInfo?.bizClient ? "사업자 정보 수정" : "사업자 정보 등록"}
           </Button>
+        </div>
+      </div>
+
+      {/* 회원 등급 — 일반회원 vs 사업자회원 */}
+      <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
+        <div className="flex items-center gap-2">
+          <Network className="w-5 h-5 text-gray-600" />
+          <h2 className="text-lg font-semibold text-gray-800">회원 등급</h2>
+        </div>
+
+        <div className="flex flex-wrap gap-2 items-center">
+          {profileInfo?.isBusinessApproved ? (
+            <span className="px-2.5 py-1 text-xs font-semibold bg-emerald-100 text-emerald-700 border border-emerald-300 rounded">
+              사업자회원 (인증 완료)
+            </span>
+          ) : (
+            <span className="px-2.5 py-1 text-xs font-semibold bg-gray-100 text-gray-600 border border-gray-300 rounded">
+              일반회원
+            </span>
+          )}
+          {profileInfo?.parent && (
+            <span className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded">
+              하위 회원 (상위: {profileInfo.parent.name || profileInfo.parent.email})
+            </span>
+          )}
+        </div>
+
+        {!profileInfo?.isBusinessApproved && (
+          <div className="text-xs text-gray-600 bg-amber-50 border border-amber-200 rounded p-3 space-y-1">
+            <p className="font-medium text-amber-800">📌 사업자회원이 되면</p>
+            <ul className="list-disc list-inside text-amber-700 space-y-0.5">
+              <li>다른 회원의 상위·하위법인 검색에 <span className="font-semibold">우선 노출</span></li>
+              <li>통계제출처 자동 라우팅 등 사업자 전용 기능 사용 가능</li>
+            </ul>
+            <p className="text-amber-700 mt-1">
+              위 <span className="font-semibold">사업자 정보</span> 카드에서 상호명·사업자번호·사업자등록증을 등록하면 관리자 승인 후 사업자회원으로 전환됩니다.
+            </p>
+          </div>
+        )}
+
+        <div className="text-xs text-gray-600 bg-blue-50 border border-blue-200 rounded p-3 space-y-1">
+          <p className="font-medium text-blue-700">상위 회원과 연결하려면?</p>
+          <p>
+            <Link href="/submission-routes" className="underline font-semibold text-blue-700 hover:text-blue-900">통계제출처 메뉴</Link>
+            에서 상위 회원에게 이메일로 연결 요청을 보내거나, 거래처관리(의료기관) &gt; 제약사 필터링 탭에서 상위법인을 검색·선택하세요.
+          </p>
         </div>
       </div>
 

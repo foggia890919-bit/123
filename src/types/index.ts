@@ -25,6 +25,7 @@ export interface MedicationItem {
   insuranceCode: string | null;
   notes: string | null;
   stock?: number | null;
+  stockScrapedAt?: string | null;  // 캐시 재고의 마지막 크롤링 시각 (ISO)
   isSettlement: boolean;
   settlementType?: string | null;
   source: "EXCEL" | "PUBLIC_API";
