@@ -160,18 +160,31 @@ export const family: WholesaleAdapter = {
     await input.type(insuranceCode, { delay: 30 });
     const inputValue = await input.inputValue().catch(() => "");
 
-    // 검색 버튼 클릭 + Enter 키 둘 다 시도 (안 눌리는 케이스 대비)
-    const btn = page.locator(SEL.searchBtn).first();
-    const btnVisible = await btn.isVisible().catch(() => false);
-    const btnHtml = btnVisible
-      ? (await btn.evaluate((el: Element) => el.outerHTML.slice(0, 150)).catch(() => "")).replace(/\s+/g, " ")
-      : "";
-    console.log(`[family] code=${insuranceCode} dropdown="${selectedValue}" input="${inputValue}" btnVisible=${btnVisible} btn="${btnHtml}"`);
-    if (btnVisible) {
-      await btn.click().catch(() => {});
-    }
-    // 항상 Enter 추가 시도 — form submit 보장
-    await input.press("Enter").catch(() => {});
+    // 검색 실행 — 여러 방법 시도 (셀렉터 기반 버튼이 안 잡히는 사이트 대응)
+    // 우선순위: ① 텍스트 "조회" 클릭 가능 요소 강제 클릭  ② form.submit() 직접 호출
+    const submitInfo = await page.evaluate(() => {
+      // 1) "조회" 텍스트가 정확히 또는 시작하는 모든 클릭 가능 요소를 찾아 클릭
+      const all = Array.from(document.querySelectorAll<HTMLElement>(
+        'button, input[type="button"], input[type="submit"], a, span, div, img'
+      ));
+      for (const el of all) {
+        const txt = ((el as HTMLInputElement).value || el.textContent || el.getAttribute("alt") || "").trim();
+        if (!/^조회/.test(txt)) continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) continue; // 숨겨진 건 제외
+        el.click();
+        return { method: "click", tag: el.tagName, txt, html: el.outerHTML.slice(0, 150).replace(/\s+/g, " ") };
+      }
+      // 2) selkeyword 들어있는 form 을 찾아 직접 submit
+      const sel = document.querySelector('select[name="selkeyword"]');
+      const form = sel?.closest("form") as HTMLFormElement | null;
+      if (form) {
+        form.submit();
+        return { method: "form.submit", name: form.name || "(no-name)", action: form.action };
+      }
+      return null;
+    }).catch((err) => ({ method: "error", error: String(err) }));
+    console.log(`[family] code=${insuranceCode} dropdown="${selectedValue}" input="${inputValue}" submit=${JSON.stringify(submitInfo)}`);
     await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => {});
 
     await page
