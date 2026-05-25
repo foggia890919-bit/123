@@ -160,32 +160,57 @@ export const family: WholesaleAdapter = {
     await input.type(insuranceCode, { delay: 30 });
     const inputValue = await input.inputValue().catch(() => "");
 
-    // 검색 실행 — 여러 방법 시도 (셀렉터 기반 버튼이 안 잡히는 사이트 대응)
-    // 우선순위: ① 텍스트 "조회" 클릭 가능 요소 강제 클릭  ② form.submit() 직접 호출
+    // 페이지 변경 감지용 baseline
+    const beforeUrl = page.url();
+    const beforeBodyLen = await page.evaluate(() => document.body.innerText.length).catch(() => 0);
+
+    // 검색 실행 — 클릭과 form.submit 모두 시도
     const submitInfo = await page.evaluate(() => {
-      // 1) "조회" 텍스트가 정확히 또는 시작하는 모든 클릭 가능 요소를 찾아 클릭
+      const results: string[] = [];
+      // 1) "조회" 텍스트 element 클릭
       const all = Array.from(document.querySelectorAll<HTMLElement>(
         'button, input[type="button"], input[type="submit"], a, span, div, img'
       ));
+      let clicked = false;
       for (const el of all) {
         const txt = ((el as HTMLInputElement).value || el.textContent || el.getAttribute("alt") || "").trim();
         if (!/^조회/.test(txt)) continue;
         const rect = el.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) continue; // 숨겨진 건 제외
+        if (rect.width === 0 || rect.height === 0) continue;
         el.click();
-        return { method: "click", tag: el.tagName, txt, html: el.outerHTML.slice(0, 150).replace(/\s+/g, " ") };
+        results.push(`click:${el.tagName}`);
+        clicked = true;
+        break;
       }
-      // 2) selkeyword 들어있는 form 을 찾아 직접 submit
+      // 2) form.submit() 도 추가로 — click 만으로 안 먹는 케이스 대비
       const sel = document.querySelector('select[name="selkeyword"]');
       const form = sel?.closest("form") as HTMLFormElement | null;
       if (form) {
-        form.submit();
-        return { method: "form.submit", name: form.name || "(no-name)", action: form.action };
+        try {
+          // 클릭 후 동시 호출은 중복 submit 위험이라, 클릭 성공했으면 form.submit 생략
+          if (!clicked) form.submit();
+          results.push(`form:${form.name || "(no-name)"}@${form.action || "?"}`);
+        } catch (e) {
+          results.push(`form-err:${(e as Error).message}`);
+        }
       }
-      return null;
-    }).catch((err) => ({ method: "error", error: String(err) }));
-    console.log(`[family] code=${insuranceCode} dropdown="${selectedValue}" input="${inputValue}" submit=${JSON.stringify(submitInfo)}`);
-    await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => {});
+      return results.join(" + ");
+    }).catch((err) => `error:${(err as Error).message}`);
+
+    // 페이지 변화 대기 — URL 변경 또는 body 길이 변화
+    const changed = await page.waitForFunction(
+      (args) => {
+        const cur = document.body.innerText.length;
+        return window.location.href !== args.url || Math.abs(cur - args.len) > 30;
+      },
+      { url: beforeUrl, len: beforeBodyLen },
+      { timeout: 10_000 }
+    ).then(() => true).catch(() => false);
+
+    const afterUrl = page.url();
+    const afterBodyLen = await page.evaluate(() => document.body.innerText.length).catch(() => 0);
+    console.log(`[family] code=${insuranceCode} dropdown="${selectedValue}" input="${inputValue}" submit=${submitInfo} pageChanged=${changed} urlBefore=${beforeUrl.slice(-30)} urlAfter=${afterUrl.slice(-30)} bodyLen=${beforeBodyLen}->${afterBodyLen}`);
+    await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => {});
 
     await page
       .waitForFunction(
