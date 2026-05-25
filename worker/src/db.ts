@@ -45,14 +45,14 @@ export interface ExcelMedRow {
   productName: string;
 }
 
-// Returns deduped list of insurance codes from Excel-uploaded medications
-// (the "요율표" — what users uploaded as their commission rate sheet).
+// Returns deduped list of insurance codes for ALL medications (HIRA 공공데이터 포함).
+// 이전엔 source='EXCEL' (요율표 업로드) 만 가져왔지만, 사용자 의도는 전체 의약품.
+// 함수명은 기존 호출처 호환을 위해 유지하되 의미는 "모든 의약품 보험코드" 로 확장.
 export async function loadExcelMedicationCodes(): Promise<ExcelMedRow[]> {
   const { rows } = await getPool().query<{ insuranceCode: string; productName: string }>(
     `SELECT DISTINCT ON ("insuranceCode") "insuranceCode", "productName"
      FROM "Medication"
-     WHERE "source" = 'EXCEL'
-       AND "insuranceCode" IS NOT NULL
+     WHERE "insuranceCode" IS NOT NULL
        AND "insuranceCode" <> ''
      ORDER BY "insuranceCode", "createdAt" DESC`
   );
