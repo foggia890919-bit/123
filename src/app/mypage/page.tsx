@@ -475,8 +475,6 @@ export default function MyPage() {
               <option value="PHARMACY">약국</option>
               <option value="CSO">CSO / 일반 사업자</option>
               <option value="CORPORATION">법인</option>
-              <option value="UPPER_CORP">상위법인</option>
-              <option value="LOWER_CORP">하위법인</option>
               <option value="INDIVIDUAL">개인사업자(딜러)</option>
             </select>
           </div>

@@ -3342,7 +3342,7 @@ interface AdminUserClient {
   user: { name: string | null; email: string; phone?: string | null };
 }
 
-type BizSubTab = "all" | "hospital" | "upper-corp" | "lower-corp";
+type BizSubTab = "all" | "hospital" | "pharmacy" | "cso" | "corporation";
 
 interface EditValues {
   clientName: string;
@@ -3469,14 +3469,20 @@ function BizManagementTab() {
   const SUB_TABS: { key: BizSubTab; label: string }[] = [
     { key: "all", label: "전체" },
     { key: "hospital", label: "병의원(원외)" },
-    { key: "upper-corp", label: "상위법인" },
-    { key: "lower-corp", label: "하위법인" },
+    { key: "pharmacy", label: "약국" },
+    { key: "cso", label: "CSO/일반사업자" },
+    { key: "corporation", label: "법인" },
   ];
 
   const typeFiltered = rows.filter((r) => {
     if (subTab === "hospital") return !r.dealerType;
-    if (subTab === "upper-corp") return r.dealerType === "UPPER_CORP";
-    if (subTab === "lower-corp") return r.dealerType === "LOWER_CORP";
+    if (subTab === "pharmacy") return r.dealerType === "PHARMACY";
+    if (subTab === "cso") return r.dealerType === "CSO";
+    // 법인 탭은 CORPORATION/UPPER_CORP/LOWER_CORP/INDIVIDUAL/SELF 모두 포함 (상위/하위 통합)
+    if (subTab === "corporation") {
+      const t = r.dealerType;
+      return t === "CORPORATION" || t === "UPPER_CORP" || t === "LOWER_CORP" || t === "INDIVIDUAL" || t === "SELF";
+    }
     return true;
   });
 
@@ -3493,9 +3499,8 @@ function BizManagementTab() {
 
   const dealerLabel = (type?: string | null) => {
     if (!type) return "병의원(원외)";
-    if (type === "UPPER_CORP") return "상위법인";
-    if (type === "LOWER_CORP") return "하위법인";
-    if (type === "CORPORATION") return "법인";
+    // 상위/하위 개념 제거 — 모두 "법인" 으로 통합 표시 (기존 데이터 호환)
+    if (type === "UPPER_CORP" || type === "LOWER_CORP" || type === "CORPORATION") return "법인";
     if (type === "INDIVIDUAL") return "개인사업자";
     if (type === "PHARMACY") return "약국";
     if (type === "CSO") return "CSO/일반사업자";
@@ -3504,8 +3509,7 @@ function BizManagementTab() {
   };
   const dealerColor = (type?: string | null) => {
     if (!type) return "bg-green-100 text-green-700";
-    if (type === "UPPER_CORP") return "bg-indigo-100 text-indigo-700";
-    if (type === "LOWER_CORP") return "bg-cyan-100 text-cyan-700";
+    if (type === "UPPER_CORP" || type === "LOWER_CORP" || type === "CORPORATION") return "bg-indigo-100 text-indigo-700";
     if (type === "PHARMACY") return "bg-pink-100 text-pink-700";
     if (type === "CSO") return "bg-orange-100 text-orange-700";
     return "bg-gray-100 text-gray-600";
@@ -3514,8 +3518,12 @@ function BizManagementTab() {
   const counts = {
     all: rows.length,
     hospital: rows.filter((r) => !r.dealerType).length,
-    "upper-corp": rows.filter((r) => r.dealerType === "UPPER_CORP").length,
-    "lower-corp": rows.filter((r) => r.dealerType === "LOWER_CORP").length,
+    pharmacy: rows.filter((r) => r.dealerType === "PHARMACY").length,
+    cso: rows.filter((r) => r.dealerType === "CSO").length,
+    corporation: rows.filter((r) => {
+      const t = r.dealerType;
+      return t === "CORPORATION" || t === "UPPER_CORP" || t === "LOWER_CORP" || t === "INDIVIDUAL" || t === "SELF";
+    }).length,
   };
 
   // 본인 대표 사업자 진단 — 마이페이지 사업자 정보 카드는 dealerType=null 중 가장 오래된 1행만 가져옴.
@@ -3778,8 +3786,6 @@ function BizManagementTab() {
                         <option value="">병의원(원외)</option>
                         <option value="PHARMACY">약국</option>
                         <option value="CSO">CSO/일반사업자</option>
-                        <option value="UPPER_CORP">상위법인</option>
-                        <option value="LOWER_CORP">하위법인</option>
                         <option value="CORPORATION">법인</option>
                         <option value="INDIVIDUAL">개인사업자</option>
                       </select>
