@@ -180,16 +180,15 @@ export async function GET(req: NextRequest) {
   // 4시간 초과면 빨갛게 강조 — 사용자가 신선도를 직접 판단할 수 있게 함.
   const insuranceCodes = result.map((m) => m.insuranceCode).filter((c): c is string => !!c);
   if (!fast && insuranceCodes.length > 0) {
+    // 빠른 단순 쿼리 — UNIQUE (siteKey, insuranceCode) 덕분에 키별 1줄만 존재.
+    // DISTINCT ON / ORDER BY 불필요 → planner 가 인덱스 만으로 즉시 조회.
     const rows = await prisma.$queryRaw<Array<{ insuranceCode: string; stock: number; scrapedAt: Date }>>`
-      SELECT DISTINCT ON ("siteKey", "insuranceCode")
-             "insuranceCode",
+      SELECT "insuranceCode",
              COALESCE("stock", 0)::int AS stock,
              "scrapedAt"
       FROM "InventorySnapshot"
       WHERE "insuranceCode" = ANY(${insuranceCodes}::text[])
         AND "siteKey" IN ('ibjp', 'family')
-        AND "scrapedAt" > NOW() - INTERVAL '14 days'
-      ORDER BY "siteKey", "insuranceCode", "scrapedAt" DESC
     `;
     const sumByCode = new Map<string, number>();
     const latestByCode = new Map<string, Date>();
