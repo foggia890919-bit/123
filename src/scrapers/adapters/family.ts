@@ -119,8 +119,8 @@ export const family: WholesaleAdapter = {
   async searchByCode(page: Page, insuranceCode: string): Promise<InventoryItem[]> {
     if (!/order_search/i.test(page.url())) {
       await page.goto(SEARCH_URL, { waitUntil: "commit", timeout: 30_000 });
-      await page.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => {});
-      await page.waitForTimeout(800);
+      await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => {});
+      await page.waitForTimeout(300);
     }
 
     // 드롭다운을 "보험코드" 로 강제 — 페이지의 모든 select 를 순회하며
@@ -156,8 +156,7 @@ export const family: WholesaleAdapter = {
 
     const input = await waitAny(page, SEL.searchInput, 20_000);
     await input.click();
-    await input.fill("");
-    await input.type(insuranceCode, { delay: 30 });
+    await input.fill(insuranceCode);  // type → fill (타이핑 지연 제거)
     const inputValue = await input.inputValue().catch(() => "");
 
     // 페이지 변경 감지용 baseline
@@ -210,7 +209,7 @@ export const family: WholesaleAdapter = {
     const afterUrl = page.url();
     const afterBodyLen = await page.evaluate(() => document.body.innerText.length).catch(() => 0);
     console.log(`[family] code=${insuranceCode} dropdown="${selectedValue}" input="${inputValue}" submit=${submitInfo} pageChanged=${changed} urlBefore=${beforeUrl.slice(-30)} urlAfter=${afterUrl.slice(-30)} bodyLen=${beforeBodyLen}->${afterBodyLen}`);
-    await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 3_000 }).catch(() => {});
 
     await page
       .waitForFunction(
@@ -225,10 +224,10 @@ export const family: WholesaleAdapter = {
           }
           return false;
         },
-        { timeout: 10_000 }
+        { timeout: 5_000 }
       )
       .catch(() => {});
-    await page.waitForTimeout(600);
+    await page.waitForTimeout(150);
 
     const rows = await page.locator(SEL.resultRows).all();
     const items: InventoryItem[] = [];
