@@ -188,7 +188,7 @@ export default function SearchPage() {
       if (cos.size > 0) params.set("companies", Array.from(cos).join(","));
       const activePaymentType = pt !== undefined ? pt : selectedPaymentType;
       if (activePaymentType) params.set("paymentType", activePaymentType);
-      params.set("limit", "500");
+      params.set("limit", "200");
       const res = await fetch(`/api/medications/search?${params.toString()}`);
       const data = await res.json();
       const count = data.total || 0;
@@ -225,7 +225,7 @@ export default function SearchPage() {
       if (nextSet.size > 0) params.set("companies", Array.from(nextSet).join(","));
       const activePaymentType = pt !== undefined ? pt : selectedPaymentType;
       if (activePaymentType) params.set("paymentType", activePaymentType);
-      params.set("limit", "500");
+      params.set("limit", "200");
       const res = await fetch(`/api/medications/search?${params.toString()}`);
       const data = await res.json();
       const count = data.total || 0;

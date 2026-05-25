@@ -252,6 +252,12 @@ app.get("/sites", (_req, res) => {
   });
 });
 
+// 라이브 호출 전용 lane — 풀배치(scheduler) 가 slot 0..CONCURRENCY_PER_SITE-1 을
+// 점유하는 동안에도 사용자 검색은 별도 브라우저 세션으로 즉시 처리.
+// 슬롯 번호를 충분히 큰 값(+100)으로 띄워 풀배치와 절대 안 겹치게 한다.
+const LIVE_SLOT_BASE = 100;
+const LIVE_CONCURRENCY = Math.max(1, Number(process.env.LIVE_CONCURRENCY ?? 2));
+
 app.post("/scrape", async (req, res) => {
   const { sites, codes } = req.body as { sites?: string[]; codes: string[] };
   if (!Array.isArray(codes) || codes.length === 0) {
@@ -267,12 +273,15 @@ app.post("/scrape", async (req, res) => {
     return;
   }
 
-  // Sites are scraped in parallel for each code; codes are still sequential
-  // so we don't open dozens of contexts on the same site at once.
+  // 사이트는 코드별로 병렬 — 사이트당 LIVE_CONCURRENCY lane 까지 동시 처리.
+  // 풀배치와 별도 슬롯이라 lane 경쟁 없음.
   const results: ScrapeRow[] = [];
-  for (const code of codes) {
+  for (let i = 0; i < codes.length; i += LIVE_CONCURRENCY) {
+    const codeChunk = codes.slice(i, i + LIVE_CONCURRENCY);
     const rows = await Promise.all(
-      targetKeys.map(key => scrapeOne(ALL_ADAPTERS[key], code))
+      codeChunk.flatMap((code, j) =>
+        targetKeys.map(key => scrapeOne(ALL_ADAPTERS[key], code, LIVE_SLOT_BASE + j))
+      )
     );
     results.push(...rows);
   }
@@ -290,7 +299,7 @@ app.post("/scrape-one", async (req, res) => {
     res.status(400).json({ error: "code required" });
     return;
   }
-  const row = await scrapeOne(adapter, code);
+  const row = await scrapeOne(adapter, code, LIVE_SLOT_BASE);
   res.json(row);
 });
 
