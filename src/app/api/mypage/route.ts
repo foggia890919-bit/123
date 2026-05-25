@@ -32,7 +32,7 @@ export async function GET(_req: NextRequest) {
 
   // 본인 사업자 정보 — User.ownerBizClientId 로 명시적으로 식별.
   // null 이면 (구 데이터 또는 미등록) UserClient(dealerType=null) 중 가장 오래된 거 fallback.
-  let bizClient: { id: string; clientName: string; bizNumber: string; address: string | null; bizFileName: string | null } | null = null;
+  let bizClient: { id: string; clientName: string; bizNumber: string; address: string | null; bizFileName: string | null; dealerType: string | null } | null = null;
   try {
     const userRow = await prisma.user.findUnique({
       where: { id: session.id },
@@ -41,14 +41,14 @@ export async function GET(_req: NextRequest) {
     if (userRow?.ownerBizClientId) {
       bizClient = await prisma.userClient.findUnique({
         where: { id: userRow.ownerBizClientId },
-        select: { id: true, clientName: true, bizNumber: true, address: true, bizFileName: true },
+        select: { id: true, clientName: true, bizNumber: true, address: true, bizFileName: true, dealerType: true },
       });
     }
     // fallback: ownerBizClientId 미설정시 가장 오래된 본인-타입 거래처
     if (!bizClient) {
       bizClient = await prisma.userClient.findFirst({
         where: { userId: session.id, dealerType: null },
-        select: { id: true, clientName: true, bizNumber: true, address: true, bizFileName: true },
+        select: { id: true, clientName: true, bizNumber: true, address: true, bizFileName: true, dealerType: true },
         orderBy: { createdAt: "asc" },
       });
       // 발견되면 즉시 ownerBizClientId 로 연결 (다음부터는 명시적으로 식별됨)
@@ -90,14 +90,18 @@ export async function PATCH(req: NextRequest) {
 
   // 사업자 정보 저장
   if (biz !== undefined) {
-    const { id: bizId, clientName, bizNumber, address, bizDocument } = biz as {
+    const { id: bizId, clientName, bizNumber, address, dealerType, bizDocument } = biz as {
       id?: string; clientName: string; bizNumber: string; address?: string;
+      dealerType?: string | null;
       bizDocument?: { fileName: string; fileData: string } | null;
     };
     if (!clientName?.trim() || !bizNumber?.trim()) {
       return NextResponse.json({ error: "상호명과 사업자번호는 필수예요." }, { status: 400 });
     }
     const digits = String(bizNumber).replace(/\D/g, "");
+    // 허용 dealerType 값 — enum 이외는 null 로 처리
+    const ALLOWED_DEALER_TYPES = ["CORPORATION", "INDIVIDUAL", "UPPER_CORP", "LOWER_CORP", "SELF", "PHARMACY", "CSO"];
+    const normalizedDealerType: string | null = dealerType && ALLOWED_DEALER_TYPES.includes(dealerType) ? dealerType : null;
 
     let bizFileKey: string | null = null;
     let bizDocFallback: string | null = null;
@@ -122,6 +126,7 @@ export async function PATCH(req: NextRequest) {
         clientName: clientName.trim(),
         bizNumber: digits,
         address: address?.trim() || null,
+        dealerType: normalizedDealerType,
       };
       if (bizFileKey) { data.bizFileKey = bizFileKey; data.bizDocument = bizDocFallback; data.bizFileName = bizFileName; }
       try {
@@ -143,7 +148,7 @@ export async function PATCH(req: NextRequest) {
         bizFileKey,
         bizDocument: bizDocFallback,
         bizFileName,
-        dealerType: null,
+        dealerType: normalizedDealerType,
         approved: true,
       };
       try {

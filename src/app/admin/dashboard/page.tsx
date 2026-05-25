@@ -3497,12 +3497,17 @@ function BizManagementTab() {
     if (type === "LOWER_CORP") return "하위법인";
     if (type === "CORPORATION") return "법인";
     if (type === "INDIVIDUAL") return "개인사업자";
+    if (type === "PHARMACY") return "약국";
+    if (type === "CSO") return "CSO/일반사업자";
+    if (type === "SELF") return "자사";
     return type;
   };
   const dealerColor = (type?: string | null) => {
     if (!type) return "bg-green-100 text-green-700";
     if (type === "UPPER_CORP") return "bg-indigo-100 text-indigo-700";
     if (type === "LOWER_CORP") return "bg-cyan-100 text-cyan-700";
+    if (type === "PHARMACY") return "bg-pink-100 text-pink-700";
+    if (type === "CSO") return "bg-orange-100 text-orange-700";
     return "bg-gray-100 text-gray-600";
   };
 
@@ -3771,6 +3776,8 @@ function BizManagementTab() {
                         className="border border-blue-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
                       >
                         <option value="">병의원(원외)</option>
+                        <option value="PHARMACY">약국</option>
+                        <option value="CSO">CSO/일반사업자</option>
                         <option value="UPPER_CORP">상위법인</option>
                         <option value="LOWER_CORP">하위법인</option>
                         <option value="CORPORATION">법인</option>
