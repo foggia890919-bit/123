@@ -123,13 +123,22 @@ export const family: WholesaleAdapter = {
       await page.waitForTimeout(800);
     }
 
-    // Switch the dropdown to 보험코드 (using visible text — works regardless
-    // of the underlying option value).
+    // Switch the dropdown to 보험코드 — value, label, evaluate fallback 순으로 시도.
     const select = page.locator(SEL.searchTypeSelect).first();
+    let selectedValue = "";
     if (await select.isVisible().catch(() => false)) {
       await select.selectOption({ value: "yakga_cd" }).catch(async () => {
-        await select.selectOption({ label: "보험코드" }).catch(() => {});
+        await select.selectOption({ label: "보험코드" }).catch(async () => {
+          await select.evaluate((el: HTMLSelectElement) => {
+            const opt = Array.from(el.options).find(o => /보험|yakga|insurance/i.test(o.text + o.value));
+            if (opt) {
+              el.value = opt.value;
+              el.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+          }).catch(() => {});
+        });
       });
+      selectedValue = await select.inputValue().catch(() => "");
       await page.waitForTimeout(200);
     }
 
@@ -137,13 +146,21 @@ export const family: WholesaleAdapter = {
     await input.click();
     await input.fill("");
     await input.type(insuranceCode, { delay: 30 });
+    const inputValue = await input.inputValue().catch(() => "");
 
+    // 검색 버튼 클릭 + Enter 키 둘 다 시도 (안 눌리는 케이스 대비)
     const btn = page.locator(SEL.searchBtn).first();
-    if (await btn.isVisible().catch(() => false)) {
-      await btn.click();
-    } else {
-      await page.keyboard.press("Enter");
+    const btnVisible = await btn.isVisible().catch(() => false);
+    const btnHtml = btnVisible
+      ? (await btn.evaluate((el: Element) => el.outerHTML.slice(0, 150)).catch(() => "")).replace(/\s+/g, " ")
+      : "";
+    console.log(`[family] code=${insuranceCode} dropdown="${selectedValue}" input="${inputValue}" btnVisible=${btnVisible} btn="${btnHtml}"`);
+    if (btnVisible) {
+      await btn.click().catch(() => {});
     }
+    // 항상 Enter 추가 시도 — form submit 보장
+    await input.press("Enter").catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => {});
 
     await page
       .waitForFunction(
