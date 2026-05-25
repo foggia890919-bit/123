@@ -94,10 +94,18 @@ export async function saveSnapshots(rows: SnapshotInsert[]): Promise<number> {
           `($${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, NOW())`
         );
       }
+      // 같은 (사이트, 보험코드)는 한 줄만 유지 — 새 재고가 들어오면 이전 줄을 덮어쓴다.
       const sql = `INSERT INTO "InventorySnapshot"
         ("id","siteKey","insuranceCode","productName","spec","manufacturer","unitPrice","stock","raw","scrapedAt")
         VALUES ${placeholders.join(",")}
-        ON CONFLICT ("siteKey","insuranceCode","scrapedAt") DO NOTHING`;
+        ON CONFLICT ("siteKey","insuranceCode") DO UPDATE SET
+          "productName" = EXCLUDED."productName",
+          "spec" = EXCLUDED."spec",
+          "manufacturer" = EXCLUDED."manufacturer",
+          "unitPrice" = EXCLUDED."unitPrice",
+          "stock" = EXCLUDED."stock",
+          "raw" = EXCLUDED."raw",
+          "scrapedAt" = EXCLUDED."scrapedAt"`;
       const res = await client.query(sql, values);
       written += res.rowCount ?? slice.length;
     }

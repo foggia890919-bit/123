@@ -242,30 +242,18 @@ export default function SearchPage() {
     refetchWithCompanies(next);
   }
 
-  // 검색 결과 로드 시 도매상 캐시 자동 워밍업
-  // - m.stock != null (snapshot DB 에 있음): snapshot 경로로 캐시 채움 (DB 조회, 거의 무비용)
-  // - m.stock == null (snapshot DB 에 없음): 자동 라이브 스크랩 (워커 호출, 50개 한도)
-  // 두 그룹은 disjoint 라 같은 코드가 두 번 호출되지 않는다.
-  // (예전 구현은 1단계가 모든 idle 코드를 loading 으로 잡아버려서
-  //  2단계 fetchStockBatch 의 loading/done 필터에 걸려 라이브 호출이 영원히 skip 됐다.)
+  // 검색 결과 로드 시: DB 캐시(스냅샷)만 자동으로 채운다. 도매상 직접 호출(라이브)은
+  // 사용자가 명시적으로 "전체재고 새로고침" 또는 셀의 새로고침 버튼을 누를 때만 발동.
   useEffect(() => {
     const codesWithSnapshot: string[] = [];
-    const codesWithoutSnapshot: string[] = [];
     for (const m of results) {
       if (!m.insuranceCode) continue;
       const e = getStock(m.insuranceCode);
       if (e.status === "done" || e.status === "loading") continue;
-      if (m.stock == null) codesWithoutSnapshot.push(m.insuranceCode);
-      else codesWithSnapshot.push(m.insuranceCode);
+      if (m.stock != null) codesWithSnapshot.push(m.insuranceCode);
     }
-
     if (codesWithSnapshot.length > 0) {
       fetchStockBatch(codesWithSnapshot, false, STOCK_SITES);
-    }
-    // 라이브 경로 한도가 50 이므로 최대 50개만 트리거. 나머지는 사용자가 "전체재고 새로고침"
-    const liveTargets = codesWithoutSnapshot.slice(0, 50);
-    if (liveTargets.length > 0) {
-      fetchStockBatch(liveTargets, true, STOCK_SITES);
     }
   }, [results]);
 

@@ -367,9 +367,9 @@ model InventorySnapshot {
   raw           Json?
   scrapedAt     DateTime      @default(now())
 
-  @@unique([siteKey, insuranceCode, scrapedAt])
+  // 같은 (사이트, 보험코드)는 최신 1개만 유지. 새 재고가 들어오면 덮어씀.
+  @@unique([siteKey, insuranceCode])
   @@index([insuranceCode])
-  @@index([siteKey, insuranceCode])
   @@index([scrapedAt])
 }
 

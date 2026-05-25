@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useRef, useMemo } from "react";
+import { useEffect, useState, useRef, useMemo, Fragment } from "react";
 import { signOut } from "next-auth/react";
-import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut, Building2, Search, X, Mail, Phone, Send, Inbox, Copy, MessageCircle, Menu, Loader2, Network, ChevronRight, Trash2 } from "lucide-react";
+import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut, Building2, Search, X, Mail, Phone, Send, Inbox, Copy, MessageCircle, Menu, Loader2, Network, ChevronRight, Trash2, Pencil, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import * as XLSX from "xlsx";
@@ -3344,6 +3344,13 @@ interface AdminUserClient {
 
 type BizSubTab = "all" | "hospital" | "upper-corp" | "lower-corp";
 
+interface EditValues {
+  clientName: string;
+  bizNumber: string;
+  dealerType: string | null;
+  approved: boolean;
+}
+
 function BizManagementTab() {
   const [rows, setRows] = useState<AdminUserClient[]>([]);
   const [loading, setLoading] = useState(true);
@@ -3351,6 +3358,60 @@ function BizManagementTab() {
   const [subTab, setSubTab] = useState<BizSubTab>("all");
   // 삭제 진행 상태 — 동일 행 더블 클릭 방지. 삭제 직전 GET 으로 연결 카운트 받아와서 confirm.
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // 인라인 수정 — id 별 편집 모드. editValues 에 현재 입력값 보관, 저장 시 PATCH.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValues, setEditValues] = useState<EditValues | null>(null);
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [editError, setEditError] = useState("");
+
+  function startEdit(row: AdminUserClient) {
+    setEditingId(row.id);
+    setEditValues({
+      clientName: row.clientName,
+      bizNumber: row.bizNumber,
+      dealerType: row.dealerType ?? null,
+      approved: row.approved,
+    });
+    setEditError("");
+  }
+  function cancelEdit() {
+    setEditingId(null);
+    setEditValues(null);
+    setEditError("");
+  }
+  async function saveEdit(row: AdminUserClient) {
+    if (!editValues) return;
+    const digits = editValues.bizNumber.replace(/\D/g, "");
+    if (!editValues.clientName.trim()) { setEditError("거래처명을 입력해주세요."); return; }
+    if (digits.length !== 10) { setEditError("사업자번호 10자리를 입력해주세요."); return; }
+    setSavingId(row.id);
+    setEditError("");
+    try {
+      const res = await fetch(`/api/user-clients?id=${row.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientName: editValues.clientName.trim(),
+          bizNumber: digits,
+          dealerType: editValues.dealerType,
+          approved: editValues.approved,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setEditError(err.error || `저장 실패 (${res.status})`);
+        return;
+      }
+      // 로컬 state 즉시 반영 + 서버에서 새로 fetch (uniqueness 등 검증 위해).
+      setRows((prev) => prev.map((x) => x.id === row.id
+        ? { ...x, clientName: editValues.clientName.trim(), bizNumber: digits, dealerType: editValues.dealerType, approved: editValues.approved }
+        : x));
+      cancelEdit();
+      reload();
+    } finally {
+      setSavingId(null);
+    }
+  }
 
   function reload() {
     setLoading(true);
@@ -3517,14 +3578,36 @@ function BizManagementTab() {
                             <th className="text-left py-1">사업자번호</th>
                             <th className="text-left py-1">등록일</th>
                             <th className="text-left py-1">상태</th>
-                            <th className="text-center py-1 w-12">삭제</th>
+                            <th className="text-center py-1 w-20">수정/삭제</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                          {list.map((r, idx) => (
-                            <tr key={r.id} className={idx === 0 ? "bg-green-50/40" : ""}>
-                              <td className="py-1.5 font-medium">{r.clientName}</td>
-                              <td className="py-1.5 font-mono">{r.bizNumber}</td>
+                          {list.map((r, idx) => {
+                            const isEditingHere = editingId === r.id;
+                            const isSavingHere = savingId === r.id;
+                            return (
+                            <Fragment key={r.id}>
+                            <tr className={`${idx === 0 ? "bg-green-50/40" : ""} ${isEditingHere ? "bg-blue-50/40" : ""}`}>
+                              <td className="py-1.5 font-medium">
+                                {isEditingHere && editValues ? (
+                                  <input
+                                    value={editValues.clientName}
+                                    onChange={(e) => setEditValues({ ...editValues, clientName: e.target.value })}
+                                    className="border border-blue-300 rounded px-1.5 py-0.5 text-xs w-full focus:outline-none focus:ring-1 focus:ring-blue-400"
+                                    autoFocus
+                                  />
+                                ) : r.clientName}
+                              </td>
+                              <td className="py-1.5 font-mono">
+                                {isEditingHere && editValues ? (
+                                  <input
+                                    value={editValues.bizNumber}
+                                    onChange={(e) => setEditValues({ ...editValues, bizNumber: e.target.value })}
+                                    placeholder="10자리"
+                                    className="border border-blue-300 rounded px-1.5 py-0.5 text-xs font-mono w-28 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                                  />
+                                ) : r.bizNumber}
+                              </td>
                               <td className="py-1.5 text-gray-500">{new Date(r.createdAt).toLocaleDateString("ko-KR")}</td>
                               <td className="py-1.5">
                                 {idx === 0
@@ -3532,19 +3615,57 @@ function BizManagementTab() {
                                   : <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold text-[10px]">숨김 — 저장 시 충돌</span>}
                               </td>
                               <td className="py-1.5 text-center">
-                                <button
-                                  onClick={() => handleDelete(r)}
-                                  disabled={deletingId === r.id}
-                                  title="이 거래처 행 삭제"
-                                  className="text-gray-400 hover:text-red-600 disabled:opacity-30 inline-flex items-center justify-center w-6 h-6 rounded hover:bg-red-50"
-                                >
-                                  {deletingId === r.id
-                                    ? <Loader2 className="w-3 h-3 animate-spin" />
-                                    : <Trash2 className="w-3 h-3" />}
-                                </button>
+                                {isEditingHere ? (
+                                  <div className="inline-flex items-center gap-0.5">
+                                    <button
+                                      onClick={() => saveEdit(r)}
+                                      disabled={isSavingHere}
+                                      title="저장"
+                                      className="text-green-600 hover:text-green-800 disabled:opacity-30 inline-flex items-center justify-center w-6 h-6 rounded hover:bg-green-50"
+                                    >
+                                      {isSavingHere ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                                    </button>
+                                    <button
+                                      onClick={cancelEdit}
+                                      disabled={isSavingHere}
+                                      title="취소"
+                                      className="text-gray-400 hover:text-gray-700 disabled:opacity-30 inline-flex items-center justify-center w-6 h-6 rounded hover:bg-gray-100"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="inline-flex items-center gap-0.5">
+                                    <button
+                                      onClick={() => startEdit(r)}
+                                      disabled={editingId !== null || deletingId === r.id}
+                                      title="수정"
+                                      className="text-gray-400 hover:text-blue-600 disabled:opacity-30 inline-flex items-center justify-center w-6 h-6 rounded hover:bg-blue-50"
+                                    >
+                                      <Pencil className="w-3 h-3" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleDelete(r)}
+                                      disabled={deletingId === r.id || editingId !== null}
+                                      title="이 거래처 행 삭제"
+                                      className="text-gray-400 hover:text-red-600 disabled:opacity-30 inline-flex items-center justify-center w-6 h-6 rounded hover:bg-red-50"
+                                    >
+                                      {deletingId === r.id
+                                        ? <Loader2 className="w-3 h-3 animate-spin" />
+                                        : <Trash2 className="w-3 h-3" />}
+                                    </button>
+                                  </div>
+                                )}
                               </td>
                             </tr>
-                          ))}
+                            {isEditingHere && editError && (
+                              <tr className="bg-red-50">
+                                <td colSpan={5} className="py-1.5 px-2 text-[11px] text-red-700">{editError}</td>
+                              </tr>
+                            )}
+                            </Fragment>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -3607,22 +3728,59 @@ function BizManagementTab() {
               {filtered.map((c) => {
                 const isMypagePrimary = mypageDiag.mypagePrimaryIds.has(c.id);
                 const isHiddenConflict = !c.dealerType && !isMypagePrimary && mypageDiag.duplicateUserIds.has(c.userId);
+                const isEditing = editingId === c.id;
+                const isSaving = savingId === c.id;
                 return (
-                <tr key={c.id} className={`hover:bg-gray-50 ${isHiddenConflict ? "bg-amber-50/40" : ""}`}>
+                <Fragment key={c.id}>
+                <tr className={`hover:bg-gray-50 ${isHiddenConflict ? "bg-amber-50/40" : ""} ${isEditing ? "bg-blue-50/30" : ""}`}>
                   <td className="px-4 py-3 font-medium text-gray-900">
-                    {c.clientName}
-                    {isMypagePrimary && c.dealerType == null && (
-                      <span className="ml-2 inline-block px-1.5 py-0.5 rounded bg-green-100 text-green-700 text-[10px] font-semibold align-middle">마이페이지 표시</span>
-                    )}
-                    {isHiddenConflict && (
-                      <span className="ml-2 inline-block px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-semibold align-middle">숨김 — 저장 충돌</span>
+                    {isEditing && editValues ? (
+                      <input
+                        value={editValues.clientName}
+                        onChange={(e) => setEditValues({ ...editValues, clientName: e.target.value })}
+                        className="border border-blue-300 rounded px-2 py-1 text-sm w-full focus:outline-none focus:ring-1 focus:ring-blue-400"
+                        autoFocus
+                      />
+                    ) : (
+                      <>
+                        {c.clientName}
+                        {isMypagePrimary && c.dealerType == null && (
+                          <span className="ml-2 inline-block px-1.5 py-0.5 rounded bg-green-100 text-green-700 text-[10px] font-semibold align-middle">마이페이지 표시</span>
+                        )}
+                        {isHiddenConflict && (
+                          <span className="ml-2 inline-block px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-semibold align-middle">숨김 — 저장 충돌</span>
+                        )}
+                      </>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-gray-600 text-xs font-mono">{c.bizNumber}</td>
+                  <td className="px-4 py-3 text-gray-600 text-xs font-mono">
+                    {isEditing && editValues ? (
+                      <input
+                        value={editValues.bizNumber}
+                        onChange={(e) => setEditValues({ ...editValues, bizNumber: e.target.value })}
+                        placeholder="10자리 숫자"
+                        className="border border-blue-300 rounded px-2 py-1 text-xs font-mono w-32 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      />
+                    ) : c.bizNumber}
+                  </td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${dealerColor(c.dealerType)}`}>
-                      {dealerLabel(c.dealerType)}
-                    </span>
+                    {isEditing && editValues ? (
+                      <select
+                        value={editValues.dealerType ?? ""}
+                        onChange={(e) => setEditValues({ ...editValues, dealerType: e.target.value || null })}
+                        className="border border-blue-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      >
+                        <option value="">병의원(원외)</option>
+                        <option value="UPPER_CORP">상위법인</option>
+                        <option value="LOWER_CORP">하위법인</option>
+                        <option value="CORPORATION">법인</option>
+                        <option value="INDIVIDUAL">개인사업자</option>
+                      </select>
+                    ) : (
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${dealerColor(c.dealerType)}`}>
+                        {dealerLabel(c.dealerType)}
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-gray-700">
                     <p>{c.user.name || "-"}</p>
@@ -3630,7 +3788,17 @@ function BizManagementTab() {
                   </td>
                   <td className="px-4 py-3 text-gray-500 text-xs">{c.user.email}</td>
                   <td className="px-4 py-3 text-center">
-                    {c.approved
+                    {isEditing && editValues ? (
+                      <label className="inline-flex items-center gap-1 text-xs cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={editValues.approved}
+                          onChange={(e) => setEditValues({ ...editValues, approved: e.target.checked })}
+                          className="w-3.5 h-3.5"
+                        />
+                        승인
+                      </label>
+                    ) : c.approved
                       ? <span className="text-xs text-green-600 font-medium">승인</span>
                       : <span className="text-xs text-amber-500">미승인</span>}
                   </td>
@@ -3638,18 +3806,55 @@ function BizManagementTab() {
                     {new Date(c.createdAt).toLocaleDateString("ko-KR")}
                   </td>
                   <td className="px-4 py-3 text-center">
-                    <button
-                      onClick={() => handleDelete(c)}
-                      disabled={deletingId === c.id}
-                      title="이 거래처 행 삭제"
-                      className="text-gray-400 hover:text-red-600 disabled:opacity-30 inline-flex items-center justify-center w-7 h-7 rounded hover:bg-red-50"
-                    >
-                      {deletingId === c.id
-                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        : <Trash2 className="w-3.5 h-3.5" />}
-                    </button>
+                    {isEditing ? (
+                      <div className="inline-flex items-center gap-1">
+                        <button
+                          onClick={() => saveEdit(c)}
+                          disabled={isSaving}
+                          title="저장"
+                          className="text-green-600 hover:text-green-800 disabled:opacity-30 inline-flex items-center justify-center w-7 h-7 rounded hover:bg-green-50"
+                        >
+                          {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-4 h-4" />}
+                        </button>
+                        <button
+                          onClick={cancelEdit}
+                          disabled={isSaving}
+                          title="취소"
+                          className="text-gray-400 hover:text-gray-700 disabled:opacity-30 inline-flex items-center justify-center w-7 h-7 rounded hover:bg-gray-100"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="inline-flex items-center gap-1">
+                        <button
+                          onClick={() => startEdit(c)}
+                          disabled={editingId !== null || deletingId === c.id}
+                          title="수정"
+                          className="text-gray-400 hover:text-blue-600 disabled:opacity-30 inline-flex items-center justify-center w-7 h-7 rounded hover:bg-blue-50"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(c)}
+                          disabled={deletingId === c.id || editingId !== null}
+                          title="이 거래처 행 삭제"
+                          className="text-gray-400 hover:text-red-600 disabled:opacity-30 inline-flex items-center justify-center w-7 h-7 rounded hover:bg-red-50"
+                        >
+                          {deletingId === c.id
+                            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            : <Trash2 className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
+                {isEditing && editError && (
+                  <tr className="bg-red-50">
+                    <td colSpan={8} className="px-4 py-2 text-xs text-red-700">{editError}</td>
+                  </tr>
+                )}
+                </Fragment>
                 );
               })}
             </tbody>

@@ -79,6 +79,7 @@ export const family: WholesaleAdapter = {
   loginUrl: "http://family-pharm.co.kr/member/",
 
   async login(page: Page, creds: Credentials) {
+    console.log(`[family] login start — id=${creds.id.slice(0, 3)}***`);
     await page.goto(this.loginUrl, { waitUntil: "commit", timeout: 60_000 });
     await page.waitForLoadState("domcontentloaded", { timeout: 30_000 }).catch(() => {});
     await page.waitForTimeout(800);
@@ -101,8 +102,13 @@ export const family: WholesaleAdapter = {
     const url = page.url();
     const stillOnLogin = /\/member\//i.test(url) || /LoginProcess/i.test(url);
     if (stillOnLogin) {
+      // 페이지 안내문구를 같이 잡아서 원인 추적
+      const bodyText = await page.locator("body").innerText().catch(() => "");
+      const snippet = bodyText.replace(/\s+/g, " ").slice(0, 200);
+      console.error(`[family] login FAILED — url=${url} body="${snippet}"`);
       throw new Error(`family login failed — still on login page (${url})`);
     }
+    console.log(`[family] login OK — landed on ${url}`);
   },
 
   async isLoggedIn(page: Page) {
@@ -160,6 +166,15 @@ export const family: WholesaleAdapter = {
     const rows = await page.locator(SEL.resultRows).all();
     const items: InventoryItem[] = [];
 
+    // 빈 결과 진단 — 결과 행이 0이면 페이지에 어떤 안내 메시지가 떴는지,
+    // 또는 결과 표 자체가 안 그려졌는지 한 줄로 기록.
+    if (rows.length === 0) {
+      const bodyText = await page.locator("body").innerText().catch(() => "");
+      const snippet = bodyText.replace(/\s+/g, " ").slice(0, 250);
+      const url = page.url();
+      console.warn(`[family] code=${insuranceCode} EMPTY rows=0 url=${url} body="${snippet}"`);
+    }
+
     for (const row of rows) {
       const cells = (await row.locator("td").allTextContents()).map(c => c.trim());
       if (cells.length === 0) continue;
@@ -208,6 +223,10 @@ export const family: WholesaleAdapter = {
       });
     }
 
+    // 결과 카운트 1줄 요약
+    if (items.length > 0) {
+      console.log(`[family] code=${insuranceCode} OK items=${items.length} firstStock=${items[0].stock}`);
+    }
     return items;
   },
 };
