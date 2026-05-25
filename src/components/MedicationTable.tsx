@@ -53,39 +53,43 @@ function StockColumnCell({ code, productName, fallbackStock }: { code: string; p
       ↻
     </button>
   );
-  if (entry.status === "idle") {
+
+  // 표시할 숫자 계산 — entry.results 가 있으면 거기서 합산, 없으면 fallbackStock (검색 API 캐시값).
+  // stock-cache 가 loading 상태에서도 직전 results 를 보존하므로, 라이브 호출 중에도 이전 값이 그대로 보임.
+  const rows = (entry.results ?? []).filter((r) => STOCK_SITES.includes(r.siteKey) && !r.error);
+  const totalFromResults = rows.length > 0
+    ? rows.reduce((sum, r) => sum + r.items.reduce((s, i) => s + (i.stock ?? 0), 0), 0)
+    : null;
+  const displayedStock = totalFromResults != null ? totalFromResults : fallbackStock;
+
+  const numberNode = displayedStock == null
+    ? <span className="text-gray-300">-</span>
+    : displayedStock > 0
+      ? <span className="text-green-700 font-medium">{displayedStock.toLocaleString()}</span>
+      : <span className="text-red-400">품절</span>;
+
+  if (entry.status === "loading") {
+    // 라이브 조회 진행 중 — 기존 숫자 유지하고 옆에 작은 스피너만 표시.
     return (
-      <span className="inline-flex items-center gap-0.5">
-        <span className="text-gray-400">
-          {fallbackStock != null ? (fallbackStock > 0 ? fallbackStock.toLocaleString() : "품절") : "-"}
-        </span>
-        {refreshBtn}
+      <span className="inline-flex items-center gap-1">
+        {numberNode}
+        <Loader2 className="w-3 h-3 animate-spin text-emerald-500" />
       </span>
     );
   }
-  if (entry.status === "loading") return <Loader2 className="w-3 h-3 animate-spin text-gray-400" />;
   if (entry.status === "error") {
     return (
       <span className="inline-flex items-center gap-0.5">
-        <span className="text-red-400 text-[10px]" title={entry.error}>오류</span>
+        {numberNode}
+        <span className="text-red-400 text-[10px] ml-1" title={entry.error}>오류</span>
         {refreshBtn}
       </span>
     );
   }
-  const rows = (entry.results ?? []).filter((r) => STOCK_SITES.includes(r.siteKey) && !r.error);
-  const total = rows.reduce((sum, r) => sum + r.items.reduce((s, i) => s + (i.stock ?? 0), 0), 0);
-  const hasData = rows.length > 0;
-  if (!hasData) return (
-    <span className="inline-flex items-center gap-0.5">
-      <span className="text-gray-300 text-[10px]">-</span>
-      {refreshBtn}
-    </span>
-  );
+  // idle / done — 평소 표시
   return (
     <span className="inline-flex items-center gap-0.5">
-      <span className={total > 0 ? "text-green-700 font-medium" : "text-red-400"}>
-        {total > 0 ? total.toLocaleString() : "품절"}
-      </span>
+      {numberNode}
       {refreshBtn}
     </span>
   );
