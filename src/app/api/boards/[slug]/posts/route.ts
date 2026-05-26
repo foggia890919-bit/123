@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
-import { safeParseInt } from "@/lib/auth-guard";
+import { paginationParams } from "@/lib/pagination";
 import { publicUrl, BUCKETS } from "@/lib/storage";
 
 function withImageUrls(post: { images: string[]; [k: string]: unknown }) {
@@ -15,8 +15,7 @@ function withImageUrls(post: { images: string[]; [k: string]: unknown }) {
 export async function GET(req: NextRequest, { params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const { searchParams } = new URL(req.url);
-  const page = safeParseInt(searchParams.get("page"), 1, 1);
-  const limit = safeParseInt(searchParams.get("limit"), 20, 1, 50);
+  const { page, limit, skip } = paginationParams(searchParams, { defaultLimit: 20, maxLimit: 50 });
 
   const board = await prisma.board.findUnique({ where: { slug, active: true } });
   if (!board) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
@@ -25,7 +24,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ slug
     prisma.post.findMany({
       where: { boardId: board.id },
       orderBy: { createdAt: "desc" },
-      skip: (page - 1) * limit,
+      skip,
       take: limit,
       include: { user: { select: { id: true, name: true } } },
     }),
