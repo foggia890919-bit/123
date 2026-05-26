@@ -5,68 +5,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
-import { FileText, Building2, Search, LogIn, ShieldCheck, ChevronDown, User, LogOut, Menu, X, Filter, BarChart3, Upload, LayoutDashboard, Truck, ShoppingCart, ClipboardList, MessageCircle, TrendingUp, Wallet, Users, Sparkles, Bell, Check, Trash2, Lock } from "lucide-react";
+import { Building2, LogIn, ShieldCheck, ChevronDown, User, LogOut, Lock, LayoutDashboard, MessageCircle, TrendingUp, Wallet, Users, Upload, BarChart3, Bell, Check, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
-
-interface NavLeaf {
-  kind: "link";
-  href: string;
-  label: string;
-  icon: React.ElementType;
-  minRole: UserRole;
-}
-interface NavGroup {
-  kind: "group";
-  label: string;
-  icon: React.ElementType;
-  minRole: UserRole;
-  // 그룹이 활성화되었을 때 매칭시킬 경로들
-  matchPrefixes: string[];
-  children: { href: string; label: string; icon: React.ElementType }[];
-}
-type NavItem = NavLeaf | NavGroup;
-
-const navItems: NavItem[] = [
-  { kind: "link",  href: "/search",            label: "통합검색",        icon: Search,    minRole: "BASIC"     },
-  { kind: "link",  href: "/filter",            label: "제약사 필터링",   icon: Filter,    minRole: "BIZ"       },
-  { kind: "link",  href: "/submission-routes", label: "통계제출처",      icon: ClipboardList, minRole: "BUSINESS" },
-  {
-    kind: "group",
-    label: "제안서",
-    icon: FileText,
-    minRole: "BUSINESS",
-    matchPrefixes: ["/proposals", "/bulk-register"],
-    children: [
-      { href: "/proposals",     label: "제안서",       icon: FileText },
-      { href: "/bulk-register", label: "제안서(대량)", icon: Upload   },
-    ],
-  },
-  {
-    kind: "group",
-    label: "통계",
-    icon: BarChart3,
-    minRole: "BIZ",
-    matchPrefixes: ["/stats", "/biz/stats-review"],
-    children: [
-      { href: "/stats/photo", label: "AI 처방통계 등록", icon: Sparkles },
-      { href: "/biz/stats-review", label: "AI 처방통계 검수", icon: ShieldCheck },
-      { href: "/stats", label: "통계자동입력 (구)", icon: BarChart3 },
-      { href: "/stats/bulk-check", label: "통계엑셀대량확인", icon: ClipboardList },
-    ],
-  },
-  {
-    kind: "group",
-    label: "원내거래",
-    icon: Truck,
-    minRole: "BASIC",
-    matchPrefixes: ["/inhouse", "/mypage/ledger"],
-    children: [
-      { href: "/inhouse/order", label: "원내주문", icon: ShoppingCart },
-      { href: "/mypage/ledger", label: "거래처 매출원장", icon: Building2 },
-    ],
-  },
-];
+import { navItems, type NavGroup } from "@/lib/nav-items";
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -81,7 +23,6 @@ export default function Navbar() {
     }
   }
   const [userOpen, setUserOpen] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
   const [openGroup, setOpenGroup] = useState<string | null>(null);
   const userRef = useRef<HTMLDivElement>(null);
   const groupRef = useRef<HTMLDivElement>(null);
@@ -147,7 +88,7 @@ export default function Navbar() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-  useEffect(() => { setMobileOpen(false); setOpenGroup(null); }, [pathname]);
+  useEffect(() => { setOpenGroup(null); }, [pathname]);
 
   function isGroupActive(g: NavGroup) {
     return g.matchPrefixes.some((p) => pathname === p || pathname.startsWith(p + "/"));
@@ -246,8 +187,8 @@ export default function Navbar() {
             })}
           </div>
 
-          {/* 우측 버튼 */}
-          <div className="flex items-center gap-2">
+          {/* 우측 버튼 — 데스크톱 전용 (모바일은 BottomNav + MobileSidebar에서 처리) */}
+          <div className="hidden md:flex items-center gap-2">
             {session && (
               <div className="relative" ref={notifRef}>
                 <button onClick={() => setNotifOpen((p) => !p)}
@@ -317,7 +258,7 @@ export default function Navbar() {
                 <button onClick={() => setUserOpen((p) => !p)}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100">
                   <User className="w-4 h-4" />
-                  <span className="hidden sm:inline">{session.user.name || "마이페이지"}</span>
+                  <span>{session.user.name || "마이페이지"}</span>
                   <ChevronDown className={cn("w-3.5 h-3.5 transition-transform", userOpen && "rotate-180")} />
                 </button>
                 {userOpen && (
@@ -374,7 +315,7 @@ export default function Navbar() {
               <Link href="/login"
                 className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-gray-600 hover:bg-gray-100">
                 <LogIn className="w-4 h-4" />
-                <span className="hidden sm:inline">로그인</span>
+                <span>로그인</span>
               </Link>
             )}
 
@@ -385,106 +326,24 @@ export default function Navbar() {
               className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-yellow-900 bg-yellow-400 hover:bg-yellow-500 transition-colors"
             >
               <MessageCircle className="w-4 h-4" />
-              <span className="hidden sm:inline">카톡 문의</span>
+              <span>카톡 문의</span>
             </a>
 
             {(["BIZ", "ADMIN"] as string[]).includes((session?.user as { role?: string } | undefined)?.role ?? "") && (
               <Link href="/biz"
-                className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-white bg-purple-600 hover:bg-purple-700">
+                className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-white bg-purple-600 hover:bg-purple-700">
                 <LayoutDashboard className="w-4 h-4" />비즈관리
               </Link>
             )}
             {(session?.user as { role?: string } | undefined)?.role === "ADMIN" && (
               <Link href="/admin/dashboard"
-                className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-white bg-gray-800 hover:bg-gray-700">
+                className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium text-white bg-gray-800 hover:bg-gray-700">
                 <ShieldCheck className="w-4 h-4" />관리자
               </Link>
             )}
-
-            {/* 햄버거 버튼 (모바일) */}
-            <button onClick={() => setMobileOpen((v) => !v)}
-              className="md:hidden p-2 rounded-md text-gray-600 hover:bg-gray-100">
-              {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-            </button>
           </div>
         </div>
       </div>
-
-      {/* 모바일 메뉴 */}
-      {mobileOpen && (
-        <div className="md:hidden border-t border-gray-100 bg-white shadow-lg">
-          <div className="px-4 py-2 space-y-0.5">
-            {navItems.map((item) => {
-              const isLocked = !!session && !isBusinessApproved && (item.kind === "link" ? item.href !== "/search" : true);
-              if (item.kind === "link") {
-                const Icon = item.icon;
-                if (isLocked) {
-                  return (
-                    <button key={item.href} onClick={(e) => { setMobileOpen(false); handleLockedNavClick(e, item.label); }}
-                      className="w-full flex items-center gap-3 px-3 py-3 rounded-md text-sm font-medium text-gray-400 text-left cursor-not-allowed">
-                      <Lock className="w-3.5 h-3.5 shrink-0" />{item.label}
-                    </button>
-                  );
-                }
-                return (
-                  <Link key={item.href} href={item.href} onClick={() => setMobileOpen(false)}
-                    className={cn(
-                      "flex items-center gap-3 px-3 py-3 rounded-md text-sm font-medium transition-colors",
-                      pathname === item.href ? "bg-blue-50 text-blue-600" : "text-gray-700 hover:bg-gray-50"
-                    )}>
-                    <Icon className="w-4 h-4 shrink-0" />{item.label}
-                  </Link>
-                );
-              }
-              if (isLocked) {
-                const Icon = item.icon;
-                return (
-                  <button key={item.label} onClick={(e) => { setMobileOpen(false); handleLockedNavClick(e, item.label); }}
-                    className="w-full flex items-center gap-3 px-3 py-3 rounded-md text-sm font-medium text-gray-400 text-left cursor-not-allowed">
-                    <Lock className="w-3.5 h-3.5 shrink-0" />{item.label}
-                  </button>
-                );
-              }
-              const Icon = item.icon;
-              return (
-                <div key={item.label}>
-                  <div className="flex items-center gap-3 px-3 pt-3 pb-1 text-xs font-semibold text-gray-400 uppercase tracking-wide">
-                    <Icon className="w-4 h-4 shrink-0" />{item.label}
-                  </div>
-                  {item.children.map((child) => {
-                    const ChildIcon = child.icon;
-                    return (
-                      <Link key={child.href} href={child.href} onClick={() => setMobileOpen(false)}
-                        className={cn(
-                          "flex items-center gap-3 pl-10 pr-3 py-2.5 rounded-md text-sm font-medium transition-colors",
-                          pathname === child.href ? "bg-blue-50 text-blue-600" : "text-gray-700 hover:bg-gray-50"
-                        )}>
-                        <ChildIcon className="w-4 h-4 shrink-0" />{child.label}
-                      </Link>
-                    );
-                  })}
-                </div>
-              );
-            })}
-            {(["BIZ", "ADMIN"] as string[]).includes((session?.user as { role?: string } | undefined)?.role ?? "") && (
-              <div className="border-t border-gray-100 pt-2">
-                <Link href="/biz" onClick={() => setMobileOpen(false)}
-                  className="flex items-center gap-3 px-3 py-3 rounded-md text-sm font-medium text-white bg-purple-600">
-                  <LayoutDashboard className="w-4 h-4" />비즈관리
-                </Link>
-              </div>
-            )}
-            {(session?.user as { role?: string } | undefined)?.role === "ADMIN" && (
-              <div className="border-t border-gray-100 pt-2 pb-1">
-                <Link href="/admin/dashboard" onClick={() => setMobileOpen(false)}
-                  className="flex items-center gap-3 px-3 py-3 rounded-md text-sm font-medium text-white bg-gray-800">
-                  <ShieldCheck className="w-4 h-4" />관리자
-                </Link>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </nav>
   );
 }

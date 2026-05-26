@@ -3,6 +3,7 @@ import { Geist } from "next/font/google";
 import "./globals.css";
 import Navbar from "@/components/Navbar";
 import Providers from "@/components/Providers";
+import MobileNavWrapper from "@/components/MobileNavWrapper";
 
 const geist = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 
@@ -29,7 +30,8 @@ export default function RootLayout({
       <body className="min-h-screen bg-background antialiased">
         <Providers>
           <Navbar />
-          <main className="max-w-screen-2xl mx-auto px-4 py-6">{children}</main>
+          <MobileNavWrapper />
+          <main className="max-w-screen-2xl mx-auto px-4 pt-6 pb-20 md:pb-6">{children}</main>
         </Providers>
       </body>
     </html>
