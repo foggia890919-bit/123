@@ -24,7 +24,8 @@ export async function GET() {
         })),
       }))
     );
-  } catch {
-    return NextResponse.json([]);
+  } catch (err) {
+    console.error("[boards-home GET]", err);
+    return NextResponse.json({ error: "서버 오류가 발생했습니다." }, { status: 500 });
   }
 }

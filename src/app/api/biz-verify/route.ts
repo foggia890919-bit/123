@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
     const data = await res.json();
     const item = data?.data?.[0];
     if (!item) {
-      return NextResponse.json({ valid: false, error: "No result from NTS" });
+      return NextResponse.json({ valid: false, error: "No result from NTS" }, { status: 502 });
     }
 
     // b_stt_cd: "01" = 계속사업자, "02" = 휴업자, "03" = 폐업자

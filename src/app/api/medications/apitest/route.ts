@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
   if (isNextResponse(guard)) return guard;
   const target = req.nextUrl.searchParams.get("target") || "hira_msupply";
   const endpoint = ENDPOINTS[target];
-  if (!endpoint) return NextResponse.json({ error: "알 수 없는 target", available: Object.keys(ENDPOINTS) });
+  if (!endpoint) return NextResponse.json({ error: "알 수 없는 target", available: Object.keys(ENDPOINTS) }, { status: 400 });
 
   const apiUrl = new URL(endpoint.url);
   apiUrl.searchParams.set("serviceKey", API_KEY);
@@ -44,6 +44,6 @@ export async function GET(req: NextRequest) {
       parsed: json,
     });
   } catch (err) {
-    return NextResponse.json({ error: String(err), url: apiUrl.toString().replace(API_KEY, "***KEY***") });
+    return NextResponse.json({ error: String(err), url: apiUrl.toString().replace(API_KEY, "***KEY***") }, { status: 500 });
   }
 }
