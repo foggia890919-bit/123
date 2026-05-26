@@ -156,7 +156,10 @@ export default function StockCheckModal({ open, onClose, insuranceCode, productN
             const validRows = results.filter(r => r.error !== "no snapshot yet");
             const errors = validRows.filter(r => r.error);
             const allItems = validRows.flatMap(r => r.items);
-            const totalStock = allItems.reduce((sum, i) => sum + (i.stock ?? 0), 0);
+            const totalStock = allItems.reduce<number | null>(
+              (sum, i) => i.stock != null ? (sum ?? 0) + i.stock : sum,
+              null,
+            );
             const aggregated = allItems.length > 0
               ? [{
                   productName: allItems.find(i => i.productName)?.productName ?? (productName ?? ""),
@@ -190,7 +193,11 @@ export default function StockCheckModal({ open, onClose, insuranceCode, productN
                               {item.unitPrice != null ? item.unitPrice.toLocaleString() + "원" : "-"}
                             </td>
                             <td className="px-4 py-2 text-right tabular-nums font-medium">
-                              <span className={item.stock > 0 ? "text-green-700" : "text-gray-400"}>{item.stock}</span>
+                              {item.stock == null
+                                ? <span className="text-gray-300">-</span>
+                                : <span className={item.stock > 0 ? "text-green-700" : "text-red-500"}>
+                                    {item.stock > 0 ? item.stock.toLocaleString() : "품절"}
+                                  </span>}
                             </td>
                           </tr>
                         ))}

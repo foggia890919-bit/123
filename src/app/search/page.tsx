@@ -279,7 +279,7 @@ export default function SearchPage() {
       .map((m) => m.insuranceCode)
       .filter((c): c is string => !!c);
     if (codes.length > 0) {
-      fetchStockBatch(codes, true, STOCK_SITES);
+      fetchStockBatch(codes, true, STOCK_SITES, true);
     }
   }
 

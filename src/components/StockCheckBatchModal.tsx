@@ -141,7 +141,10 @@ export default function StockCheckBatchModal({ open, onClose, items }: Props) {
                       if (it.unitPrice == null) return acc;
                       return acc == null || it.unitPrice < acc ? it.unitPrice : acc;
                     }, null);
-                    const totalStock = totalItems.reduce((sum, it) => sum + (it.stock ?? 0), 0);
+                    const totalStock = totalItems.reduce<number | null>(
+                      (sum, it) => it.stock != null ? (sum ?? 0) + it.stock : sum,
+                      null,
+                    );
                     const displayName = totalItems.find(it => it.productName)?.productName ?? item.productName;
                     const displaySpec = totalItems.find(it => it.spec)?.spec ?? null;
                     const displayManufacturer = totalItems.find(it => it.manufacturer)?.manufacturer ?? null;
@@ -160,9 +163,11 @@ export default function StockCheckBatchModal({ open, onClose, items }: Props) {
                             ? errs.length > 0
                               ? <span className="text-red-600 text-xs">오류</span>
                               : <span className="text-gray-300">-</span>
-                            : <span className={totalStock > 0 ? "text-green-700" : "text-red-500"}>
-                                {totalStock > 0 ? totalStock.toLocaleString() : "품절"}
-                              </span>}
+                            : totalStock == null
+                              ? <span className="text-gray-300">-</span>
+                              : <span className={totalStock > 0 ? "text-green-700" : "text-red-500"}>
+                                  {totalStock > 0 ? totalStock.toLocaleString() : "품절"}
+                                </span>}
                         </td>
                       </tr>
                     );

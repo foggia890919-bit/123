@@ -71,7 +71,17 @@ function StockColumnCell({ code, productName, fallbackStock, fallbackScrapedAt }
   // stock-cache 가 loading 상태에서도 직전 results 를 보존하므로, 라이브 호출 중에도 이전 값이 그대로 보임.
   const rows = (entry.results ?? []).filter((r) => STOCK_SITES.includes(r.siteKey) && !r.error);
   const totalFromResults = rows.length > 0
-    ? rows.reduce((sum, r) => sum + r.items.reduce((s, i) => s + (i.stock ?? 0), 0), 0)
+    ? (() => {
+        let sum: number | null = null;
+        for (const r of rows) {
+          for (const i of r.items) {
+            if (i.stock != null) {
+              sum = (sum ?? 0) + i.stock;
+            }
+          }
+        }
+        return sum;
+      })()
     : null;
   const displayedStock = totalFromResults != null ? totalFromResults : fallbackStock;
 
