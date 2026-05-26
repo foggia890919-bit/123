@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { CheckCircle, RefreshCw, Search, X, Loader2 } from "lucide-react";
 import { CompanySubmission, emptySubmission } from "./types";
+import SubmissionUploadTab from "./SubmissionUploadTab";
 
 export default function CompanySubmissionsTab() {
   const [subTab, setSubTab] = useState<"new" | "bulk" | "current">("current");

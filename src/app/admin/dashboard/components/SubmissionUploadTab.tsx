@@ -5,39 +5,7 @@ import { Upload, CheckCircle, AlertCircle, Download, Plus, RefreshCw, Search, X 
 import * as XLSX from "xlsx";
 import { CompanySubmission, SubUploadRow, EXPECTED_COLUMNS, validateRow } from "./types";
 
-interface SubUploadRow {
-  companyName: string;
-  submissionEntity: string;
-  contactName: string;
-  email: string;
-  phone: string;
-  fax: string;
-  defaultAdditionalRate: string;
-  notes: string;
-  _error?: string;
-}
-
-const EXPECTED_COLUMNS: Record<string, keyof SubUploadRow> = {
-  "제약사명": "companyName",
-  "제출처법인명": "submissionEntity",
-  "담당자": "contactName",
-  "담당자명": "contactName",
-  "이메일": "email",
-  "전화번호": "phone",
-  "전화": "phone",
-  "팩스": "fax",
-  "추가수수료": "defaultAdditionalRate",
-  "추가수수료율": "defaultAdditionalRate",
-  "비고": "notes",
-};
-
-function validateRow(row: SubUploadRow): string | undefined {
-  if (!row.companyName) return "제약사명 없음";
-  if (row.defaultAdditionalRate && isNaN(Number(row.defaultAdditionalRate))) return `추가수수료 숫자 아님: ${row.defaultAdditionalRate}`;
-  return undefined;
-}
-
-function SubmissionUploadTab({ onSaved }: { onSaved?: () => void } = {}) {
+export default function SubmissionUploadTab({ onSaved }: { onSaved?: () => void } = {}) {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<SubUploadRow[]>([]);
   const [savedSet, setSavedSet] = useState<Set<number>>(new Set());

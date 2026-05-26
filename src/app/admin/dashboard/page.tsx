@@ -3,9 +3,8 @@
 import { useState } from "react";
 import { signOut } from "next-auth/react";
 import { Upload, ShieldCheck, Users, Percent, FileSpreadsheet, Filter, Database, Send, Inbox, MessageCircle, Menu, LogOut, Building2, Network, X } from "lucide-react";
-import type { Tab, MenuItem, MenuGroup } from "./components/types";
+import type { Tab, MenuGroup } from "./components/types";
 import UploadTab from "./components/UploadTab";
-import SubmissionUploadTab from "./components/SubmissionUploadTab";
 import MembersTab from "./components/MembersTab";
 import RatesTab from "./components/RatesTab";
 import FilterReqsTab from "./components/FilterReqsTab";

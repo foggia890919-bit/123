@@ -70,7 +70,7 @@ export default function BulkSubmissionTab() {
     setLoading(false);
   }
 
-  const subsByCompany = new Map(subs.map((s) => [s.companyName, s]));
+  const subsByCompany = new Map<string, CompanySubmission>(subs.map((s) => [s.companyName, s]));
 
   const filtered = reqs.filter((r) => {
     if (statusScope === "PENDING" && r.status !== "PENDING") return false;

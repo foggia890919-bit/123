@@ -213,7 +213,7 @@ export default function BizManagementTab() {
           </button>
           {diagOpen && (
             <div className="px-4 pb-4 space-y-3 border-t border-red-200 pt-3 bg-red-50/30">
-              {Array.from(mypageDiag.byUser.entries())
+              {(Array.from(mypageDiag.byUser.entries()) as [string, AdminUserClient[]][])
                 .filter(([uid]) => mypageDiag.duplicateUserIds.has(uid))
                 .map(([uid, list]) => {
                   const owner = list[0]; // any row has user info
