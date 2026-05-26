@@ -157,6 +157,7 @@ export async function GET(req: NextRequest) {
     typeof medications[number] & {
       additionalRate: number | null;
       stock?: number | null;
+      stockScrapedAt?: string | null;
       matchLevel?: MatchLevel;
     }
   >;
@@ -173,11 +174,38 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  // 검색 결과 응답에는 InventorySnapshot 의 stock 을 채우지 않는다.
-  // 이유: snapshot 에 워커 오류/매칭 실패로 stock=0 이 박혀 있을 때,
-  //       그 잘못된 값이 검색 직후 그대로 표시되어 사용자가 "품절"로 오인함.
-  //       대신 UI 의 자동 워밍업이 항상 /api/inventory/check (live 또는 snapshot 분기)
-  //       경로로 가져와서 화면을 채운다.
+  // 검색 결과에 InventorySnapshot 의 가장 최근 stock + scrapedAt 을 채워준다.
+  // 사용자 요청: "기존에 가져왔던 재고를 검색 즉시 보여주고, 시점도 표시".
+  // stock=0 도 그대로 (품절 표시). 시점은 화면에서 "N시간 전" 으로 표기하고
+  // 4시간 초과면 빨갛게 강조 — 사용자가 신선도를 직접 판단할 수 있게 함.
+  const insuranceCodes = result.map((m) => m.insuranceCode).filter((c): c is string => !!c);
+  if (!fast && insuranceCodes.length > 0) {
+    // 빠른 단순 쿼리 — UNIQUE (siteKey, insuranceCode) 덕분에 키별 1줄만 존재.
+    // DISTINCT ON / ORDER BY 불필요 → planner 가 인덱스 만으로 즉시 조회.
+    const rows = await prisma.$queryRaw<Array<{ insuranceCode: string; stock: number; scrapedAt: Date }>>`
+      SELECT "insuranceCode",
+             COALESCE("stock", 0)::int AS stock,
+             "scrapedAt"
+      FROM "InventorySnapshot"
+      WHERE "insuranceCode" = ANY(${insuranceCodes}::text[])
+        AND "siteKey" IN ('ibjp', 'family')
+    `;
+    const sumByCode = new Map<string, number>();
+    const latestByCode = new Map<string, Date>();
+    for (const r of rows) {
+      sumByCode.set(r.insuranceCode, (sumByCode.get(r.insuranceCode) ?? 0) + Number(r.stock));
+      const d = r.scrapedAt instanceof Date ? r.scrapedAt : new Date(r.scrapedAt);
+      const prev = latestByCode.get(r.insuranceCode);
+      if (!prev || d > prev) latestByCode.set(r.insuranceCode, d);
+    }
+    for (const m of result) {
+      if (m.insuranceCode && sumByCode.has(m.insuranceCode)) {
+        m.stock = sumByCode.get(m.insuranceCode)!;
+        const latest = latestByCode.get(m.insuranceCode);
+        if (latest) m.stockScrapedAt = latest.toISOString();
+      }
+    }
+  }
 
   return NextResponse.json({ medications: result, total });
 }

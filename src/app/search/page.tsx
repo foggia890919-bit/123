@@ -188,7 +188,7 @@ export default function SearchPage() {
       if (cos.size > 0) params.set("companies", Array.from(cos).join(","));
       const activePaymentType = pt !== undefined ? pt : selectedPaymentType;
       if (activePaymentType) params.set("paymentType", activePaymentType);
-      params.set("limit", "500");
+      params.set("limit", "200");
       const res = await fetch(`/api/medications/search?${params.toString()}`);
       const data = await res.json();
       const count = data.total || 0;
@@ -225,7 +225,7 @@ export default function SearchPage() {
       if (nextSet.size > 0) params.set("companies", Array.from(nextSet).join(","));
       const activePaymentType = pt !== undefined ? pt : selectedPaymentType;
       if (activePaymentType) params.set("paymentType", activePaymentType);
-      params.set("limit", "500");
+      params.set("limit", "200");
       const res = await fetch(`/api/medications/search?${params.toString()}`);
       const data = await res.json();
       const count = data.total || 0;
@@ -242,26 +242,22 @@ export default function SearchPage() {
     refetchWithCompanies(next);
   }
 
-  // 검색 결과 로드 시 도매상 캐시 자동 워밍업
-  // - m.stock != null (snapshot DB 에 있음): snapshot 경로로 캐시 채움 (DB 조회, 거의 무비용)
-  // - m.stock == null (snapshot DB 에 없음): 자동 라이브 스크랩 (워커 호출, 50개 한도)
-  // 두 그룹은 disjoint 라 같은 코드가 두 번 호출되지 않는다.
-  // (예전 구현은 1단계가 모든 idle 코드를 loading 으로 잡아버려서
-  //  2단계 fetchStockBatch 의 loading/done 필터에 걸려 라이브 호출이 영원히 skip 됐다.)
-  // 검색 결과 뜰 때 DB 스냅샷만 표시 — 라이브 크롤링 자동 시작 안 함.
+  // 검색 결과 로드 시 DB 스냅샷만 즉시 표시 — 자동 라이브 크롤링 안 함.
   // 사용자가 "전체재고 새로고침" 누를 때만 실시간 크롤링.
   useEffect(() => {
-    const codesWithSnapshot: string[] = [];
+    const snapshotTargets: string[] = [];
     for (const m of results) {
       if (!m.insuranceCode) continue;
       const e = getStock(m.insuranceCode);
       if (e.status === "done" || e.status === "loading") continue;
-      if (m.stock != null) codesWithSnapshot.push(m.insuranceCode);
-      // 스냅샷 없는 코드는 자동 크롤링 안 함 — "전체재고 새로고침" 버튼 누를 때만
+      // DB 에 캐시 있는 약품만 스냅샷 경로로 즉시 표시 (DB 조회, 무비용).
+      // 캐시 없거나 stale 이어도 자동 라이브 크롤링 안 함 — "전체재고 새로고침" 때만.
+      if (m.stock != null) {
+        snapshotTargets.push(m.insuranceCode);
+      }
     }
-
-    if (codesWithSnapshot.length > 0) {
-      fetchStockBatch(codesWithSnapshot, false, STOCK_SITES);
+    if (snapshotTargets.length > 0) {
+      fetchStockBatch(snapshotTargets, false, STOCK_SITES);
     }
   }, [results]);
 

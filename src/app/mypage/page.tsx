@@ -26,6 +26,7 @@ const docTypes = ["CSO 신고증", "의사 면허증", "약사 면허증", "사�
 interface BizClient {
   id: string; clientName: string; bizNumber: string;
   address: string | null; bizFileName: string | null;
+  dealerType: string | null;
 }
 interface ProfileInfo {
   name: string; email: string; phone: string | null;
@@ -88,9 +89,18 @@ export default function MyPage() {
 
   // 사업자 정보
   const bizDocFileRef = useRef<HTMLInputElement>(null);
+  // IME(한글 입력) 미반영 케이스 방어용 — 입력칸 DOM 값을 직접 읽기 위함
+  const editBizNameRef = useRef<HTMLInputElement>(null);
+  const editBizNumberRef = useRef<HTMLInputElement>(null);
+  const editBizAddressRef = useRef<HTMLInputElement>(null);
+  // 국세청 진위확인 상태 — 사업자번호 10자리 입력시 자동 조회.
+  const [ntsVerifyStatus, setNtsVerifyStatus] = useState<"idle" | "checking" | "valid" | "closed" | "invalid" | "error">("idle");
+  const [ntsVerifyMessage, setNtsVerifyMessage] = useState<string>("");
   const [editBizNumber, setEditBizNumber] = useState("");
   const [editBizName, setEditBizName] = useState("");
   const [editBizAddress, setEditBizAddress] = useState("");
+  // 사업자 유형 — null = 병의원(원외) (기본). 다른 값은 enum DealerType 의 이름.
+  const [editBizDealerType, setEditBizDealerType] = useState<string | "">("");
   const [bizNumberError, setBizNumberError] = useState("");
   const [bizDocFile, setBizDocFile] = useState<File | null>(null);
   const [bizSaving, setBizSaving] = useState(false);
@@ -117,6 +127,50 @@ export default function MyPage() {
     if (status === "authenticated") loadProfile();
   }, [status]);
 
+  // 사업자번호 10자리 + 형식 검증 통과시 국세청 자동 조회 (debounce 600ms).
+  useEffect(() => {
+    const digits = editBizNumber.replace(/\D/g, "");
+    if (digits.length !== 10 || bizNumberError) {
+      setNtsVerifyStatus("idle");
+      setNtsVerifyMessage("");
+      return;
+    }
+    setNtsVerifyStatus("checking");
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/biz-verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ bizNumber: digits }),
+        });
+        const data = await res.json();
+        if (res.status === 503) {
+          // API 키 미설정 — 자체 검증만으로 통과시키되 안내는 안 띄움
+          setNtsVerifyStatus("idle");
+          setNtsVerifyMessage("");
+          return;
+        }
+        if (data.valid === true) {
+          setNtsVerifyStatus("valid");
+          setNtsVerifyMessage(`국세청 확인 완료 (${data.statusText || "계속사업자"})`);
+        } else if (data.closed) {
+          setNtsVerifyStatus("closed");
+          setNtsVerifyMessage("폐업한 사업자번호예요.");
+        } else if (data.valid === false) {
+          setNtsVerifyStatus("invalid");
+          setNtsVerifyMessage("국세청에 등록되지 않은 사업자번호예요.");
+        } else {
+          setNtsVerifyStatus("error");
+          setNtsVerifyMessage(data.error || "조회 실패");
+        }
+      } catch {
+        setNtsVerifyStatus("error");
+        setNtsVerifyMessage("조회 중 오류가 발생했어요.");
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [editBizNumber, bizNumberError]);
+
   async function loadProfile() {
     setProfileLoading(true);
     try {
@@ -131,6 +185,15 @@ export default function MyPage() {
           setEditBizNumber(fmt);
           setEditBizName(data.bizClient.clientName);
           setEditBizAddress(data.bizClient.address ?? "");
+          setEditBizDealerType(data.bizClient.dealerType ?? "");
+        } else {
+          // 신규 등록 — 회원 직업(role) 기반 자동 분류 (B 기능)
+          //  의사/치과의사/한의사 → 병의원 (null, "")
+          //  약사 → 약국 (PHARMACY)
+          //  나머지 → CSO/일반 사업자
+          if (data.role === "DOCTOR") setEditBizDealerType("");
+          else if (data.role === "PHARMACIST") setEditBizDealerType("PHARMACY");
+          else setEditBizDealerType("CSO");
         }
       }
     } finally {
@@ -154,6 +217,12 @@ export default function MyPage() {
     } else {
       setBizNumberError("");
     }
+    // 10자리 형식 통과시 국세청 자동 조회 트리거 (debounce 는 useEffect 에서)
+    if (digits.length === 10 && validateBizNumber(fmt)) {
+      setNtsVerifyStatus("idle"); // useEffect 가 다시 잡아서 'checking' 으로 바꿈
+    } else {
+      setNtsVerifyStatus("idle");
+    }
   }
 
   async function handleProfileSave() {
@@ -173,11 +242,25 @@ export default function MyPage() {
 
   async function handleBizSave() {
     setBizError(""); setBizSuccess(false);
-    if (!editBizNumber.trim()) { setBizError("사업자등록번호를 입력해주세요."); return; }
+    // input 의 실제 DOM 값을 우선 읽음 — IME(한글) 입력 직후 submit 케이스 방어.
+    // state 가 아직 업데이트되지 않은 상태에서 사용자는 화면에 값이 보이는데
+    // "상호명을 입력해주세요" 같은 잘못된 에러가 뜨는 문제를 막는다.
+    const bizNumberVal = (editBizNumberRef.current?.value ?? editBizNumber).trim();
+    const bizNameVal = (editBizNameRef.current?.value ?? editBizName).trim();
+    const bizAddressVal = (editBizAddressRef.current?.value ?? editBizAddress).trim();
+    // state 와 DOM 동기화 — 이후 화면이 다시 그려질 때 일관되게.
+    if (bizNumberVal !== editBizNumber) setEditBizNumber(bizNumberVal);
+    if (bizNameVal !== editBizName) setEditBizName(bizNameVal);
+    if (bizAddressVal !== editBizAddress) setEditBizAddress(bizAddressVal);
+
+    if (!bizNumberVal) { setBizError("사업자등록번호를 입력해주세요."); return; }
     if (bizNumberError) { setBizError(bizNumberError); return; }
-    const digits = editBizNumber.replace(/\D/g, "");
+    const digits = bizNumberVal.replace(/\D/g, "");
     if (digits.length !== 10) { setBizError("사업자등록번호 10자리를 입력해주세요."); return; }
-    if (!editBizName.trim()) { setBizError("상호명을 입력해주세요."); return; }
+    if (ntsVerifyStatus === "closed") { setBizError("폐업한 사업자번호는 등록할 수 없어요."); return; }
+    if (ntsVerifyStatus === "invalid") { setBizError("국세청에 등록되지 않은 사업자번호예요."); return; }
+    if (ntsVerifyStatus === "checking") { setBizError("국세청 조회가 끝날 때까지 잠시 기다려주세요."); return; }
+    if (!bizNameVal) { setBizError("상호명을 입력해주세요."); return; }
     setBizSaving(true);
     try {
       let bizDocument: { fileName: string; fileData: string } | null = null;
@@ -197,15 +280,20 @@ export default function MyPage() {
         body: JSON.stringify({
           biz: {
             id: profileInfo?.bizClient?.id ?? undefined,
-            clientName: editBizName.trim(),
+            clientName: bizNameVal,
             bizNumber: digits,
-            address: editBizAddress.trim() || null,
+            address: bizAddressVal || null,
+            dealerType: editBizDealerType || null,  // "" → null (병의원)
             bizDocument,
           },
         }),
       });
       const data = await res.json();
-      if (!res.ok) { setBizError(data.error || "저장 실패"); }
+      if (!res.ok) {
+        // 저장 실패 — 폼 state 를 서버 실제값으로 되돌려서 사용자가 "저장된 줄 알고 새로고침" 하는 혼란 방지.
+        setBizError(data.error || "저장 실패");
+        await loadProfile();
+      }
       else { setBizSuccess(true); setBizDocFile(null); await loadProfile(); }
     } catch {
       setBizError("저장 중 오류가 발생했어요.");
@@ -348,20 +436,51 @@ export default function MyPage() {
             <label className="text-sm font-medium text-gray-700">사업자등록번호 <span className="text-red-500">*</span></label>
             <Input
               value={editBizNumber}
+              ref={editBizNumberRef}
               onChange={(e) => handleBizNumberChange(e.target.value)}
               placeholder="000-00-00000"
               maxLength={12}
               className={bizNumberError ? "border-red-400" : ""}
             />
             {bizNumberError && <p className="text-xs text-red-500">{bizNumberError}</p>}
+            {!bizNumberError && ntsVerifyStatus === "checking" && (
+              <p className="text-xs text-gray-500 flex items-center gap-1">
+                <Loader2 className="w-3 h-3 animate-spin" />국세청 조회 중...
+              </p>
+            )}
+            {!bizNumberError && ntsVerifyStatus === "valid" && (
+              <p className="text-xs text-green-600 flex items-center gap-1">
+                <CheckCircle className="w-3 h-3" />{ntsVerifyMessage}
+              </p>
+            )}
+            {!bizNumberError && (ntsVerifyStatus === "closed" || ntsVerifyStatus === "invalid") && (
+              <p className="text-xs text-red-500">{ntsVerifyMessage}</p>
+            )}
+            {!bizNumberError && ntsVerifyStatus === "error" && (
+              <p className="text-xs text-amber-600">{ntsVerifyMessage}</p>
+            )}
           </div>
           <div className="space-y-1">
             <label className="text-sm font-medium text-gray-700">상호명 <span className="text-red-500">*</span></label>
-            <Input value={editBizName} onChange={(e) => setEditBizName(e.target.value)} placeholder="병원명 / 상호명" />
+            <Input ref={editBizNameRef} value={editBizName} onChange={(e) => setEditBizName(e.target.value)} placeholder="병원명 / 상호명" />
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-gray-700">유형 <span className="text-red-500">*</span></label>
+            <select
+              value={editBizDealerType}
+              onChange={(e) => setEditBizDealerType(e.target.value)}
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
+            >
+              <option value="">병의원 (원외)</option>
+              <option value="PHARMACY">약국</option>
+              <option value="CSO">CSO / 일반 사업자</option>
+              <option value="CORPORATION">법인</option>
+              <option value="INDIVIDUAL">개인사업자(딜러)</option>
+            </select>
           </div>
           <div className="space-y-1">
             <label className="text-sm font-medium text-gray-700">주소 <span className="text-gray-400 font-normal text-xs">(선택)</span></label>
-            <Input value={editBizAddress} onChange={(e) => setEditBizAddress(e.target.value)} placeholder="예: 서울시 강남구 테헤란로 123" />
+            <Input ref={editBizAddressRef} value={editBizAddress} onChange={(e) => setEditBizAddress(e.target.value)} placeholder="예: 서울시 강남구 테헤란로 123" />
           </div>
           <div className="space-y-1">
             <label className="text-sm font-medium text-gray-700">

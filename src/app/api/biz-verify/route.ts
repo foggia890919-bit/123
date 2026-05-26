@@ -25,7 +25,11 @@ export async function POST(req: NextRequest) {
     });
 
     if (!res.ok) {
-      return NextResponse.json({ valid: null, error: `NTS API error: ${res.status}` }, { status: 502 });
+      // 401/403 = 키 잘못됨/만료. 사용자에게는 검증을 우회하도록 안내 (자체 형식 검증으로 통과).
+      if (res.status === 401 || res.status === 403) {
+        return NextResponse.json({ valid: null, error: "국세청 조회 키가 유효하지 않아요. 형식 검증만 적용됩니다." }, { status: 503 });
+      }
+      return NextResponse.json({ valid: null, error: `국세청 조회 일시 오류 (${res.status})` }, { status: 502 });
     }
 
     const data = await res.json();

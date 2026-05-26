@@ -30,14 +30,35 @@ export async function GET(_req: NextRequest) {
     documents = docs.map((d) => ({ ...d, createdAt: d.createdAt.toISOString() }));
   } catch { }
 
-  // 사업자 정보 (dealerType: null = 의료기관, 본인 대표 사업자)
-  let bizClient: { id: string; clientName: string; bizNumber: string; address: string | null; bizFileName: string | null } | null = null;
+  // 본인 사업자 정보 — User.ownerBizClientId 로 명시적으로 식별.
+  // null 이면 (구 데이터 또는 미등록) UserClient(dealerType=null) 중 가장 오래된 거 fallback.
+  let bizClient: { id: string; clientName: string; bizNumber: string; address: string | null; bizFileName: string | null; dealerType: string | null } | null = null;
   try {
-    bizClient = await prisma.userClient.findFirst({
-      where: { userId: session.id, dealerType: null },
-      select: { id: true, clientName: true, bizNumber: true, address: true, bizFileName: true },
-      orderBy: { createdAt: "asc" },
+    const userRow = await prisma.user.findUnique({
+      where: { id: session.id },
+      select: { ownerBizClientId: true },
     });
+    if (userRow?.ownerBizClientId) {
+      bizClient = await prisma.userClient.findUnique({
+        where: { id: userRow.ownerBizClientId },
+        select: { id: true, clientName: true, bizNumber: true, address: true, bizFileName: true, dealerType: true },
+      });
+    }
+    // fallback: ownerBizClientId 미설정시 가장 오래된 본인-타입 거래처
+    if (!bizClient) {
+      bizClient = await prisma.userClient.findFirst({
+        where: { userId: session.id, dealerType: null },
+        select: { id: true, clientName: true, bizNumber: true, address: true, bizFileName: true, dealerType: true },
+        orderBy: { createdAt: "asc" },
+      });
+      // 발견되면 즉시 ownerBizClientId 로 연결 (다음부터는 명시적으로 식별됨)
+      if (bizClient) {
+        await prisma.user.update({
+          where: { id: session.id },
+          data: { ownerBizClientId: bizClient.id },
+        }).catch(() => {/* silent */});
+      }
+    }
   } catch { }
 
   return NextResponse.json({ ...user, documents, bizClient });
@@ -69,14 +90,18 @@ export async function PATCH(req: NextRequest) {
 
   // 사업자 정보 저장
   if (biz !== undefined) {
-    const { id: bizId, clientName, bizNumber, address, bizDocument } = biz as {
+    const { id: bizId, clientName, bizNumber, address, dealerType, bizDocument } = biz as {
       id?: string; clientName: string; bizNumber: string; address?: string;
+      dealerType?: string | null;
       bizDocument?: { fileName: string; fileData: string } | null;
     };
     if (!clientName?.trim() || !bizNumber?.trim()) {
       return NextResponse.json({ error: "상호명과 사업자번호는 필수예요." }, { status: 400 });
     }
     const digits = String(bizNumber).replace(/\D/g, "");
+    // 허용 dealerType 값 — enum 이외는 null 로 처리
+    const ALLOWED_DEALER_TYPES = ["CORPORATION", "INDIVIDUAL", "UPPER_CORP", "LOWER_CORP", "SELF", "PHARMACY", "CSO"];
+    const normalizedDealerType: string | null = dealerType && ALLOWED_DEALER_TYPES.includes(dealerType) ? dealerType : null;
 
     let bizFileKey: string | null = null;
     let bizDocFallback: string | null = null;
@@ -88,30 +113,33 @@ export async function PATCH(req: NextRequest) {
       bizFileName = bizDocument.fileName;
     }
 
-    if (bizId) {
-      // 기존 레코드 수정
-      const existing = await prisma.userClient.findUnique({ where: { id: bizId }, select: { userId: true } });
-      if (!existing || existing.userId !== session.id) {
-        return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
-      }
+    // 본인 사업자 식별 — User.ownerBizClientId 기준. bizId 클라이언트 값보다 우선.
+    const me = await prisma.user.findUnique({
+      where: { id: session.id },
+      select: { ownerBizClientId: true },
+    });
+    const ownerId = me?.ownerBizClientId ?? null;
+
+    if (ownerId) {
+      // 본인 사업자 행만 수정 — 다른 거래처는 절대 건드리지 않음.
       const data: Record<string, unknown> = {
         clientName: clientName.trim(),
-        bizNumber: digits,                       // 사업자번호 update (이전 누락 fix)
+        bizNumber: digits,
         address: address?.trim() || null,
+        dealerType: normalizedDealerType,
       };
       if (bizFileKey) { data.bizFileKey = bizFileKey; data.bizDocument = bizDocFallback; data.bizFileName = bizFileName; }
       try {
-        await prisma.userClient.update({ where: { id: bizId }, data });
+        await prisma.userClient.update({ where: { id: ownerId }, data });
       } catch (e) {
-        // 명확한 에러 응답 (silent fail 제거)
         const msg = e instanceof Error ? e.message : String(e);
         if (msg.includes("Unique constraint")) {
-          return NextResponse.json({ error: "이미 같은 사업자번호로 등록된 거래처가 있어요." }, { status: 409 });
+          return NextResponse.json({ error: "이미 같은 사업자번호로 등록된 거래처가 있어요. 거래처 관리에서 중복 항목을 정리해주세요." }, { status: 409 });
         }
         return NextResponse.json({ error: `수정 실패: ${msg.slice(0, 200)}` }, { status: 500 });
       }
     } else {
-      // 신규 생성
+      // 본인 사업자 신규 등록 — UserClient 만들고 User.ownerBizClientId 에 연결.
       const createData: Record<string, unknown> = {
         userId: session.id,
         clientName: clientName.trim(),
@@ -120,21 +148,24 @@ export async function PATCH(req: NextRequest) {
         bizFileKey,
         bizDocument: bizDocFallback,
         bizFileName,
-        dealerType: null,
+        dealerType: normalizedDealerType,
         approved: true,
       };
       try {
-        await prisma.userClient.create({ data: createData as Parameters<typeof prisma.userClient.create>[0]["data"] });
-      } catch {
-        try {
-          await prisma.userClient.create({
-            data: { userId: session.id, clientName: clientName.trim(), bizNumber: digits, dealerType: null, approved: true } as Parameters<typeof prisma.userClient.create>[0]["data"],
-          });
-        } catch (e2) {
-          const msg = e2 instanceof Error ? e2.message : String(e2);
-          if (msg.includes("Unique constraint")) return NextResponse.json({ error: "이미 등록된 사업자번호예요." }, { status: 409 });
-          return NextResponse.json({ error: msg }, { status: 500 });
+        const created = await prisma.userClient.create({
+          data: createData as Parameters<typeof prisma.userClient.create>[0]["data"],
+        });
+        // 즉시 ownerBizClientId 로 연결 — 다음부터 본인 사업자로 명시 식별됨.
+        await prisma.user.update({
+          where: { id: session.id },
+          data: { ownerBizClientId: created.id },
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.includes("Unique constraint")) {
+          return NextResponse.json({ error: "이미 등록된 사업자번호예요." }, { status: 409 });
         }
+        return NextResponse.json({ error: msg }, { status: 500 });
       }
     }
     return NextResponse.json({ success: true });

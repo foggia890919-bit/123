@@ -13,9 +13,8 @@ import {
 } from "./db.ts";
 
 // Wait between consecutive requests within a single scraping lane.
-// Lowered default: the browser interaction itself takes 2-4s, so extra
-// delay is only needed to avoid triggering the site's rate limiter.
-const PER_SITE_DELAY_MS = Number(process.env.SCHEDULED_DELAY_MS ?? 300);
+// 사용자 의견: 백제/훼밀리는 rate limiter 없음. 기본값을 짧게 둠.
+const PER_SITE_DELAY_MS = Number(process.env.SCHEDULED_DELAY_MS ?? 100);
 
 // Number of parallel browser sessions per site. Each slot logs in
 // independently and processes a separate slice of the code list.

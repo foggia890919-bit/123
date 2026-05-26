@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo, Fragment } from "react";
 import { signOut } from "next-auth/react";
-import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut, Building2, Search, X, Mail, Phone, Send, Inbox, Copy, MessageCircle, Menu, Loader2 } from "lucide-react";
+import { Upload, CheckCircle, AlertCircle, ShieldCheck, Users, Percent, Download, FileSpreadsheet, Filter, Database, ChevronDown, ChevronUp, Plus, RefreshCw, LogOut, Building2, Search, X, Mail, Phone, Send, Inbox, Copy, MessageCircle, Menu, Loader2, Network, ChevronRight, Trash2, Pencil, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import * as XLSX from "xlsx";
@@ -24,7 +24,7 @@ declare global {
   }
 }
 
-type Tab = "upload" | "members" | "rates" | "filterReqs" | "userClients" | "bizManagement" | "corpRelation" | "apiSources" | "notices" | "companySubmissions" | "bulkSubmit" | "loginLogs" | "fileMigration" | "banners" | "boards";
+type Tab = "upload" | "members" | "rates" | "filterReqs" | "userClients" | "bizManagement" | "corpRelation" | "apiSources" | "notices" | "companySubmissions" | "bulkSubmit" | "submissionTree" | "loginLogs" | "fileMigration" | "banners" | "boards";
 
 interface MenuItem { key: Tab; label: string; icon: React.ElementType }
 interface MenuGroup { title: string; items: MenuItem[] }
@@ -53,6 +53,7 @@ const MENU_GROUPS: MenuGroup[] = [
       { key: "filterReqs", label: "요청 내역", icon: Filter },
       { key: "bulkSubmit", label: "제약사별 일괄제출", icon: Send },
       { key: "companySubmissions", label: "제출처 관리", icon: Inbox },
+      { key: "submissionTree", label: "제출 트리", icon: Network },
     ],
   },
   {
@@ -180,6 +181,7 @@ export default function AdminDashboardPage() {
         {tab === "filterReqs" && <FilterReqsTab />}
         {tab === "bulkSubmit" && <BulkSubmissionTab />}
         {tab === "companySubmissions" && <CompanySubmissionsTab />}
+        {tab === "submissionTree" && <SubmissionTreeTab />}
         {tab === "userClients" && <UserClientsTab />}
         {tab === "bizManagement" && <BizManagementTab />}
         {tab === "corpRelation" && <CorpRelationTab />}
@@ -3340,33 +3342,147 @@ interface AdminUserClient {
   user: { name: string | null; email: string; phone?: string | null };
 }
 
-type BizSubTab = "all" | "hospital" | "upper-corp" | "lower-corp";
+type BizSubTab = "all" | "hospital" | "pharmacy" | "cso" | "corporation";
+
+interface EditValues {
+  clientName: string;
+  bizNumber: string;
+  dealerType: string | null;
+  approved: boolean;
+}
 
 function BizManagementTab() {
   const [rows, setRows] = useState<AdminUserClient[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [subTab, setSubTab] = useState<BizSubTab>("all");
+  // 삭제 진행 상태 — 동일 행 더블 클릭 방지. 삭제 직전 GET 으로 연결 카운트 받아와서 confirm.
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  // 인라인 수정 — id 별 편집 모드. editValues 에 현재 입력값 보관, 저장 시 PATCH.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValues, setEditValues] = useState<EditValues | null>(null);
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [editError, setEditError] = useState("");
 
-  useEffect(() => {
+  function startEdit(row: AdminUserClient) {
+    setEditingId(row.id);
+    setEditValues({
+      clientName: row.clientName,
+      bizNumber: row.bizNumber,
+      dealerType: row.dealerType ?? null,
+      approved: row.approved,
+    });
+    setEditError("");
+  }
+  function cancelEdit() {
+    setEditingId(null);
+    setEditValues(null);
+    setEditError("");
+  }
+  async function saveEdit(row: AdminUserClient) {
+    if (!editValues) return;
+    const digits = editValues.bizNumber.replace(/\D/g, "");
+    if (!editValues.clientName.trim()) { setEditError("거래처명을 입력해주세요."); return; }
+    if (digits.length !== 10) { setEditError("사업자번호 10자리를 입력해주세요."); return; }
+    setSavingId(row.id);
+    setEditError("");
+    try {
+      const res = await fetch(`/api/user-clients?id=${row.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientName: editValues.clientName.trim(),
+          bizNumber: digits,
+          dealerType: editValues.dealerType,
+          approved: editValues.approved,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setEditError(err.error || `저장 실패 (${res.status})`);
+        return;
+      }
+      // 로컬 state 즉시 반영 + 서버에서 새로 fetch (uniqueness 등 검증 위해).
+      setRows((prev) => prev.map((x) => x.id === row.id
+        ? { ...x, clientName: editValues.clientName.trim(), bizNumber: digits, dealerType: editValues.dealerType, approved: editValues.approved }
+        : x));
+      cancelEdit();
+      reload();
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  function reload() {
     setLoading(true);
     fetch("/api/user-clients?all=true")
       .then((r) => r.json())
       .then((d) => setRows(Array.isArray(d) ? d : []))
       .finally(() => setLoading(false));
-  }, []);
+  }
+  useEffect(() => { reload(); }, []);
+
+  async function handleDelete(row: AdminUserClient) {
+    if (deletingId) return;
+    setDeletingId(row.id);
+    try {
+      // 연결된 보고서/제안서 카운트 미리 받아서 사용자에게 알리기.
+      let reportCount = 0, proposalCount = 0;
+      try {
+        const r = await fetch(`/api/user-clients/${row.id}`);
+        if (r.ok) {
+          const d = await r.json();
+          reportCount = d.reportCount ?? 0;
+          proposalCount = d.proposalCount ?? 0;
+        }
+      } catch { /* 카운트 못 받아도 진행 가능 */ }
+
+      const lines = [
+        `정말 삭제할까요?`,
+        ``,
+        `거래처명: ${row.clientName}`,
+        `사업자번호: ${row.bizNumber}`,
+        `담당자: ${row.user.name || row.user.email}`,
+      ];
+      if (reportCount > 0 || proposalCount > 0) {
+        lines.push(``, `⚠️ 이 거래처에 연결된 항목:`);
+        if (reportCount > 0) lines.push(`  - 처방통계 보고서 ${reportCount}건`);
+        if (proposalCount > 0) lines.push(`  - 제안서 ${proposalCount}건`);
+        lines.push(`삭제해도 보고서/제안서 자체는 남지만 거래처 연결이 끊깁니다.`);
+      }
+      if (!confirm(lines.join("\n"))) return;
+
+      const del = await fetch(`/api/user-clients/${row.id}`, { method: "DELETE" });
+      if (!del.ok) {
+        const err = await del.json().catch(() => ({}));
+        alert(`삭제 실패: ${err.error || del.status}`);
+        return;
+      }
+      // 로컬 state 에서도 즉시 제거 (네트워크 reload 동시에).
+      setRows((prev) => prev.filter((x) => x.id !== row.id));
+      reload();
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   const SUB_TABS: { key: BizSubTab; label: string }[] = [
     { key: "all", label: "전체" },
     { key: "hospital", label: "병의원(원외)" },
-    { key: "upper-corp", label: "상위법인" },
-    { key: "lower-corp", label: "하위법인" },
+    { key: "pharmacy", label: "약국" },
+    { key: "cso", label: "CSO/일반사업자" },
+    { key: "corporation", label: "법인" },
   ];
 
   const typeFiltered = rows.filter((r) => {
     if (subTab === "hospital") return !r.dealerType;
-    if (subTab === "upper-corp") return r.dealerType === "UPPER_CORP";
-    if (subTab === "lower-corp") return r.dealerType === "LOWER_CORP";
+    if (subTab === "pharmacy") return r.dealerType === "PHARMACY";
+    if (subTab === "cso") return r.dealerType === "CSO";
+    // 법인 탭은 CORPORATION/UPPER_CORP/LOWER_CORP/INDIVIDUAL/SELF 모두 포함 (상위/하위 통합)
+    if (subTab === "corporation") {
+      const t = r.dealerType;
+      return t === "CORPORATION" || t === "UPPER_CORP" || t === "LOWER_CORP" || t === "INDIVIDUAL" || t === "SELF";
+    }
     return true;
   });
 
@@ -3383,27 +3499,200 @@ function BizManagementTab() {
 
   const dealerLabel = (type?: string | null) => {
     if (!type) return "병의원(원외)";
-    if (type === "UPPER_CORP") return "상위법인";
-    if (type === "LOWER_CORP") return "하위법인";
-    if (type === "CORPORATION") return "법인";
+    // 상위/하위 개념 제거 — 모두 "법인" 으로 통합 표시 (기존 데이터 호환)
+    if (type === "UPPER_CORP" || type === "LOWER_CORP" || type === "CORPORATION") return "법인";
     if (type === "INDIVIDUAL") return "개인사업자";
+    if (type === "PHARMACY") return "약국";
+    if (type === "CSO") return "CSO/일반사업자";
+    if (type === "SELF") return "자사";
     return type;
   };
   const dealerColor = (type?: string | null) => {
     if (!type) return "bg-green-100 text-green-700";
-    if (type === "UPPER_CORP") return "bg-indigo-100 text-indigo-700";
-    if (type === "LOWER_CORP") return "bg-cyan-100 text-cyan-700";
+    if (type === "UPPER_CORP" || type === "LOWER_CORP" || type === "CORPORATION") return "bg-indigo-100 text-indigo-700";
+    if (type === "PHARMACY") return "bg-pink-100 text-pink-700";
+    if (type === "CSO") return "bg-orange-100 text-orange-700";
     return "bg-gray-100 text-gray-600";
   };
 
   const counts = {
     all: rows.length,
     hospital: rows.filter((r) => !r.dealerType).length,
-    "upper-corp": rows.filter((r) => r.dealerType === "UPPER_CORP").length,
-    "lower-corp": rows.filter((r) => r.dealerType === "LOWER_CORP").length,
+    pharmacy: rows.filter((r) => r.dealerType === "PHARMACY").length,
+    cso: rows.filter((r) => r.dealerType === "CSO").length,
+    corporation: rows.filter((r) => {
+      const t = r.dealerType;
+      return t === "CORPORATION" || t === "UPPER_CORP" || t === "LOWER_CORP" || t === "INDIVIDUAL" || t === "SELF";
+    }).length,
   };
 
+  // 본인 대표 사업자 진단 — 마이페이지 사업자 정보 카드는 dealerType=null 중 가장 오래된 1행만 가져옴.
+  // 한 회원이 dealerType=null 행을 여러 개 가지면 마이페이지에선 안 보이는 사업자가 생기고
+  // 저장 시 "이미 같은 사업자번호로 등록된 거래처" 오류로 막힘. 이를 자동 감지.
+  const mypageDiag = useMemo(() => {
+    const byUser = new Map<string, AdminUserClient[]>();
+    for (const r of rows) {
+      if (r.dealerType != null) continue;
+      const list = byUser.get(r.userId) ?? [];
+      list.push(r);
+      byUser.set(r.userId, list);
+    }
+    const mypagePrimaryIds = new Set<string>();
+    const duplicateUserIds = new Set<string>();
+    for (const [uid, list] of byUser.entries()) {
+      list.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      mypagePrimaryIds.add(list[0].id);
+      if (list.length >= 2) duplicateUserIds.add(uid);
+    }
+    return { mypagePrimaryIds, duplicateUserIds, byUser };
+  }, [rows]);
+
+  // 중복 회원 펼침 토글
+  const [diagOpen, setDiagOpen] = useState(false);
+
   return (
+    <div className="space-y-4">
+      {/* 진단 패널 — 본인 대표 사업자 중복 (dealerType=null 행이 한 회원에 2개+) */}
+      {mypageDiag.duplicateUserIds.size > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-lg overflow-hidden">
+          <button
+            onClick={() => setDiagOpen((v) => !v)}
+            className="w-full px-4 py-3 flex items-center gap-3 hover:bg-red-100/50 text-left"
+          >
+            <AlertCircle className="w-5 h-5 text-red-500 shrink-0" />
+            <div className="flex-1">
+              <div className="text-sm font-bold text-red-800">
+                마이페이지 사업자 정보 충돌 — {mypageDiag.duplicateUserIds.size}명 감지
+              </div>
+              <div className="text-xs text-red-600 mt-0.5">
+                같은 회원이 &quot;본인 대표 사업자&quot; 후보 행(병의원 유형) 을 2개 이상 가지고 있어요.
+                마이페이지는 그중 가장 오래된 1행만 보여주고, 나머지는 사업자번호 충돌로 저장 안 됨.
+              </div>
+            </div>
+            <ChevronDown className={`w-4 h-4 text-red-500 transition-transform ${diagOpen ? "rotate-180" : ""}`} />
+          </button>
+          {diagOpen && (
+            <div className="px-4 pb-4 space-y-3 border-t border-red-200 pt-3 bg-red-50/30">
+              {Array.from(mypageDiag.byUser.entries())
+                .filter(([uid]) => mypageDiag.duplicateUserIds.has(uid))
+                .map(([uid, list]) => {
+                  const owner = list[0]; // any row has user info
+                  return (
+                    <div key={uid} className="bg-white border border-red-200 rounded p-3">
+                      <div className="flex items-center gap-2 mb-2 flex-wrap">
+                        <span className="text-sm font-bold text-gray-900">{owner.user.name || owner.user.email.split("@")[0]}</span>
+                        <span className="text-xs text-gray-500">{owner.user.email}</span>
+                        <span className="ml-auto text-[10px] text-red-700">중복 {list.length}건</span>
+                      </div>
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-gray-500">
+                            <th className="text-left py-1">거래처명</th>
+                            <th className="text-left py-1">사업자번호</th>
+                            <th className="text-left py-1">등록일</th>
+                            <th className="text-left py-1">상태</th>
+                            <th className="text-center py-1 w-20">수정/삭제</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {list.map((r, idx) => {
+                            const isEditingHere = editingId === r.id;
+                            const isSavingHere = savingId === r.id;
+                            return (
+                            <Fragment key={r.id}>
+                            <tr className={`${idx === 0 ? "bg-green-50/40" : ""} ${isEditingHere ? "bg-blue-50/40" : ""}`}>
+                              <td className="py-1.5 font-medium">
+                                {isEditingHere && editValues ? (
+                                  <input
+                                    value={editValues.clientName}
+                                    onChange={(e) => setEditValues({ ...editValues, clientName: e.target.value })}
+                                    className="border border-blue-300 rounded px-1.5 py-0.5 text-xs w-full focus:outline-none focus:ring-1 focus:ring-blue-400"
+                                    autoFocus
+                                  />
+                                ) : r.clientName}
+                              </td>
+                              <td className="py-1.5 font-mono">
+                                {isEditingHere && editValues ? (
+                                  <input
+                                    value={editValues.bizNumber}
+                                    onChange={(e) => setEditValues({ ...editValues, bizNumber: e.target.value })}
+                                    placeholder="10자리"
+                                    className="border border-blue-300 rounded px-1.5 py-0.5 text-xs font-mono w-28 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                                  />
+                                ) : r.bizNumber}
+                              </td>
+                              <td className="py-1.5 text-gray-500">{new Date(r.createdAt).toLocaleDateString("ko-KR")}</td>
+                              <td className="py-1.5">
+                                {idx === 0
+                                  ? <span className="px-1.5 py-0.5 rounded bg-green-100 text-green-700 font-semibold text-[10px]">마이페이지 표시</span>
+                                  : <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold text-[10px]">숨김 — 저장 시 충돌</span>}
+                              </td>
+                              <td className="py-1.5 text-center">
+                                {isEditingHere ? (
+                                  <div className="inline-flex items-center gap-0.5">
+                                    <button
+                                      onClick={() => saveEdit(r)}
+                                      disabled={isSavingHere}
+                                      title="저장"
+                                      className="text-green-600 hover:text-green-800 disabled:opacity-30 inline-flex items-center justify-center w-6 h-6 rounded hover:bg-green-50"
+                                    >
+                                      {isSavingHere ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                                    </button>
+                                    <button
+                                      onClick={cancelEdit}
+                                      disabled={isSavingHere}
+                                      title="취소"
+                                      className="text-gray-400 hover:text-gray-700 disabled:opacity-30 inline-flex items-center justify-center w-6 h-6 rounded hover:bg-gray-100"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="inline-flex items-center gap-0.5">
+                                    <button
+                                      onClick={() => startEdit(r)}
+                                      disabled={editingId !== null || deletingId === r.id}
+                                      title="수정"
+                                      className="text-gray-400 hover:text-blue-600 disabled:opacity-30 inline-flex items-center justify-center w-6 h-6 rounded hover:bg-blue-50"
+                                    >
+                                      <Pencil className="w-3 h-3" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleDelete(r)}
+                                      disabled={deletingId === r.id || editingId !== null}
+                                      title="이 거래처 행 삭제"
+                                      className="text-gray-400 hover:text-red-600 disabled:opacity-30 inline-flex items-center justify-center w-6 h-6 rounded hover:bg-red-50"
+                                    >
+                                      {deletingId === r.id
+                                        ? <Loader2 className="w-3 h-3 animate-spin" />
+                                        : <Trash2 className="w-3 h-3" />}
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                            {isEditingHere && editError && (
+                              <tr className="bg-red-50">
+                                <td colSpan={5} className="py-1.5 px-2 text-[11px] text-red-700">{editError}</td>
+                              </tr>
+                            )}
+                            </Fragment>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })}
+              <p className="text-[11px] text-red-700 px-1">
+                해결: 어드민에서 불필요한 행을 정리하거나, 회원에게 거래처관리(의료기관) 페이지에서 직접 삭제 안내.
+                마이페이지 사업자 정보 수정으로는 이 충돌을 풀 수 없어요.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3">
         <div>
@@ -3445,17 +3734,66 @@ function BizManagementTab() {
                 <th className="px-4 py-3 text-left">이메일</th>
                 <th className="px-4 py-3 text-center">승인</th>
                 <th className="px-4 py-3 text-center">등록일</th>
+                <th className="px-4 py-3 text-center">삭제</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {filtered.map((c) => (
-                <tr key={c.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 font-medium text-gray-900">{c.clientName}</td>
-                  <td className="px-4 py-3 text-gray-600 text-xs font-mono">{c.bizNumber}</td>
+              {filtered.map((c) => {
+                const isMypagePrimary = mypageDiag.mypagePrimaryIds.has(c.id);
+                const isHiddenConflict = !c.dealerType && !isMypagePrimary && mypageDiag.duplicateUserIds.has(c.userId);
+                const isEditing = editingId === c.id;
+                const isSaving = savingId === c.id;
+                return (
+                <Fragment key={c.id}>
+                <tr className={`hover:bg-gray-50 ${isHiddenConflict ? "bg-amber-50/40" : ""} ${isEditing ? "bg-blue-50/30" : ""}`}>
+                  <td className="px-4 py-3 font-medium text-gray-900">
+                    {isEditing && editValues ? (
+                      <input
+                        value={editValues.clientName}
+                        onChange={(e) => setEditValues({ ...editValues, clientName: e.target.value })}
+                        className="border border-blue-300 rounded px-2 py-1 text-sm w-full focus:outline-none focus:ring-1 focus:ring-blue-400"
+                        autoFocus
+                      />
+                    ) : (
+                      <>
+                        {c.clientName}
+                        {isMypagePrimary && c.dealerType == null && (
+                          <span className="ml-2 inline-block px-1.5 py-0.5 rounded bg-green-100 text-green-700 text-[10px] font-semibold align-middle">마이페이지 표시</span>
+                        )}
+                        {isHiddenConflict && (
+                          <span className="ml-2 inline-block px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-semibold align-middle">숨김 — 저장 충돌</span>
+                        )}
+                      </>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-gray-600 text-xs font-mono">
+                    {isEditing && editValues ? (
+                      <input
+                        value={editValues.bizNumber}
+                        onChange={(e) => setEditValues({ ...editValues, bizNumber: e.target.value })}
+                        placeholder="10자리 숫자"
+                        className="border border-blue-300 rounded px-2 py-1 text-xs font-mono w-32 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      />
+                    ) : c.bizNumber}
+                  </td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${dealerColor(c.dealerType)}`}>
-                      {dealerLabel(c.dealerType)}
-                    </span>
+                    {isEditing && editValues ? (
+                      <select
+                        value={editValues.dealerType ?? ""}
+                        onChange={(e) => setEditValues({ ...editValues, dealerType: e.target.value || null })}
+                        className="border border-blue-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      >
+                        <option value="">병의원(원외)</option>
+                        <option value="PHARMACY">약국</option>
+                        <option value="CSO">CSO/일반사업자</option>
+                        <option value="CORPORATION">법인</option>
+                        <option value="INDIVIDUAL">개인사업자</option>
+                      </select>
+                    ) : (
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${dealerColor(c.dealerType)}`}>
+                        {dealerLabel(c.dealerType)}
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-gray-700">
                     <p>{c.user.name || "-"}</p>
@@ -3463,19 +3801,80 @@ function BizManagementTab() {
                   </td>
                   <td className="px-4 py-3 text-gray-500 text-xs">{c.user.email}</td>
                   <td className="px-4 py-3 text-center">
-                    {c.approved
+                    {isEditing && editValues ? (
+                      <label className="inline-flex items-center gap-1 text-xs cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={editValues.approved}
+                          onChange={(e) => setEditValues({ ...editValues, approved: e.target.checked })}
+                          className="w-3.5 h-3.5"
+                        />
+                        승인
+                      </label>
+                    ) : c.approved
                       ? <span className="text-xs text-green-600 font-medium">승인</span>
                       : <span className="text-xs text-amber-500">미승인</span>}
                   </td>
                   <td className="px-4 py-3 text-center text-xs text-gray-400">
                     {new Date(c.createdAt).toLocaleDateString("ko-KR")}
                   </td>
+                  <td className="px-4 py-3 text-center">
+                    {isEditing ? (
+                      <div className="inline-flex items-center gap-1">
+                        <button
+                          onClick={() => saveEdit(c)}
+                          disabled={isSaving}
+                          title="저장"
+                          className="text-green-600 hover:text-green-800 disabled:opacity-30 inline-flex items-center justify-center w-7 h-7 rounded hover:bg-green-50"
+                        >
+                          {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-4 h-4" />}
+                        </button>
+                        <button
+                          onClick={cancelEdit}
+                          disabled={isSaving}
+                          title="취소"
+                          className="text-gray-400 hover:text-gray-700 disabled:opacity-30 inline-flex items-center justify-center w-7 h-7 rounded hover:bg-gray-100"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="inline-flex items-center gap-1">
+                        <button
+                          onClick={() => startEdit(c)}
+                          disabled={editingId !== null || deletingId === c.id}
+                          title="수정"
+                          className="text-gray-400 hover:text-blue-600 disabled:opacity-30 inline-flex items-center justify-center w-7 h-7 rounded hover:bg-blue-50"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(c)}
+                          disabled={deletingId === c.id || editingId !== null}
+                          title="이 거래처 행 삭제"
+                          className="text-gray-400 hover:text-red-600 disabled:opacity-30 inline-flex items-center justify-center w-7 h-7 rounded hover:bg-red-50"
+                        >
+                          {deletingId === c.id
+                            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            : <Trash2 className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    )}
+                  </td>
                 </tr>
-              ))}
+                {isEditing && editError && (
+                  <tr className="bg-red-50">
+                    <td colSpan={8} className="px-4 py-2 text-xs text-red-700">{editError}</td>
+                  </tr>
+                )}
+                </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
+    </div>
     </div>
   );
 }
@@ -5308,6 +5707,255 @@ function SyncSheetsButton() {
         </a>
       )}
       {error && <p className="text-xs text-red-500 px-1">{error}</p>}
+    </div>
+  );
+}
+
+// 제출 트리 — SubmissionRoute.parentUserId 기반 상위↔하위 회원 매핑 시각화.
+// 상위회원(법인) 카드 안에 하위회원(영업사원/거래처) 카드 + 그 회원의 매핑(거래처×제약사×제출처) 행 표시.
+// "미연결" 섹션은 parentUserId=null 인 매핑 모음.
+interface TreeUser { id: string; name: string | null; email: string; isBusinessApproved?: boolean | null }
+interface TreeRoute { id: string; clientName: string; companyName: string; submissionEntity: string; active: boolean }
+interface TreeChild { owner: TreeUser; routes: TreeRoute[] }
+interface TreeParent { parent: TreeUser; childCount: number; routeCount: number; children: TreeChild[] }
+interface TreeResponse {
+  parents: TreeParent[];
+  unlinked: { owners: TreeChild[]; routeCount: number };
+  totals: { parentCount: number; routeCount: number; unlinkedRouteCount: number };
+}
+
+function SubmissionTreeTab() {
+  const [data, setData] = useState<TreeResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [query, setQuery] = useState("");
+
+  function refresh() {
+    setLoading(true);
+    setError("");
+    fetch("/api/admin/submission-tree")
+      .then(async (r) => {
+        if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((d: TreeResponse) => setData(d))
+      .catch((e) => setError(e instanceof Error ? e.message : "조회 실패"))
+      .finally(() => setLoading(false));
+  }
+  useEffect(() => { refresh(); }, []);
+
+  function toggleParent(id: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function expandAll() {
+    if (!data) return;
+    setExpanded(new Set([...data.parents.map((p) => p.parent.id), "__unlinked__"]));
+  }
+  function collapseAll() { setExpanded(new Set()); }
+
+  // 검색 — 상위회원, 하위회원, 거래처/제약사/제출처명 모두 매칭.
+  const filteredParents = useMemo(() => {
+    if (!data) return [];
+    if (!query.trim()) return data.parents;
+    const q = query.trim().toLowerCase();
+    return data.parents.filter((p) => {
+      if ((p.parent.name || "").toLowerCase().includes(q)) return true;
+      if (p.parent.email.toLowerCase().includes(q)) return true;
+      return p.children.some((c) => {
+        if ((c.owner.name || "").toLowerCase().includes(q)) return true;
+        if (c.owner.email.toLowerCase().includes(q)) return true;
+        return c.routes.some((r) =>
+          r.clientName.toLowerCase().includes(q) ||
+          r.companyName.toLowerCase().includes(q) ||
+          r.submissionEntity.toLowerCase().includes(q)
+        );
+      });
+    });
+  }, [data, query]);
+
+  const filteredUnlinked = useMemo(() => {
+    if (!data) return [];
+    if (!query.trim()) return data.unlinked.owners;
+    const q = query.trim().toLowerCase();
+    return data.unlinked.owners.filter((c) => {
+      if ((c.owner.name || "").toLowerCase().includes(q)) return true;
+      if (c.owner.email.toLowerCase().includes(q)) return true;
+      return c.routes.some((r) =>
+        r.clientName.toLowerCase().includes(q) ||
+        r.companyName.toLowerCase().includes(q) ||
+        r.submissionEntity.toLowerCase().includes(q)
+      );
+    });
+  }, [data, query]);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <Network className="w-5 h-5 text-indigo-500" />
+        <h1 className="text-2xl font-bold text-gray-900">제출 트리</h1>
+      </div>
+      <p className="text-sm text-gray-500">
+        상위회원(법인) ↔ 하위회원(영업사원/거래처) ↔ 매핑(거래처×제약사×제출처) 관계를 한눈에 봅니다.
+        매핑은 회원 통계제출처에서 등록한 SubmissionRoute 입니다.
+      </p>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <button onClick={refresh} disabled={loading}
+          className="text-xs px-3 py-1.5 bg-white border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 inline-flex items-center gap-1">
+          <RefreshCw className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} /> 새로고침
+        </button>
+        <button onClick={expandAll} disabled={!data || loading}
+          className="text-xs px-3 py-1.5 bg-white border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50">
+          모두 펼치기
+        </button>
+        <button onClick={collapseAll} disabled={!data || loading}
+          className="text-xs px-3 py-1.5 bg-white border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50">
+          모두 접기
+        </button>
+        <div className="relative ml-auto">
+          <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            placeholder="회원/거래처/제약사/제출처 검색"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="text-xs pl-7 pr-2 py-1.5 border border-gray-300 rounded w-64 focus:outline-none focus:border-blue-400"
+          />
+        </div>
+        {data && (
+          <div className="text-xs text-gray-500 px-2">
+            상위 {data.totals.parentCount}명 · 매핑 {data.totals.routeCount}건
+            {data.totals.unlinkedRouteCount > 0 && <span className="text-amber-600"> · 미연결 {data.totals.unlinkedRouteCount}건</span>}
+          </div>
+        )}
+      </div>
+
+      {error && <div className="bg-red-50 border border-red-200 rounded p-3 text-xs text-red-700">{error}</div>}
+
+      {loading && !data ? (
+        <div className="text-center py-12 text-gray-400 inline-flex items-center gap-2">
+          <Loader2 className="w-4 h-4 animate-spin" /> 트리 로딩 중...
+        </div>
+      ) : !data ? null : (
+        <div className="space-y-3">
+          {filteredParents.length === 0 && filteredUnlinked.length === 0 && (
+            <div className="text-center py-12 text-gray-400 text-sm">
+              {query ? "검색 결과가 없어요." : "등록된 제출처가 없어요."}
+            </div>
+          )}
+
+          {filteredParents.map((p) => {
+            const isOpen = expanded.has(p.parent.id);
+            return (
+              <div key={p.parent.id} className="bg-white border border-gray-200 rounded-lg">
+                <button
+                  onClick={() => toggleParent(p.parent.id)}
+                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-left"
+                >
+                  <ChevronRight className={`w-4 h-4 text-gray-400 transition-transform ${isOpen ? "rotate-90" : ""}`} />
+                  <div className="flex items-center gap-2 flex-1 min-w-0 flex-wrap">
+                    <span className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 text-[10px] font-semibold">상위</span>
+                    <span className="text-sm font-bold text-gray-900 truncate">{p.parent.name || p.parent.email.split("@")[0]}</span>
+                    <span className="text-xs text-gray-500 truncate">{p.parent.email}</span>
+                    {p.parent.isBusinessApproved && (
+                      <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 text-[10px]">사업자</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-gray-500 shrink-0">
+                    <span>하위 {p.childCount}명</span>
+                    <span className="text-gray-300">·</span>
+                    <span>매핑 {p.routeCount}건</span>
+                  </div>
+                </button>
+
+                {isOpen && (
+                  <div className="border-t border-gray-100 px-4 py-3 space-y-3 bg-gray-50/50">
+                    {p.children.map((c) => (
+                      <div key={c.owner.id} className="bg-white border border-gray-200 rounded">
+                        <div className="px-3 py-2 border-b border-gray-100 flex items-center gap-2 flex-wrap">
+                          <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 text-[10px] font-semibold">하위</span>
+                          <span className="text-sm font-semibold text-gray-900">{c.owner.name || c.owner.email.split("@")[0]}</span>
+                          <span className="text-xs text-gray-500">{c.owner.email}</span>
+                          <span className="ml-auto text-[10px] text-gray-400">{c.routes.length}건</span>
+                        </div>
+                        <div className="divide-y divide-gray-100">
+                          {c.routes.map((r) => (
+                            <div key={r.id} className="px-3 py-1.5 grid grid-cols-12 gap-2 text-xs items-center">
+                              <span className="col-span-4 text-gray-800 truncate" title={r.clientName}>{r.clientName}</span>
+                              <span className="col-span-1 text-gray-300 text-center">→</span>
+                              <span className="col-span-3 text-gray-700 truncate" title={r.companyName}>{r.companyName}</span>
+                              <span className="col-span-3 text-indigo-700 font-medium truncate" title={r.submissionEntity}>{r.submissionEntity}</span>
+                              <span className="col-span-1 text-right">
+                                {r.active
+                                  ? <span className="px-1 py-0.5 rounded bg-green-50 text-green-700 text-[10px]">활성</span>
+                                  : <span className="px-1 py-0.5 rounded bg-gray-100 text-gray-500 text-[10px]">비활성</span>}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* 미연결 매핑 — parentUserId=null. ADMIN 이 상위 지정을 안 했거나 자유 입력으로만 등록된 케이스. */}
+          {filteredUnlinked.length > 0 && (
+            <div className="bg-white border border-amber-200 rounded-lg">
+              <button
+                onClick={() => toggleParent("__unlinked__")}
+                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-amber-50/50 text-left"
+              >
+                <ChevronRight className={`w-4 h-4 text-amber-500 transition-transform ${expanded.has("__unlinked__") ? "rotate-90" : ""}`} />
+                <div className="flex items-center gap-2 flex-1 flex-wrap">
+                  <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-semibold">미연결</span>
+                  <span className="text-sm font-bold text-amber-900">상위회원 미지정</span>
+                  <span className="text-xs text-amber-700">— 자유 입력으로만 등록된 매핑</span>
+                </div>
+                <div className="text-xs text-amber-700 shrink-0">
+                  {filteredUnlinked.length}명 · 매핑 {filteredUnlinked.reduce((s, c) => s + c.routes.length, 0)}건
+                </div>
+              </button>
+
+              {expanded.has("__unlinked__") && (
+                <div className="border-t border-amber-100 px-4 py-3 space-y-3 bg-amber-50/30">
+                  {filteredUnlinked.map((c) => (
+                    <div key={c.owner.id} className="bg-white border border-amber-200 rounded">
+                      <div className="px-3 py-2 border-b border-amber-100 flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-semibold text-gray-900">{c.owner.name || c.owner.email.split("@")[0]}</span>
+                        <span className="text-xs text-gray-500">{c.owner.email}</span>
+                        <span className="ml-auto text-[10px] text-gray-400">{c.routes.length}건</span>
+                      </div>
+                      <div className="divide-y divide-gray-100">
+                        {c.routes.map((r) => (
+                          <div key={r.id} className="px-3 py-1.5 grid grid-cols-12 gap-2 text-xs items-center">
+                            <span className="col-span-4 text-gray-800 truncate" title={r.clientName}>{r.clientName}</span>
+                            <span className="col-span-1 text-gray-300 text-center">→</span>
+                            <span className="col-span-3 text-gray-700 truncate" title={r.companyName}>{r.companyName}</span>
+                            <span className="col-span-3 text-amber-700 truncate" title={r.submissionEntity}>{r.submissionEntity}</span>
+                            <span className="col-span-1 text-right">
+                              {r.active
+                                ? <span className="px-1 py-0.5 rounded bg-green-50 text-green-700 text-[10px]">활성</span>
+                                : <span className="px-1 py-0.5 rounded bg-gray-100 text-gray-500 text-[10px]">비활성</span>}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -44,6 +44,8 @@ interface GroupListItem {
   submitted: boolean;
   latestAt: string;
   metrics: Metrics;
+  // 사진을 올린 회원들 — 한 그룹에 여러 영업사원이 사진 올렸을 수 있어 배열.
+  uploaders?: { name: string | null; email: string }[];
 }
 
 interface ReportRow {
@@ -713,6 +715,19 @@ export default function StatsReviewPage() {
                 )}
                 <ChevronRight className="w-4 h-4 text-gray-400 ml-auto" />
               </div>
+              {/* 업로드한 회원 — 한 그룹에 여러 명일 수 있어 모두 표시. 이름 없으면 이메일. */}
+              {g.uploaders && g.uploaders.length > 0 && (
+                <div className="flex items-center gap-1.5 mb-2 flex-wrap text-[11px] text-gray-500">
+                  <span className="text-gray-400">업로드:</span>
+                  {g.uploaders.map((u, i) => (
+                    <span key={u.email} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-50 border border-gray-200">
+                      <span className="font-medium text-gray-700">{u.name || u.email.split("@")[0]}</span>
+                      {u.name && <span className="text-gray-400">· {u.email}</span>}
+                      {!u.name && i === 0 && <span className="text-gray-400">@{u.email.split("@")[1]}</span>}
+                    </span>
+                  ))}
+                </div>
+              )}
               <div className="grid grid-cols-6 gap-2">
                 <MetricBadge label="사진" value={`${g.metrics.photoCount}장`} />
                 <MetricBadge label="행" value={`${g.metrics.rowCount}건`} />
