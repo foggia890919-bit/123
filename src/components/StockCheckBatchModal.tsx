@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { X, Loader2, AlertCircle, CheckCircle2, RefreshCw } from "lucide-react";
+import { sumStockNullSafe } from "@/lib/stock-utils";
 
 interface InventoryItem {
   insuranceCode: string;
@@ -141,10 +142,7 @@ export default function StockCheckBatchModal({ open, onClose, items }: Props) {
                       if (it.unitPrice == null) return acc;
                       return acc == null || it.unitPrice < acc ? it.unitPrice : acc;
                     }, null);
-                    const totalStock = totalItems.reduce<number | null>(
-                      (sum, it) => it.stock != null ? (sum ?? 0) + it.stock : sum,
-                      null,
-                    );
+                    const totalStock = sumStockNullSafe(totalItems);
                     const displayName = totalItems.find(it => it.productName)?.productName ?? item.productName;
                     const displaySpec = totalItems.find(it => it.spec)?.spec ?? null;
                     const displayManufacturer = totalItems.find(it => it.manufacturer)?.manufacturer ?? null;

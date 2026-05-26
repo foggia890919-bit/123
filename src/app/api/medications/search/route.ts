@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { normalizeCompanyKey } from "@/lib/utils";
-import { safeParseInt } from "@/lib/auth-guard";
+import { paginationParams } from "@/lib/pagination";
 import { buildRateMap } from "@/lib/rate-utils";
 
 /**
@@ -51,8 +51,7 @@ export async function GET(req: NextRequest) {
   const ingredientNameHint = req.nextUrl.searchParams.get("ingredientName")?.trim() || "";
   const settlementOnly = req.nextUrl.searchParams.get("settlement") === "true";
   const userId = req.nextUrl.searchParams.get("userId") || null;
-  const page = safeParseInt(req.nextUrl.searchParams.get("page"), 1, 1, 10000);
-  const limit = safeParseInt(req.nextUrl.searchParams.get("limit"), 50, 1, 1000);
+  const { page, limit, skip } = paginationParams(req.nextUrl.searchParams, { defaultLimit: 50, maxLimit: 1000, maxPage: 10000 });
   const ingredientOnly = req.nextUrl.searchParams.get("ingredientOnly") === "true";
   const companiesRaw = req.nextUrl.searchParams.get("companies") || "";
   const companyList = companiesRaw.split(",").map((s) => s.trim()).filter(Boolean);
@@ -121,7 +120,7 @@ export async function GET(req: NextRequest) {
     prisma.medication.findMany({
       where,
       orderBy: [{ isSettlement: "desc" }, { commissionRate: "desc" }],
-      skip: (page - 1) * limit,
+      skip,
       take: limit,
       ...(fast ? {
         select: {

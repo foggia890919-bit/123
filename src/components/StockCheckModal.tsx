@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { X, Loader2, AlertCircle, CheckCircle2, RefreshCw, AlertTriangle, Info } from "lucide-react";
+import { sumStockNullSafe } from "@/lib/stock-utils";
 
 interface InventoryItem {
   insuranceCode: string;
@@ -156,10 +157,7 @@ export default function StockCheckModal({ open, onClose, insuranceCode, productN
             const validRows = results.filter(r => r.error !== "no snapshot yet");
             const errors = validRows.filter(r => r.error);
             const allItems = validRows.flatMap(r => r.items);
-            const totalStock = allItems.reduce<number | null>(
-              (sum, i) => i.stock != null ? (sum ?? 0) + i.stock : sum,
-              null,
-            );
+            const totalStock = sumStockNullSafe(allItems);
             const aggregated = allItems.length > 0
               ? [{
                   productName: allItems.find(i => i.productName)?.productName ?? (productName ?? ""),
