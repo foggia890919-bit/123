@@ -124,3 +124,5 @@ CREATE INDEX IF NOT EXISTS "UserClient_isRateTarget_idx"        ON "UserClient"(
 - 2026-05-26 11:42 | qa-crosscheck | medications/search stock null-propagation plan | CONDITIONAL_PASS
 
 - 2026-05-26 12:00 | qa-crosscheck | medications/search stock:null frontend propagation audit | CONDITIONAL_PASS (1 MAJOR: live-scraper overload in search/page.tsx:261-272)
+
+- 2026-05-26 12:00 | qa-crosscheck | medications/search COALESCE removal + stock aggregation code | PASS
