@@ -116,8 +116,8 @@ export function fetchStockBatch(codes: string[], live = false, sites?: string[],
   const targets = codes.filter((c) => {
     const e = cache.get(c);
     if (!e) return true;
-    if (e.status === "loading") return isLoadingStale(e);
     if (force) return true;
+    if (e.status === "loading") return isLoadingStale(e);
     return e.status !== "done";
   });
   if (targets.length === 0) return;
