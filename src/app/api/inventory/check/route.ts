@@ -235,7 +235,9 @@ export async function POST(req: NextRequest) {
         if (!cur) {
           aggMap.set(key, { ...s });
         } else {
-          cur.stock = (cur.stock ?? 0) + (s.stock ?? 0);
+          cur.stock = cur.stock != null && s.stock != null
+            ? cur.stock + s.stock
+            : cur.stock ?? s.stock;
           // unitPrice 가 비어있던 경우 채워주기
           if (cur.unitPrice == null && s.unitPrice != null) cur.unitPrice = s.unitPrice;
         }
