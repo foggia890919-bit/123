@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 import { BUCKETS, persistDataUri } from "@/lib/storage";
-import { appendRxStats } from "@/lib/google-sheets-rx-append";
-import type { RxExtractResult, RxDrugRow } from "@/lib/gemini-rx-stats-extract";
+import { appendRxStats } from "@/lib/google/google-sheets-rx-append";
+import type { RxExtractResult, RxDrugRow } from "@/lib/ai/gemini-rx-stats-extract";
 
 // /stats/photo 페이지의 "최종 승인" → DB + 구글 시트 동시 저장.
 // DB: 기존 /api/stats POST 와 동일 패턴 (영업실적 / 마이페이지 / 정산 모두 호환).

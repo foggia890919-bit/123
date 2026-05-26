@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { findOrCreateSpreadsheet, sheetsApi } from "./google-sheets";
-import type { RxExtractResult } from "./gemini-rx-stats-extract";
+import type { RxExtractResult } from "../ai/gemini-rx-stats-extract";
 
 export type RxSource = "manual" | "api" | "kakao";
 

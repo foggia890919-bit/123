@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireSession, requireAdmin, isNextResponse } from "@/lib/auth-guard";
-import { extractStatsLikeFusion } from "@/lib/gemini-stats-fusion-adapter";
+import { extractStatsLikeFusion } from "@/lib/ai/gemini-stats-fusion-adapter";
 
 // 기존 Clova OCR + Document AI + Gemini Vision fusion 파이프라인은 폐기.
 // gemini-3.5-flash 멀티모달이 사진을 통째로 읽어서 표 추출 → 마스터 매칭/수수료 보정만.

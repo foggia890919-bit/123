@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
-import { syncToSheets, type SheetData } from "@/lib/google-sheets";
+import { syncToSheets, type SheetData } from "@/lib/google/google-sheets";
 
 export const runtime = "nodejs";
 
