@@ -38,6 +38,15 @@ export function getStock(code: string): StockEntry {
   return cache.get(code) ?? { status: "idle" };
 }
 
+// 캐시 강제 초기화 — "done" 상태를 지워서 fetchStockBatch 가 다시 호출 가능하게.
+// "전체재고 새로고침" 버튼 용.
+export function resetStockCache(codes: string[]) {
+  for (const code of codes) {
+    cache.delete(code);
+    notify(code);
+  }
+}
+
 export function subscribeStock(code: string, fn: () => void): () => void {
   if (!listeners.has(code)) listeners.set(code, new Set());
   listeners.get(code)!.add(fn);

@@ -12,7 +12,7 @@ import { useSession } from "next-auth/react";
 import type { MedicationItem } from "@/types";
 import { hasRole } from "@/lib/roles";
 import { useGuestLimit } from "@/hooks/useGuestLimit";
-import { fetchStockBatch, getStock } from "@/lib/stock-cache";
+import { fetchStockBatch, getStock, resetStockCache } from "@/lib/stock-cache";
 
 // 인천약품 제외, 백제·훼밀리만
 const STOCK_SITES = ["ibjp", "family"];
@@ -261,12 +261,13 @@ export default function SearchPage() {
     }
   }, [results]);
 
-  // "전체재고 새로고침" — 모든 행을 실시간 라이브 스크랩으로 갱신 (한 번의 API 호출)
+  // "전체재고 새로고침" — 캐시 강제 리셋 후 라이브 크롤링 재요청
   function refreshAllLive() {
     const codes = results
       .map((m) => m.insuranceCode)
       .filter((c): c is string => !!c);
     if (codes.length > 0) {
+      resetStockCache(codes);  // "done" 상태 초기화 — 안 하면 fetchStockBatch 가 skip
       fetchStockBatch(codes, true, STOCK_SITES);
     }
   }
