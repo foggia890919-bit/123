@@ -1,16 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import bcrypt from "bcryptjs";
-import { requireAdmin, isNextResponse, safeParseInt } from "@/lib/auth-guard";
+import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
+import { paginationParams } from "@/lib/pagination";
 
 export async function GET(req: NextRequest) {
   const guard = await requireAdmin();
   if (isNextResponse(guard)) return guard;
 
-  const page = safeParseInt(req.nextUrl.searchParams.get("page"), 1, 1, 10000);
-  const limit = safeParseInt(req.nextUrl.searchParams.get("limit"), 50, 1, 200);
+  const { page, limit, skip } = paginationParams(req.nextUrl.searchParams, { defaultLimit: 50, maxLimit: 200, maxPage: 10000 });
   const q = req.nextUrl.searchParams.get("q")?.trim() || "";
-  const skip = (page - 1) * limit;
 
   const where: Record<string, unknown> = {};
   if (q) {
