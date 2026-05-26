@@ -248,24 +248,20 @@ export default function SearchPage() {
   // 두 그룹은 disjoint 라 같은 코드가 두 번 호출되지 않는다.
   // (예전 구현은 1단계가 모든 idle 코드를 loading 으로 잡아버려서
   //  2단계 fetchStockBatch 의 loading/done 필터에 걸려 라이브 호출이 영원히 skip 됐다.)
+  // 검색 결과 뜰 때 DB 스냅샷만 표시 — 라이브 크롤링 자동 시작 안 함.
+  // 사용자가 "전체재고 새로고침" 누를 때만 실시간 크롤링.
   useEffect(() => {
     const codesWithSnapshot: string[] = [];
-    const codesWithoutSnapshot: string[] = [];
     for (const m of results) {
       if (!m.insuranceCode) continue;
       const e = getStock(m.insuranceCode);
       if (e.status === "done" || e.status === "loading") continue;
-      if (m.stock == null) codesWithoutSnapshot.push(m.insuranceCode);
-      else codesWithSnapshot.push(m.insuranceCode);
+      if (m.stock != null) codesWithSnapshot.push(m.insuranceCode);
+      // 스냅샷 없는 코드는 자동 크롤링 안 함 — "전체재고 새로고침" 버튼 누를 때만
     }
 
     if (codesWithSnapshot.length > 0) {
       fetchStockBatch(codesWithSnapshot, false, STOCK_SITES);
-    }
-    // 라이브 경로 한도가 50 이므로 최대 50개만 트리거. 나머지는 사용자가 "전체재고 새로고침"
-    const liveTargets = codesWithoutSnapshot.slice(0, 50);
-    if (liveTargets.length > 0) {
-      fetchStockBatch(liveTargets, true, STOCK_SITES);
     }
   }, [results]);
 
