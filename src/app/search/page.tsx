@@ -12,7 +12,7 @@ import { useSession } from "next-auth/react";
 import type { MedicationItem } from "@/types";
 import { hasRole } from "@/lib/roles";
 import { useGuestLimit } from "@/hooks/useGuestLimit";
-import { fetchStockBatch, getStock, resetStockCache, applyBatchResults } from "@/lib/stock-cache";
+import { fetchStockBatch, getStock, resetStockCache, applyResult } from "@/lib/stock-cache";
 
 // 인천약품 제외, 백제·훼밀리만
 const STOCK_SITES = ["ibjp", "family"];
@@ -262,7 +262,7 @@ export default function SearchPage() {
     }
   }, [results]);
 
-  // "전체재고 새로고침" — 워커에 라이브 크롤링 요청
+  // "전체재고 새로고침" — 단일 API 호출, 결과를 stock-cache에 직접 반영
   async function refreshAllLive() {
     const codes = results
       .map((m) => m.insuranceCode)
@@ -281,20 +281,19 @@ export default function SearchPage() {
       const data = await r.json().catch(() => null);
 
       if (!r.ok || data?.error) {
-        const msg = data?.error ?? `HTTP ${r.status}`;
-        setStockError(msg);
+        setStockError(data?.error ?? `HTTP ${r.status}`);
         return;
       }
 
-      const results = Array.isArray(data?.results) ? data.results : [];
-      if (results.length === 0) {
-        setStockError(`워커가 응답했지만 재고 데이터 0건`);
+      const liveResults = Array.isArray(data?.results) ? data.results : [];
+      if (liveResults.length === 0) {
+        setStockError("워커가 응답했지만 재고 데이터 0건");
         return;
       }
 
-      applyBatchResults(codes, results, "live");
-      setStockError(`✓ ${results.length}건 갱신 완료`);
-      setTimeout(() => setStockError(null), 3000);
+      for (const code of codes) {
+        applyResult(code, liveResults, "live");
+      }
     } catch (err) {
       setStockError(`네트워크 오류: ${String(err)}`);
     } finally {
@@ -319,8 +318,8 @@ export default function SearchPage() {
         )}
 
         {stockError && (
-          <div className={`flex items-center gap-2 text-xs rounded-lg px-3 py-2 ${stockError.startsWith("✓") ? "text-green-700 bg-green-50 border border-green-200" : "text-red-700 bg-red-50 border border-red-200"}`}>
-            <span className="font-semibold">{stockError.startsWith("✓") ? "재고 갱신:" : "재고 조회 실패:"}</span>
+          <div className="flex items-center gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+            <span className="font-semibold">재고 조회 실패:</span>
             <span>{stockError}</span>
           </div>
         )}
