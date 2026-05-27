@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAdmin, isNextResponse, safeParseInt } from "@/lib/auth-guard";
+import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
+import { paginationParams } from "@/lib/pagination";
 
 export async function GET(req: NextRequest) {
   const guard = await requireAdmin();
   if (isNextResponse(guard)) return guard;
-  const page = safeParseInt(req.nextUrl.searchParams.get("page"), 1, 1, 10000);
-  const limit = 50;
-  const skip = (page - 1) * limit;
+  const { page, limit, skip } = paginationParams(req.nextUrl.searchParams, { defaultLimit: 50, maxLimit: 50, maxPage: 10000 });
   const q = req.nextUrl.searchParams.get("q")?.trim() || "";
   const successParam = req.nextUrl.searchParams.get("success");
 

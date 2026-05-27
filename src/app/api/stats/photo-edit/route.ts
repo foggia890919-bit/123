@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
-import { replaceRxStats } from "@/lib/google-sheets-rx-append";
-import type { RxExtractResult } from "@/lib/gemini-rx-stats-extract";
+import { replaceRxStats } from "@/lib/google/google-sheets-rx-append";
+import type { RxExtractResult } from "@/lib/ai/gemini-rx-stats-extract";
 import { computeRowQuality, checkTotalSum } from "@/lib/rx-quality-checks";
 
 // 검수 페이지에서 수정 후 저장 — DB + 구글 시트 동시 갱신.
@@ -168,7 +168,7 @@ export async function POST(req: NextRequest) {
       deletedDrugs = r.deletedDrugs;
     } else {
       // 옛 batchId 없는 행 (초기 fusion 시절 또는 일부 흐름) — append 만
-      const { appendRxStats } = await import("@/lib/google-sheets-rx-append");
+      const { appendRxStats } = await import("@/lib/google/google-sheets-rx-append");
       const r = await appendRxStats(payload, "manual");
       sheetUrl = r.spreadsheetUrl;
       sheetBatchId = r.batchId;

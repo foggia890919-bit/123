@@ -145,7 +145,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (hiraMap.size === 0) {
-      return NextResponse.json({ success: false, error: "HIRA에서 가격 데이터를 가져오지 못했습니다.", scanned, companyErrors });
+      return NextResponse.json({ success: false, error: "HIRA에서 가격 데이터를 가져오지 못했습니다.", scanned, companyErrors }, { status: 502 });
     }
 
     // DB 매칭: insuranceCode 콤마분리(UNNEST) + leading-zero 정규화(LTRIM) — HIRA 측 키와 동일 형태로 비교

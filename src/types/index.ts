@@ -34,16 +34,3 @@ export interface MedicationItem {
   matchLevel?: IngredientMatchLevel;
 }
 
-export interface ProposalCartItem {
-  id: string;
-  originalMedication?: MedicationItem;
-  altMedication?: MedicationItem;
-  quantity: number;
-  note?: string;
-  order: number;
-}
-
-export interface SearchResult {
-  medications: MedicationItem[];
-  total: number;
-}

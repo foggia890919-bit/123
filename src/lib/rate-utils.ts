@@ -54,7 +54,7 @@ export async function fetchRateEntries(
 }
 
 /**
- * normalizeCompanyKey 기반의 rateMap을 반환한다.
+ * companyNameKey (normalizeCompanyKey) 기반의 rateMap을 반환한다.
  * 대부분의 약품 검색 라우트에서 사용.
  */
 export async function buildRateMap(userId: string): Promise<Record<string, number>> {

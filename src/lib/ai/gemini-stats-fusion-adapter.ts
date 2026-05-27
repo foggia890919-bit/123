@@ -1,7 +1,7 @@
 import { extractRxStatsFromImage, type RxExtractResult, type RxDrugRow } from "./gemini-rx-stats-extract";
-import { fetchMasterByCodes, fetchMasterByNamePrefixes, matchMedication, type MergedDrug } from "./medication-master-match";
-import { fetchRateEntries } from "./rate-utils";
-import { computeRowQuality, checkTotalSum, type RowQualityChecks, type QualityCheck } from "./rx-quality-checks";
+import { fetchMasterByCodes, fetchMasterByNamePrefixes, matchMedication, type MergedDrug } from "../medication-master-match";
+import { fetchRateEntries } from "../rate-utils";
+import { computeRowQuality, checkTotalSum, type RowQualityChecks, type QualityCheck } from "../rx-quality-checks";
 
 // stats/page.tsx 가 자체 재정의해서 쓰는 JSON 응답 형식. import 의존성 없음 — 응답 형식만 호환.
 // 핵심 필드: drugs[].{insuranceCode, companyName, productName, quantity (Field), unitPrice,

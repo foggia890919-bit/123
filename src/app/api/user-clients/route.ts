@@ -20,8 +20,9 @@ export async function GET(req: NextRequest) {
         orderBy: { clientName: "asc" },
       });
       return NextResponse.json(rows);
-    } catch {
-      return NextResponse.json([]);
+    } catch (err) {
+      console.error("[user-clients GET publicUpperCorps]", err);
+      return NextResponse.json({ error: "서버 오류가 발생했습니다." }, { status: 500 });
     }
   }
 
@@ -154,8 +155,9 @@ export async function GET(req: NextRequest) {
         },
       });
       return NextResponse.json(allRows.map((r) => ({ ...r, dealerType: null, parentCorpId: null })));
-    } catch {
-      return NextResponse.json([]);
+    } catch (err) {
+      console.error("[user-clients GET corps]", err);
+      return NextResponse.json({ error: "서버 오류가 발생했습니다." }, { status: 500 });
     }
   }
 
@@ -249,8 +251,9 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(
         (buildRows(users) as Array<Record<string, unknown>>).map((r) => ({ ...r, dealerType: null, parentCorpId: null }))
       );
-    } catch {
-      return NextResponse.json([]);
+    } catch (err) {
+      console.error("[user-clients GET allMembers]", err);
+      return NextResponse.json({ error: "서버 오류가 발생했습니다." }, { status: 500 });
     }
   }
 

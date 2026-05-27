@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import type { ValidationResult } from "./medication-master-match";
+import type { ValidationResult } from "../medication-master-match";
 
 // Gemini 양방향 자가검증 — Vision OCR 1차 결과를 텍스트 API 로 두 방향에서 cross-check.
 //

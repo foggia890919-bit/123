@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireSession, isNextResponse, safeParseInt } from "@/lib/auth-guard";
+import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { paginationParams } from "@/lib/pagination";
 import { BUCKETS, storageEnabled, newStorageKey, deleteObject } from "@/lib/storage";
 
 export const runtime = "nodejs";
@@ -45,9 +46,7 @@ export async function GET(req: NextRequest) {
   const corpClientId = sp.get("corpClientId") ?? undefined;
   const companyName = sp.get("companyName") ?? undefined;
   const applyMonth = sp.get("applyMonth") ?? undefined;
-  const page = safeParseInt(sp.get("page"), 1, 1);
-  const limit = safeParseInt(sp.get("limit"), 20, 1, 100);
-  const skip = (page - 1) * limit;
+  const { page, limit, skip } = paginationParams(sp);
 
   const where = {
     ...(corpClientId ? { corpClientId } : {}),

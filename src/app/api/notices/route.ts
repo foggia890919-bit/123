@@ -23,8 +23,9 @@ export async function GET(req: NextRequest) {
       take: 20,
     });
     return NextResponse.json(notices);
-  } catch {
-    return NextResponse.json([]);
+  } catch (err) {
+    console.error("[notices GET]", err);
+    return NextResponse.json({ error: "서버 오류가 발생했습니다." }, { status: 500 });
   }
 }
 

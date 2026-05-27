@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { extractSalesFromImage } from "@/lib/gemini-sales-extract";
-import { appendSalesRow } from "@/lib/google-sheets-append";
+import { extractSalesFromImage } from "@/lib/ai/gemini-sales-extract";
+import { appendSalesRow } from "@/lib/google/google-sheets-append";
 import { assertSafePublicUrl } from "@/lib/url-safety";
 
 export const runtime = "nodejs";

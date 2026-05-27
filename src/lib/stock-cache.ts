@@ -25,10 +25,19 @@ export interface StockEntry {
   error?: string;
   source?: "snapshot" | "live";
   fetchedAt?: Date;
+  loadingSince?: Date;
 }
 
 const cache = new Map<string, StockEntry>();
 const listeners = new Map<string, Set<() => void>>();
+
+const LOADING_TIMEOUT_MS = 60_000;
+
+function isLoadingStale(entry: StockEntry): boolean {
+  if (entry.status !== "loading") return false;
+  if (!entry.loadingSince) return true;
+  return Date.now() - entry.loadingSince.getTime() > LOADING_TIMEOUT_MS;
+}
 
 function notify(code: string) {
   listeners.get(code)?.forEach((fn) => fn());
@@ -81,13 +90,13 @@ function applyError(code: string, error: string) {
 
 export function fetchStock(code: string, productName: string, live = false, sites?: string[]) {
   const prev = cache.get(code);
-  if (prev?.status === "loading") return;
-  // 로딩 중에도 화면에서 직전 값이 그대로 보이도록 results/source/fetchedAt 보존.
+  if (prev?.status === "loading" && !isLoadingStale(prev)) return;
   cache.set(code, {
     status: "loading",
     results: prev?.results,
     source: prev?.source,
     fetchedAt: prev?.fetchedAt,
+    loadingSince: new Date(),
   });
   notify(code);
 
@@ -112,21 +121,24 @@ export function fetchStock(code: string, productName: string, live = false, site
  * 검색 결과 자동 워밍업처럼 50건+ 일괄 처리할 때 사용.
  * Vercel 동시 함수 호출 제한을 피하고 워커 부하도 줄임.
  */
-export function fetchStockBatch(codes: string[], live = false, sites?: string[]) {
+export function fetchStockBatch(codes: string[], live = false, sites?: string[], force = false) {
   const targets = codes.filter((c) => {
     const e = cache.get(c);
-    return !e || (e.status !== "loading" && e.status !== "done");
+    if (!e) return true;
+    if (force) return true;
+    if (e.status === "loading") return isLoadingStale(e);
+    return e.status !== "done";
   });
   if (targets.length === 0) return;
 
   for (const code of targets) {
     const prev = cache.get(code);
-    // 로딩 중에도 직전 값을 화면에 유지 — results/source/fetchedAt 그대로 보존.
     cache.set(code, {
       status: "loading",
       results: prev?.results,
       source: prev?.source,
       fetchedAt: prev?.fetchedAt,
+      loadingSince: new Date(),
     });
     notify(code);
   }

@@ -14,7 +14,7 @@ export async function GET() {
   const workerUrl = process.env.WORKER_URL;
   const workerToken = process.env.WORKER_TOKEN;
   if (!workerUrl || !workerToken) {
-    return NextResponse.json({ sites: [], workerConfigured: false, error: "worker not configured" });
+    return NextResponse.json({ sites: [], workerConfigured: false, error: "worker not configured" }, { status: 503 });
   }
 
   try {
@@ -23,10 +23,10 @@ export async function GET() {
       signal: AbortSignal.timeout(10_000),
     });
     if (!r.ok) {
-      return NextResponse.json({ sites: [], error: `worker error ${r.status}` });
+      return NextResponse.json({ sites: [], error: `worker error ${r.status}` }, { status: 502 });
     }
     return NextResponse.json(await r.json());
   } catch (err) {
-    return NextResponse.json({ sites: [], error: (err as Error).message });
+    return NextResponse.json({ sites: [], error: (err as Error).message }, { status: 502 });
   }
 }

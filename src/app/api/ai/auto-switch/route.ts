@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { normalizeCompanyKey } from "@/lib/utils";
 import { buildRateMap } from "@/lib/rate-utils";
+import { requireSession, isNextResponse } from "@/lib/auth-guard";
 import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 
@@ -62,6 +63,9 @@ function buildComparator(criteriaList: string[]) {
 }
 
 export async function POST(req: NextRequest) {
+  const user = await requireSession();
+  if (isNextResponse(user)) return user;
+
   const body = await req.json().catch(() => ({}));
   const rows: InputRow[] = Array.isArray(body?.rows) ? body.rows : [];
   const rawCriteria = body?.criteria;

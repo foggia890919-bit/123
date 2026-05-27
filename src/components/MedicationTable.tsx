@@ -7,6 +7,7 @@ import { formatPrice } from "@/lib/utils";
 import type { MedicationItem } from "@/types";
 import SameIngredientModal from "./SameIngredientModal";
 import { getStock, subscribeStock, fetchStock, type StockEntry } from "@/lib/stock-cache";
+import { sumStockNullSafe } from "@/lib/stock-utils";
 
 // 인천약품 제외, 백제약품+훼밀리팜만 표시
 const STOCK_SITES = ["ibjp", "family"];
@@ -71,7 +72,7 @@ function StockColumnCell({ code, productName, fallbackStock, fallbackScrapedAt }
   // stock-cache 가 loading 상태에서도 직전 results 를 보존하므로, 라이브 호출 중에도 이전 값이 그대로 보임.
   const rows = (entry.results ?? []).filter((r) => STOCK_SITES.includes(r.siteKey) && !r.error);
   const totalFromResults = rows.length > 0
-    ? rows.reduce((sum, r) => sum + r.items.reduce((s, i) => s + (i.stock ?? 0), 0), 0)
+    ? sumStockNullSafe(rows.flatMap((r) => r.items))
     : null;
   const displayedStock = totalFromResults != null ? totalFromResults : fallbackStock;
 

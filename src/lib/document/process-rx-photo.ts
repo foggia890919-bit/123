@@ -7,7 +7,7 @@
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { extractRxStatsFromImage } from "@/lib/gemini-rx-stats-extract";
+import { extractRxStatsFromImage } from "@/lib/ai/gemini-rx-stats-extract";
 import {
   fetchMasterByCodes,
   fetchMasterByNamePrefixes,
@@ -16,8 +16,8 @@ import {
   type MatchResult,
   type ValidationResult,
 } from "@/lib/medication-master-match";
-import { runSelfValidateBatch, type SelfValidateMeta } from "@/lib/gemini-self-validate";
-import { appendRxStats } from "@/lib/google-sheets-rx-append";
+import { runSelfValidateBatch, type SelfValidateMeta } from "@/lib/ai/gemini-self-validate";
+import { appendRxStats } from "@/lib/google/google-sheets-rx-append";
 import { fetchRateEntries } from "@/lib/rate-utils";
 import { computeRowQuality, checkTotalSum } from "@/lib/rx-quality-checks";
 

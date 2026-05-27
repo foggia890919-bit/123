@@ -250,8 +250,6 @@ export default function SearchPage() {
       if (!m.insuranceCode) continue;
       const e = getStock(m.insuranceCode);
       if (e.status === "done" || e.status === "loading") continue;
-      // DB 에 캐시 있는 약품만 스냅샷 경로로 즉시 표시 (DB 조회, 무비용).
-      // 캐시 없거나 stale 이어도 자동 라이브 크롤링 안 함 — "전체재고 새로고침" 때만.
       if (m.stock != null) {
         snapshotTargets.push(m.insuranceCode);
       }
@@ -267,7 +265,7 @@ export default function SearchPage() {
       .map((m) => m.insuranceCode)
       .filter((c): c is string => !!c);
     if (codes.length > 0) {
-      resetStockCache(codes);  // "done" 상태 초기화 — 안 하면 fetchStockBatch 가 skip
+      resetStockCache(codes);
       fetchStockBatch(codes, true, STOCK_SITES);
     }
   }

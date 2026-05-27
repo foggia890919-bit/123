@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { normalizeCompanyKey } from "@/lib/utils";
-import { safeParseInt } from "@/lib/auth-guard";
+import { paginationParams } from "@/lib/pagination";
 import { buildRateMap } from "@/lib/rate-utils";
 
 /**
@@ -51,8 +51,7 @@ export async function GET(req: NextRequest) {
   const ingredientNameHint = req.nextUrl.searchParams.get("ingredientName")?.trim() || "";
   const settlementOnly = req.nextUrl.searchParams.get("settlement") === "true";
   const userId = req.nextUrl.searchParams.get("userId") || null;
-  const page = safeParseInt(req.nextUrl.searchParams.get("page"), 1, 1, 10000);
-  const limit = safeParseInt(req.nextUrl.searchParams.get("limit"), 50, 1, 1000);
+  const { page, limit, skip } = paginationParams(req.nextUrl.searchParams, { defaultLimit: 50, maxLimit: 1000, maxPage: 10000 });
   const ingredientOnly = req.nextUrl.searchParams.get("ingredientOnly") === "true";
   const companiesRaw = req.nextUrl.searchParams.get("companies") || "";
   const companyList = companiesRaw.split(",").map((s) => s.trim()).filter(Boolean);
@@ -122,7 +121,7 @@ export async function GET(req: NextRequest) {
     prisma.medication.findMany({
       where,
       orderBy: [{ isSettlement: "desc" }, { commissionRate: "desc" }],
-      skip: (page - 1) * limit,
+      skip,
       take: limit,
       ...(fast ? {
         select: {
@@ -176,31 +175,36 @@ export async function GET(req: NextRequest) {
 
   // 검색 결과에 InventorySnapshot 의 가장 최근 stock + scrapedAt 을 채워준다.
   // 사용자 요청: "기존에 가져왔던 재고를 검색 즉시 보여주고, 시점도 표시".
-  // stock=0 도 그대로 (품절 표시). 시점은 화면에서 "N시간 전" 으로 표기하고
+  // stock=0 → 품절, stock=null → "-"(데이터 없음). 시점은 화면에서 "N시간 전" 으로 표기하고
   // 4시간 초과면 빨갛게 강조 — 사용자가 신선도를 직접 판단할 수 있게 함.
   const insuranceCodes = result.map((m) => m.insuranceCode).filter((c): c is string => !!c);
   if (!fast && insuranceCodes.length > 0) {
     // 빠른 단순 쿼리 — UNIQUE (siteKey, insuranceCode) 덕분에 키별 1줄만 존재.
     // DISTINCT ON / ORDER BY 불필요 → planner 가 인덱스 만으로 즉시 조회.
-    const rows = await prisma.$queryRaw<Array<{ insuranceCode: string; stock: number; scrapedAt: Date }>>`
+    const rows = await prisma.$queryRaw<Array<{ insuranceCode: string; stock: number | null; scrapedAt: Date }>>`
       SELECT "insuranceCode",
-             COALESCE("stock", 0)::int AS stock,
+             "stock",
              "scrapedAt"
       FROM "InventorySnapshot"
       WHERE "insuranceCode" = ANY(${insuranceCodes}::text[])
         AND "siteKey" IN ('ibjp', 'family')
     `;
-    const sumByCode = new Map<string, number>();
+    const sumByCode = new Map<string, number | null>();
     const latestByCode = new Map<string, Date>();
     for (const r of rows) {
-      sumByCode.set(r.insuranceCode, (sumByCode.get(r.insuranceCode) ?? 0) + Number(r.stock));
+      if (r.stock != null) {
+        const prev = sumByCode.get(r.insuranceCode);
+        sumByCode.set(r.insuranceCode, (prev ?? 0) + r.stock);
+      } else if (!sumByCode.has(r.insuranceCode)) {
+        sumByCode.set(r.insuranceCode, null);
+      }
       const d = r.scrapedAt instanceof Date ? r.scrapedAt : new Date(r.scrapedAt);
       const prev = latestByCode.get(r.insuranceCode);
       if (!prev || d > prev) latestByCode.set(r.insuranceCode, d);
     }
     for (const m of result) {
       if (m.insuranceCode && sumByCode.has(m.insuranceCode)) {
-        m.stock = sumByCode.get(m.insuranceCode)!;
+        m.stock = sumByCode.get(m.insuranceCode) ?? null;
         const latest = latestByCode.get(m.insuranceCode);
         if (latest) m.stockScrapedAt = latest.toISOString();
       }

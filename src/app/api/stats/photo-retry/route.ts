@@ -2,7 +2,7 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 import { BUCKETS, downloadAsDataUri, parseDataUri } from "@/lib/storage";
-import { processRxPhoto } from "@/lib/process-rx-photo";
+import { processRxPhoto } from "@/lib/document/process-rx-photo";
 
 // 처방통계 사진 재분석 — Gemini 처리 실패(ERROR) 또는 단순 재실행 요청 시.
 // reportId 로 기존 사진 가져와서 processRxPhoto helper 재호출.

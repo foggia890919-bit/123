@@ -16,8 +16,9 @@ export async function GET() {
       total: parseInt(total?.value ?? "0"),
       today: parseInt(today?.value ?? "0"),
     });
-  } catch {
-    return NextResponse.json({ total: 0, today: 0 });
+  } catch (err) {
+    console.error("[visits GET]", err);
+    return NextResponse.json({ error: "서버 오류가 발생했습니다." }, { status: 500 });
   }
 }
 
@@ -41,7 +42,8 @@ export async function POST() {
   try {
     await Promise.all([increment("visits_total"), increment(todayKey())]);
     return NextResponse.json({ ok: true });
-  } catch {
-    return NextResponse.json({ ok: false });
+  } catch (err) {
+    console.error("[visits POST]", err);
+    return NextResponse.json({ error: "서버 오류가 발생했습니다." }, { status: 500 });
   }
 }

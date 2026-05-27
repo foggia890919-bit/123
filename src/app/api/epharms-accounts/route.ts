@@ -6,7 +6,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireSession, isNextResponse, safeParseInt } from "@/lib/auth-guard";
+import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { paginationParams } from "@/lib/pagination";
 import { encryptSecret } from "@/lib/crypto-secret";
 
 function bizOrAdmin(role: string) {
@@ -55,9 +56,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
   const q = req.nextUrl.searchParams.get("q") ?? "";
-  const page = safeParseInt(req.nextUrl.searchParams.get("page"), 1, 1, 10000);
-  const limit = safeParseInt(req.nextUrl.searchParams.get("limit"), 50, 1, 200);
-  const skip = (page - 1) * limit;
+  const { page, limit, skip } = paginationParams(req.nextUrl.searchParams, { defaultLimit: 50, maxLimit: 200, maxPage: 10000 });
 
   const where = q
     ? {

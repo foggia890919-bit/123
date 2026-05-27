@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 import { BUCKETS, persistDataUri } from "@/lib/storage";
-import { processRxPhoto } from "@/lib/process-rx-photo";
+import { processRxPhoto } from "@/lib/document/process-rx-photo";
 
 // "닥치고 저장" 패턴 — 사용자 의도: 영업사원은 사진만 던지면 끝.
 //

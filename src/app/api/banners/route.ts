@@ -14,7 +14,8 @@ export async function GET() {
         imageUrl: b.imageKey ? publicUrl(BUCKETS.bannerImage, b.imageKey) : null,
       }))
     );
-  } catch {
-    return NextResponse.json([]);
+  } catch (err) {
+    console.error("[banners GET]", err);
+    return NextResponse.json({ error: "서버 오류가 발생했습니다." }, { status: 500 });
   }
 }

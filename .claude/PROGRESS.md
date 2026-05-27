@@ -121,3 +121,8 @@ CREATE INDEX IF NOT EXISTS "UserClient_isRateTarget_idx"        ON "UserClient"(
   - QA B2 픽스: productName 공백/대소문자 정규화
   - ENV `GEMINI_SELFVALIDATE_ENABLED=true` + 옵션 `GEMINI_SELFVALIDATE_DEBUG=true`
 - 2026-05-24 15:00 | qa-crosscheck | canBeParent 9-step Plan (dealer 분류+상위법인 매핑) | FAIL
+- 2026-05-26 11:42 | qa-crosscheck | medications/search stock null-propagation plan | CONDITIONAL_PASS
+
+- 2026-05-26 12:00 | qa-crosscheck | medications/search stock:null frontend propagation audit | CONDITIONAL_PASS (1 MAJOR: live-scraper overload in search/page.tsx:261-272)
+
+- 2026-05-26 12:00 | qa-crosscheck | medications/search COALESCE removal + stock aggregation code | PASS
