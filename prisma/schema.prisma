@@ -517,6 +517,9 @@ enum DealerType {
   UPPER_CORP    // 상위법인
   LOWER_CORP    // 하위법인
   SELF          // 자사 (와이케이)
+  PHARMACY      // 약국
+  CSO           // CSO / 일반 사업자 (컨설팅, 영업 대행 등)
+  // null 은 그대로 "병의원(원외)" 의미로 유지 (기존 데이터 호환)
 }
 
 model SettlementTemplate {

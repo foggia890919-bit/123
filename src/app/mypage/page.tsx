@@ -26,6 +26,7 @@ const docTypes = ["CSO 신고증", "의사 면허증", "약사 면허증", "사�
 interface BizClient {
   id: string; clientName: string; bizNumber: string;
   address: string | null; bizFileName: string | null;
+  dealerType: string | null;
 }
 interface ProfileInfo {
   name: string; email: string; phone: string | null;
@@ -98,6 +99,8 @@ export default function MyPage() {
   const [editBizNumber, setEditBizNumber] = useState("");
   const [editBizName, setEditBizName] = useState("");
   const [editBizAddress, setEditBizAddress] = useState("");
+  // 사업자 유형 — null = 병의원(원외) (기본). 다른 값은 enum DealerType 의 이름.
+  const [editBizDealerType, setEditBizDealerType] = useState<string | "">("");
   const [bizNumberError, setBizNumberError] = useState("");
   const [bizDocFile, setBizDocFile] = useState<File | null>(null);
   const [bizSaving, setBizSaving] = useState(false);
@@ -182,6 +185,15 @@ export default function MyPage() {
           setEditBizNumber(fmt);
           setEditBizName(data.bizClient.clientName);
           setEditBizAddress(data.bizClient.address ?? "");
+          setEditBizDealerType(data.bizClient.dealerType ?? "");
+        } else {
+          // 신규 등록 — 회원 직업(role) 기반 자동 분류 (B 기능)
+          //  의사/치과의사/한의사 → 병의원 (null, "")
+          //  약사 → 약국 (PHARMACY)
+          //  나머지 → CSO/일반 사업자
+          if (data.role === "DOCTOR") setEditBizDealerType("");
+          else if (data.role === "PHARMACIST") setEditBizDealerType("PHARMACY");
+          else setEditBizDealerType("CSO");
         }
       }
     } finally {
@@ -271,6 +283,7 @@ export default function MyPage() {
             clientName: bizNameVal,
             bizNumber: digits,
             address: bizAddressVal || null,
+            dealerType: editBizDealerType || null,  // "" → null (병의원)
             bizDocument,
           },
         }),
@@ -450,6 +463,20 @@ export default function MyPage() {
           <div className="space-y-1">
             <label className="text-sm font-medium text-gray-700">상호명 <span className="text-red-500">*</span></label>
             <Input ref={editBizNameRef} value={editBizName} onChange={(e) => setEditBizName(e.target.value)} placeholder="병원명 / 상호명" />
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-gray-700">유형 <span className="text-red-500">*</span></label>
+            <select
+              value={editBizDealerType}
+              onChange={(e) => setEditBizDealerType(e.target.value)}
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
+            >
+              <option value="">병의원 (원외)</option>
+              <option value="PHARMACY">약국</option>
+              <option value="CSO">CSO / 일반 사업자</option>
+              <option value="CORPORATION">법인</option>
+              <option value="INDIVIDUAL">개인사업자(딜러)</option>
+            </select>
           </div>
           <div className="space-y-1">
             <label className="text-sm font-medium text-gray-700">주소 <span className="text-gray-400 font-normal text-xs">(선택)</span></label>

@@ -116,7 +116,8 @@ export async function GET(req: NextRequest) {
     ],
   };
 
-  const [medications, total] = await Promise.all([
+  // 검색 + count + rateMap 동시 병렬 (기존: 검색+count 병렬 → rateMap 순차)
+  const [medications, total, rateMap] = await Promise.all([
     prisma.medication.findMany({
       where,
       orderBy: [{ isSettlement: "desc" }, { commissionRate: "desc" }],
@@ -130,11 +131,10 @@ export async function GET(req: NextRequest) {
         },
       } : {}),
     }),
-    fast ? Promise.resolve(0) : prisma.medication.count({ where }),
+    // count 는 첫 페이지만 (페이지 2+ 면 이미 total 알고 있음). fast 모드 skip.
+    fast || page > 1 ? Promise.resolve(-1) : prisma.medication.count({ where }),
+    userId ? buildRateMap(userId) : Promise.resolve({} as Record<string, number>),
   ]);
-
-  // 로그인 회원의 추가수수료 적용 (개인 설정 → 법인 폴백)
-  const rateMap = userId ? await buildRateMap(userId) : {};
 
   const result = medications.map((med) => {
     let matchLevel: MatchLevel | null = null;

@@ -12,7 +12,7 @@ import { useSession } from "next-auth/react";
 import type { MedicationItem } from "@/types";
 import { hasRole } from "@/lib/roles";
 import { useGuestLimit } from "@/hooks/useGuestLimit";
-import { fetchStockBatch, getStock } from "@/lib/stock-cache";
+import { fetchStockBatch, getStock, resetStockCache } from "@/lib/stock-cache";
 
 // 인천약품 제외, 백제·훼밀리만
 const STOCK_SITES = ["ibjp", "family"];
@@ -242,49 +242,31 @@ export default function SearchPage() {
     refetchWithCompanies(next);
   }
 
-  // 검색 결과 로드 시 자동 재고 워밍업.
-  // - 캐시 있고 신선(4시간 이내): snapshot 경로 (DB 즉시 조회)
-  // - 캐시 있는데 stale(4시간 초과) 또는 캐시 없음: 라이브 경로 (워커 호출)
-  // → stale 데이터를 검색 직후 자동으로 "방금" 값으로 갱신해주는 효과.
-  // 핵심: 로딩 중에도 stock-cache 가 직전 결과를 보존하므로, 화면에서 기존 숫자가
-  // 사라지지 않는다. spinner 만 옆에 돌고 새 값 도착하면 자연스럽게 교체.
-  const STOCK_STALE_MS = 4 * 60 * 60 * 1000; // 4시간 — 워커 풀배치 간격과 일치
+  // 검색 결과 로드 시 DB 스냅샷만 즉시 표시 — 자동 라이브 크롤링 안 함.
+  // 사용자가 "전체재고 새로고침" 누를 때만 실시간 크롤링.
   useEffect(() => {
     const snapshotTargets: string[] = [];
-    const liveTargets: string[] = [];
     for (const m of results) {
       if (!m.insuranceCode) continue;
       const e = getStock(m.insuranceCode);
-      if (e.status === "loading") continue;
-      const cacheStale = e.status === "done" && e.fetchedAt
-        ? (Date.now() - e.fetchedAt.getTime()) > STOCK_STALE_MS
-        : false;
-      if (e.status === "done" && !cacheStale) continue;
-      const cachedAt = m.stockScrapedAt ? new Date(m.stockScrapedAt).getTime() : 0;
-      const isStale = !cachedAt || (Date.now() - cachedAt) > STOCK_STALE_MS;
-      if (e.status === "done" && cacheStale) {
-        snapshotTargets.push(m.insuranceCode);
-      } else if (m.stock == null || isStale) {
-        liveTargets.push(m.insuranceCode);
-      } else {
+      if (e.status === "done" || e.status === "loading") continue;
+      if (m.stock != null) {
         snapshotTargets.push(m.insuranceCode);
       }
     }
     if (snapshotTargets.length > 0) {
       fetchStockBatch(snapshotTargets, false, STOCK_SITES);
     }
-    if (liveTargets.length > 0) {
-      fetchStockBatch(liveTargets.slice(0, 50), true, STOCK_SITES);
-    }
-  }, [results, STOCK_STALE_MS]);
+  }, [results]);
 
-  // "전체재고 새로고침" — 모든 행을 실시간 라이브 스크랩으로 갱신 (한 번의 API 호출)
+  // "전체재고 새로고침" — 캐시 강제 리셋 후 라이브 크롤링 재요청
   function refreshAllLive() {
     const codes = results
       .map((m) => m.insuranceCode)
       .filter((c): c is string => !!c);
     if (codes.length > 0) {
-      fetchStockBatch(codes, true, STOCK_SITES, true);
+      resetStockCache(codes);
+      fetchStockBatch(codes, true, STOCK_SITES);
     }
   }
 
