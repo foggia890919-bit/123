@@ -122,6 +122,12 @@ export function setStockBatchErrorHandler(handler: ((msg: string) => void) | nul
   _onBatchError = handler;
 }
 
+export function applyBatchResults(codes: string[], results: SiteResult[], source?: "snapshot" | "live") {
+  for (const code of codes) {
+    applyResult(code, results, source);
+  }
+}
+
 /**
  * 여러 보험코드의 재고를 한 번의 API 호출로 가져온다.
  * 검색 결과 자동 워밍업처럼 50건+ 일괄 처리할 때 사용.
