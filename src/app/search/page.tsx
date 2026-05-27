@@ -274,10 +274,32 @@ export default function SearchPage() {
     const codes = results
       .map((m) => m.insuranceCode)
       .filter((c): c is string => !!c);
-    if (codes.length > 0) {
-      resetStockCache(codes);
-      fetchStockBatch(codes, true, STOCK_SITES);
-    }
+    if (codes.length === 0) return;
+    resetStockCache(codes);
+
+    setStockError(null);
+    fetch("/api/inventory/check?live=1", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ codes, sites: STOCK_SITES }),
+    })
+      .then(async (r) => {
+        const data = await r.json().catch(() => null);
+        if (!r.ok || data?.error) {
+          const msg = data?.error ?? `HTTP ${r.status}`;
+          setStockError(msg);
+          for (const c of codes) resetStockCache([c]);
+          return;
+        }
+        const resultCount = Array.isArray(data?.results) ? data.results.length : 0;
+        if (resultCount === 0) {
+          setStockError(`도매상에서 ${codes.length}개 품목 데이터를 찾지 못했습니다. 워커 서버 상태를 확인하세요.`);
+        }
+        fetchStockBatch(codes, false, STOCK_SITES);
+      })
+      .catch((err) => setStockError(String(err)));
+
+    fetchStockBatch(codes, true, STOCK_SITES);
   }
 
   return (
