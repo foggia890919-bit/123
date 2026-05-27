@@ -12,7 +12,7 @@ import { useSession } from "next-auth/react";
 import type { MedicationItem } from "@/types";
 import { hasRole } from "@/lib/roles";
 import { useGuestLimit } from "@/hooks/useGuestLimit";
-import { fetchStockBatch, getStock, resetStockCache } from "@/lib/stock-cache";
+import { fetchStockBatch, getStock, resetStockCache, setStockBatchErrorHandler } from "@/lib/stock-cache";
 
 // 인천약품 제외, 백제·훼밀리만
 const STOCK_SITES = ["ibjp", "family"];
@@ -48,6 +48,16 @@ export default function SearchPage() {
   const [batchStockOpen, setBatchStockOpen] = useState(false);
   const [displayedQuery, setDisplayedQuery] = useState("");
   const [showGate, setShowGate] = useState(false);
+  const [stockError, setStockError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setStockBatchErrorHandler((msg) => {
+      setStockError(msg);
+      setTimeout(() => setStockError(null), 8000);
+    });
+    return () => setStockBatchErrorHandler(null);
+  }, []);
+
   const [cols, setCols] = useState<ColumnVisibility>({
     showIngredientName: true,
     showBioStatus: true,
@@ -283,6 +293,13 @@ export default function SearchPage() {
         {searched && (
           <div className="text-sm text-gray-500">
             통합 검색 &gt; <span className="font-semibold text-gray-800">{displayedQuery || "전체"}</span>
+          </div>
+        )}
+
+        {stockError && (
+          <div className="flex items-center gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+            <span className="font-semibold">재고 조회 실패:</span>
+            <span>{stockError}</span>
           </div>
         )}
 
