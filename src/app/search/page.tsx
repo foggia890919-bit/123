@@ -255,10 +255,16 @@ export default function SearchPage() {
     for (const m of results) {
       if (!m.insuranceCode) continue;
       const e = getStock(m.insuranceCode);
-      if (e.status === "done" || e.status === "loading") continue;
+      if (e.status === "loading") continue;
+      const cacheStale = e.status === "done" && e.fetchedAt
+        ? (Date.now() - e.fetchedAt.getTime()) > STOCK_STALE_MS
+        : false;
+      if (e.status === "done" && !cacheStale) continue;
       const cachedAt = m.stockScrapedAt ? new Date(m.stockScrapedAt).getTime() : 0;
       const isStale = !cachedAt || (Date.now() - cachedAt) > STOCK_STALE_MS;
-      if (m.stock == null || isStale) {
+      if (e.status === "done" && cacheStale) {
+        snapshotTargets.push(m.insuranceCode);
+      } else if (m.stock == null || isStale) {
         liveTargets.push(m.insuranceCode);
       } else {
         snapshotTargets.push(m.insuranceCode);
@@ -267,7 +273,6 @@ export default function SearchPage() {
     if (snapshotTargets.length > 0) {
       fetchStockBatch(snapshotTargets, false, STOCK_SITES);
     }
-    // 라이브 경로 한도가 50 — stale + 캐시 없는 것 우선 처리.
     if (liveTargets.length > 0) {
       fetchStockBatch(liveTargets.slice(0, 50), true, STOCK_SITES);
     }
