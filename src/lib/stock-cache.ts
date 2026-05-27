@@ -72,7 +72,7 @@ async function safeJson(res: Response): Promise<{ data?: unknown; error?: string
   }
 }
 
-function applyResult(code: string, results: SiteResult[], source?: "snapshot" | "live") {
+export function applyResult(code: string, results: SiteResult[], source?: "snapshot" | "live") {
   const codeResults = results.filter((r) => r.insuranceCode === code);
   cache.set(code, {
     status: "done",
@@ -120,12 +120,6 @@ let _onBatchError: ((msg: string) => void) | null = null;
 
 export function setStockBatchErrorHandler(handler: ((msg: string) => void) | null) {
   _onBatchError = handler;
-}
-
-export function applyBatchResults(codes: string[], results: SiteResult[], source?: "snapshot" | "live") {
-  for (const code of codes) {
-    applyResult(code, results, source);
-  }
 }
 
 /**
