@@ -70,17 +70,19 @@ function StockColumnCell({ code, productName, fallbackStock, fallbackScrapedAt }
 
   // 표시할 숫자 계산 — entry.results 가 있으면 거기서 합산, 없으면 fallbackStock (검색 API 캐시값).
   // stock-cache 가 loading 상태에서도 직전 results 를 보존하므로, 라이브 호출 중에도 이전 값이 그대로 보임.
-  const rows = (entry.results ?? []).filter((r) => STOCK_SITES.includes(r.siteKey) && !r.error);
+  const allRows = (entry.results ?? []).filter((r) => STOCK_SITES.includes(r.siteKey) && !r.error);
+  const latestFromResults = allRows
+    .map((r) => r.scrapedAt)
+    .filter((s): s is string => !!s)
+    .reduce<string | null>((acc, cur) => !acc || new Date(cur) > new Date(acc) ? cur : acc, null);
+  const FRESH_MS = 6 * 60 * 60 * 1000;
+  const rows = latestFromResults
+    ? allRows.filter((r) => !r.scrapedAt || new Date(latestFromResults).getTime() - new Date(r.scrapedAt).getTime() <= FRESH_MS)
+    : allRows;
   const totalFromResults = rows.length > 0
     ? sumStockNullSafe(rows.flatMap((r) => r.items))
     : null;
   const displayedStock = totalFromResults != null ? totalFromResults : fallbackStock;
-
-  // 표시할 시점 계산 — entry 의 가장 최신 scrapedAt, 없으면 fallbackScrapedAt (검색 API 가 같이 준 값)
-  const latestFromResults = rows
-    .map((r) => r.scrapedAt)
-    .filter((s): s is string => !!s)
-    .reduce<string | null>((acc, cur) => !acc || new Date(cur) > new Date(acc) ? cur : acc, null);
   const displayedScrapedAt = latestFromResults ?? fallbackScrapedAt;
   const ago = formatStockAgo(displayedScrapedAt);
   const isStale = displayedScrapedAt != null && Date.now() - new Date(displayedScrapedAt).getTime() > STOCK_STALE_MS;

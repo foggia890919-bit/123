@@ -189,18 +189,24 @@ export async function GET(req: NextRequest) {
       WHERE "insuranceCode" = ANY(${insuranceCodes}::text[])
         AND "siteKey" IN ('ibjp', 'family')
     `;
-    const sumByCode = new Map<string, number | null>();
+    const STALE_MS = 6 * 60 * 60 * 1000;
     const latestByCode = new Map<string, Date>();
     for (const r of rows) {
+      const d = r.scrapedAt instanceof Date ? r.scrapedAt : new Date(r.scrapedAt);
+      const prev = latestByCode.get(r.insuranceCode);
+      if (!prev || d > prev) latestByCode.set(r.insuranceCode, d);
+    }
+    const sumByCode = new Map<string, number | null>();
+    for (const r of rows) {
+      const d = r.scrapedAt instanceof Date ? r.scrapedAt : new Date(r.scrapedAt);
+      const latest = latestByCode.get(r.insuranceCode)!;
+      if (latest.getTime() - d.getTime() > STALE_MS) continue;
       if (r.stock != null) {
         const prev = sumByCode.get(r.insuranceCode);
         sumByCode.set(r.insuranceCode, (prev ?? 0) + r.stock);
       } else if (!sumByCode.has(r.insuranceCode)) {
         sumByCode.set(r.insuranceCode, null);
       }
-      const d = r.scrapedAt instanceof Date ? r.scrapedAt : new Date(r.scrapedAt);
-      const prev = latestByCode.get(r.insuranceCode);
-      if (!prev || d > prev) latestByCode.set(r.insuranceCode, d);
     }
     for (const m of result) {
       if (m.insuranceCode && sumByCode.has(m.insuranceCode)) {
