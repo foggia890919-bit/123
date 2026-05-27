@@ -12,7 +12,7 @@ import { useSession } from "next-auth/react";
 import type { MedicationItem } from "@/types";
 import { hasRole } from "@/lib/roles";
 import { useGuestLimit } from "@/hooks/useGuestLimit";
-import { fetchStockBatch, getStock, resetStockCache } from "@/lib/stock-cache";
+import { fetchStockBatch, getStock, resetStockCache, applyBatchResults } from "@/lib/stock-cache";
 
 // 인천약품 제외, 백제·훼밀리만
 const STOCK_SITES = ["ibjp", "family"];
@@ -286,16 +286,14 @@ export default function SearchPage() {
         return;
       }
 
-      const cnt = Array.isArray(data?.results) ? data.results.length : 0;
-      if (cnt === 0) {
-        setStockError(`워커가 응답했지만 재고 데이터 0건. codes: ${codes.join(", ")}`);
+      const results = Array.isArray(data?.results) ? data.results : [];
+      if (results.length === 0) {
+        setStockError(`워커가 응답했지만 재고 데이터 0건`);
         return;
       }
 
-      // 성공 — snapshot 경로로 DB에 저장된 최신 데이터를 stock-cache에 반영
-      resetStockCache(codes);
-      fetchStockBatch(codes, false, STOCK_SITES);
-      setStockError(`✓ ${cnt}건 갱신 완료`);
+      applyBatchResults(codes, results, "live");
+      setStockError(`✓ ${results.length}건 갱신 완료`);
       setTimeout(() => setStockError(null), 3000);
     } catch (err) {
       setStockError(`네트워크 오류: ${String(err)}`);
