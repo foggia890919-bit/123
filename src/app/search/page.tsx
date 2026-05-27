@@ -262,7 +262,7 @@ export default function SearchPage() {
     }
   }, [results]);
 
-  // "전체재고 새로고침" — 워커에 라이브 크롤링 요청, 결과를 stock-cache에 반영
+  // "전체재고 새로고침" — 워커에 라이브 크롤링 요청
   async function refreshAllLive() {
     const codes = results
       .map((m) => m.insuranceCode)
@@ -271,8 +271,6 @@ export default function SearchPage() {
 
     setStockError(null);
     setStockRefreshing(true);
-    resetStockCache(codes);
-    fetchStockBatch(codes, true, STOCK_SITES);
 
     try {
       const r = await fetch("/api/inventory/check?live=1", {
@@ -281,16 +279,26 @@ export default function SearchPage() {
         body: JSON.stringify({ codes, sites: STOCK_SITES }),
       });
       const data = await r.json().catch(() => null);
+
       if (!r.ok || data?.error) {
-        setStockError(data?.error ?? `HTTP ${r.status}`);
-      } else {
-        const cnt = Array.isArray(data?.results) ? data.results.length : 0;
-        if (cnt === 0) {
-          setStockError(`워커가 응답했지만 ${codes.length}개 품목 재고를 찾지 못했습니다.`);
-        }
+        const msg = data?.error ?? `HTTP ${r.status}`;
+        setStockError(msg);
+        return;
       }
+
+      const cnt = Array.isArray(data?.results) ? data.results.length : 0;
+      if (cnt === 0) {
+        setStockError(`워커가 응답했지만 재고 데이터 0건. codes: ${codes.join(", ")}`);
+        return;
+      }
+
+      // 성공 — snapshot 경로로 DB에 저장된 최신 데이터를 stock-cache에 반영
+      resetStockCache(codes);
+      fetchStockBatch(codes, false, STOCK_SITES);
+      setStockError(`✓ ${cnt}건 갱신 완료`);
+      setTimeout(() => setStockError(null), 3000);
     } catch (err) {
-      setStockError(String(err));
+      setStockError(`네트워크 오류: ${String(err)}`);
     } finally {
       setStockRefreshing(false);
     }
@@ -313,8 +321,8 @@ export default function SearchPage() {
         )}
 
         {stockError && (
-          <div className="flex items-center gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-            <span className="font-semibold">재고 조회 실패:</span>
+          <div className={`flex items-center gap-2 text-xs rounded-lg px-3 py-2 ${stockError.startsWith("✓") ? "text-green-700 bg-green-50 border border-green-200" : "text-red-700 bg-red-50 border border-red-200"}`}>
+            <span className="font-semibold">{stockError.startsWith("✓") ? "재고 갱신:" : "재고 조회 실패:"}</span>
             <span>{stockError}</span>
           </div>
         )}
