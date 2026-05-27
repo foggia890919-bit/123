@@ -12,7 +12,7 @@ import { useSession } from "next-auth/react";
 import type { MedicationItem } from "@/types";
 import { hasRole } from "@/lib/roles";
 import { useGuestLimit } from "@/hooks/useGuestLimit";
-import { fetchStockBatch, getStock, resetStockCache, setStockBatchErrorHandler } from "@/lib/stock-cache";
+import { fetchStockBatch, getStock, resetStockCache } from "@/lib/stock-cache";
 
 // 인천약품 제외, 백제·훼밀리만
 const STOCK_SITES = ["ibjp", "family"];
@@ -49,14 +49,7 @@ export default function SearchPage() {
   const [displayedQuery, setDisplayedQuery] = useState("");
   const [showGate, setShowGate] = useState(false);
   const [stockError, setStockError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setStockBatchErrorHandler((msg) => {
-      setStockError(msg);
-      setTimeout(() => setStockError(null), 8000);
-    });
-    return () => setStockBatchErrorHandler(null);
-  }, []);
+  const [stockRefreshing, setStockRefreshing] = useState(false);
 
   const [cols, setCols] = useState<ColumnVisibility>({
     showIngredientName: true,
@@ -269,37 +262,38 @@ export default function SearchPage() {
     }
   }, [results]);
 
-  // "전체재고 새로고침" — 캐시 강제 리셋 후 라이브 크롤링 재요청
-  function refreshAllLive() {
+  // "전체재고 새로고침" — 워커에 라이브 크롤링 요청, 결과를 stock-cache에 반영
+  async function refreshAllLive() {
     const codes = results
       .map((m) => m.insuranceCode)
       .filter((c): c is string => !!c);
     if (codes.length === 0) return;
-    resetStockCache(codes);
 
     setStockError(null);
-    fetch("/api/inventory/check?live=1", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ codes, sites: STOCK_SITES }),
-    })
-      .then(async (r) => {
-        const data = await r.json().catch(() => null);
-        if (!r.ok || data?.error) {
-          const msg = data?.error ?? `HTTP ${r.status}`;
-          setStockError(msg);
-          for (const c of codes) resetStockCache([c]);
-          return;
-        }
-        const resultCount = Array.isArray(data?.results) ? data.results.length : 0;
-        if (resultCount === 0) {
-          setStockError(`도매상에서 ${codes.length}개 품목 데이터를 찾지 못했습니다. 워커 서버 상태를 확인하세요.`);
-        }
-        fetchStockBatch(codes, false, STOCK_SITES);
-      })
-      .catch((err) => setStockError(String(err)));
-
+    setStockRefreshing(true);
+    resetStockCache(codes);
     fetchStockBatch(codes, true, STOCK_SITES);
+
+    try {
+      const r = await fetch("/api/inventory/check?live=1", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ codes, sites: STOCK_SITES }),
+      });
+      const data = await r.json().catch(() => null);
+      if (!r.ok || data?.error) {
+        setStockError(data?.error ?? `HTTP ${r.status}`);
+      } else {
+        const cnt = Array.isArray(data?.results) ? data.results.length : 0;
+        if (cnt === 0) {
+          setStockError(`워커가 응답했지만 ${codes.length}개 품목 재고를 찾지 못했습니다.`);
+        }
+      }
+    } catch (err) {
+      setStockError(String(err));
+    } finally {
+      setStockRefreshing(false);
+    }
   }
 
   return (
@@ -525,10 +519,11 @@ export default function SearchPage() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={refreshAllLive}
-                  disabled={results.filter(r => r.insuranceCode).length === 0}
+                  disabled={stockRefreshing || results.filter(r => r.insuranceCode).length === 0}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" />전체재고 새로고침
+                  <RefreshCw className={`w-3.5 h-3.5 ${stockRefreshing ? "animate-spin" : ""}`} />
+                  {stockRefreshing ? "조회 중..." : "전체재고 새로고침"}
                 </button>
                 <ColumnToggles cols={cols} setCols={setCols} isSalesRep={isSalesRep} />
               </div>
