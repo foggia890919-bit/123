@@ -116,6 +116,12 @@ export function fetchStock(code: string, productName: string, live = false, site
     .catch((err) => applyError(code, String(err)));
 }
 
+let _onBatchError: ((msg: string) => void) | null = null;
+
+export function setStockBatchErrorHandler(handler: ((msg: string) => void) | null) {
+  _onBatchError = handler;
+}
+
 /**
  * 여러 보험코드의 재고를 한 번의 API 호출로 가져온다.
  * 검색 결과 자동 워밍업처럼 50건+ 일괄 처리할 때 사용.
@@ -153,16 +159,19 @@ export function fetchStockBatch(codes: string[], live = false, sites?: string[],
     .then(({ data, error }) => {
       if (error) {
         for (const c of targets) applyError(c, error);
+        if (live) _onBatchError?.(error);
         return;
       }
       const d = data as { error?: string; results?: SiteResult[]; source?: "snapshot" | "live" };
       if (d?.error) {
         for (const c of targets) applyError(c, d.error!);
+        if (live) _onBatchError?.(d.error!);
         return;
       }
       for (const c of targets) applyResult(c, d?.results ?? [], d?.source);
     })
     .catch((err) => {
       for (const c of targets) applyError(c, String(err));
+      if (live) _onBatchError?.(String(err));
     });
 }
