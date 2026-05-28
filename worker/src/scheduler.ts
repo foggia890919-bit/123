@@ -115,6 +115,7 @@ export async function runScheduledJob(
             for (const { insuranceCode } of slice) {
               const row = await deps.scrapeOne(site, insuranceCode, slot);
               if (row.error) {
+                console.warn(`[scheduler] FAIL ${site.key}/${insuranceCode}: ${row.error}`);
                 stats.failed++;
               } else if (row.items.length > 0) {
                 const inserts: SnapshotInsert[] = row.items.map(item => ({
@@ -131,6 +132,7 @@ export async function runScheduledJob(
                 }
                 stats.done++;
               } else {
+                console.info(`[scheduler] EMPTY ${site.key}/${insuranceCode}: 도매상에 등록 없음`);
                 stats.done++;
               }
               await new Promise(r => setTimeout(r, PER_SITE_DELAY_MS));
