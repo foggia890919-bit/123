@@ -106,6 +106,13 @@ const BIZ_MENU_GROUPS = [
         icon: PercentCircle,
         color: "bg-yellow-50 text-yellow-600",
       },
+      {
+        href: "/biz/promotion",
+        label: "협력법인 프로모션",
+        desc: "협력법인 등급별 추가수수료 차감 현황·프로모션 기간 관리",
+        icon: PercentCircle,
+        color: "bg-amber-50 text-amber-600",
+      },
     ],
   },
   {

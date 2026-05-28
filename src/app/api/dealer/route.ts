@@ -11,6 +11,7 @@ const FULL_SELECT = {
   managerName: true, managerPhone: true, managerEmail: true, memo: true, code: true,
   isSettlementTarget: true, isRateTarget: true,
   isPublic: true, parentCorpId: true,
+  corpClassification: true, partnerGrade: true, promotionBaseDate: true,
 } as const;
 
 const SAFE_SELECT = {
@@ -198,6 +199,18 @@ export async function PATCH(req: NextRequest) {
   if (body.isRateTarget        !== undefined) data.isRateTarget        = Boolean(body.isRateTarget);
   if (body.isPublic     !== undefined) data.isPublic     = Boolean(body.isPublic);
   if (body.parentCorpId !== undefined) data.parentCorpId = body.parentCorpId ?? null;
+  if (body.corpClassification !== undefined) {
+    const valid = [null, "GENERAL", "PARTNER"];
+    data.corpClassification = valid.includes(body.corpClassification) ? body.corpClassification : null;
+    if (data.corpClassification !== "PARTNER") data.partnerGrade = null;
+  }
+  if (body.partnerGrade !== undefined) {
+    const valid = [null, "A", "B", "C"];
+    data.partnerGrade = valid.includes(body.partnerGrade) ? body.partnerGrade : null;
+  }
+  if (body.promotionBaseDate !== undefined) {
+    data.promotionBaseDate = body.promotionBaseDate ? new Date(body.promotionBaseDate) : null;
+  }
 
   try {
     const updated = await prisma.userClient.update({

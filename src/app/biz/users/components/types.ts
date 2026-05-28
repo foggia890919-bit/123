@@ -33,6 +33,8 @@ export interface DealerClient {
   approved: boolean; managerName?: string | null; managerPhone?: string | null;
   managerEmail?: string | null; memo?: string | null; code?: string | null;
   isSettlementTarget?: boolean | null; isRateTarget?: boolean | null;
+  corpClassification?: string | null; partnerGrade?: string | null;
+  promotionBaseDate?: string | null;
 }
 
 // SalesRepsTab types

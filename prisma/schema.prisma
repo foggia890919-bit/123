@@ -140,6 +140,9 @@ model UserClient {
   approved     Boolean    @default(false)
   isSettlementTarget  Boolean    @default(false)
   isRateTarget        Boolean    @default(false)
+  corpClassification  String?    // "GENERAL" | "PARTNER" | null
+  partnerGrade        String?    // "A" | "B" | "C" | null
+  promotionBaseDate   DateTime?  // 프로모션 기준일 — 이 날짜 이후 등록된 거래처만 적용
   createdAt    DateTime   @default(now())
   proposals             Proposal[]
   statImages            StatImage[]
