@@ -7,25 +7,16 @@ import { normalizeCompanyName } from "@/lib/company-name";
 const SPREADSHEET_ID = "1wRscbgsxW62bwa3E2kopHBAgJIsgJvRzb-lHCk5bHDA";
 const SHEET_NAME = "★YK추가수수료";
 
-// 시트 컬럼 구조 (스크린샷 기반):
+// 시트 컬럼 구조 (사용자 정정 후):
 // B: 제약사명 (행 헤더)
-// E~M: 거래처별 추가수수료율
-//   E:이음, F:서원, G:메디펄스, H:YK, I:에이스, J:엠디파마, K:힐링팜, L:의왕, M:DH홀딩스
-const CORP_COLUMNS: Array<{ col: string; name: string }> = [
-  { col: "E", name: "이음" },
-  { col: "F", name: "서원" },
-  { col: "G", name: "메디펄스" },
-  { col: "H", name: "YK" },
-  { col: "I", name: "에이스" },
-  { col: "J", name: "엠디파마" },
-  { col: "K", name: "힐링팜" },
-  { col: "L", name: "의왕" },
-  { col: "M", name: "DH홀딩스" },
-];
-
+// C: 최고요율 (★ 우리 프로모션이 적용하는 요율 ★)
+// D: 최고요율업체 (참고용 — 메모로 저장)
+// E~M, N~Q: 무시
 const COMPANY_COL = "B";
-const HEADER_ROW = 2; // 헤더는 2행, 데이터는 3행부터
-const DATA_RANGE = `${SHEET_NAME}!${COMPANY_COL}3:M`;
+const DATA_RANGE = `${SHEET_NAME}!${COMPANY_COL}3:D`;
+
+// 협력법인 모든 곳에 동일하게 적용하는 글로벌 요율의 corpName 키
+export const GLOBAL_PROMO_CORP_KEY = "_GLOBAL_PROMO_";
 
 interface SyncResult {
   totalRows: number;
@@ -45,73 +36,57 @@ export async function POST(_req: NextRequest) {
     };
     const rows = data.values ?? [];
 
-    // 시트 별명 → 실제 법인명 매핑 로드
-    const mappings = await prisma.sheetCorpMapping.findMany({
-      where: { active: true },
-      include: { userClient: { select: { clientName: true } } },
-    });
-    const labelToCorp = new Map<string, string>();
-    for (const m of mappings) {
-      if (m.userClient?.clientName) {
-        labelToCorp.set(m.sheetLabel, m.userClient.clientName);
-      }
-    }
-
-    // 시트 제약사명 → KMD 전산 제약사명 매핑 로드
+    // 시트 제약사명 → KMD 전산 제약사명 매핑 (★ 이게 핵심 ★)
     const companyMappings = await prisma.sheetCompanyMapping.findMany({ where: { active: true } });
     const sheetToKmd = new Map(companyMappings.map((m) => [m.sheetCompany, m.kmdCompany]));
 
     const result: SyncResult = { totalRows: rows.length, upserted: 0, skipped: 0, errors: [] };
-    const unmappedLabels = new Set<string>();
     const unmappedCompanies = new Set<string>();
 
     for (const row of rows) {
       const companyRaw = (row[0] ?? "").trim();
-      if (!companyRaw) {
-        result.skipped++;
-        continue;
-      }
+      if (!companyRaw) { result.skipped++; continue; }
+
       // 명시적 매핑 우선, 없으면 정규화 fallback
-      const companyName = sheetToKmd.get(companyRaw) ?? normalizeCompanyName(companyRaw);
-      if (!sheetToKmd.has(companyRaw)) unmappedCompanies.add(companyRaw);
-      if (!companyName) {
-        result.skipped++;
+      const explicitMapping = sheetToKmd.get(companyRaw);
+      const companyName = explicitMapping ?? normalizeCompanyName(companyRaw);
+      if (!explicitMapping) unmappedCompanies.add(companyRaw);
+      if (!companyName) { result.skipped++; continue; }
+
+      // C열 = 최고요율
+      const maxRateRaw = (row[1] ?? "").trim();
+      if (!maxRateRaw) { result.skipped++; continue; }
+      const maxRate = Number(maxRateRaw);
+      if (!Number.isFinite(maxRate)) {
+        result.errors.push(`${companyRaw}: 최고요율 숫자 아님 (${maxRateRaw})`);
         continue;
       }
 
-      // E열이 row[3] (B=0, C=1, D=2, E=3)
-      for (let i = 0; i < CORP_COLUMNS.length; i++) {
-        const cellIdx = 3 + i;
-        const raw = (row[cellIdx] ?? "").trim();
-        if (!raw) continue;
-        const rate = Number(raw);
-        if (!Number.isFinite(rate)) {
-          result.errors.push(`${companyRaw} / ${CORP_COLUMNS[i].name}: 숫자 아님 (${raw})`);
-          continue;
-        }
-        const sheetLabel = CORP_COLUMNS[i].name;
-        const corpName = labelToCorp.get(sheetLabel);
-        if (!corpName) {
-          unmappedLabels.add(sheetLabel);
-          result.skipped++;
-          continue;
-        }
-        try {
-          await prisma.corpCompanyRate.upsert({
-            where: { corpName_companyName: { corpName, companyName } },
-            update: { additionalRate: rate, memo: `시트 자동 동기화 — ${SHEET_NAME} (${sheetLabel})` },
-            create: { corpName, companyName, additionalRate: rate, memo: `시트 자동 동기화 — ${SHEET_NAME} (${sheetLabel})` },
-          });
-          result.upserted++;
-        } catch (err) {
-          result.errors.push(`${companyName} / ${corpName}: ${(err as Error).message}`);
-        }
+      // D열 = 최고요율업체 (참고)
+      const maxChannel = (row[2] ?? "").trim();
+
+      try {
+        await prisma.corpCompanyRate.upsert({
+          where: { corpName_companyName: { corpName: GLOBAL_PROMO_CORP_KEY, companyName } },
+          update: {
+            additionalRate: maxRate,
+            memo: `시트 ${SHEET_NAME} 최고요율${maxChannel ? ` · ${maxChannel}` : ""}`,
+          },
+          create: {
+            corpName: GLOBAL_PROMO_CORP_KEY,
+            companyName,
+            additionalRate: maxRate,
+            memo: `시트 ${SHEET_NAME} 최고요율${maxChannel ? ` · ${maxChannel}` : ""}`,
+          },
+        });
+        result.upserted++;
+      } catch (err) {
+        result.errors.push(`${companyName}: ${(err as Error).message}`);
       }
     }
 
     return NextResponse.json({
       ...result,
-      unmappedLabels: [...unmappedLabels],
       unmappedCompanies: [...unmappedCompanies],
     });
   } catch (err) {

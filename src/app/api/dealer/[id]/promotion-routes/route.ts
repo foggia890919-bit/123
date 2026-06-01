@@ -50,8 +50,10 @@ export async function GET(
   });
 
   const companyNames = [...new Set(routes.map((r) => r.companyName))];
+  // 글로벌 최고요율(시트 C열) 기준으로 조회 — 모든 협력법인에 동일 요율 적용 후 등급 차감
+  const { GLOBAL_PROMO_CORP_KEY } = await import("@/app/api/admin/sync-yk-rates/route");
   const rates = await prisma.corpCompanyRate.findMany({
-    where: { corpName: corp.clientName, companyName: { in: companyNames } },
+    where: { corpName: GLOBAL_PROMO_CORP_KEY, companyName: { in: companyNames } },
     select: { companyName: true, additionalRate: true },
   });
   const rateMap = new Map(rates.map((r) => [r.companyName, r.additionalRate]));
