@@ -642,6 +642,19 @@ model SheetCorpMapping {
   @@index([userClientId])
 }
 
+// 시트 제약사명 → KMD 전산 제약사명 매칭
+// 구글시트 ★YK추가수수료의 B열 제약사명과 KMD Medication.companyName 연결
+model SheetCompanyMapping {
+  id               String   @id @default(cuid())
+  sheetCompany     String   @unique // 시트 B열 제약사명 원본 (예: "경보제약", "광동제약(이음)")
+  kmdCompany       String   // KMD 전산 제약사명 (Medication.companyName)
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([kmdCompany])
+}
+
 // 제약사별 월별 통계 제출 마감일 — 마감 전 제출만 추가수수료 적용
 model CompanyDeadline {
   id          String   @id @default(cuid())
