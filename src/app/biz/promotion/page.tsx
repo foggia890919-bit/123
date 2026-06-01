@@ -40,6 +40,7 @@ interface CorpSummary {
 const STATUS_BADGE: Record<string, { bg: string; text: string }> = {
   "적용중": { bg: "bg-green-50 border-green-200", text: "text-green-700" },
   "미제출": { bg: "bg-yellow-50 border-yellow-200", text: "text-yellow-700" },
+  "마감초과": { bg: "bg-orange-50 border-orange-200", text: "text-orange-700" },
   "미적용": { bg: "bg-gray-50 border-gray-200", text: "text-gray-500" },
   "미적용(이관)": { bg: "bg-gray-50 border-gray-200", text: "text-gray-500" },
   "만료": { bg: "bg-red-50 border-red-200", text: "text-red-600" },
