@@ -36,6 +36,7 @@ model User {
   documents             UserDocument[]
   filterRequests        FilterRequest[]
   userClients           UserClient[]
+  pharmaClaims          ClientPharmaClaim[]
   prescriptionReports   PrescriptionReport[]
   loginLogs             LoginLog[]
   posts                 Post[]
@@ -106,11 +107,33 @@ model Client {
   accountFileKey  String?
   accountFileName String?
   createdByUserId String?
+  address         String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+  pharmaClaims    ClientPharmaClaim[]
+
   @@index([clientName])
   @@index([bizNumber])
+}
+
+// 거래처-제약사 거래 점유 — 한 병의원의 같은 제약사는 한 회원만 거래 가능 (선등록자 우선)
+// 예: "클로드내과 × 제일약품"을 A회원이 등록하면 B회원은 같은 조합 등록 불가.
+model ClientPharmaClaim {
+  id           String   @id @default(cuid())
+  clientId     String
+  client       Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  companyName  String   // normalize된 제약사명
+  userId       String   // 점유한 회원
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  memo         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([clientId, companyName])  // 같은 (병의원, 제약사) 1건만 — 핵심 제약
+  @@index([userId])
+  @@index([companyName])
+  @@index([clientId])
 }
 
 model UserClient {
