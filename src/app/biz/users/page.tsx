@@ -3,11 +3,12 @@
 import { useState, useEffect, Suspense } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Hospital, Building2, UserCheck, Users } from "lucide-react";
+import { Hospital, Building2, UserCheck, Users, PercentCircle } from "lucide-react";
 import { BizLayout } from "@/app/biz/page";
 import type { Tab } from "./components/types";
 import ClientsTab from "./components/ClientsTab";
 import DealersTab from "./components/DealersTab";
+import PartnerPromoTab from "./components/PartnerPromoTab";
 import SalesRepsTab from "./components/SalesRepsTab";
 import InhouseClientsTab from "./components/InhouseClientsTab";
 import AllTab from "./components/AllTab";
@@ -19,6 +20,7 @@ const TABS: { key: Tab; label: string; icon: React.ElementType; desc: string }[]
   { key: "upper-corp",      label: "상위법인",       icon: Building2,  desc: "상위법인 등록·C-코드 생성" },
   { key: "lower-corp",      label: "하위법인",       icon: Building2,  desc: "하위법인 등록·C-코드 생성" },
   { key: "sales-reps",      label: "영업사원",       icon: UserCheck,  desc: "영업사원 승인·S-코드 생성" },
+  { key: "partner-promo",   label: "협력법인 프로모션", icon: PercentCircle, desc: "협력법인 지정·등급 설정·시트 매칭" },
 ];
 
 function UsersPageInner() {
@@ -81,6 +83,7 @@ function UsersPageInner() {
         {tab === "upper-corp"      && <DealersTab fixedType="UPPER_CORP" />}
         {tab === "lower-corp"      && <DealersTab fixedType="LOWER_CORP" />}
         {tab === "sales-reps"      && <SalesRepsTab />}
+        {tab === "partner-promo"   && <PartnerPromoTab />}
       </div>
     </BizLayout>
   );

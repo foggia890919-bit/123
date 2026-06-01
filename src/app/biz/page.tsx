@@ -107,13 +107,6 @@ const BIZ_MENU_GROUPS = [
         color: "bg-yellow-50 text-yellow-600",
       },
       {
-        href: "/biz/promotion",
-        label: "협력법인 프로모션",
-        desc: "협력법인 등급별 추가수수료 차감 현황·프로모션 기간 관리",
-        icon: PercentCircle,
-        color: "bg-amber-50 text-amber-600",
-      },
-      {
         href: "/biz/company-deadlines",
         label: "제약사 마감일",
         desc: "제약사별 월별 통계제출 마감일 (이미지 업로드 → Gemini OCR 자동 인식)",

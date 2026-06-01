@@ -57,8 +57,13 @@ export async function POST(_req: NextRequest) {
       }
     }
 
+    // 시트 제약사명 → KMD 전산 제약사명 매핑 로드
+    const companyMappings = await prisma.sheetCompanyMapping.findMany({ where: { active: true } });
+    const sheetToKmd = new Map(companyMappings.map((m) => [m.sheetCompany, m.kmdCompany]));
+
     const result: SyncResult = { totalRows: rows.length, upserted: 0, skipped: 0, errors: [] };
     const unmappedLabels = new Set<string>();
+    const unmappedCompanies = new Set<string>();
 
     for (const row of rows) {
       const companyRaw = (row[0] ?? "").trim();
@@ -66,7 +71,9 @@ export async function POST(_req: NextRequest) {
         result.skipped++;
         continue;
       }
-      const companyName = normalizeCompanyName(companyRaw);
+      // 명시적 매핑 우선, 없으면 정규화 fallback
+      const companyName = sheetToKmd.get(companyRaw) ?? normalizeCompanyName(companyRaw);
+      if (!sheetToKmd.has(companyRaw)) unmappedCompanies.add(companyRaw);
       if (!companyName) {
         result.skipped++;
         continue;
@@ -105,6 +112,7 @@ export async function POST(_req: NextRequest) {
     return NextResponse.json({
       ...result,
       unmappedLabels: [...unmappedLabels],
+      unmappedCompanies: [...unmappedCompanies],
     });
   } catch (err) {
     console.error("[sync-yk-rates]", err);

@@ -111,4 +111,4 @@ export interface AllClient {
 }
 
 // Main page types
-export type Tab = "all" | "clients" | "inhouse-clients" | "upper-corp" | "lower-corp" | "sales-reps";
+export type Tab = "all" | "clients" | "inhouse-clients" | "upper-corp" | "lower-corp" | "sales-reps" | "partner-promo";
