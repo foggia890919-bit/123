@@ -1,4 +1,4 @@
-export type Tab = "upload" | "members" | "rates" | "filterReqs" | "userClients" | "bizManagement" | "corpRelation" | "apiSources" | "notices" | "companySubmissions" | "bulkSubmit" | "submissionTree" | "loginLogs" | "fileMigration" | "banners" | "boards";
+export type Tab = "upload" | "members" | "hospitals" | "businesses" | "rates" | "filterReqs" | "userClients" | "bizManagement" | "corpRelation" | "apiSources" | "notices" | "companySubmissions" | "bulkSubmit" | "submissionTree" | "loginLogs" | "fileMigration" | "banners" | "boards";
 
 export interface MenuItem { key: Tab; label: string; icon: React.ElementType }
 export interface MenuGroup { title: string; items: MenuItem[] }

@@ -2,10 +2,12 @@
 
 import { useState } from "react";
 import { signOut } from "next-auth/react";
-import { Upload, ShieldCheck, Users, Percent, FileSpreadsheet, Filter, Database, Send, Inbox, MessageCircle, Menu, LogOut, Building2, Network, X } from "lucide-react";
+import { Upload, ShieldCheck, Users, Percent, FileSpreadsheet, Filter, Database, Send, Inbox, MessageCircle, Menu, LogOut, Building2, Network, X, Briefcase } from "lucide-react";
 import type { Tab, MenuGroup } from "./components/types";
 import UploadTab from "./components/UploadTab";
 import MembersTab from "./components/MembersTab";
+import HospitalsTab from "./components/HospitalsTab";
+import BusinessesTab from "./components/BusinessesTab";
 import RatesTab from "./components/RatesTab";
 import FilterReqsTab from "./components/FilterReqsTab";
 import BulkSubmissionTab from "./components/BulkSubmissionTab";
@@ -24,6 +26,14 @@ import SyncSheetsButton from "./components/SyncSheetsButton";
 
 const MENU_GROUPS: MenuGroup[] = [
   {
+    title: "최상단 관리",
+    items: [
+      { key: "members", label: "회원관리", icon: Users },
+      { key: "hospitals", label: "병의원관리", icon: Building2 },
+      { key: "businesses", label: "사업자관리", icon: Briefcase },
+    ],
+  },
+  {
     title: "데이터 관리",
     items: [
       { key: "upload", label: "요율표 업로드", icon: Upload },
@@ -31,13 +41,12 @@ const MENU_GROUPS: MenuGroup[] = [
     ],
   },
   {
-    title: "회원 & 거래처",
+    title: "수수료·거래처 상세",
     items: [
-      { key: "members", label: "회원관리", icon: Users },
       { key: "rates", label: "추가수수료 관리", icon: Percent },
       { key: "userClients", label: "담당자별 거래처", icon: Building2 },
-      { key: "bizManagement", label: "사업자관리", icon: Building2 },
-      { key: "corpRelation", label: "상위 하위법인 지정", icon: Building2 },
+      { key: "bizManagement", label: "사업자 상세 (legacy)", icon: Building2 },
+      { key: "corpRelation", label: "상위/하위법인 (legacy)", icon: Building2 },
     ],
   },
   {
@@ -72,7 +81,7 @@ const MENU_GROUPS: MenuGroup[] = [
 ];
 
 export default function AdminDashboardPage() {
-  const [tab, setTab] = useState<Tab>("upload");
+  const [tab, setTab] = useState<Tab>("members");
   const [mobileOpen, setMobileOpen] = useState(false);
 
   function handleLogout() {
@@ -149,6 +158,8 @@ export default function AdminDashboardPage() {
         {tab === "upload" && <UploadTab />}
         {tab === "notices" && <NoticesTab />}
         {tab === "members" && <MembersTab />}
+        {tab === "hospitals" && <HospitalsTab />}
+        {tab === "businesses" && <BusinessesTab />}
         {tab === "rates" && <RatesTab />}
         {tab === "filterReqs" && <FilterReqsTab />}
         {tab === "bulkSubmit" && <BulkSubmissionTab />}

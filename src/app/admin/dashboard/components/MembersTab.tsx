@@ -54,6 +54,14 @@ export default function MembersTab() {
   async function changeRole(userId: string, role: string) {
     await fetch("/api/admin/users", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId, role }) });
     setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, role } : u));
+    // CSO 분류로 전환되면 사용자에게 안내 — 사업자관리에서 확인
+    if (["SALES", "BIZ", "ADMIN", "BUSINESS"].includes(role)) {
+      // 짧은 토스트만 — 이미 select가 변경됐으니 시각적 피드백은 충분
+      const target = users.find((u) => u.id === userId);
+      const name = target?.name ?? target?.email ?? "회원";
+      // alert 대신 console로 ; 화면 흐름 방해 안 하게
+      console.log(`[admin] ${name} → 사업자관리로 이동 (role=${role})`);
+    }
   }
 
   async function toggleApproval(userId: string, approved: boolean) {
@@ -100,7 +108,10 @@ export default function MembersTab() {
               <h2 className="text-lg font-semibold text-gray-800">
                 회원 목록 {total > 0 && <span className="text-base font-normal text-gray-500">({total}명)</span>}
               </h2>
-              <p className="text-xs text-gray-400 mt-0.5">가입 승인 후 서비스를 이용할 수 있어요.</p>
+              <p className="text-xs text-gray-400 mt-0.5">
+                신규회원은 의사/약사/일반으로 가입. 관리자가 권한을 <strong>CSO·영업/CSO·비즈관리자/CSO·관리자</strong>로 변경하면
+                자동으로 <strong>사업자관리</strong>로 이동합니다.
+              </p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <div className="relative">
