@@ -47,11 +47,14 @@ export async function POST(_req: NextRequest) {
       const companyRaw = (row[0] ?? "").trim();
       if (!companyRaw) { result.skipped++; continue; }
 
-      // 명시적 매핑 우선, 없으면 정규화 fallback
+      // 명시적 매핑이 있어야만 동기화. 없으면 unmapped로 분류 (자동 매칭 안 함 — 잘못 묶일 위험)
       const explicitMapping = sheetToKmd.get(companyRaw);
-      const companyName = explicitMapping ?? normalizeCompanyName(companyRaw);
-      if (!explicitMapping) unmappedCompanies.add(companyRaw);
-      if (!companyName) { result.skipped++; continue; }
+      if (!explicitMapping) {
+        unmappedCompanies.add(companyRaw);
+        result.skipped++;
+        continue;
+      }
+      const companyName = explicitMapping;
 
       // C열 = 최고요율
       const maxRateRaw = (row[1] ?? "").trim();

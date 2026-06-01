@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 import { sheetsApi } from "@/lib/google/google-sheets";
-import { companyNameKey } from "@/lib/company-name";
+import { companyNameKey, companyNamePrefixKey } from "@/lib/company-name";
 
 const SPREADSHEET_ID = "1wRscbgsxW62bwa3E2kopHBAgJIsgJvRzb-lHCk5bHDA";
 const SHEET_NAME = "★YK추가수수료";
@@ -10,8 +10,9 @@ const COMPANY_RANGE = `${SHEET_NAME}!B3:B`;
 
 interface MappingItem {
   sheetCompany: string;
-  kmdCompany: string | null;   // 확정 매핑
-  suggested: string | null;     // 자동 제안 (정규화 키 일치)
+  kmdCompany: string | null;     // 확정 매핑
+  suggested: string | null;       // 단일 자동 제안 (정규화 키 일치, 즉 안전한 매칭)
+  candidates: string[];           // 다중 후보 (prefix 키 일치 — 사용자 선택 필요)
   matched: boolean;
 }
 
@@ -41,8 +42,18 @@ export async function GET() {
     orderBy: { companyName: "asc" },
   });
   const kmdCompanies = [...new Set(kmdRows.map((r) => r.companyName).filter(Boolean))] as string[];
-  const kmdKeyMap = new Map<string, string>(); // 정규화키 → 원본
-  for (const c of kmdCompanies) kmdKeyMap.set(companyNameKey(c), c);
+
+  // 인덱스 두 개:
+  // - strictMap: 정규화 키 (회사형태/괄호만 제거)  → 유일 매칭 = 안전
+  // - prefixIndex: prefix 키 (제약/약품 접미어 추가 제거)  → 다중 후보 가능
+  const kmdStrictMap = new Map<string, string>(); // key → name (유일 보장)
+  const kmdPrefixIndex = new Map<string, string[]>(); // key → name[] (여러 개 가능)
+  for (const c of kmdCompanies) {
+    kmdStrictMap.set(companyNameKey(c), c);
+    const pk = companyNamePrefixKey(c);
+    if (!kmdPrefixIndex.has(pk)) kmdPrefixIndex.set(pk, []);
+    kmdPrefixIndex.get(pk)!.push(c);
+  }
 
   // 3) 기존 매핑
   const existing = await prisma.sheetCompanyMapping.findMany();
@@ -51,11 +62,30 @@ export async function GET() {
   // 4) 항목 조립
   const items: MappingItem[] = sheetCompanies.map((sheetCompany) => {
     const confirmed = existingMap.get(sheetCompany) ?? null;
-    const suggested = confirmed ? null : (kmdKeyMap.get(companyNameKey(sheetCompany)) ?? null);
+    let suggested: string | null = null;
+    let candidates: string[] = [];
+
+    if (!confirmed) {
+      // 1순위: 정규화 키 정확 일치 → 단일 안전 제안
+      const strictHit = kmdStrictMap.get(companyNameKey(sheetCompany));
+      if (strictHit) {
+        suggested = strictHit;
+      } else {
+        // 2순위: prefix 키 일치 → 후보 여러 개 (사용자 선택)
+        candidates = kmdPrefixIndex.get(companyNamePrefixKey(sheetCompany)) ?? [];
+        // 후보가 정확히 1개면 안전한 제안으로 승격 (정규화 키 다른 경우는 없으므로)
+        if (candidates.length === 1) {
+          suggested = candidates[0];
+          candidates = [];
+        }
+      }
+    }
+
     return {
       sheetCompany,
       kmdCompany: confirmed,
       suggested,
+      candidates,
       matched: !!confirmed,
     };
   });
@@ -101,19 +131,47 @@ export async function PUT() {
     select: { companyName: true },
     distinct: ["companyName"],
   });
-  const kmdKeyMap = new Map<string, string>();
-  for (const r of kmdRows) if (r.companyName) kmdKeyMap.set(companyNameKey(r.companyName), r.companyName);
-
-  let count = 0;
-  for (const sheetCompany of sheetCompanies) {
-    const match = kmdKeyMap.get(companyNameKey(sheetCompany));
-    if (!match) continue;
-    await prisma.sheetCompanyMapping.upsert({
-      where: { sheetCompany },
-      update: { kmdCompany: match },
-      create: { sheetCompany, kmdCompany: match },
-    });
-    count++;
+  const kmdStrictMap = new Map<string, string>();
+  const kmdPrefixIndex = new Map<string, string[]>();
+  for (const r of kmdRows) {
+    if (!r.companyName) continue;
+    kmdStrictMap.set(companyNameKey(r.companyName), r.companyName);
+    const pk = companyNamePrefixKey(r.companyName);
+    if (!kmdPrefixIndex.has(pk)) kmdPrefixIndex.set(pk, []);
+    kmdPrefixIndex.get(pk)!.push(r.companyName);
   }
-  return NextResponse.json({ ok: true, autoMatched: count });
+
+  let strictCount = 0;     // 정규화 키 정확 일치
+  let singleCount = 0;     // prefix 매칭 후보 1개라 자동 확정
+  let ambiguousCount = 0;  // prefix 후보 2개+ — 사용자 선택 대기
+  for (const sheetCompany of sheetCompanies) {
+    const strict = kmdStrictMap.get(companyNameKey(sheetCompany));
+    if (strict) {
+      await prisma.sheetCompanyMapping.upsert({
+        where: { sheetCompany },
+        update: { kmdCompany: strict },
+        create: { sheetCompany, kmdCompany: strict },
+      });
+      strictCount++;
+      continue;
+    }
+    const candidates = kmdPrefixIndex.get(companyNamePrefixKey(sheetCompany)) ?? [];
+    if (candidates.length === 1) {
+      await prisma.sheetCompanyMapping.upsert({
+        where: { sheetCompany },
+        update: { kmdCompany: candidates[0] },
+        create: { sheetCompany, kmdCompany: candidates[0] },
+      });
+      singleCount++;
+    } else if (candidates.length > 1) {
+      ambiguousCount++;
+    }
+  }
+  return NextResponse.json({
+    ok: true,
+    autoMatched: strictCount + singleCount,
+    strictCount,
+    singleCount,
+    ambiguousCount,
+  });
 }

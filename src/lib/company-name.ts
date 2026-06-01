@@ -44,3 +44,22 @@ export function companyNameKey(name: string): string {
     .replace(/[\s.,()/\-_·]/g, "")
     .toLowerCase();
 }
+
+// 제약사명 prefix 키 — 접미어 ("제약", "약품") 제거 후 핵심부만 추출.
+// 후보 제안 전용 — 자동매칭에는 절대 사용하지 말 것 (동광 ≠ 동광제약 가능성).
+//
+// 예시:
+// - "동광"     → prefix: "동광"
+// - "동광제약" → prefix: "동광"
+// - "동광약품" → prefix: "동광"
+// → "동광"으로 검색하면 3개 후보가 모두 매칭되어 사용자가 선택
+const TRAILING_SUFFIXES = ["제약", "약품"];
+export function companyNamePrefixKey(name: string): string {
+  let key = companyNameKey(name);
+  for (const suffix of TRAILING_SUFFIXES) {
+    if (key.endsWith(suffix) && key.length > suffix.length + 1) {
+      key = key.slice(0, -suffix.length);
+    }
+  }
+  return key;
+}

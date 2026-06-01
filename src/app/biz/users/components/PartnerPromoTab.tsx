@@ -12,7 +12,13 @@ const GRADES = [
   { v: "C", label: "C (-2%)", desc: "5천↑" },
 ];
 
-interface CompanyMatchItem { sheetCompany: string; kmdCompany: string | null; suggested: string | null; matched: boolean; }
+interface CompanyMatchItem {
+  sheetCompany: string;
+  kmdCompany: string | null;
+  suggested: string | null;
+  candidates: string[];
+  matched: boolean;
+}
 
 export default function PartnerPromoTab() {
   const [view, setView] = useState<SubView>("partners");
@@ -212,6 +218,7 @@ function CompanyMatchView() {
     .filter((it) => !onlyUnmatched || !it.matched)
     .filter((it) => !query || it.sheetCompany.includes(query));
   const matchedCount = items.filter((it) => it.matched).length;
+  const ambiguousCount = items.filter((it) => !it.matched && it.candidates.length > 0).length;
 
   if (loading) return <div className="flex justify-center py-12 text-gray-400"><Loader2 className="w-5 h-5 animate-spin" /></div>;
 
@@ -239,7 +246,12 @@ function CompanyMatchView() {
             className="w-full pl-9 pr-3 py-1.5 text-xs border border-gray-300 rounded-lg"
           />
         </div>
-        <span className="text-xs text-gray-500 ml-auto">{matchedCount}/{items.length} 매칭됨</span>
+        <span className="text-xs text-gray-500 ml-auto">
+          {matchedCount}/{items.length} 매칭
+          {ambiguousCount > 0 && (
+            <span className="ml-2 text-orange-600 font-medium">선택대기 {ambiguousCount}건</span>
+          )}
+        </span>
       </div>
 
       <div className="overflow-x-auto border rounded-lg bg-white max-h-[60vh] overflow-y-auto">
@@ -252,35 +264,62 @@ function CompanyMatchView() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {filtered.map((it) => (
-              <tr key={it.sheetCompany} className="hover:bg-gray-50">
-                <td className="px-4 py-2 font-medium text-gray-800">{it.sheetCompany}</td>
-                <td className="px-3 py-2">
-                  <select
-                    value={it.kmdCompany ?? ""}
-                    onChange={(e) => save(it.sheetCompany, e.target.value)}
-                    className={`w-full text-xs border rounded px-2 py-1.5 ${
-                      it.kmdCompany ? "border-green-300 bg-green-50" : it.suggested ? "border-amber-300 bg-amber-50" : "border-gray-300"
-                    }`}
-                  >
-                    <option value="">-- 미매칭 --</option>
-                    {it.suggested && !it.kmdCompany && (
-                      <option value={it.suggested}>⭐ {it.suggested} (자동제안)</option>
+            {filtered.map((it) => {
+              const hasCandidates = !it.kmdCompany && it.candidates.length > 0;
+              return (
+                <tr key={it.sheetCompany} className="hover:bg-gray-50">
+                  <td className="px-4 py-2 font-medium text-gray-800">{it.sheetCompany}</td>
+                  <td className="px-3 py-2 space-y-1">
+                    {hasCandidates && (
+                      <div className="flex gap-1 flex-wrap mb-1">
+                        <span className="text-[10px] text-orange-700 bg-orange-50 border border-orange-200 rounded px-1.5 py-0.5 font-medium">
+                          후보 {it.candidates.length}개 — 어떤건가요?
+                        </span>
+                        {it.candidates.map((c) => (
+                          <button
+                            key={c}
+                            onClick={() => save(it.sheetCompany, c)}
+                            className="text-[11px] px-2 py-0.5 rounded border border-orange-300 bg-orange-50 text-orange-700 hover:bg-orange-100"
+                          >
+                            {c}
+                          </button>
+                        ))}
+                      </div>
                     )}
-                    {kmdCompanies.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </td>
-                <td className="px-3 py-2 text-center">
-                  {it.matched
-                    ? <Check className="w-4 h-4 text-green-600 inline" />
-                    : it.suggested
-                      ? <span className="text-[10px] text-amber-600">제안有</span>
-                      : <span className="text-[10px] text-gray-300">-</span>}
-                </td>
-              </tr>
-            ))}
+                    <select
+                      value={it.kmdCompany ?? ""}
+                      onChange={(e) => save(it.sheetCompany, e.target.value)}
+                      className={`w-full text-xs border rounded px-2 py-1.5 ${
+                        it.kmdCompany
+                          ? "border-green-300 bg-green-50"
+                          : hasCandidates
+                            ? "border-orange-300 bg-orange-50"
+                            : it.suggested
+                              ? "border-amber-300 bg-amber-50"
+                              : "border-gray-300"
+                      }`}
+                    >
+                      <option value="">-- 미매칭 --</option>
+                      {it.suggested && !it.kmdCompany && (
+                        <option value={it.suggested}>⭐ {it.suggested} (자동제안)</option>
+                      )}
+                      {kmdCompanies.map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    {it.matched
+                      ? <Check className="w-4 h-4 text-green-600 inline" />
+                      : hasCandidates
+                        ? <span className="text-[10px] text-orange-600 font-medium">선택필요</span>
+                        : it.suggested
+                          ? <span className="text-[10px] text-amber-600">제안有</span>
+                          : <span className="text-[10px] text-gray-300">-</span>}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
