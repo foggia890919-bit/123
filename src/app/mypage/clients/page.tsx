@@ -239,6 +239,16 @@ export default function ClientsPage() {
       if (!validateBizNumber(formatted)) { setBizError("유효하지 않은 사업자등록번호예요."); return; }
       setDupChecked("checking");
       try {
+        // 1) 마스터에서 사업자번호 검색 → 있으면 거래처명/주소 자동 채움
+        const masterRes = await fetch(`/api/clients-master?bizNumber=${digits}`);
+        if (masterRes.ok) {
+          const masterData = await masterRes.json();
+          if (masterData.found && masterData.client) {
+            if (!name && masterData.client.clientName) setName(masterData.client.clientName);
+            if (!address && masterData.client.address) setAddress(masterData.client.address);
+          }
+        }
+        // 2) 본인 중복 / 법인 거래처 체크 (기존 로직)
         const res = await fetch(`/api/user-clients?lookup=${digits}`);
         if (!res.ok) { setDupChecked("none"); setBizError("중복 확인 중 오류가 발생했어요."); return; }
         const data = await res.json();
