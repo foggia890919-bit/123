@@ -376,8 +376,38 @@ export async function POST(req: NextRequest) {
     // 사용자 정책 (최종): Clova OCR 줄 파서 결과만 그대로 채택. Document AI 무시
     // (셀 분리가 사진마다 다르게 나와 신뢰 X). LLM 호출 0번. 매핑/검증 X.
     // 보험코드는 마스터 매칭 (matchMedication 의 9자리 매칭) 만으로 단가/수수료 보정.
-    pipeline.mergeUsed = "clova-only";
-    merged = parseDrugsFromClovaText(clovaText);
+    // 추론 기반 전환: USE_VISION_EXTRACT=1 이면 Gemini Vision 이 이미지를 사람처럼 통째로
+    // 읽어 약품 행을 추출(Clova 좌표/positional/cross-validate 우회). 실패 시 Clova 줄
+    // 파서로 안전 폴백. 마스터 매칭(보험코드 9자리 → 단가/수수료)은 그대로 유지된다.
+    // 과거 Gemini 폐기는 Gemini 탓이 아니라 좌표 로직과 얽힌 복잡함 탓 → 단일 경로로 부활.
+    if (process.env.USE_VISION_EXTRACT === "1" && process.env.GEMINI_API_KEY) {
+      try {
+        const gv = await callGeminiVision(base64, mimeType, clientContext);
+        merged = gv.drugs.map((d) => ({
+          insuranceCode: d.insuranceCode,
+          productName: d.productName,
+          companyName: d.companyName,
+          quantity: d.quantity,
+          confidence: d.confidence,
+        }));
+        pipeline.mergeUsed = "vision-preferred";
+        // Gemini 가 직접 읽은 보험코드로 마스터 재조회 — 좌표 기반 코드 추출을 우회한다.
+        const gvCodes = merged
+          .map((m) => m.insuranceCode.replace(/\D/g, ""))
+          .filter((c) => c.length === 9);
+        if (gvCodes.length) {
+          const extra = await fetchMasterByCodes(gvCodes);
+          for (const [k, v] of extra) masterByCode.set(k, v);
+        }
+      } catch (e) {
+        pipeline.mergeError = `vision 추출 실패, clova 폴백: ${String(e).slice(0, 200)}`;
+        pipeline.mergeUsed = "clova-only";
+        merged = parseDrugsFromClovaText(clovaText);
+      }
+    } else {
+      pipeline.mergeUsed = "clova-only";
+      merged = parseDrugsFromClovaText(clovaText);
+    }
     pipeline.mergeDrugCount = merged.length;
 
     // ── Vision · Positional 교차 검증 ──────────────────────────────────────
@@ -2047,10 +2077,9 @@ async function callGeminiVision(
 { "drugs": [{ "insuranceCode": "", "productName": "", "companyName": "", "quantity": "", "confidence": 0 }] }${clientContextHint(clientContext)}`;
 
   const response = await ai.models.generateContent({
-    // Vision 단계 — 이미지에서 직접 약품 추출. flash-lite 보다 정확한 pro 사용.
-    // 비용: lite 의 ~12배 (페이지당 ₩0.2 → ₩2) 이지만 한국어 정형 문서
-    // 정확도가 90% → 95% 수준으로 향상.
-    model: "gemini-2.5-pro",
+    // Vision 단계 — 이미지에서 직접 약품 추출. 평가 정확도 1위 모델 사용.
+    // 기본 gemini-3.5-pro, GEMINI_VISION_MODEL 로 교체 가능.
+    model: process.env.GEMINI_VISION_MODEL || "gemini-3.5-pro",
     contents: [{
       role: "user",
       parts: [
