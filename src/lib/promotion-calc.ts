@@ -48,3 +48,14 @@ export function promotionRemainingDays(
   if (now > expires) return null;
   return Math.ceil((expires.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
 }
+
+export type SubmissionTiming = "ON_TIME" | "LATE" | "PENDING" | "NO_DEADLINE";
+
+export function classifySubmissionTiming(opts: {
+  submittedAt: Date | null;
+  deadline: Date | null;
+}): SubmissionTiming {
+  if (!opts.deadline) return "NO_DEADLINE";
+  if (!opts.submittedAt) return "PENDING";
+  return opts.submittedAt <= opts.deadline ? "ON_TIME" : "LATE";
+}

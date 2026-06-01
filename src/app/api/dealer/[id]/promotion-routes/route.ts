@@ -7,7 +7,9 @@ import {
   calculatePromotionRate,
   promotionExpiresAt,
   promotionRemainingDays,
+  classifySubmissionTiming,
 } from "@/lib/promotion-calc";
+import { normalizeCompanyName } from "@/lib/company-name";
 
 export async function GET(
   req: NextRequest,
@@ -60,9 +62,17 @@ export async function GET(
   const routeIds = routes.map((r) => r.id);
   const logs = await prisma.monthlySubmissionLog.findMany({
     where: { submissionRouteId: { in: routeIds }, yearMonth: currentYM },
-    select: { submissionRouteId: true, submitted: true },
+    select: { submissionRouteId: true, submitted: true, submittedAt: true },
   });
   const submittedMap = new Map(logs.map((l) => [l.submissionRouteId, l.submitted]));
+  const submittedAtMap = new Map(logs.map((l) => [l.submissionRouteId, l.submittedAt]));
+
+  const normalizedCompanies = [...new Set(routes.map((r) => normalizeCompanyName(r.companyName)))];
+  const deadlines = await prisma.companyDeadline.findMany({
+    where: { companyName: { in: normalizedCompanies }, yearMonth: currentYM },
+    select: { companyName: true, deadline: true },
+  });
+  const deadlineMap = new Map(deadlines.map((d) => [d.companyName, d.deadline]));
 
   const items = routes.map((r) => {
     const eligible = isPromotionEligible({
@@ -78,11 +88,17 @@ export async function GET(
       ? calculatePromotionRate(baseRate, corp.partnerGrade)
       : baseRate;
     const submitted = submittedMap.get(r.id) ?? false;
+    const submittedAt = submittedAtMap.get(r.id) ?? null;
+    const deadline = deadlineMap.get(normalizeCompanyName(r.companyName)) ?? null;
+    const timing = classifySubmissionTiming({ submittedAt, deadline });
+    // 마감일 초과 제출은 추가수수료 미적용
+    const timingValid = timing === "ON_TIME" || timing === "NO_DEADLINE";
 
     let status: string;
     if (!eligible) status = r.requestType === "이관" ? "미적용(이관)" : "미적용";
     else if (!withinPeriod) status = "만료";
-    else if (submitted) status = "적용중";
+    else if (submitted && !timingValid) status = "마감초과";
+    else if (submitted && timingValid) status = "적용중";
     else status = "미제출";
 
     return {
@@ -92,13 +108,16 @@ export async function GET(
       submissionEntity: r.submissionEntity,
       requestType: r.requestType,
       routeCreatedAt: r.createdAt.toISOString(),
-      isPromotionEligible: eligible && withinPeriod,
+      isPromotionEligible: eligible && withinPeriod && timingValid,
       promotionExpiresAt: eligible ? promotionExpiresAt(r.createdAt).toISOString() : null,
       promotionRemainingDays: eligible ? promotionRemainingDays(r.createdAt, now) : null,
       baseAdditionalRate: baseRate,
       gradeDiscount: gradeDiscount ?? (corp.partnerGrade ? undefined : 0),
-      finalRate,
+      finalRate: timingValid ? finalRate : baseRate,
       currentMonthSubmitted: submitted,
+      submittedAt: submittedAt?.toISOString() ?? null,
+      deadline: deadline?.toISOString() ?? null,
+      submissionTiming: timing,
       status,
     };
   });
