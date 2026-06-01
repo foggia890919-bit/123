@@ -143,16 +143,21 @@ export interface TreeResponse {
 
 export type EditSub = CompanySubmission & { isNew?: boolean };
 
+// 신구 enum 값 모두 라벨/색상 매핑 (Phase 5 완료까지 superset 유지)
 export const roleLabel: Record<string, string> = {
-  ADMIN: "관리자", BUSINESS: "사업자", BIZ: "비즈회원", BASIC: "일반회원", DOCTOR: "의사", PHARMACIST: "약사",
+  ADMIN: "관리자", BIZ: "비즈관리자",
+  SALES: "CSO(영업)", BUSINESS: "CSO(영업)",
+  HOSPITAL: "병의원", DOCTOR: "병의원",
+  PHARMACY: "약국", PHARMACIST: "약국",
+  GENERAL: "일반", BASIC: "일반",
 };
 export const roleColor: Record<string, string> = {
-  BASIC: "bg-gray-100 text-gray-600",
-  BUSINESS: "bg-blue-100 text-blue-700",
-  BIZ: "bg-purple-100 text-purple-700",
   ADMIN: "bg-red-100 text-red-700",
-  DOCTOR: "bg-green-100 text-green-700",
-  PHARMACIST: "bg-teal-100 text-teal-700",
+  BIZ: "bg-purple-100 text-purple-700",
+  SALES: "bg-blue-100 text-blue-700", BUSINESS: "bg-blue-100 text-blue-700",
+  HOSPITAL: "bg-green-100 text-green-700", DOCTOR: "bg-green-100 text-green-700",
+  PHARMACY: "bg-teal-100 text-teal-700", PHARMACIST: "bg-teal-100 text-teal-700",
+  GENERAL: "bg-gray-100 text-gray-600", BASIC: "bg-gray-100 text-gray-600",
 };
 
 export const statusOptions = [

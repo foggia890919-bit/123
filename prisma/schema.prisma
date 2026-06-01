@@ -160,11 +160,15 @@ model UserClient {
 
 enum Role {
   ADMIN
-  BUSINESS
+  BUSINESS    // legacy → BACKFILL 후 제거 예정 (Phase 8)
   BIZ
-  BASIC
-  DOCTOR
-  PHARMACIST
+  BASIC       // legacy → BACKFILL 후 제거 예정
+  DOCTOR      // legacy → BACKFILL 후 제거 예정
+  PHARMACIST  // legacy → BACKFILL 후 제거 예정
+  SALES       // 신규 — CSO 가입자 기본
+  GENERAL     // 신규 — 일반 가입자
+  HOSPITAL    // 신규 — 병의원 가입자
+  PHARMACY    // 신규 — 약국 가입자
 }
 
 model MemberCompanyRate {

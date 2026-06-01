@@ -44,15 +44,25 @@ export async function requireAdminOrService(req: Request): Promise<SessionUser |
   return requireAdmin();
 }
 
+// superset HIERARCHY — 신구 enum 값 모두 동작 (Phase 8까지 유지).
+const ROLE_HIERARCHY: Record<string, number> = {
+  // 일반 사용자 레벨
+  GENERAL: 0, BASIC: 0,
+  HOSPITAL: 0, DOCTOR: 0,
+  PHARMACY: 0, PHARMACIST: 0,
+  // 영업 (CSO 기본)
+  SALES: 1, BUSINESS: 1,
+  // 비즈 관리자
+  BIZ: 2,
+  // 최상위
+  ADMIN: 99,
+};
+
 export async function requireRole(minRole: string): Promise<SessionUser | NextResponse> {
   const user = await getSessionUser();
   if (!user) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
-  const hierarchy: Record<string, number> = {
-    BASIC: 0, DOCTOR: 0, PHARMACIST: 0,
-    BUSINESS: 1, BIZ: 2, ADMIN: 99,
-  };
   if (user.role === "ADMIN") return user;
-  if ((hierarchy[user.role] ?? -1) < (hierarchy[minRole] ?? 99)) {
+  if ((ROLE_HIERARCHY[user.role] ?? -1) < (ROLE_HIERARCHY[minRole] ?? 99)) {
     return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
   }
   return user;
@@ -62,10 +72,14 @@ export function isNextResponse(v: unknown): v is NextResponse {
   return v instanceof NextResponse;
 }
 
-// 통계제출처 접근 허용 role — DOCTOR/PHARMACIST 차단.
-// HIERARCHY 가 BASIC/DOCTOR/PHARMACIST/BUSINESS/BIZ 모두 동일 레벨이라 minRole 만으로 차단 불가 → explicit 화이트리스트.
+// 통계제출처 접근 허용 role — 병의원/약국/일반(직업 분류 가입자) 차단, CSO 분류 + 비즈/관리자만 허용.
+// 신구 enum 값 모두 인식.
 export function canManageSubmissionRoutes(role: string): boolean {
-  return role === "ADMIN" || role === "BIZ" || role === "BUSINESS" || role === "BASIC";
+  return (
+    role === "ADMIN" || role === "BIZ" ||
+    role === "SALES" || role === "BUSINESS" ||
+    role === "GENERAL" || role === "BASIC"  // 일반은 기존 동작 유지 (제출처 등록 가능)
+  );
 }
 
 export function safeParseInt(v: string | null | undefined, fallback: number, min = 0, max = 1_000_000): number {
