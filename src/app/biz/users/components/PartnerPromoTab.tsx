@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { Loader2, RefreshCw, Check, Search } from "lucide-react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Loader2, RefreshCw, Check, Search, X, ChevronDown } from "lucide-react";
 import type { DealerClient } from "./types";
 
 type SubView = "partners" | "company-match";
@@ -18,6 +18,105 @@ interface CompanyMatchItem {
   suggested: string | null;
   candidates: string[];
   matched: boolean;
+}
+
+// 검색 가능한 콤보박스 — 옵션 수천개여도 빠르게 검색해서 선택
+function ComboBox({ value, options, onChange, placeholder, className }: {
+  value: string;
+  options: string[];
+  onChange: (v: string) => void;
+  placeholder?: string;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onClick(e: MouseEvent) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [open]);
+
+  useEffect(() => {
+    if (open) setTimeout(() => inputRef.current?.focus(), 10);
+  }, [open]);
+
+  const filtered = useMemo(() => {
+    if (!query.trim()) return options.slice(0, 200);
+    const q = query.toLowerCase();
+    return options.filter((o) => o.toLowerCase().includes(q)).slice(0, 200);
+  }, [options, query]);
+
+  return (
+    <div ref={wrapRef} className={`relative ${className ?? ""}`}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={`w-full text-left text-xs border rounded px-2 py-1.5 flex items-center justify-between gap-2 ${
+          value ? "bg-white" : "bg-white"
+        } hover:bg-gray-50`}
+      >
+        <span className={value ? "text-gray-900 truncate" : "text-gray-400"}>
+          {value || placeholder || "선택"}
+        </span>
+        <div className="flex items-center gap-1 shrink-0">
+          {value && (
+            <X
+              className="w-3.5 h-3.5 text-gray-400 hover:text-red-500"
+              onClick={(e) => { e.stopPropagation(); onChange(""); }}
+            />
+          )}
+          <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
+        </div>
+      </button>
+      {open && (
+        <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-72 overflow-hidden flex flex-col">
+          <div className="p-1.5 border-b border-gray-100 relative">
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="검색..."
+              className="w-full pl-8 pr-2 py-1.5 text-xs border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-300"
+            />
+          </div>
+          <div className="overflow-y-auto flex-1">
+            {filtered.length === 0 ? (
+              <div className="px-3 py-3 text-xs text-gray-400 text-center">검색 결과 없음</div>
+            ) : (
+              filtered.map((opt) => (
+                <button
+                  key={opt}
+                  type="button"
+                  onClick={() => { onChange(opt); setOpen(false); setQuery(""); }}
+                  className={`w-full text-left text-xs px-3 py-1.5 hover:bg-blue-50 flex items-center justify-between ${
+                    opt === value ? "bg-blue-50 text-blue-700 font-medium" : "text-gray-700"
+                  }`}
+                >
+                  <span className="truncate">{opt}</span>
+                  {opt === value && <Check className="w-3 h-3 text-blue-600 shrink-0 ml-2" />}
+                </button>
+              ))
+            )}
+            {query.trim() === "" && options.length > 200 && (
+              <div className="px-3 py-2 text-[10px] text-gray-400 border-t bg-gray-50">
+                상위 200개만 표시 — 검색해서 좁히세요 ({options.length}개)
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function PartnerPromoTab() {
@@ -336,27 +435,22 @@ function CompanyMatchView() {
                         ))}
                       </div>
                     )}
-                    <select
-                      value={it.kmdCompany ?? ""}
-                      onChange={(e) => save(it.sheetCompany, e.target.value)}
-                      className={`w-full text-xs border rounded px-2 py-1.5 ${
-                        it.kmdCompany
-                          ? "border-green-300 bg-green-50"
-                          : hasCandidates
-                            ? "border-orange-300 bg-orange-50"
-                            : it.suggested
-                              ? "border-amber-300 bg-amber-50"
-                              : "border-gray-300"
-                      }`}
-                    >
-                      <option value="">-- 미매칭 --</option>
-                      {it.suggested && !it.kmdCompany && (
-                        <option value={it.suggested}>⭐ {it.suggested} (자동제안)</option>
-                      )}
-                      {kmdCompanies.map((c) => (
-                        <option key={c} value={c}>{c}</option>
-                      ))}
-                    </select>
+                    <div className={`${
+                      it.kmdCompany
+                        ? "ring-1 ring-green-300 rounded"
+                        : hasCandidates
+                          ? "ring-1 ring-orange-300 rounded"
+                          : it.suggested
+                            ? "ring-1 ring-amber-300 rounded"
+                            : ""
+                    }`}>
+                      <ComboBox
+                        value={it.kmdCompany ?? ""}
+                        options={kmdCompanies}
+                        placeholder={it.suggested ? `⭐ ${it.suggested} (자동제안)` : "-- 미매칭 --"}
+                        onChange={(v) => save(it.sheetCompany, v)}
+                      />
+                    </div>
                   </td>
                   <td className="px-3 py-2 text-center">
                     {it.matched
