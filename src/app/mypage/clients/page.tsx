@@ -3,7 +3,8 @@
 import { useState, useEffect, useRef, Fragment, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import { Building2, Plus, Trash2, FileText, CheckCircle2, XCircle, Loader2, AlertCircle,
-  Stethoscope, Briefcase, Pencil, MapPin, Filter, Send, Search, ChevronDown, X, RefreshCw } from "lucide-react";
+  Stethoscope, Briefcase, Pencil, MapPin, Filter, Send, Search, ChevronDown, X, RefreshCw, Network } from "lucide-react";
+import ClientPharmaPanel from "@/components/ClientPharmaPanel";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import RequireRole from "@/components/RequireRole";
@@ -67,6 +68,7 @@ export default function ClientsPage() {
   const [myBizClientId, setMyBizClientId] = useState<string | null>(null);
   const [listLoading, setListLoading] = useState(true);
   const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
+  const [expandedClaimId, setExpandedClaimId] = useState<string | null>(null);
   const [editingAddressVal, setEditingAddressVal] = useState("");
   const [name, setName] = useState("");
   const [biz, setBiz] = useState("");
@@ -758,7 +760,8 @@ export default function ClientsPage() {
           ) : (
             <div className="divide-y divide-gray-100">
               {externalClients.map((c) => (
-                <div key={c.id} className="flex items-center gap-3 px-5 py-3.5 hover:bg-gray-50">
+                <div key={c.id}>
+                <div className="flex items-center gap-3 px-5 py-3.5 hover:bg-gray-50">
                   <Stethoscope className="w-4 h-4 text-gray-300 shrink-0" />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-800 truncate">{c.clientName}</p>
@@ -786,7 +789,22 @@ export default function ClientsPage() {
                   </div>
                   {c.bizFileName && <span className="text-xs text-gray-500 bg-gray-50 border border-gray-100 px-1.5 py-0.5 rounded shrink-0">서류첨부</span>}
                   <span className="text-xs text-gray-400 shrink-0">{new Date(c.createdAt).toLocaleDateString("ko-KR")}</span>
+                  <button
+                    onClick={() => setExpandedClaimId(expandedClaimId === c.id ? null : c.id)}
+                    className={`p-1.5 rounded transition-colors ${
+                      expandedClaimId === c.id
+                        ? "text-orange-600 bg-orange-50"
+                        : "text-gray-400 hover:text-orange-500 hover:bg-orange-50"
+                    }`}
+                    title="거래 제약사 관리"
+                  >
+                    <Network className="w-4 h-4" />
+                  </button>
                   <button onClick={() => handleDelete(c.id, c.clientName)} className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors"><Trash2 className="w-4 h-4" /></button>
+                </div>
+                {expandedClaimId === c.id && (
+                  <ClientPharmaPanel bizNumber={c.bizNumber} clientName={c.clientName} />
+                )}
                 </div>
               ))}
             </div>

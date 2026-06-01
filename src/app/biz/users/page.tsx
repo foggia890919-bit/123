@@ -3,25 +3,22 @@
 import { useState, useEffect, Suspense } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Hospital, Building2, UserCheck, Users, PercentCircle } from "lucide-react";
+import { Hospital, Briefcase, Users, PercentCircle, Pill, User } from "lucide-react";
 import { BizLayout } from "@/app/biz/page";
 import type { Tab } from "./components/types";
-import ClientsTab from "./components/ClientsTab";
-import DealersTab from "./components/DealersTab";
 import PartnerPromoTab from "./components/PartnerPromoTab";
-import SalesRepsTab from "./components/SalesRepsTab";
-import InhouseClientsTab from "./components/InhouseClientsTab";
-import AllTab from "./components/AllTab";
+import RoleUsersTab from "./components/RoleUsersTab";
 
 const TABS: { key: Tab; label: string; icon: React.ElementType; desc: string }[] = [
-  { key: "all",             label: "전체",           icon: Users,      desc: "등록된 모든 거래처" },
-  { key: "clients",         label: "병의원(원외)",   icon: Hospital,   desc: "병의원 등록·승인·H-코드 생성" },
-  { key: "inhouse-clients", label: "병의원(원내)",   icon: Hospital,   desc: "원내 병·의원 이팜스 계정 관리" },
-  { key: "upper-corp",      label: "상위법인",       icon: Building2,  desc: "상위법인 등록·C-코드 생성" },
-  { key: "lower-corp",      label: "하위법인",       icon: Building2,  desc: "하위법인 등록·C-코드 생성" },
-  { key: "sales-reps",      label: "영업사원",       icon: UserCheck,  desc: "영업사원 승인·S-코드 생성" },
-  { key: "partner-promo",   label: "협력법인 프로모션", icon: PercentCircle, desc: "협력법인 지정·등급 설정·시트 매칭" },
+  { key: "all",            label: "전체",          icon: Users,         desc: "가입한 모든 회원 (4분류 통합)" },
+  { key: "hospital",       label: "병의원",        icon: Hospital,      desc: "의사·간호사 등 병의원 종사자" },
+  { key: "pharmacy",       label: "약국",          icon: Pill,          desc: "약사" },
+  { key: "cso",            label: "CSO",           icon: Briefcase,     desc: "CSO 영업·비즈관리자·관리자" },
+  { key: "general",        label: "일반",          icon: User,          desc: "기타 일반 가입자" },
+  { key: "partner-promo",  label: "협력법인 프로모션", icon: PercentCircle, desc: "협력법인 지정·등급 설정·시트 매칭" },
 ];
+
+const VALID_TABS = TABS.map((t) => t.key);
 
 function UsersPageInner() {
   const { data: session, status } = useSession();
@@ -29,12 +26,11 @@ function UsersPageInner() {
   const searchParams = useSearchParams();
   const [tab, setTab] = useState<Tab>(() => {
     const t = searchParams.get("tab");
-    return (t === "sales-reps" || t === "inhouse-clients" || t === "upper-corp" || t === "lower-corp" || t === "partner-promo") ? t as Tab : "all";
+    return (t && (VALID_TABS as string[]).includes(t)) ? t as Tab : "all";
   });
   const [ambigCount, setAmbigCount] = useState(0);
 
   useEffect(() => {
-    // 협력법인 프로모션 — 선택대기 건수 폴링 (페이지 진입 시 1회)
     fetch("/api/admin/company-mapping").then((r) => r.ok ? r.json() : null).then((d) => {
       if (!d?.items) return;
       const cnt = d.items.filter((it: { matched: boolean; candidates: string[] }) =>
@@ -62,20 +58,18 @@ function UsersPageInner() {
   return (
     <BizLayout>
       <div className="space-y-5">
-        {/* 헤더 */}
         <div>
           <h1 className="text-xl font-bold text-gray-900">유저 관리</h1>
           <p className="text-sm text-gray-500 mt-0.5">{current.desc}</p>
         </div>
 
-        {/* 탭 바 */}
-        <div className="flex border-b border-gray-200">
+        <div className="flex border-b border-gray-200 overflow-x-auto">
           {TABS.map((t) => {
             const Icon = t.icon;
             const active = tab === t.key;
             return (
               <button key={t.key} onClick={() => switchTab(t.key)}
-                className={`flex items-center gap-2 px-5 py-3 text-sm font-medium border-b-2 transition-colors -mb-px ${
+                className={`flex items-center gap-2 px-5 py-3 text-sm font-medium border-b-2 transition-colors -mb-px whitespace-nowrap ${
                   active
                     ? "border-blue-600 text-blue-600"
                     : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
@@ -95,14 +89,12 @@ function UsersPageInner() {
           })}
         </div>
 
-        {/* 탭 콘텐츠 */}
-        {tab === "all"             && <AllTab />}
-        {tab === "clients"         && <ClientsTab />}
-        {tab === "inhouse-clients" && <InhouseClientsTab />}
-        {tab === "upper-corp"      && <DealersTab fixedType="UPPER_CORP" />}
-        {tab === "lower-corp"      && <DealersTab fixedType="LOWER_CORP" />}
-        {tab === "sales-reps"      && <SalesRepsTab />}
-        {tab === "partner-promo"   && <PartnerPromoTab />}
+        {tab === "all"           && <RoleUsersTab role="ALL"      title="전체 회원" desc="모든 가입자" />}
+        {tab === "hospital"      && <RoleUsersTab role="HOSPITAL" title="병의원" desc="의사·간호사·재직자 등 병의원 종사자" />}
+        {tab === "pharmacy"      && <RoleUsersTab role="PHARMACY" title="약국" desc="약사" />}
+        {tab === "cso"           && <RoleUsersTab role="CSO"      title="CSO" desc="CSO 영업·비즈관리자·관리자 (관리자에서 권한 부여)" />}
+        {tab === "general"       && <RoleUsersTab role="GENERAL"  title="일반" desc="기타 일반 가입자" />}
+        {tab === "partner-promo" && <PartnerPromoTab />}
       </div>
     </BizLayout>
   );
