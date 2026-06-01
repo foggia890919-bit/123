@@ -2,7 +2,24 @@
 
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { Loader2, ChevronUp, ChevronDown, RefreshCw } from "lucide-react";
+import { Loader2, ChevronUp, ChevronDown, RefreshCw, Link2, Settings } from "lucide-react";
+
+// 시트 헤더 9개 (★YK추가수수료 시트 E~M 컬럼)
+const SHEET_LABELS = ["이음", "서원", "메디펄스", "YK", "에이스", "엠디파마", "힐링팜", "의왕", "DH홀딩스"];
+
+interface SheetMapping {
+  id: string;
+  sheetLabel: string;
+  userClientId: string | null;
+  userClient: { id: string; clientName: string; bizNumber: string; partnerGrade: string | null } | null;
+}
+
+interface PartnerCorp {
+  id: string;
+  clientName: string;
+  bizNumber: string;
+  partnerGrade: string | null;
+}
 
 interface DealerClient {
   id: string;
@@ -59,8 +76,32 @@ export default function PromotionPage() {
   const [filterStatus, setFilterStatus] = useState<string>("전체");
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
+  const [showMapping, setShowMapping] = useState(false);
+  const [mappings, setMappings] = useState<SheetMapping[]>([]);
+  const [partners, setPartners] = useState<PartnerCorp[]>([]);
 
   const isAdmin = session?.user?.role === "ADMIN";
+
+  async function loadMappings() {
+    const r = await fetch("/api/admin/sheet-mapping");
+    if (!r.ok) return;
+    const data = await r.json();
+    setMappings(data.mappings ?? []);
+    setPartners(data.partners ?? []);
+  }
+
+  async function saveMapping(sheetLabel: string, userClientId: string | null) {
+    await fetch("/api/admin/sheet-mapping", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sheetLabel, userClientId }),
+    });
+    loadMappings();
+  }
+
+  useEffect(() => {
+    if (isAdmin && showMapping) loadMappings();
+  }, [isAdmin, showMapping]);
 
   useEffect(() => {
     fetch("/api/dealer")
@@ -94,32 +135,98 @@ export default function PromotionPage() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-xl font-bold text-gray-900">협력법인 프로모션 관리</h1>
         {isAdmin && (
-          <button
-            onClick={async () => {
-              setSyncing(true);
-              setSyncResult(null);
-              try {
-                const r = await fetch("/api/admin/sync-yk-rates", { method: "POST" });
-                const data = await r.json();
-                if (!r.ok || data.error) {
-                  setSyncResult(`실패: ${data.error ?? `HTTP ${r.status}`}`);
-                } else {
-                  setSyncResult(`✓ ${data.upserted}건 동기화 (스킵 ${data.skipped}, 에러 ${data.errors?.length ?? 0})`);
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowMapping(!showMapping)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100"
+            >
+              <Link2 className="w-3.5 h-3.5" />
+              시트 ↔ 법인 매칭
+            </button>
+            <button
+              onClick={async () => {
+                setSyncing(true);
+                setSyncResult(null);
+                try {
+                  const r = await fetch("/api/admin/sync-yk-rates", { method: "POST" });
+                  const data = await r.json();
+                  if (!r.ok || data.error) {
+                    setSyncResult(`실패: ${data.error ?? `HTTP ${r.status}`}`);
+                  } else {
+                    const errMsg = data.errors?.[0] ? ` · 첫에러: ${data.errors[0]}` : "";
+                    const unmapped = data.unmappedLabels?.length
+                      ? ` · 미매칭 시트라벨: ${data.unmappedLabels.join(", ")}`
+                      : "";
+                    setSyncResult(`✓ ${data.upserted}건 동기화 (스킵 ${data.skipped}, 에러 ${data.errors?.length ?? 0})${unmapped}${errMsg}`);
+                  }
+                } catch (e) {
+                  setSyncResult(`네트워크 오류: ${String(e)}`);
+                } finally {
+                  setSyncing(false);
                 }
-              } catch (e) {
-                setSyncResult(`네트워크 오류: ${String(e)}`);
-              } finally {
-                setSyncing(false);
-              }
-            }}
-            disabled={syncing}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 disabled:opacity-40"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
-            {syncing ? "동기화 중..." : "구글시트 → DB 동기화"}
-          </button>
+              }}
+              disabled={syncing}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 disabled:opacity-40"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
+              {syncing ? "동기화 중..." : "구글시트 → DB 동기화"}
+            </button>
+          </div>
         )}
       </div>
+      {/* 시트 ↔ 법인 매칭 패널 */}
+      {isAdmin && showMapping && (
+        <div className="bg-white border border-purple-200 rounded-lg p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
+                <Settings className="w-4 h-4 text-purple-600" />구글시트 ↔ KMD 법인 매칭
+              </p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                시트 헤더(이음/서원/YK 등)를 협력법인으로 분류된 KMD 거래처와 연결하세요. 매칭 없으면 동기화 시 스킵됩니다.
+              </p>
+            </div>
+            <button onClick={() => setShowMapping(false)} className="text-xs text-gray-400 hover:text-gray-600">닫기</button>
+          </div>
+
+          {partners.length === 0 ? (
+            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+              협력법인으로 분류된 거래처가 없습니다. 먼저 <strong>비즈관리 → 유저 관리 → 상위법인/하위법인</strong> 탭에서 법인을 등록하고 수정 모달에서 "협력법인" 분류 + 등급 설정을 해주세요.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {SHEET_LABELS.map((label) => {
+                const m = mappings.find((x) => x.sheetLabel === label);
+                return (
+                  <div key={label} className="border border-gray-200 rounded-lg p-3 space-y-2 bg-gray-50">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-gray-700">시트: <span className="text-purple-700">{label}</span></span>
+                      {m?.userClient && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-green-50 border-green-200 text-green-700">
+                          매칭됨
+                        </span>
+                      )}
+                    </div>
+                    <select
+                      value={m?.userClientId ?? ""}
+                      onChange={(e) => saveMapping(label, e.target.value || null)}
+                      className="w-full text-xs border border-gray-300 rounded px-2 py-1.5 bg-white"
+                    >
+                      <option value="">-- 미매칭 --</option>
+                      {partners.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.clientName} ({p.bizNumber}) — {p.partnerGrade ?? "?"}등급
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {syncResult && (
         <div className={`text-xs px-3 py-2 rounded-lg border ${
           syncResult.startsWith("✓")
