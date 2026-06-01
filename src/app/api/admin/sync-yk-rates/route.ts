@@ -45,7 +45,20 @@ export async function POST(_req: NextRequest) {
     };
     const rows = data.values ?? [];
 
+    // 시트 별명 → 실제 법인명 매핑 로드
+    const mappings = await prisma.sheetCorpMapping.findMany({
+      where: { active: true },
+      include: { userClient: { select: { clientName: true } } },
+    });
+    const labelToCorp = new Map<string, string>();
+    for (const m of mappings) {
+      if (m.userClient?.clientName) {
+        labelToCorp.set(m.sheetLabel, m.userClient.clientName);
+      }
+    }
+
     const result: SyncResult = { totalRows: rows.length, upserted: 0, skipped: 0, errors: [] };
+    const unmappedLabels = new Set<string>();
 
     for (const row of rows) {
       const companyRaw = (row[0] ?? "").trim();
@@ -69,12 +82,18 @@ export async function POST(_req: NextRequest) {
           result.errors.push(`${companyRaw} / ${CORP_COLUMNS[i].name}: 숫자 아님 (${raw})`);
           continue;
         }
-        const corpName = CORP_COLUMNS[i].name;
+        const sheetLabel = CORP_COLUMNS[i].name;
+        const corpName = labelToCorp.get(sheetLabel);
+        if (!corpName) {
+          unmappedLabels.add(sheetLabel);
+          result.skipped++;
+          continue;
+        }
         try {
           await prisma.corpCompanyRate.upsert({
             where: { corpName_companyName: { corpName, companyName } },
-            update: { additionalRate: rate, memo: `시트 자동 동기화 — ${SHEET_NAME}` },
-            create: { corpName, companyName, additionalRate: rate, memo: `시트 자동 동기화 — ${SHEET_NAME}` },
+            update: { additionalRate: rate, memo: `시트 자동 동기화 — ${SHEET_NAME} (${sheetLabel})` },
+            create: { corpName, companyName, additionalRate: rate, memo: `시트 자동 동기화 — ${SHEET_NAME} (${sheetLabel})` },
           });
           result.upserted++;
         } catch (err) {
@@ -83,7 +102,10 @@ export async function POST(_req: NextRequest) {
       }
     }
 
-    return NextResponse.json(result);
+    return NextResponse.json({
+      ...result,
+      unmappedLabels: [...unmappedLabels],
+    });
   } catch (err) {
     console.error("[sync-yk-rates]", err);
     return NextResponse.json(

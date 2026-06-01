@@ -150,6 +150,7 @@ model UserClient {
   corpRateFiles         CorpRateFile[]
   // 본인 사업자로 지정된 User (반대 관계). User.ownerBizClientId 가 참조.
   ownerUser             User?              @relation("UserOwnerBizClient")
+  sheetMappings         SheetCorpMapping[] @relation("SheetMapping")
 
   @@index([userId])
   @@index([approved])
@@ -624,6 +625,21 @@ model CoPromotion {
   @@unique([productName, statCompany])
   @@index([statCompany])
   @@index([billingCompany])
+}
+
+// 시트 거래처 별명 → KMD 법인 매칭
+// 구글시트 ★YK추가수수료의 헤더(이음/서원/YK/...)와 실제 KMD 법인(UserClient) 연결
+model SheetCorpMapping {
+  id           String      @id @default(cuid())
+  sheetLabel   String      @unique // "이음", "서원", "YK", "메디펄스" 등 (시트 헤더 그대로)
+  userClientId String?     // 매칭된 UserClient.id (협력법인)
+  userClient   UserClient? @relation("SheetMapping", fields: [userClientId], references: [id], onDelete: SetNull)
+  active       Boolean     @default(true)
+  memo         String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@index([userClientId])
 }
 
 // 제약사별 월별 통계 제출 마감일 — 마감 전 제출만 추가수수료 적용
