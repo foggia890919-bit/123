@@ -4,21 +4,14 @@ import { useState, useEffect, useCallback } from "react";
 import { Loader2, RefreshCw, Check, Search } from "lucide-react";
 import type { DealerClient } from "./types";
 
-type SubView = "partners" | "corp-match" | "company-match";
+type SubView = "partners" | "company-match";
 
-const SHEET_LABELS = ["이음", "서원", "메디펄스", "YK", "에이스", "엠디파마", "힐링팜", "의왕", "DH홀딩스"];
 const GRADES = [
   { v: "A", label: "A (-0.5%)", desc: "5억↑" },
   { v: "B", label: "B (-1%)", desc: "1억↑" },
   { v: "C", label: "C (-2%)", desc: "5천↑" },
 ];
 
-interface SheetMapping {
-  sheetLabel: string;
-  userClientId: string | null;
-  userClient: { clientName: string } | null;
-}
-interface PartnerCorp { id: string; clientName: string; bizNumber: string; partnerGrade: string | null; }
 interface CompanyMatchItem { sheetCompany: string; kmdCompany: string | null; suggested: string | null; matched: boolean; }
 
 export default function PartnerPromoTab() {
@@ -26,11 +19,9 @@ export default function PartnerPromoTab() {
 
   return (
     <div className="space-y-5">
-      {/* 서브탭 */}
       <div className="flex gap-2 flex-wrap">
         {([
           { k: "partners", label: "협력법인 지정" },
-          { k: "corp-match", label: "거래처 매칭" },
           { k: "company-match", label: "제약사 매칭" },
         ] as { k: SubView; label: string }[]).map((t) => (
           <button
@@ -48,7 +39,6 @@ export default function PartnerPromoTab() {
       </div>
 
       {view === "partners" && <PartnersView />}
-      {view === "corp-match" && <CorpMatchView />}
       {view === "company-match" && <CompanyMatchView />}
     </div>
   );
@@ -98,7 +88,10 @@ function PartnersView() {
           className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg"
         />
       </div>
-      <p className="text-xs text-gray-500">법인을 협력법인으로 지정하고 등급·기준일을 설정하세요. 협력법인만 추가수수료 차감 대상입니다.</p>
+      <p className="text-xs text-gray-500">
+        협력법인으로 지정하면 자동으로 우리 프로모션이 적용됩니다. 적용 요율 = 시트 최고요율 − 등급차감.
+        제약사별 정산내역서에 이 요율이 반영됩니다.
+      </p>
 
       <div className="overflow-x-auto border rounded-lg bg-white">
         <table className="w-full text-sm">
@@ -181,65 +174,6 @@ function PartnersView() {
   );
 }
 
-// ── 2. 거래처 매칭 — 시트 헤더 ↔ 협력법인 ──────────────────────────
-function CorpMatchView() {
-  const [mappings, setMappings] = useState<SheetMapping[]>([]);
-  const [partners, setPartners] = useState<PartnerCorp[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const load = useCallback(() => {
-    setLoading(true);
-    fetch("/api/admin/sheet-mapping").then((r) => r.json())
-      .then((d) => { setMappings(d.mappings ?? []); setPartners(d.partners ?? []); })
-      .finally(() => setLoading(false));
-  }, []);
-  useEffect(() => { load(); }, [load]);
-
-  async function save(sheetLabel: string, userClientId: string | null) {
-    await fetch("/api/admin/sheet-mapping", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sheetLabel, userClientId }),
-    });
-    load();
-  }
-
-  if (loading) return <div className="flex justify-center py-12 text-gray-400"><Loader2 className="w-5 h-5 animate-spin" /></div>;
-
-  return (
-    <div className="space-y-3">
-      <p className="text-xs text-gray-500">구글시트 거래처 헤더(이음/서원/YK 등)를 협력법인으로 지정된 KMD 거래처와 연결하세요.</p>
-      {partners.length === 0 ? (
-        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-          협력법인이 없습니다. <strong>협력법인 지정</strong> 탭에서 먼저 법인을 협력법인으로 지정하세요.
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {SHEET_LABELS.map((label) => {
-            const m = mappings.find((x) => x.sheetLabel === label);
-            return (
-              <div key={label} className="border border-gray-200 rounded-lg p-3 space-y-2 bg-white">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold">시트: <span className="text-purple-700">{label}</span></span>
-                  {m?.userClientId && <Check className="w-4 h-4 text-green-600" />}
-                </div>
-                <select
-                  value={m?.userClientId ?? ""}
-                  onChange={(e) => save(label, e.target.value || null)}
-                  className="w-full text-xs border border-gray-300 rounded px-2 py-1.5"
-                >
-                  <option value="">-- 미매칭 --</option>
-                  {partners.map((p) => (
-                    <option key={p.id} value={p.id}>{p.clientName} ({p.partnerGrade ?? "?"}등급)</option>
-                  ))}
-                </select>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ── 3. 제약사 매칭 — 시트 제약사명 ↔ 전산 제약사명 ───────────────────
 function CompanyMatchView() {
