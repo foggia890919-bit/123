@@ -626,6 +626,22 @@ model CoPromotion {
   @@index([billingCompany])
 }
 
+// 제약사별 월별 통계 제출 마감일 — 마감 전 제출만 추가수수료 적용
+model CompanyDeadline {
+  id          String   @id @default(cuid())
+  companyName String   // normalizeCompanyName 적용
+  yearMonth   String   // "YYYY-MM" — 처방통계 해당월
+  deadline    DateTime // 제출 마감일시 (KST)
+  source      String   @default("MANUAL") // "MANUAL" | "GEMINI_OCR" | "IMPORT"
+  memo        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([companyName, yearMonth])
+  @@index([yearMonth])
+  @@index([deadline])
+}
+
 // 법인별 제약사별 추가수수료
 model CorpCompanyRate {
   id             String   @id @default(cuid())
