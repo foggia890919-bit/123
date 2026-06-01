@@ -113,6 +113,13 @@ const BIZ_MENU_GROUPS = [
         icon: PercentCircle,
         color: "bg-amber-50 text-amber-600",
       },
+      {
+        href: "/biz/company-deadlines",
+        label: "제약사 마감일",
+        desc: "제약사별 월별 통계제출 마감일 (이미지 업로드 → Gemini OCR 자동 인식)",
+        icon: PercentCircle,
+        color: "bg-rose-50 text-rose-600",
+      },
     ],
   },
   {
