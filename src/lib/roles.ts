@@ -74,6 +74,18 @@ export function isCsoCategory(role: string | undefined): boolean {
   return r === "SALES" || r === "BIZ" || r === "ADMIN";
 }
 
+// 전체 메뉴 접근 가능 — CSO 분류(SALES/BIZ/ADMIN)만.
+// 의사/약사/일반은 통합검색만 보임. 관리자가 SALES/BIZ로 승격해야 전체 메뉴 보임.
+export function canAccessFullMenu(role: string | undefined): boolean {
+  return isCsoCategory(role);
+}
+
+// 통합검색만 보이는 분류 — HOSPITAL/PHARMACY/GENERAL.
+export function isSearchOnly(role: string | undefined): boolean {
+  const r = normalizeRole(role);
+  return r === "HOSPITAL" || r === "PHARMACY" || r === "GENERAL";
+}
+
 // 가입 시 직업 분류 (사용자에게 노출되는 4가지)
 export type Occupation = "HOSPITAL" | "PHARMACY" | "CSO" | "GENERAL";
 

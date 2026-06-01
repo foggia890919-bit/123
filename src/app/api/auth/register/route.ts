@@ -40,10 +40,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "이미 사용 중인 이메일이에요." }, { status: 409 });
     }
 
-    // 신규 4분류 + legacy 호환. normalizeRole이 legacy → 신규로 변환해 저장.
-    const validRoles = ["HOSPITAL", "PHARMACY", "SALES", "GENERAL", "BIZ", "BUSINESS", "BASIC", "DOCTOR", "PHARMACIST"];
+    // 가입은 의사(HOSPITAL)/약사(PHARMACY)/일반(GENERAL) 3가지만.
+    // CSO 분류(SALES/BIZ)는 관리자가 회원관리에서 전환. legacy 값은 normalize.
+    const allowedSelfRegister = ["HOSPITAL", "PHARMACY", "GENERAL", "DOCTOR", "PHARMACIST", "BASIC"];
     const { normalizeRole } = await import("@/lib/roles");
-    const safeRole = normalizeRole(validRoles.includes(role) ? role : "SALES");
+    const safeRole = normalizeRole(allowedSelfRegister.includes(role) ? role : "GENERAL");
 
     const hashed = await bcrypt.hash(password, 12);
 
