@@ -180,12 +180,12 @@ export default function MembersTab() {
                     onChange={(e) => changeRole(user.id, e.target.value)}
                     className={`text-xs font-medium rounded px-2 py-1 border-0 cursor-pointer ${roleColor[user.role] || "bg-gray-100 text-gray-600"}`}
                   >
-                    <option value="BASIC">일반회원</option>
-                    <option value="BUSINESS">사업자</option>
-                    <option value="BIZ">비즈회원</option>
-                    <option value="ADMIN">관리자</option>
-                    <option value="DOCTOR">의사</option>
-                    <option value="PHARMACIST">약사</option>
+                    <option value="HOSPITAL">병의원</option>
+                    <option value="PHARMACY">약국</option>
+                    <option value="SALES">CSO(영업)</option>
+                    <option value="BIZ">CSO·비즈관리자</option>
+                    <option value="ADMIN">CSO·관리자</option>
+                    <option value="GENERAL">일반</option>
                   </select>
                 </td>
                 <td className="px-4 py-3 text-center text-gray-400 text-xs">{new Date(user.createdAt).toLocaleDateString("ko-KR")}</td>

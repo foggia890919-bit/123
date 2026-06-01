@@ -90,13 +90,15 @@ export async function PATCH(req: NextRequest) {
   }
 
   if ("role" in body) {
-    const validRoles = ["ADMIN", "BUSINESS", "BIZ", "BASIC", "DOCTOR", "PHARMACIST"];
+    // superset: 신규 + legacy 모두 허용. normalizeRole로 저장 직전 변환.
+    const validRoles = ["ADMIN", "BIZ", "SALES", "GENERAL", "HOSPITAL", "PHARMACY", "BUSINESS", "BASIC", "DOCTOR", "PHARMACIST"];
     if (!validRoles.includes(body.role)) {
       return NextResponse.json({ error: "잘못된 역할" }, { status: 400 });
     }
+    const { normalizeRole } = await import("@/lib/roles");
     const user = await prisma.user.update({
       where: { id: body.userId },
-      data: { role: body.role, updatedAt: new Date() },
+      data: { role: normalizeRole(body.role), updatedAt: new Date() },
       select: { id: true, role: true },
     });
     return NextResponse.json(user);

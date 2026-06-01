@@ -8,9 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Upload, CheckCircle2, Loader2, FileText } from "lucide-react";
 
 const roles = [
-  { value: "BUSINESS", label: "사업자", docLabel: "CSO 신고증" },
-  { value: "DOCTOR", label: "의사", docLabel: "의사 면허증" },
-  { value: "PHARMACIST", label: "약사", docLabel: "약사 면허증" },
+  { value: "HOSPITAL", label: "병의원", docLabel: "의사·간호사 면허증 또는 재직증명서" },
+  { value: "PHARMACY", label: "약국", docLabel: "약사 면허증" },
+  { value: "SALES", label: "CSO", docLabel: "CSO 신고증" },
+  { value: "GENERAL", label: "일반", docLabel: "신분증 또는 명함" },
 ];
 
 const carriers = ["SKT", "KT", "LG U+", "SKT 알뜰폰", "KT 알뜰폰", "LG 알뜰폰"];
@@ -22,7 +23,7 @@ export default function RegisterPage() {
   const nameRef = useRef<HTMLInputElement>(null);
   const emailRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
-  const [form, setForm] = useState({ email: "", password: "", name: "", role: "BUSINESS", phone: "", carrier: "" });
+  const [form, setForm] = useState({ email: "", password: "", name: "", role: "SALES", phone: "", carrier: "" });
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);

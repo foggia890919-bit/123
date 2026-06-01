@@ -40,8 +40,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "이미 사용 중인 이메일이에요." }, { status: 409 });
     }
 
-    const validRoles = ["BUSINESS", "BIZ", "BASIC", "DOCTOR", "PHARMACIST"];
-    const safeRole = validRoles.includes(role) ? role : "BUSINESS";
+    // 신규 4분류 + legacy 호환. normalizeRole이 legacy → 신규로 변환해 저장.
+    const validRoles = ["HOSPITAL", "PHARMACY", "SALES", "GENERAL", "BIZ", "BUSINESS", "BASIC", "DOCTOR", "PHARMACIST"];
+    const { normalizeRole } = await import("@/lib/roles");
+    const safeRole = normalizeRole(validRoles.includes(role) ? role : "SALES");
 
     const hashed = await bcrypt.hash(password, 12);
 
