@@ -2,21 +2,19 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin, isNextResponse } from "@/lib/auth-guard";
 
-// GET /api/admin/hospitals → 전체 회원이 등록한 병의원 거래처 (dealerType IS NULL)
+// GET /api/admin/hospitals → Client 마스터 + 점유 제약사 수
 export async function GET() {
   const guard = await requireAdmin();
   if (isNextResponse(guard)) return guard;
 
-  const rows = await prisma.userClient.findMany({
-    where: { dealerType: null },
+  const rows = await prisma.client.findMany({
     select: {
       id: true,
       clientName: true,
       bizNumber: true,
       address: true,
-      approved: true,
       createdAt: true,
-      user: { select: { name: true, email: true } },
+      _count: { select: { pharmaClaims: true } },
     },
     orderBy: { createdAt: "desc" },
     take: 1000,
@@ -28,10 +26,8 @@ export async function GET() {
       clientName: r.clientName,
       bizNumber: r.bizNumber,
       address: r.address,
-      approved: r.approved,
       createdAt: r.createdAt.toISOString(),
-      ownerName: r.user?.name ?? null,
-      ownerEmail: r.user?.email ?? null,
+      claimCount: r._count.pharmaClaims,
     })),
   );
 }
