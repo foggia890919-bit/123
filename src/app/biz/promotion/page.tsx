@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { Loader2, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
+import { Loader2, ChevronUp, ChevronDown, RefreshCw } from "lucide-react";
 
 interface DealerClient {
   id: string;
@@ -56,6 +56,10 @@ export default function PromotionPage() {
   const [corp, setCorp] = useState<CorpSummary | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [filterStatus, setFilterStatus] = useState<string>("전체");
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
+
+  const isAdmin = session?.user?.role === "ADMIN";
 
   useEffect(() => {
     fetch("/api/dealer")
@@ -86,7 +90,44 @@ export default function PromotionPage() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-      <h1 className="text-xl font-bold text-gray-900">협력법인 프로모션 관리</h1>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h1 className="text-xl font-bold text-gray-900">협력법인 프로모션 관리</h1>
+        {isAdmin && (
+          <button
+            onClick={async () => {
+              setSyncing(true);
+              setSyncResult(null);
+              try {
+                const r = await fetch("/api/admin/sync-yk-rates", { method: "POST" });
+                const data = await r.json();
+                if (!r.ok || data.error) {
+                  setSyncResult(`실패: ${data.error ?? `HTTP ${r.status}`}`);
+                } else {
+                  setSyncResult(`✓ ${data.upserted}건 동기화 (스킵 ${data.skipped}, 에러 ${data.errors?.length ?? 0})`);
+                }
+              } catch (e) {
+                setSyncResult(`네트워크 오류: ${String(e)}`);
+              } finally {
+                setSyncing(false);
+              }
+            }}
+            disabled={syncing}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 disabled:opacity-40"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
+            {syncing ? "동기화 중..." : "구글시트 → DB 동기화"}
+          </button>
+        )}
+      </div>
+      {syncResult && (
+        <div className={`text-xs px-3 py-2 rounded-lg border ${
+          syncResult.startsWith("✓")
+            ? "text-green-700 bg-green-50 border-green-200"
+            : "text-red-700 bg-red-50 border-red-200"
+        }`}>
+          {syncResult}
+        </div>
+      )}
 
       {/* 법인 선택 */}
       <div className="flex items-center gap-4 flex-wrap">
