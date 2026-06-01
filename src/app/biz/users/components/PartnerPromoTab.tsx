@@ -187,6 +187,8 @@ function CompanyMatchView() {
   const [kmdCompanies, setKmdCompanies] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [autoRunning, setAutoRunning] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [query, setQuery] = useState("");
   const [onlyUnmatched, setOnlyUnmatched] = useState(false);
 
@@ -214,6 +216,37 @@ function CompanyMatchView() {
     load();
   }
 
+  async function runSheetSync() {
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const r = await fetch("/api/admin/sync-yk-rates", { method: "POST" });
+      const data = await r.json();
+      if (!r.ok || data.error) {
+        setSyncMsg({ ok: false, text: data.error ?? `HTTP ${r.status}` });
+        return;
+      }
+      // 동기화 후 매칭 상태 재로딩 → 선택대기 건수 계산
+      const mr = await fetch("/api/admin/company-mapping");
+      const md = await mr.json();
+      const items2 = (md.items ?? []) as CompanyMatchItem[];
+      const ambig = items2.filter((it) => !it.matched && it.candidates.length > 0).length;
+      const unmatched = items2.filter((it) => !it.matched).length;
+      const unmappedCnt = data.unmappedCompanies?.length ?? 0;
+      const parts = [`✓ ${data.upserted}건 동기화 (스킵 ${data.skipped})`];
+      if (unmappedCnt > 0) parts.push(`미매핑 ${unmappedCnt}건`);
+      if (ambig > 0) parts.push(`⚠️ 선택대기 ${ambig}건 — 후보 버튼 확인 필요`);
+      if (unmatched > ambig) parts.push(`미매칭 ${unmatched - ambig}건`);
+      setSyncMsg({ ok: true, text: parts.join(" · ") });
+      setItems(items2);
+      setKmdCompanies(md.kmdCompanies ?? []);
+    } catch (e) {
+      setSyncMsg({ ok: false, text: `네트워크 오류: ${String(e)}` });
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   const filtered = items
     .filter((it) => !onlyUnmatched || !it.matched)
     .filter((it) => !query || it.sheetCompany.includes(query));
@@ -224,7 +257,24 @@ function CompanyMatchView() {
 
   return (
     <div className="space-y-3">
+      {syncMsg && (
+        <div className={`text-xs px-3 py-2 rounded-lg border ${
+          syncMsg.ok
+            ? "text-green-700 bg-green-50 border-green-200"
+            : "text-red-700 bg-red-50 border-red-200"
+        }`}>
+          {syncMsg.text}
+        </div>
+      )}
       <div className="flex items-center gap-3 flex-wrap">
+        <button
+          onClick={runSheetSync}
+          disabled={syncing}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 disabled:opacity-40"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
+          {syncing ? "동기화 중..." : "구글시트 → DB 동기화"}
+        </button>
         <button
           onClick={autoMatch}
           disabled={autoRunning}

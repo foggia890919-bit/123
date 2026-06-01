@@ -29,8 +29,19 @@ function UsersPageInner() {
   const searchParams = useSearchParams();
   const [tab, setTab] = useState<Tab>(() => {
     const t = searchParams.get("tab");
-    return (t === "sales-reps" || t === "inhouse-clients" || t === "upper-corp" || t === "lower-corp") ? t as Tab : "all";
+    return (t === "sales-reps" || t === "inhouse-clients" || t === "upper-corp" || t === "lower-corp" || t === "partner-promo") ? t as Tab : "all";
   });
+  const [ambigCount, setAmbigCount] = useState(0);
+
+  useEffect(() => {
+    // 협력법인 프로모션 — 선택대기 건수 폴링 (페이지 진입 시 1회)
+    fetch("/api/admin/company-mapping").then((r) => r.ok ? r.json() : null).then((d) => {
+      if (!d?.items) return;
+      const cnt = d.items.filter((it: { matched: boolean; candidates: string[] }) =>
+        !it.matched && it.candidates.length > 0).length;
+      setAmbigCount(cnt);
+    }).catch(() => {});
+  }, [tab]);
 
   useEffect(() => {
     if (status === "loading") return;
@@ -71,6 +82,14 @@ function UsersPageInner() {
                 }`}>
                 <Icon className="w-4 h-4" />
                 {t.label}
+                {t.key === "partner-promo" && ambigCount > 0 && (
+                  <span
+                    className="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] text-[10px] font-bold rounded-full bg-orange-500 text-white px-1.5"
+                    title={`제약사 매칭 선택대기 ${ambigCount}건`}
+                  >
+                    {ambigCount}
+                  </span>
+                )}
               </button>
             );
           })}
