@@ -91,6 +91,9 @@ function DealersTab({ fixedType }: { fixedType?: string } = {}) {
   const [editManagerPhone, setEditManagerPhone] = useState("");
   const [editManagerEmail, setEditManagerEmail] = useState("");
   const [editMemo, setEditMemo] = useState("");
+  const [editCorpClass, setEditCorpClass] = useState<string>("GENERAL");
+  const [editGrade, setEditGrade] = useState<string>("");
+  const [editBaseDate, setEditBaseDate] = useState<string>("");
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [generatingCode, setGeneratingCode] = useState<string | null>(null);
@@ -111,7 +114,11 @@ function DealersTab({ fixedType }: { fixedType?: string } = {}) {
   function openEdit(c: DealerClient) {
     setEditTarget(c); setEditName(c.clientName); setEditType(c.dealerType ?? "CORPORATION");
     setEditManagerName(c.managerName ?? ""); setEditManagerPhone(c.managerPhone ?? "");
-    setEditManagerEmail(c.managerEmail ?? ""); setEditMemo(c.memo ?? ""); setEditError(null); setEditModal(true);
+    setEditManagerEmail(c.managerEmail ?? ""); setEditMemo(c.memo ?? "");
+    setEditCorpClass(c.corpClassification ?? "GENERAL");
+    setEditGrade(c.partnerGrade ?? "");
+    setEditBaseDate(c.promotionBaseDate ? c.promotionBaseDate.slice(0, 10) : "");
+    setEditError(null); setEditModal(true);
   }
 
   async function handleBizCheck() {
@@ -164,6 +171,9 @@ function DealersTab({ fixedType }: { fixedType?: string } = {}) {
         managerPhone: editManagerPhone.trim() || null,
         managerEmail: editManagerEmail.trim() || null,
         memo: editMemo.trim() || null,
+        corpClassification: editCorpClass || "GENERAL",
+        partnerGrade: editCorpClass === "PARTNER" ? (editGrade || null) : null,
+        promotionBaseDate: editBaseDate ? new Date(editBaseDate).toISOString() : null,
       }),
     });
     setEditSaving(false);
@@ -442,6 +452,72 @@ function DealersTab({ fixedType }: { fixedType?: string } = {}) {
                 <label className="block text-xs font-medium text-gray-600">메모</label>
                 <Input value={editMemo} onChange={(e) => setEditMemo(e.target.value)} />
               </div>
+
+              {/* 협력법인 프로모션 설정 */}
+              <div className="border-t pt-4 mt-2 space-y-3">
+                <p className="text-sm font-semibold text-gray-700">협력법인 프로모션</p>
+                <div className="space-y-1">
+                  <label className="block text-xs font-medium text-gray-600">법인 분류</label>
+                  <div className="flex gap-2">
+                    {[
+                      { v: "GENERAL", label: "일반법인", color: "bg-gray-100 text-gray-700 border-gray-300" },
+                      { v: "PARTNER", label: "협력법인", color: "bg-amber-50 text-amber-700 border-amber-300" },
+                    ].map((o) => (
+                      <button
+                        key={o.v}
+                        type="button"
+                        onClick={() => setEditCorpClass(o.v)}
+                        className={`flex-1 px-3 py-2 text-xs font-medium border rounded-lg transition-all ${
+                          editCorpClass === o.v ? `${o.color} ring-2 ring-offset-1` : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50"
+                        }`}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {editCorpClass === "PARTNER" && (
+                  <>
+                    <div className="space-y-1">
+                      <label className="block text-xs font-medium text-gray-600">등급</label>
+                      <div className="flex gap-2">
+                        {[
+                          { v: "A", label: "A등급 (-0.5%)", desc: "5억 이상" },
+                          { v: "B", label: "B등급 (-1%)", desc: "1억 이상" },
+                          { v: "C", label: "C등급 (-2%)", desc: "5천 이상" },
+                        ].map((g) => (
+                          <button
+                            key={g.v}
+                            type="button"
+                            onClick={() => setEditGrade(g.v)}
+                            className={`flex-1 px-2 py-2 text-xs border rounded-lg transition-all ${
+                              editGrade === g.v
+                                ? "bg-blue-50 text-blue-700 border-blue-300 ring-2 ring-blue-200"
+                                : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50"
+                            }`}
+                          >
+                            <div className="font-medium">{g.label}</div>
+                            <div className="text-[10px] text-gray-400 mt-0.5">{g.desc}</div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="block text-xs font-medium text-gray-600">
+                        프로모션 기준일
+                        <span className="ml-1 text-gray-400 font-normal">(이 날짜 이후 등록된 거래처만 적용)</span>
+                      </label>
+                      <input
+                        type="date"
+                        value={editBaseDate}
+                        onChange={(e) => setEditBaseDate(e.target.value)}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+
               {editError && <p className="text-xs text-red-600 bg-red-50 rounded px-2 py-1.5">{editError}</p>}
             </div>
             <div className="px-6 pb-5 flex gap-2 justify-end sticky bottom-0 bg-white border-t pt-4">
