@@ -1,7 +1,7 @@
 import { extractRxStatsFromImage, type RxExtractResult, type RxDrugRow } from "./gemini-rx-stats-extract";
 import { fetchMasterByCodes, fetchMasterByNamePrefixes, matchMedication, type MergedDrug } from "./medication-master-match";
 import { fetchRateEntries } from "./rate-utils";
-import { computeRowQuality, checkTotalSum, type RowQualityChecks, type QualityCheck } from "./rx-quality-checks";
+import { computeRowQuality, checkTotalSum, reconcileQtyPrice, type RowQualityChecks, type QualityCheck } from "./rx-quality-checks";
 
 // stats/page.tsx 가 자체 재정의해서 쓰는 JSON 응답 형식. import 의존성 없음 — 응답 형식만 호환.
 // 핵심 필드: drugs[].{insuranceCode, companyName, productName, quantity (Field), unitPrice,
@@ -181,10 +181,19 @@ export async function extractStatsLikeFusion(
 
     const codeOk = match.matchedMedicationId !== null && d.code.replace(/\D/g, "").length === 9;
     const hasName = !!match.productName;
-    const hasQty = (d.quantity ?? 0) > 0;
     const finalUnitPrice = match.unitPrice ?? (d.unitPrice || null);
 
-    // 0~100 가중 평균 — 마스터(50) + prefix(15) + 단가(20) + 매출(15)
+    // 사용량/처방금액 산술 재분류 — 마스터 약가(match.unitPrice)를 기준으로 칸 섞임·기울어진
+    // 사진의 인접 행/칸 오인을 교정. 관계를 못 맞추면 rec.reliable=false → 아래에서 검수 표시.
+    const rec = reconcileQtyPrice({
+      masterUnitPrice: match.unitPrice,
+      quantity: d.quantity ?? 0,
+      prescriptions: d.prescriptions ?? 0,
+      unitPrice: d.unitPrice ?? 0,
+      totalPrice: d.totalPrice ?? 0,
+    });
+
+    // 0~100 가중 평균 — 마스터(50) + prefix(15) + 단가(20) + 매출(15). 교정된 사용량·금액으로 검증.
     const { checks, score } = computeRowQuality({
       matchedMedicationId: match.matchedMedicationId,
       codeOk,
@@ -192,10 +201,10 @@ export async function extractStatsLikeFusion(
       nameSimilar: !!match.matchedMedicationId && (match.nameCodeMismatch == null || match.nameAutoReplaced),
       masterProductName: match.productName,
       ocrProductName: d.name,
-      quantity: d.quantity ?? 0,
+      quantity: rec.quantity,
       geminiUnitPrice: d.unitPrice || undefined,
       masterUnitPrice: match.unitPrice,
-      geminiTotalPrice: d.totalPrice || undefined,
+      geminiTotalPrice: rec.totalPrice || undefined,
       finalUnitPrice,
     });
 
@@ -226,15 +235,17 @@ export async function extractStatsLikeFusion(
         confidence: hasName ? 90 : 0,
       },
       quantity: {
-        value: String(d.quantity ?? ""),
-        confidence: hasQty ? 90 : 30,
+        // 산술 재분류로 교정된 사용량. 약가 관계로 확정(reliable)된 경우만 높은 신뢰.
+        value: rec.quantity > 0 ? String(rec.quantity) : "",
+        confidence: rec.reliable && rec.quantity > 0 ? 90 : 40,
       },
       unitPrice: finalUnitPrice,
       commissionRate: match.commissionRate,
       additionalRate,
       matchedMedicationId: match.matchedMedicationId,
       finalConfidence: score.overall,
-      manualCheck: score.overall < 90,
+      // 신뢰도 미달 또는 사용량·금액 산술관계 불일치(재분류 실패) 시 검수 표시.
+      manualCheck: score.overall < 90 || !rec.reliable,
       bboxYPercent: fallbackY(i, n),
       debug: null,
       mismatch: match.nameCodeMismatch
