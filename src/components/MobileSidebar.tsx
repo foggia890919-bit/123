@@ -24,6 +24,10 @@ export default function MobileSidebar({ open, onClose }: Props) {
   const { data: session } = useSession();
   const isBusinessApproved = !!(session?.user as { isBusinessApproved?: boolean } | undefined)?.isBusinessApproved;
   const role = (session?.user as { role?: string } | undefined)?.role ?? "";
+  // 의사/약사/일반은 통합검색만. CSO 분류(SALES/BIZ/ADMIN)만 전체 메뉴.
+  const fullMenu = !session
+    || role === "ADMIN" || role === "BIZ" || role === "SALES" || role === "BUSINESS"
+    || isBusinessApproved;
 
   useEffect(() => { onClose(); }, [pathname]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -100,7 +104,7 @@ export default function MobileSidebar({ open, onClose }: Props) {
         {/* nav items — always expanded */}
         <div className="px-3 py-3 space-y-0.5">
           {navItems.map((item) => {
-            const isLocked = !!session && !isBusinessApproved && (item.kind === "link" ? item.href !== "/search" : true);
+            const isLocked = !!session && !fullMenu && (item.kind === "link" ? item.href !== "/search" : true);
 
             if (item.kind === "link") {
               const Icon = item.icon;

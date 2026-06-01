@@ -14,13 +14,15 @@ export default function Navbar() {
   const pathname = usePathname();
   const router = useRouter();
   const { data: session } = useSession();
-  // 일반회원 (사업자 미인증) 은 통합검색 외 모든 메뉴 차단 + 안내
+  // 의사/약사/일반은 통합검색만 보임. CSO 분류(SALES/BIZ/ADMIN)만 전체 메뉴.
+  const role = (session?.user as { role?: string } | undefined)?.role;
   const isBusinessApproved = !!(session?.user as { isBusinessApproved?: boolean } | undefined)?.isBusinessApproved;
+  const fullMenu = !session
+    || role === "ADMIN" || role === "BIZ" || role === "SALES" || role === "BUSINESS"
+    || isBusinessApproved; // legacy 호환: 사업자 인증된 기존 회원 유지
   function handleLockedNavClick(e: React.MouseEvent, label: string) {
     e.preventDefault();
-    if (confirm(`'${label}' 은(는) 사업자 인증이 필요한 기능이에요.\n\n마이페이지에서 사업자등록증을 등록하고 관리자 승인을 받으면 사용할 수 있어요.\n\n마이페이지로 이동할까요?`)) {
-      router.push("/mypage");
-    }
+    alert(`'${label}' 은(는) 사업자 권한이 필요한 기능이에요.\n\n관리자에게 사업자 전환을 요청하시면 전체 메뉴를 사용하실 수 있어요.`);
   }
   const [userOpen, setUserOpen] = useState(false);
   const [openGroup, setOpenGroup] = useState<string | null>(null);
@@ -116,8 +118,8 @@ export default function Navbar() {
           {/* 데스크톱 네비 */}
           <div className="hidden md:flex items-center gap-1">
             {navItems.map((item) => {
-              // 일반회원이면 통합검색(/search) 외 모든 메뉴 잠금
-              const isLocked = !!session && !isBusinessApproved && (item.kind === "link" ? item.href !== "/search" : true);
+              // 의사/약사/일반은 통합검색(/search) 외 모든 메뉴 잠금
+              const isLocked = !!session && !fullMenu && (item.kind === "link" ? item.href !== "/search" : true);
               if (item.kind === "link") {
                 const Icon = item.icon;
                 if (isLocked) {
