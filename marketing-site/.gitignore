@@ -1,0 +1,4 @@
+# 업로드된 이미지(런타임 생성물)는 버전관리 제외
+data/uploads/*
+!data/uploads/.gitkeep
+node_modules/

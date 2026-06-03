@@ -1,0 +1,13 @@
+{
+  "name": "suwan-style-site",
+  "version": "1.0.0",
+  "private": true,
+  "description": "독립형 회사 홈페이지 + 자체 관리자(CMS). 외부 의존성 없이 Node 내장 모듈만 사용.",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

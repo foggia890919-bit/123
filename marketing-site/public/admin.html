@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>관리자 · 홈페이지 편집</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;color:#13233b;background:#eef2f7}
+  button{font-family:inherit;cursor:pointer}
+  .hidden{display:none!important}
+
+  /* 로그인 */
+  #login{min-height:100vh;display:flex;align-items:center;justify-content:center}
+  .login-card{background:#fff;padding:36px;border-radius:16px;width:340px;box-shadow:0 20px 50px rgba(13,40,90,.12)}
+  .login-card h1{font-size:20px;margin:0 0 6px}
+  .login-card p{color:#6b7a90;font-size:14px;margin:0 0 20px}
+  .login-card input{width:100%;padding:12px;border:1px solid #d7dee8;border-radius:10px;font-size:15px;margin-bottom:12px}
+  .login-card button{width:100%;padding:12px;border:0;border-radius:10px;background:#0b5cab;color:#fff;font-weight:700;font-size:15px}
+  .err{color:#d23b3b;font-size:13px;margin-bottom:10px;min-height:18px}
+
+  /* 레이아웃 */
+  .topbar{height:56px;background:#0c1a2e;color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 18px;position:sticky;top:0;z-index:20}
+  .topbar b{font-size:15px;letter-spacing:.02em}
+  .topbar .actions{display:flex;gap:10px;align-items:center}
+  .topbar a,.topbar button{color:#fff;background:transparent;border:1px solid rgba(255,255,255,.3);padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none}
+  .topbar .save{background:#16b8a6;border-color:#16b8a6}
+  .save-state{font-size:12px;color:#9fb0c6;min-width:90px;text-align:right}
+
+  .workspace{display:grid;grid-template-columns:280px 1fr 44%;height:calc(100vh - 56px)}
+  .col{overflow-y:auto;height:100%}
+  .sidebar{background:#fff;border-right:1px solid #e2e8f1;padding:14px}
+  .editor{padding:22px 26px;background:#f7f9fc}
+  .preview{border-left:1px solid #e2e8f1;background:#fff}
+  .preview iframe{width:100%;height:100%;border:0}
+
+  .side-title{font-size:12px;font-weight:700;color:#8090a5;text-transform:uppercase;letter-spacing:.06em;margin:6px 4px 8px}
+  .nav-item{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:10px;margin-bottom:4px;cursor:pointer;border:1px solid transparent}
+  .nav-item:hover{background:#f0f4f9}
+  .nav-item.active{background:#e8f1fc;border-color:#bcd8f5}
+  .nav-item .grip{color:#aebacb;font-size:13px}
+  .nav-item .label{flex:1;font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .nav-item .type{font-size:11px;color:#8c9ab0}
+  .nav-item.hiddenSec .label{opacity:.45}
+  .mini{border:1px solid #d7dee8;background:#fff;border-radius:7px;width:26px;height:26px;font-size:13px;color:#5b6b80;display:inline-flex;align-items:center;justify-content:center}
+  .mini:hover{background:#f0f4f9}
+  .row-actions{display:flex;gap:4px}
+
+  .add-box{margin-top:14px;border-top:1px solid #eef2f7;padding-top:14px}
+  .add-box select{width:100%;padding:10px;border:1px solid #d7dee8;border-radius:9px;font-size:14px;margin-bottom:8px}
+  .add-box button{width:100%;padding:10px;border:0;border-radius:9px;background:#0b5cab;color:#fff;font-weight:700;font-size:14px}
+
+  /* 폼 */
+  .editor h2{font-size:18px;margin:0 0 4px}
+  .editor .hint{color:#7a8aa0;font-size:13px;margin:0 0 22px}
+  .field{margin-bottom:18px}
+  .field>label{display:block;font-size:13px;font-weight:700;color:#3a4a62;margin-bottom:6px}
+  .field input[type=text],.field textarea,.field input[type=color]{width:100%;padding:10px 12px;border:1px solid #d7dee8;border-radius:9px;font-size:14px;font-family:inherit;background:#fff}
+  .field textarea{min-height:90px;resize:vertical;line-height:1.55}
+  .field input[type=color]{height:42px;padding:4px}
+  .color-row{display:flex;gap:10px;align-items:center}
+  .color-row input[type=text]{max-width:130px}
+
+  .img-field .thumb{width:100%;max-height:150px;object-fit:cover;border-radius:10px;border:1px solid #e2e8f1;margin-bottom:8px;background:#f0f4f9}
+  .img-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .img-controls .file-btn{border:1px solid #0b5cab;color:#0b5cab;background:#fff;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600}
+  .img-controls .clear-btn{border:1px solid #e0a3a3;color:#c0392b;background:#fff;padding:8px 12px;border-radius:8px;font-size:13px}
+
+  .list-block{border:1px solid #e2e8f1;border-radius:12px;padding:14px;margin-bottom:12px;background:#fff}
+  .list-item{border:1px solid #eef2f7;border-radius:10px;padding:12px;margin-bottom:10px;background:#fbfcfe;position:relative}
+  .list-item .item-bar{display:flex;justify-content:flex-end;gap:4px;margin-bottom:8px}
+  .add-item{border:1px dashed #b9c6d8;background:#fff;color:#0b5cab;width:100%;padding:9px;border-radius:9px;font-weight:600;font-size:13px}
+
+  .empty{color:#8090a5;text-align:center;margin-top:80px}
+</style>
+</head>
+<body>
+
+<!-- 로그인 -->
+<div id="login">
+  <div class="login-card">
+    <h1>홈페이지 관리자</h1>
+    <p>비밀번호를 입력하세요.</p>
+    <div class="err" id="loginErr"></div>
+    <input type="password" id="pw" placeholder="비밀번호" autocomplete="current-password">
+    <button id="loginBtn">로그인</button>
+  </div>
+</div>
+
+<!-- 관리자 -->
+<div id="app" class="hidden">
+  <div class="topbar">
+    <b>홈페이지 편집</b>
+    <div class="actions">
+      <span class="save-state" id="saveState"></span>
+      <a href="/" target="_blank">사이트 보기 ↗</a>
+      <button class="save" id="saveBtn">저장</button>
+      <button id="logoutBtn">로그아웃</button>
+    </div>
+  </div>
+  <div class="workspace">
+    <div class="col sidebar">
+      <div class="side-title">전체 설정</div>
+      <div class="nav-item" data-nav="settings"><span class="label">⚙️ 사이트 설정 (로고·색상·푸터)</span></div>
+      <div class="side-title" style="margin-top:18px">섹션 (드래그 대신 ▲▼로 순서변경)</div>
+      <div id="sectionList"></div>
+      <div class="add-box">
+        <select id="addType"></select>
+        <button id="addBtn">+ 섹션 추가</button>
+      </div>
+    </div>
+    <div class="col editor" id="editor"></div>
+    <div class="col preview"><iframe id="previewFrame" title="미리보기"></iframe></div>
+  </div>
+</div>
+
+<script src="/render.js"></script>
+<script>
+/* ---------- 섹션 정의 (render.js와 필드 동기화) ---------- */
+var TYPE_LABELS = {
+  hero:"히어로(상단 배너)", stats:"숫자 통계", about:"회사 소개", features:"강점 카드",
+  steps:"단계/로드맵", history:"연혁", gallery:"이미지 갤러리", richtext:"자유 텍스트",
+  cta:"행동유도 배너(CTA)", contact:"문의/오시는 길"
+};
+var SCHEMAS = {
+  hero:[
+    {k:"eyebrow",t:"text",label:"상단 작은 문구"},
+    {k:"title",t:"textarea",label:"제목 (줄바꿈 가능)"},
+    {k:"subtitle",t:"textarea",label:"부제목"},
+    {k:"ctaText",t:"text",label:"기본 버튼 텍스트"},
+    {k:"ctaLink",t:"text",label:"기본 버튼 링크 (예: #contact)"},
+    {k:"secondaryText",t:"text",label:"보조 버튼 텍스트"},
+    {k:"secondaryLink",t:"text",label:"보조 버튼 링크"},
+    {k:"bgImage",t:"image",label:"배경 이미지"}
+  ],
+  stats:[
+    {k:"heading",t:"text",label:"제목"},
+    {k:"items",t:"list",label:"통계 항목",fields:[{k:"value",t:"text",label:"수치"},{k:"label",t:"text",label:"설명"}]}
+  ],
+  about:[
+    {k:"heading",t:"text",label:"제목"},
+    {k:"lead",t:"textarea",label:"리드 문장(강조)"},
+    {k:"body",t:"textarea",label:"본문 (빈 줄로 문단 구분)"},
+    {k:"image",t:"image",label:"이미지"}
+  ],
+  features:[
+    {k:"heading",t:"text",label:"제목"},
+    {k:"subheading",t:"text",label:"부제목"},
+    {k:"items",t:"list",label:"카드",fields:[{k:"icon",t:"text",label:"아이콘(이모지)"},{k:"title",t:"text",label:"제목"},{k:"desc",t:"textarea",label:"설명"}]}
+  ],
+  steps:[
+    {k:"heading",t:"text",label:"제목"},
+    {k:"subheading",t:"text",label:"부제목"},
+    {k:"items",t:"list",label:"단계",fields:[{k:"step",t:"text",label:"번호(예: 01)"},{k:"title",t:"text",label:"제목"},{k:"desc",t:"textarea",label:"설명"}]}
+  ],
+  history:[
+    {k:"heading",t:"text",label:"제목"},
+    {k:"items",t:"list",label:"연혁",fields:[{k:"year",t:"text",label:"연도"},{k:"text",t:"textarea",label:"내용"}]}
+  ],
+  gallery:[
+    {k:"heading",t:"text",label:"제목"},
+    {k:"images",t:"imagelist",label:"이미지 목록"}
+  ],
+  richtext:[
+    {k:"heading",t:"text",label:"제목"},
+    {k:"body",t:"textarea",label:"본문 (빈 줄로 문단 구분)"}
+  ],
+  cta:[
+    {k:"title",t:"textarea",label:"제목"},
+    {k:"subtitle",t:"textarea",label:"부제목"},
+    {k:"buttonText",t:"text",label:"버튼 텍스트"},
+    {k:"buttonLink",t:"text",label:"버튼 링크"},
+    {k:"bgImage",t:"image",label:"배경 이미지"}
+  ],
+  contact:[
+    {k:"heading",t:"text",label:"제목"},
+    {k:"company",t:"text",label:"회사명"},
+    {k:"ceo",t:"text",label:"대표자"},
+    {k:"bizNo",t:"text",label:"사업자등록번호"},
+    {k:"address",t:"textarea",label:"주소"},
+    {k:"phone",t:"text",label:"전화"},
+    {k:"email",t:"text",label:"이메일"},
+    {k:"hours",t:"text",label:"운영시간"},
+    {k:"mapEmbed",t:"textarea",label:"지도 임베드 코드(선택, iframe HTML)"}
+  ]
+};
+var DEFAULTS = {
+  hero:{eyebrow:"새 배너",title:"제목을 입력하세요",subtitle:"부제목을 입력하세요.",ctaText:"버튼",ctaLink:"#contact",secondaryText:"",secondaryLink:"",bgImage:""},
+  stats:{heading:"숫자로 보는 성과",items:[{value:"100+",label:"설명"},{value:"99%",label:"설명"}]},
+  about:{heading:"회사 소개",lead:"한 줄 소개",body:"본문을 입력하세요.",image:""},
+  features:{heading:"강점",subheading:"부제목",items:[{icon:"⭐",title:"제목",desc:"설명"}]},
+  steps:{heading:"로드맵",subheading:"부제목",items:[{step:"01",title:"제목",desc:"설명"}]},
+  history:{heading:"연혁",items:[{year:"2026",text:"내용"}]},
+  gallery:{heading:"갤러리",images:[]},
+  richtext:{heading:"제목",body:"본문을 입력하세요."},
+  cta:{title:"지금 시작하세요",subtitle:"부제목",buttonText:"문의하기",buttonLink:"#contact",bgImage:""},
+  contact:{heading:"문의 및 오시는 길",company:"",ceo:"",bizNo:"",address:"",phone:"",email:"",hours:"",mapEmbed:""}
+};
+
+/* ---------- 상태 ---------- */
+var content = null;
+var selected = "settings";
+var dirty = false;
+var saveTimer = null;
+
+var $ = function(id){return document.getElementById(id)};
+
+/* ---------- 로그인 ---------- */
+function showLogin(){ $("login").classList.remove("hidden"); $("app").classList.add("hidden"); }
+function showApp(){ $("login").classList.add("hidden"); $("app").classList.remove("hidden"); }
+
+async function doLogin(){
+  $("loginErr").textContent="";
+  var r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:$("pw").value})});
+  if(r.ok){ await boot(); } else { var j=await r.json().catch(function(){return{}}); $("loginErr").textContent=j.error||"로그인 실패"; }
+}
+$("loginBtn").onclick=doLogin;
+$("pw").addEventListener("keydown",function(e){if(e.key==="Enter")doLogin();});
+$("logoutBtn").onclick=async function(){ await fetch("/api/logout",{method:"POST"}); showLogin(); };
+
+/* ---------- 부팅 ---------- */
+async function boot(){
+  var me=await fetch("/api/me").then(function(r){return r.json()}).catch(function(){return{}});
+  if(!me.authed){ showLogin(); return; }
+  content=await fetch("/api/content").then(function(r){return r.json()});
+  if(!content.settings) content.settings={};
+  if(!Array.isArray(content.sections)) content.sections=[];
+  showApp();
+  fillAddOptions();
+  selected="settings";
+  renderAll();
+}
+function fillAddOptions(){
+  var sel=$("addType"); sel.innerHTML="";
+  Object.keys(TYPE_LABELS).forEach(function(t){
+    var o=document.createElement("option"); o.value=t; o.textContent=TYPE_LABELS[t]; sel.appendChild(o);
+  });
+}
+
+/* ---------- 변경 표시 / 미리보기 ---------- */
+function markDirty(){ dirty=true; $("saveState").textContent="● 저장 안 됨"; updatePreview(); }
+function buildPreviewDoc(){
+  var s=content.settings||{};
+  var nav='<header class="site-header"><div class="container site-header__inner"><a class="brand" href="#top"><span class="brand__mark">'+SiteRender.esc(s.logoText||"LOGO")+'</span></a><nav class="nav"><a href="#about">회사소개</a><a href="#contact">문의</a>'+(s.phone?'<a class="nav__phone">'+SiteRender.esc(s.phone)+'</a>':'')+'</nav></div></header>';
+  var footer='<footer class="site-footer"><div class="container">'+(s.footerCompany?'<p class="site-footer__company">'+SiteRender.esc(s.footerCompany)+'</p>':'')+(s.footerAddress?'<p>'+SiteRender.esc(s.footerAddress)+'</p>':'')+(s.footerText?'<p class="site-footer__copy">'+SiteRender.esc(s.footerText)+'</p>':'')+'</div></footer>';
+  return '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public/styles.css"><style>:root{--primary:'+SiteRender.esc(s.primaryColor||"#0b5cab")+';--accent:'+SiteRender.esc(s.accentColor||"#16b8a6")+';}a{pointer-events:none}</style></head><body id="top">'+nav+'<main>'+SiteRender.renderSections(content)+'</main>'+footer+'</body></html>';
+}
+function updatePreview(){ $("previewFrame").srcdoc=buildPreviewDoc(); }
+
+/* ---------- 렌더링 ---------- */
+function renderAll(){ renderSidebar(); renderEditor(); updatePreview(); }
+
+function renderSidebar(){
+  var list=$("sectionList"); list.innerHTML="";
+  content.sections.forEach(function(sec,i){
+    var item=document.createElement("div");
+    item.className="nav-item"+(selected===i?" active":"")+(sec.visible===false?" hiddenSec":"");
+    item.innerHTML='<span class="grip">≡</span><span class="label">'+SiteRender.esc(labelOf(sec))+'</span>';
+    var act=document.createElement("span"); act.className="row-actions";
+    act.appendChild(mkBtn("▲",function(e){e.stopPropagation();move(i,-1)}));
+    act.appendChild(mkBtn("▼",function(e){e.stopPropagation();move(i,1)}));
+    act.appendChild(mkBtn(sec.visible===false?"🚫":"👁",function(e){e.stopPropagation();toggleVis(i)}));
+    act.appendChild(mkBtn("🗑",function(e){e.stopPropagation();delSection(i)}));
+    item.appendChild(act);
+    item.onclick=function(){ selected=i; renderAll(); };
+    list.appendChild(item);
+  });
+  // settings nav active 표시
+  document.querySelectorAll('[data-nav="settings"]').forEach(function(el){
+    el.classList.toggle("active",selected==="settings");
+    el.onclick=function(){ selected="settings"; renderAll(); };
+  });
+}
+function labelOf(sec){
+  var d=sec.data||{};
+  var t=d.heading||d.title||d.eyebrow||TYPE_LABELS[sec.type]||sec.type;
+  return t;
+}
+function mkBtn(txt,fn){ var b=document.createElement("button"); b.className="mini"; b.textContent=txt; b.onclick=fn; return b; }
+
+function move(i,dir){
+  var j=i+dir; if(j<0||j>=content.sections.length) return;
+  var a=content.sections; var tmp=a[i]; a[i]=a[j]; a[j]=tmp;
+  if(selected===i) selected=j; else if(selected===j) selected=i;
+  markDirty(); renderAll();
+}
+function toggleVis(i){ content.sections[i].visible = content.sections[i].visible===false; markDirty(); renderAll(); }
+function delSection(i){
+  if(!confirm("이 섹션을 삭제할까요?")) return;
+  content.sections.splice(i,1);
+  if(selected===i) selected="settings"; else if(typeof selected==="number"&&selected>i) selected--;
+  markDirty(); renderAll();
+}
+$("addBtn").onclick=function(){
+  var t=$("addType").value;
+  var sec={id:"sec_"+Date.now().toString(36),type:t,visible:true,data:JSON.parse(JSON.stringify(DEFAULTS[t]||{}))};
+  content.sections.push(sec);
+  selected=content.sections.length-1;
+  markDirty(); renderAll();
+};
+
+/* ---------- 에디터 ---------- */
+function renderEditor(){
+  var ed=$("editor");
+  if(selected==="settings"){ ed.innerHTML=""; ed.appendChild(settingsForm()); return; }
+  var sec=content.sections[selected];
+  if(!sec){ ed.innerHTML='<div class="empty">왼쪽에서 섹션을 선택하거나 새 섹션을 추가하세요.</div>'; return; }
+  ed.innerHTML="";
+  var h=document.createElement("h2"); h.textContent=TYPE_LABELS[sec.type]||sec.type;
+  var hint=document.createElement("p"); hint.className="hint"; hint.textContent="수정하면 오른쪽 미리보기에 즉시 반영됩니다. 완료 후 상단 '저장'을 눌러야 실제 사이트에 반영됩니다.";
+  ed.appendChild(h); ed.appendChild(hint);
+  (SCHEMAS[sec.type]||[]).forEach(function(f){ ed.appendChild(fieldEl(f,sec.data)); });
+}
+
+function settingsForm(){
+  var wrap=document.createElement("div");
+  var h=document.createElement("h2"); h.textContent="사이트 설정";
+  var hint=document.createElement("p"); hint.className="hint"; hint.textContent="로고, 강조 색상, 전화번호, 푸터 정보를 설정합니다.";
+  wrap.appendChild(h); wrap.appendChild(hint);
+  var s=content.settings;
+  [
+    {k:"siteName",t:"text",label:"사이트 제목(브라우저 탭)"},
+    {k:"logoText",t:"text",label:"로고 텍스트"},
+    {k:"phone",t:"text",label:"대표 전화(상단 표시)"}
+  ].forEach(function(f){ wrap.appendChild(fieldEl(f,s)); });
+  // 색상
+  wrap.appendChild(colorField("primaryColor","주요 색상(Primary)",s));
+  wrap.appendChild(colorField("accentColor","강조 색상(Accent)",s));
+  [
+    {k:"footerCompany",t:"text",label:"푸터 - 회사정보"},
+    {k:"footerAddress",t:"text",label:"푸터 - 주소"},
+    {k:"footerText",t:"text",label:"푸터 - 저작권 문구"}
+  ].forEach(function(f){ wrap.appendChild(fieldEl(f,s)); });
+  return wrap;
+}
+function colorField(key,label,obj){
+  var f=document.createElement("div"); f.className="field";
+  var l=document.createElement("label"); l.textContent=label; f.appendChild(l);
+  var row=document.createElement("div"); row.className="color-row";
+  var c=document.createElement("input"); c.type="color"; c.value=obj[key]||"#0b5cab";
+  var tx=document.createElement("input"); tx.type="text"; tx.value=obj[key]||"";
+  c.oninput=function(){ obj[key]=c.value; tx.value=c.value; markDirty(); };
+  tx.oninput=function(){ obj[key]=tx.value; if(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(tx.value))c.value=tx.value; markDirty(); };
+  row.appendChild(c); row.appendChild(tx); f.appendChild(row);
+  return f;
+}
+
+function fieldEl(f,obj){
+  if(f.t==="image") return imageField(f,obj);
+  if(f.t==="list") return listField(f,obj);
+  if(f.t==="imagelist") return imageListField(f,obj);
+  var wrap=document.createElement("div"); wrap.className="field";
+  var l=document.createElement("label"); l.textContent=f.label; wrap.appendChild(l);
+  var inp= f.t==="textarea"?document.createElement("textarea"):document.createElement("input");
+  if(f.t!=="textarea") inp.type="text";
+  inp.value=obj[f.k]==null?"":obj[f.k];
+  inp.oninput=function(){ obj[f.k]=inp.value; markDirty(); };
+  wrap.appendChild(inp);
+  return wrap;
+}
+
+function imageField(f,obj){
+  var wrap=document.createElement("div"); wrap.className="field img-field";
+  var l=document.createElement("label"); l.textContent=f.label; wrap.appendChild(l);
+  var img=document.createElement("img"); img.className="thumb"; img.src=obj[f.k]||""; img.style.display=obj[f.k]?"block":"none";
+  wrap.appendChild(img);
+  var controls=document.createElement("div"); controls.className="img-controls";
+  var fileBtn=document.createElement("label"); fileBtn.className="file-btn"; fileBtn.textContent="이미지 업로드";
+  var file=document.createElement("input"); file.type="file"; file.accept="image/*"; file.style.display="none";
+  file.onchange=function(){ uploadFile(file.files[0],function(url){ obj[f.k]=url; img.src=url; img.style.display="block"; urlInp.value=url; markDirty(); }); };
+  fileBtn.appendChild(file);
+  var urlInp=document.createElement("input"); urlInp.type="text"; urlInp.placeholder="또는 이미지 URL"; urlInp.value=obj[f.k]||""; urlInp.style.flex="1"; urlInp.style.minWidth="160px"; urlInp.style.padding="8px 10px"; urlInp.style.border="1px solid #d7dee8"; urlInp.style.borderRadius="8px";
+  urlInp.oninput=function(){ obj[f.k]=urlInp.value; img.src=urlInp.value; img.style.display=urlInp.value?"block":"none"; markDirty(); };
+  var clr=document.createElement("button"); clr.className="clear-btn"; clr.textContent="제거"; clr.onclick=function(){ obj[f.k]=""; img.src=""; img.style.display="none"; urlInp.value=""; markDirty(); };
+  controls.appendChild(fileBtn); controls.appendChild(urlInp); controls.appendChild(clr);
+  wrap.appendChild(controls);
+  return wrap;
+}
+
+function listField(f,obj){
+  if(!Array.isArray(obj[f.k])) obj[f.k]=[];
+  var arr=obj[f.k];
+  var block=document.createElement("div"); block.className="field";
+  var l=document.createElement("label"); l.textContent=f.label; block.appendChild(l);
+  var box=document.createElement("div"); box.className="list-block";
+  arr.forEach(function(item,idx){
+    var it=document.createElement("div"); it.className="list-item";
+    var bar=document.createElement("div"); bar.className="item-bar";
+    bar.appendChild(mkBtn("▲",function(){ if(idx>0){var t=arr[idx-1];arr[idx-1]=arr[idx];arr[idx]=t;markDirty();renderEditor();}}));
+    bar.appendChild(mkBtn("▼",function(){ if(idx<arr.length-1){var t=arr[idx+1];arr[idx+1]=arr[idx];arr[idx]=t;markDirty();renderEditor();}}));
+    bar.appendChild(mkBtn("🗑",function(){ arr.splice(idx,1); markDirty(); renderEditor(); }));
+    it.appendChild(bar);
+    f.fields.forEach(function(sf){ it.appendChild(fieldEl(sf,item)); });
+    box.appendChild(it);
+  });
+  var add=document.createElement("button"); add.className="add-item"; add.textContent="+ 항목 추가";
+  add.onclick=function(){ var o={}; f.fields.forEach(function(sf){o[sf.k]=""}); arr.push(o); markDirty(); renderEditor(); };
+  box.appendChild(add);
+  block.appendChild(box);
+  return block;
+}
+
+function imageListField(f,obj){
+  if(!Array.isArray(obj[f.k])) obj[f.k]=[];
+  var arr=obj[f.k];
+  var block=document.createElement("div"); block.className="field";
+  var l=document.createElement("label"); l.textContent=f.label; block.appendChild(l);
+  var box=document.createElement("div"); box.className="list-block";
+  arr.forEach(function(url,idx){
+    var it=document.createElement("div"); it.className="list-item"; it.style.display="flex"; it.style.gap="10px"; it.style.alignItems="center";
+    var img=document.createElement("img"); img.src=url; img.style.width="64px"; img.style.height="48px"; img.style.objectFit="cover"; img.style.borderRadius="6px";
+    var tx=document.createElement("input"); tx.type="text"; tx.value=url; tx.style.flex="1"; tx.style.padding="8px"; tx.style.border="1px solid #d7dee8"; tx.style.borderRadius="8px";
+    tx.oninput=function(){ arr[idx]=tx.value; img.src=tx.value; markDirty(); };
+    var del=mkBtn("🗑",function(){ arr.splice(idx,1); markDirty(); renderEditor(); });
+    it.appendChild(img); it.appendChild(tx); it.appendChild(del); box.appendChild(it);
+  });
+  var addBtn=document.createElement("label"); addBtn.className="add-item"; addBtn.textContent="+ 이미지 업로드";
+  var file=document.createElement("input"); file.type="file"; file.accept="image/*"; file.style.display="none";
+  file.onchange=function(){ uploadFile(file.files[0],function(u){ arr.push(u); markDirty(); renderEditor(); }); };
+  addBtn.appendChild(file);
+  box.appendChild(addBtn);
+  block.appendChild(box);
+  return block;
+}
+
+/* ---------- 업로드 ---------- */
+function uploadFile(file,cb){
+  if(!file) return;
+  var reader=new FileReader();
+  reader.onload=async function(){
+    var r=await fetch("/api/upload",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({dataUrl:reader.result})});
+    if(r.ok){ var j=await r.json(); cb(j.url); } else { alert("업로드 실패"); }
+  };
+  reader.readAsDataURL(file);
+}
+
+/* ---------- 저장 ---------- */
+$("saveBtn").onclick=async function(){
+  $("saveState").textContent="저장 중...";
+  var r=await fetch("/api/content",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(content)});
+  if(r.ok){ dirty=false; $("saveState").textContent="✔ 저장됨"; setTimeout(function(){ if(!dirty)$("saveState").textContent=""; },2500); }
+  else if(r.status===401){ $("saveState").textContent=""; showLogin(); }
+  else { $("saveState").textContent="저장 실패"; }
+};
+window.addEventListener("beforeunload",function(e){ if(dirty){ e.preventDefault(); e.returnValue=""; } });
+
+boot();
+</script>
+</body>
+</html>
