@@ -37,6 +37,9 @@ import {
 const YEOGI_WHOLESALE_SPREADSHEET_ID = "10DgfEqudeXOBmFFm8vyOHHuHJp6nZXKaxv4ecpbVhno";
 const YEOGI_WHOLESALE_GID = 30917428;
 const YEOGI_STORE = "여기명품";
+// 네이버 주문 자동 기록 탭 (사입관리장 VLOOKUP용) — 기존 시트는 안 건드리고 새 탭에만 기록.
+const NAVER_AUTO_TAB = "네이버주문_자동";
+const NAVER_AUTO_HEADERS = ["상품주문번호", "결제일", "스토어", "채널상품번호", "상품명", "상품옵션", "수량", "매출", "정산금액", "수수료", "상태"];
 
 interface YeogiInfo { wholesale: number; label: string }
 async function loadYeogiWholesaleMap(): Promise<Map<string, YeogiInfo>> {
@@ -967,6 +970,25 @@ async function processDay(
     }
   } else if (!SHEET_CREDS) {
     console.log("(시트 미설정 — 시트 입력 스킵)");
+  }
+
+  // 여기명품 네이버 주문 자동 기록 (사입관리장 VLOOKUP용 새 탭). 어제 보고분만, 상품주문번호 기준 upsert.
+  if (options.sendTelegram && SHEET_CREDS) {
+    const targetRows = allRows.filter((r) => r.store === YEOGI_STORE);
+    if (targetRows.length > 0) {
+      try {
+        const autoCreds: SheetCreds = { ...SHEET_CREDS, sheetId: YEOGI_WHOLESALE_SPREADSHEET_ID };
+        await ensureTab(autoCreds, NAVER_AUTO_TAB, NAVER_AUTO_HEADERS);
+        const autoRows = targetRows.map((r) => [
+          r.productOrderId, r.paymentDate, r.store, r.channelProductNo,
+          r.productName, r.optionName, r.quantity, r.salesAmount, r.settlement, r.commission, r.status,
+        ]);
+        const res = await upsertRows(autoCreds, NAVER_AUTO_TAB, autoRows, (row) => String(row[0] ?? ""));
+        console.log(`[${NAVER_AUTO_TAB}] 신규 ${res.appended} / 갱신 ${res.updated}`);
+      } catch (err) {
+        console.error(`[${NAVER_AUTO_TAB}] 기록 실패:`, err instanceof Error ? err.message : String(err));
+      }
+    }
   }
 
   // 집계
