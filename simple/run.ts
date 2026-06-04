@@ -969,6 +969,9 @@ async function processDay(
           deliveryFeeSeen.add(oidForFee);
         }
         const profit = settlement - cost - logistics + deliveryFee;
+        if (store.name === "와이케이팜") {
+          console.log(`[WK상세] "${String(po.productName).slice(0, 18)}" 매출=${po.totalPaymentAmount} 배송=${deliveryFee} 물류=${logistics} 원가=${cost}`);
+        }
         allRows.push({
           paymentDate: po.paymentDate ?? o.order?.paymentDate ?? "",
           store: store.name,
