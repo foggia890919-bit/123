@@ -226,6 +226,7 @@ interface BulkOrder {
     quantity: number;
     unitPrice: number;
     totalPaymentAmount: number;
+    deliveryFeeAmount?: number;
     productOrderStatus?: string;
     knowledgeShoppingSellingInterlockCommission?: number;
     payCommissionAmount?: number;
@@ -754,6 +755,7 @@ async function processDay(
   const allRows: Row[] = [];
   const errors: string[] = [];
   const vitaLogiSeen = new Set<string>(); // 비타앤오리진 자동 물류비: 주문당 1회만 부과
+  const deliveryFeeSeen = new Set<string>(); // 배송비: 배송(주문)당 1회만 매출/이익 반영
 
   for (let si = 0; si < STORES.length; si++) {
     if (si > 0) await sleep(3000);
@@ -761,6 +763,13 @@ async function processDay(
     try {
       console.log(`[${store.name}] 시작…`);
       const orders = await fetchOrdersForDay(store, range.fromIso, range.toIso);
+      // 주문(배송)당 배송비 = 그 주문 productOrder 들 중 최대 deliveryFeeAmount (묶음배송 중복 방지)
+      const feeByOrder = new Map<string, number>();
+      for (const o of orders) {
+        const oid2 = o.order?.orderId ?? o.productOrder.orderId ?? "";
+        const f = Number(o.productOrder.deliveryFeeAmount ?? 0) || 0;
+        if (oid2 && f > (feeByOrder.get(oid2) ?? 0)) feeByOrder.set(oid2, f);
+      }
       for (const o of orders) {
         const po = o.productOrder;
         const channelProductNo = po.channelProductNo ?? po.productId ?? "";
@@ -901,7 +910,14 @@ async function processDay(
           : computedLogistics >= 0
             ? computedLogistics
             : logisticsPerOrder;
-        const profit = settlement - cost - logistics;
+        // 배송비: 배송(주문)당 1회, 취소 아니면. 멤버십 무료여도 네이버가 부담 → 셀러는 받으므로 매출·이익에 반영.
+        const oidForFee = o.order?.orderId ?? po.orderId ?? "";
+        let deliveryFee = 0;
+        if (!isCanceled(po.productOrderStatus ?? "") && oidForFee && !deliveryFeeSeen.has(oidForFee)) {
+          deliveryFee = feeByOrder.get(oidForFee) ?? 0;
+          deliveryFeeSeen.add(oidForFee);
+        }
+        const profit = settlement - cost - logistics + deliveryFee;
         allRows.push({
           paymentDate: po.paymentDate ?? o.order?.paymentDate ?? "",
           store: store.name,
@@ -915,7 +931,7 @@ async function processDay(
           type: productRule?.type ?? "",
           quantity: po.quantity,
           bottles: totalUnits,
-          salesAmount: po.totalPaymentAmount,
+          salesAmount: po.totalPaymentAmount + deliveryFee,
           commission,
           settlement,
           status: po.productOrderStatus ?? "",
