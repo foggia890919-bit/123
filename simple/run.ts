@@ -42,8 +42,8 @@ const NAVER_AUTO_TAB = "매출raw";
 const NAVER_AUTO_HEADERS = ["상품주문번호", "결제일", "스토어", "채널상품번호", "상품명", "상품옵션", "수량", "매출", "정산금액", "수수료", "상태"];
 // 매일 카톡 보고 끝에 함께 보낼 "남은 개발 작업" 리마인더. 완료되면 항목을 지우면 발송 안 됨.
 const REMAINING_TASKS: string[] = [
-  "와이케이팜 원가 설정 (품목별 단가)",
   "원가 매핑 정리 (피쿠알 등 시트값 5000 vs 코드 5200, 200원차)",
+  "와이케이팜 멜라토닌 등 ⭐옵션매핑 미등록 상품 시트 등록 (현재 원가 0)",
 ];
 
 interface YeogiInfo { wholesale: number; label: string }
@@ -964,13 +964,9 @@ async function processDay(
         // 배송비: 배송(주문)당 1회, 취소 아니면. 멤버십 무료여도 네이버가 부담 → 셀러는 받으므로 매출·이익에 반영.
         const oidForFee = o.order?.orderId ?? po.orderId ?? "";
         let deliveryFee = 0;
-        const feeAlreadySeen = deliveryFeeSeen.has(oidForFee);
-        if (!isCanceled(po.productOrderStatus ?? "") && oidForFee && !feeAlreadySeen) {
+        if (!isCanceled(po.productOrderStatus ?? "") && oidForFee && !deliveryFeeSeen.has(oidForFee)) {
           deliveryFee = feeByOrder.get(oidForFee) ?? 0;
           deliveryFeeSeen.add(oidForFee);
-        }
-        if (store.name === "와이케이팜") {
-          console.log(`[WK배송] oid="${oidForFee}" raw=${po.deliveryFeeAmount} byOrder=${feeByOrder.get(oidForFee)} 이미봄=${feeAlreadySeen} 취소=${isCanceled(po.productOrderStatus ?? "")} 적용=${deliveryFee}`);
         }
         const profit = settlement - cost - logistics + deliveryFee;
         allRows.push({
