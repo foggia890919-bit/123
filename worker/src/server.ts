@@ -1,6 +1,8 @@
 import "dotenv/config";
 import express, { type Request, type Response, type NextFunction } from "express";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { ALL_ADAPTERS } from "../../src/scrapers/adapters/index.ts";
 import type { Credentials, InventoryItem, WholesaleAdapter } from "../../src/scrapers/core/types.ts";
 import { startScheduler, triggerJobNow, isJobRunning } from "./scheduler.ts";
@@ -9,10 +11,49 @@ import { startEpharmsScheduler } from "./epharms/cron.ts";
 import { isEpharmsSyncRunning, runEpharmsSync, forceResetSync } from "./epharms/sync.ts";
 import { isProductSyncRunning, syncProductMaster } from "./epharms/products.ts";
 
+// 시작 시 .env 중복 키 검증 — dotenv는 첫 값을 적용하므로 같은 키가 여러 번 적혀있으면 의도와 다른 값이 적용될 수 있음.
+function checkEnvDuplicates() {
+  try {
+    const envPath = resolve(process.cwd(), ".env");
+    const content = readFileSync(envPath, "utf-8");
+    const seen = new Map<string, number>();
+    const dups: string[] = [];
+    let lineNo = 0;
+    for (const raw of content.split("\n")) {
+      lineNo++;
+      const line = raw.trim();
+      if (!line || line.startsWith("#")) continue;
+      const eq = line.indexOf("=");
+      if (eq < 0) continue;
+      const key = line.slice(0, eq).trim();
+      if (seen.has(key)) {
+        dups.push(`${key} (line ${seen.get(key)} & ${lineNo})`);
+      } else {
+        seen.set(key, lineNo);
+      }
+    }
+    if (dups.length > 0) {
+      console.error(`[startup] ⚠️ .env에 중복 키 ${dups.length}건 발견 — dotenv는 첫 값을 적용합니다:`);
+      for (const d of dups) console.error(`  - ${d}`);
+    } else {
+      console.log("[startup] .env 검증 OK (중복 키 없음)");
+    }
+  } catch (err) {
+    console.warn(`[startup] .env 검증 건너뜀: ${(err as Error).message}`);
+  }
+}
+checkEnvDuplicates();
+
 const PORT = Number(process.env.PORT ?? 8080);
 const TOKEN = process.env.WORKER_TOKEN ?? "";
 const INTERVAL_MS = Number(process.env.SCRAPE_INTERVAL_MS ?? 1500);
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS ?? 20 * 60 * 1000);
+
+// 시작 시 실제 적용된 핵심 환경변수 로그 — 트러블슈팅용
+console.log(`[startup] PORT=${PORT} INTERVAL_MS=${INTERVAL_MS} ` +
+  `CONCURRENCY_PER_SITE=${process.env.CONCURRENCY_PER_SITE ?? "(default)"} ` +
+  `SCHEDULE_CRON="${process.env.SCHEDULE_CRON ?? "(default 0 6,12,18 * * *)"}" ` +
+  `LIVE_CONCURRENCY=${process.env.LIVE_CONCURRENCY ?? "(default)"}`);
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
