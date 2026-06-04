@@ -682,57 +682,56 @@ function buildKakaoMessages(dateStr: string, live: Row[]): string[] {
   const aggLine = (a: KwAgg) =>
     ` ${a.keyword} ${a.orders.size}건 ${a.bottles}병 매출 ${a.sales.toLocaleString("ko-KR")} 이익 ${a.profit.toLocaleString("ko-KR")}`;
 
-  // 상품번호별 그룹 (매출 큰 순)
-  const byProduct = new Map<string, Row[]>();
-  for (const r of live) {
-    const key = r.channelProductNo || r.productName;
-    const list = byProduct.get(key) ?? [];
-    list.push(r);
-    byProduct.set(key, list);
-  }
-  const mainKeyword = (rows: Row[]): string => {
-    const mainRow = rows.find((r) => r.type === "메인");
-    if (mainRow) return kwOf(mainRow);
-    return aggByKeyword(rows)[0]?.keyword ?? "";
-  };
-  const products = [...byProduct.entries()]
-    .map(([code, rows]) => ({ code, rows, sales: rows.reduce((s, r) => s + r.salesAmount, 0) }))
-    .sort((a, b) => b.sales - a.sales);
-
-  const productSections: string[] = [];
-  for (const p of products) {
-    const lines = [`${p.code} ${mainKeyword(p.rows)}`];
-    for (const a of aggByKeyword(p.rows)) lines.push(aggLine(a));
-    productSections.push(lines.join("\n"));
-  }
-
-  // 총합
-  const totalSales = live.reduce((s, r) => s + r.salesAmount, 0);
-  const totalOrders = new Set(live.map((r) => r.orderId)).size;
-  const totalBottles = live.reduce((s, r) => s + r.bottles, 0);
-  const totalProfit = live.reduce((s, r) => s + r.profit, 0);
-  const totalLines = [
-    `[매출 총합] ${dateStr}`,
-    `총매출 ${totalSales.toLocaleString("ko-KR")}`,
-    `총이익 ${totalProfit.toLocaleString("ko-KR")}`,
-    `총건수 ${totalOrders}건 · 총소진 ${totalBottles}병`,
-    "",
-    "(품종별)",
-    ...aggByKeyword(live).map(aggLine),
-  ];
-
-  // 메시지 조립: 1통차 = 총합, 이후 = 상품별 섹션 청크
-  const messages: string[] = [totalLines.join("\n")];
-  let buf = `[상품별] ${dateStr}`;
-  for (const sec of productSections) {
-    if ((buf + "\n\n" + sec).length > KAKAO_MSG_LIMIT) {
-      if (buf) messages.push(buf);
-      buf = sec;
-    } else {
-      buf = buf + "\n\n" + sec;
+  // 스토어(사업자)별 블록 — 키워드(품종)별 건수/병수/매출/이익 + 스토어 총합. 길면 분할.
+  const storeBlock = (storeName: string, rows: Row[]): string[] => {
+    const sSales = rows.reduce((s, r) => s + r.salesAmount, 0);
+    const sProfit = rows.reduce((s, r) => s + r.profit, 0);
+    const sOrders = new Set(rows.map((r) => r.orderId)).size;
+    const sQty = rows.reduce((s, r) => s + r.bottles, 0);
+    const header =
+      `[${storeName}] ${dateStr}\n` +
+      `총 ${sOrders}건 ${sQty}병 · 매출 ${sSales.toLocaleString("ko-KR")} · 이익 ${sProfit.toLocaleString("ko-KR")}`;
+    const out: string[] = [];
+    let buf = header;
+    for (const a of aggByKeyword(rows)) {
+      const line = aggLine(a);
+      if ((buf + "\n" + line).length > KAKAO_MSG_LIMIT) {
+        out.push(buf);
+        buf = `[${storeName}] (계속)\n` + line;
+      } else {
+        buf += "\n" + line;
+      }
     }
+    out.push(buf);
+    return out;
+  };
+
+  const messages: string[] = [];
+  // 1) 전체 총합
+  const tSales = live.reduce((s, r) => s + r.salesAmount, 0);
+  const tProfit = live.reduce((s, r) => s + r.profit, 0);
+  const tOrders = new Set(live.map((r) => r.orderId)).size;
+  const tQty = live.reduce((s, r) => s + r.bottles, 0);
+  messages.push(
+    `[전체 총합] ${dateStr}\n` +
+      `매출 ${tSales.toLocaleString("ko-KR")} · 이익 ${tProfit.toLocaleString("ko-KR")}\n` +
+      `${tOrders}건 · ${tQty}병`,
+  );
+
+  // 2) 사업자별 (STORES 정의 순서 우선, 그 외는 뒤에)
+  const byStore = new Map<string, Row[]>();
+  for (const r of live) {
+    const l = byStore.get(r.store) ?? [];
+    l.push(r);
+    byStore.set(r.store, l);
   }
-  if (buf) messages.push(buf);
+  const storeOrder = [
+    ...STORES.map((s) => s.name).filter((n) => byStore.has(n)),
+    ...[...byStore.keys()].filter((n) => !STORES.some((s) => s.name === n)),
+  ];
+  for (const sn of storeOrder) {
+    messages.push(...storeBlock(sn, byStore.get(sn)!));
+  }
   return messages;
 }
 
