@@ -40,6 +40,13 @@ const YEOGI_STORE = "여기명품";
 // 네이버 주문 자동 기록 탭 (사입관리장 VLOOKUP용) — 기존 시트는 안 건드리고 새 탭에만 기록.
 const NAVER_AUTO_TAB = "매출raw";
 const NAVER_AUTO_HEADERS = ["상품주문번호", "결제일", "스토어", "채널상품번호", "상품명", "상품옵션", "수량", "매출", "정산금액", "수수료", "상태"];
+// 매일 카톡 보고 끝에 함께 보낼 "남은 개발 작업" 리마인더. 완료되면 항목을 지우면 발송 안 됨.
+const REMAINING_TASKS: string[] = [
+  "와이케이팜 원가 설정 (품목별 단가 필요)",
+  "일주일치 보고 추가 (사업자별 키워드+총합)",
+  "원가 매핑 정리 (피쿠알 등 시트값 5000 vs 코드 5200, 200원차)",
+  "배송비 정산 이중계산 검증 (정산금액에 배송비 포함 여부)",
+];
 
 interface YeogiInfo { wholesale: number; label: string }
 async function loadYeogiWholesaleMap(): Promise<Map<string, YeogiInfo>> {
@@ -669,8 +676,9 @@ async function loadCatalogOptionNames(): Promise<Map<string, string>> {
 // 카카오 메모는 한 통 길이 제한이 있어 상품 섹션을 여러 통으로 청크 분할.
 const KAKAO_MSG_LIMIT = 1000;
 
-function buildKakaoMessages(dateStr: string, live: Row[]): string[] {
+function buildKakaoMessages(dateStr: string, live: Row[], canceled: Row[]): string[] {
   const kwOf = (r: Row) => r.keyword || `(미분류)${r.productName.slice(0, 10)}`;
+  const wk = (n: number) => n.toLocaleString("ko-KR");
 
   interface KwAgg { keyword: string; orders: Set<string>; bottles: number; sales: number; profit: number }
   const aggByKeyword = (rows: Row[]): KwAgg[] => {
@@ -687,20 +695,23 @@ function buildKakaoMessages(dateStr: string, live: Row[]): string[] {
     return [...m.values()].sort((a, b) => b.sales - a.sales);
   };
   const aggLine = (a: KwAgg) =>
-    ` ${a.keyword} ${a.orders.size}건 ${a.bottles}개 매출 ${a.sales.toLocaleString("ko-KR")} 이익 ${a.profit.toLocaleString("ko-KR")}`;
+    ` ${a.keyword} ${a.orders.size}건 ${a.bottles}개 매출 ${wk(a.sales)} 이익 ${wk(a.profit)}`;
 
-  // 스토어(사업자)별 블록 — 키워드(품종)별 건수/병수/매출/이익 + 스토어 총합. 길면 분할.
-  const storeBlock = (storeName: string, rows: Row[]): string[] => {
-    const sSales = rows.reduce((s, r) => s + r.salesAmount, 0);
-    const sProfit = rows.reduce((s, r) => s + r.profit, 0);
-    const sOrders = new Set(rows.map((r) => r.orderId)).size;
-    const sQty = rows.reduce((s, r) => s + r.bottles, 0);
-    const header =
-      `[${storeName}] ${dateStr}\n` +
-      `총 ${sOrders}건 ${sQty}개 · 매출 ${sSales.toLocaleString("ko-KR")} · 이익 ${sProfit.toLocaleString("ko-KR")}`;
+  // 스토어(사업자)별 블록 — 총매출/취소/최종매출 + 키워드별. 길면 분할.
+  const storeBlock = (storeName: string, liveRows: Row[], cancelRows: Row[]): string[] => {
+    const sSales = liveRows.reduce((s, r) => s + r.salesAmount, 0);
+    const sProfit = liveRows.reduce((s, r) => s + r.profit, 0);
+    const sLiveOrders = new Set(liveRows.map((r) => r.orderId)).size;
+    const sQty = liveRows.reduce((s, r) => s + r.bottles, 0);
+    const cancelSales = cancelRows.reduce((s, r) => s + r.salesAmount, 0);
+    const gross = sSales + cancelSales;
+    const totalCnt = new Set([...liveRows, ...cancelRows].map((r) => r.orderId)).size;
+    const head = [`[${storeName}] ${dateStr}`, `총매출 ${wk(gross)} (${totalCnt}건)`];
+    if (cancelRows.length > 0) head.push(`취소 -${wk(cancelSales)} (${cancelRows.length}건)`);
+    head.push(`최종매출 ${wk(sSales)} (${sLiveOrders}건) ${sQty}개 · 이익 ${wk(sProfit)}`);
     const out: string[] = [];
-    let buf = header;
-    for (const a of aggByKeyword(rows)) {
+    let buf = head.join("\n");
+    for (const a of aggByKeyword(liveRows)) {
       const line = aggLine(a);
       if ((buf + "\n" + line).length > KAKAO_MSG_LIMIT) {
         out.push(buf);
@@ -714,30 +725,31 @@ function buildKakaoMessages(dateStr: string, live: Row[]): string[] {
   };
 
   const messages: string[] = [];
-  // 1) 전체 총합
-  const tSales = live.reduce((s, r) => s + r.salesAmount, 0);
+  // 1) 전체 총합 (총매출 / 취소 / 최종매출)
+  const tLiveSales = live.reduce((s, r) => s + r.salesAmount, 0);
   const tProfit = live.reduce((s, r) => s + r.profit, 0);
-  const tOrders = new Set(live.map((r) => r.orderId)).size;
+  const tLiveOrders = new Set(live.map((r) => r.orderId)).size;
   const tQty = live.reduce((s, r) => s + r.bottles, 0);
-  messages.push(
-    `[전체 총합] ${dateStr}\n` +
-      `매출 ${tSales.toLocaleString("ko-KR")} · 이익 ${tProfit.toLocaleString("ko-KR")}\n` +
-      `${tOrders}건 · ${tQty}개`,
-  );
+  const tCancelSales = canceled.reduce((s, r) => s + r.salesAmount, 0);
+  const tGross = tLiveSales + tCancelSales;
+  const tTotalCnt = new Set([...live, ...canceled].map((r) => r.orderId)).size;
+  const totalHead = [`[전체 총합] ${dateStr}`, `총매출 ${wk(tGross)} (${tTotalCnt}건)`];
+  if (canceled.length > 0) totalHead.push(`취소 -${wk(tCancelSales)} (${canceled.length}건)`);
+  totalHead.push(`최종매출 ${wk(tLiveSales)} (${tLiveOrders}건) ${tQty}개 · 이익 ${wk(tProfit)}`);
+  messages.push(totalHead.join("\n"));
 
   // 2) 사업자별 (STORES 정의 순서 우선, 그 외는 뒤에)
-  const byStore = new Map<string, Row[]>();
-  for (const r of live) {
-    const l = byStore.get(r.store) ?? [];
-    l.push(r);
-    byStore.set(r.store, l);
-  }
+  const byLive = new Map<string, Row[]>();
+  const byCancel = new Map<string, Row[]>();
+  for (const r of live) { const l = byLive.get(r.store) ?? []; l.push(r); byLive.set(r.store, l); }
+  for (const r of canceled) { const l = byCancel.get(r.store) ?? []; l.push(r); byCancel.set(r.store, l); }
+  const names = new Set([...byLive.keys(), ...byCancel.keys()]);
   const storeOrder = [
-    ...STORES.map((s) => s.name).filter((n) => byStore.has(n)),
-    ...[...byStore.keys()].filter((n) => !STORES.some((s) => s.name === n)),
+    ...STORES.map((s) => s.name).filter((n) => names.has(n)),
+    ...[...names].filter((n) => !STORES.some((s) => s.name === n)),
   ];
   for (const sn of storeOrder) {
-    messages.push(...storeBlock(sn, byStore.get(sn)!));
+    messages.push(...storeBlock(sn, byLive.get(sn) ?? [], byCancel.get(sn) ?? []));
   }
   return messages;
 }
@@ -1229,9 +1241,11 @@ async function processDay(
     const sProfit = sLive.reduce((s, r) => s + r.profit, 0);
 
     const l: string[] = [];
+    const sGross = sLiveSales + sCancelSales;
     l.push(`<b>━━ ${storeName} (${range.dateStr}) ━━</b>`);
-    l.push(`💰 매출 ${won(sLiveSales)} (${sLive.length}건) · 출고 ${sBottles}개 · 배송 ${sShipments}건`);
+    l.push(`💰 총매출 ${won(sGross)} (${sLive.length + sCancel.length}건)`);
     if (sCancel.length > 0) l.push(`❌ 취소 -${won(sCancelSales)} (${sCancel.length}건)`);
+    l.push(`✅ 최종매출 ${won(sLiveSales)} (${sLive.length}건) · 출고 ${sBottles}개 · 배송 ${sShipments}건`);
     l.push(`💳 수수료 ${won(sCommission)} / 💵 정산 ${won(sSettlement)}`);
     l.push(`📦 원가 ${won(sCost)} · 🚚 ${won(sLogistics)} → 💎 <b>이익 ${won(sProfit)}</b>`);
     l.push("");
@@ -1289,10 +1303,14 @@ async function processDay(
     try {
       const kakaoToken = await getKakaoAccessToken();
       if (kakaoToken) {
-        const kakaoMsgs = buildKakaoMessages(range.dateStr, live);
+        const kakaoMsgs = buildKakaoMessages(range.dateStr, live, canceled);
         console.log(`\n=== 카카오 미리보기 ===\n` + kakaoMsgs.join("\n---\n"));
         for (const km of kakaoMsgs) {
           await sendKakao(km, kakaoToken);
+          await sleep(500);
+        }
+        if (REMAINING_TASKS.length > 0) {
+          await sendKakao("[남은 개발 작업]\n" + REMAINING_TASKS.map((t, i) => `${i + 1}. ${t}`).join("\n"), kakaoToken);
           await sleep(500);
         }
         console.log(`[카카오] ${kakaoMsgs.length}통 발송 완료`);

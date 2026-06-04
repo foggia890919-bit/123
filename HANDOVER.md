@@ -14,7 +14,7 @@
 | 실행 호스트 | AWS Lightsail `Ubuntu-1` (2GB RAM, 2 vCPU, 60GB SSD, Seoul Zone A, **정적 IP `52.79.198.61`**) |
 | cron | 매일 08:00 `run.ts` (매출) / 08:01 `inventory-report.ts` (재고) / 매분 `scheduler.ts` (자동화 폴링) |
 | 시트 | Google Sheets (「매출보고_네이버」, 「여기명품 사입관리」, 「B2C 재고장」) |
-| 알림 | 텔레그램 |
+| 알림 | 텔레그램 + **카카오톡(나에게 보내기)** |
 
 `simple/` = 라이브 본체. `src/app/...` Next.js 는 무관.
 
@@ -49,6 +49,28 @@
 - `NAVER_DEVELOPER_CLIENT_ID`, `NAVER_DEVELOPER_CLIENT_SECRET` (검색 API — 순위 추적)
 - `NAVER_SHOPPING_COOKIE` (선택 — 시장 규모 작업용 봇 차단 우회. 미설정 시 HTTP 418. Chrome F12 → search.shopping.naver.com 쿠키 통째 복사)
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
+- `KAKAO_REST_API_KEY`, `KAKAO_CLIENT_SECRET`, `KAKAO_REFRESH_TOKEN` (카카오톡 나에게보내기. refresh_token 으로 access 갱신, 새 refresh 내려오면 `simple/.kakao_refresh` 에 자동저장 → `.gitignore` 처리됨)
+
+---
+
+## 카카오톡 보고 (2026-06 추가)
+
+매일 cron(08:00) `run.ts` 가 **텔레그램 + 카카오톡 동시 발송**. 카카오는 `buildKakaoMessages()` + `sendKakao()` (토큰 `getKakaoAccessToken()` 이 refresh→access 갱신).
+
+- 카카오 앱: 카카오 디벨로퍼스 "나에게보내기" (앱 ID `1476964`), Redirect URI `https://localhost`, scope `talk_message`. REST API 키 `efd52dae1881148fbefcf1254aedaae9`.
+- **사업자별 분리** 메시지: `[전체 총합]` → `[비타앤오리진]` → `[여기명품]` → `[와이케이팜]`. 각 스토어 = 키워드별 `건수/개/매출/이익` + 스토어 총합. (단위 "개"로 통일, 이모지 없음 — PC카톡 깨짐 방지)
+- **비타앤오리진**: 품종 분류(피쿠알/아르베키나/블렌딩/아보카도오일/레몬즙). 원가 = ⭐옵션매핑 시트값 우선, 없으면 코드 `VITA_COST_BY_KEYWORD`(올리브오일 5200·아보카도 5000·레몬즙 3200/개) + 물류 출고당 4500.
+- **여기명품**: keyword = 사입관리 N열(키워드)+Q열(상품옵션) 라벨(AD=상품주문번호 매칭). 매출=네이버, 이익=정산−도매가(AB, 배송비 포함값). 사입 시차분 도매가는 `loadRecentCostByOption`(주문원본 채널+옵션 최근단가)로 추정.
+- **배송비**: `deliveryFeeAmount` 전액(멤버십/N배송 무료 할인 `deliveryDiscountAmount` 무시)을 **배송(주문)당 1회** 매출·이익에 반영. 취소건 제외.
+- **`매출raw` 탭**: 여기명품 네이버주문을 사입관리 파일(`10Dgf...`)에 자동기록(A=상품주문번호 ~ K=상태). 직원이 VLOOKUP 으로 사입리스트(신)에서 끌어씀. 기존 시트(AD/AE) 안 건드림.
+
+### 미완료 / 주의
+
+- [ ] **와이케이팜 원가** 미설정 → 이익=매출 허수. 품목별 단가 받아 비타앤처럼 코드/시트 설정 필요.
+- [ ] **일주일치 보고** 미구현 (사업자별 키워드+총합, 최근 7일).
+- [ ] **원가 매핑 정밀화**: 피쿠알 등 ⭐옵션매핑 시트값(5000)이 코드 fallback(5200)보다 우선이라 200원 차이. 시트 매핑 전반 정리 필요(옵션/자동합산/시트값 우선순위 얽힘).
+- [ ] **배송비 정산 이중계산 검증**: `expectedSettlementAmount`(정산)에 배송비가 이미 포함됐는지 확인. 포함이면 이익에서 빼야 함.
+- `simple/diag-yeogi.ts`, `simple/diag-naver.ts` = 1회용 진단 스크립트(삭제 가능). 여기명품/와이케이팜 네이버키는 **서버 IP만 허용**(로컬 호출 403).
 
 ---
 
