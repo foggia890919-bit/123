@@ -60,8 +60,8 @@ async function loadYeogiWholesaleMap(): Promise<Map<string, YeogiInfo>> {
       const productOrderId = String(r[29] ?? "").trim();
       if (!productOrderId) continue;
       const wholesale = Number(String(r[27] ?? "").replace(/,/g, "")) || 0;
-      const n = String(r[13] ?? "").trim();
-      const q = String(r[16] ?? "").trim();
+      const n = String(r[13] ?? "").trim();  // N열 키워드
+      const q = String(r[16] ?? "").trim();  // Q열 상품옵션
       const label = [n, q].filter(Boolean).join(" ").trim();
       map.set(productOrderId, { wholesale, label });
     }
@@ -683,7 +683,7 @@ function buildKakaoMessages(dateStr: string, live: Row[]): string[] {
     return [...m.values()].sort((a, b) => b.sales - a.sales);
   };
   const aggLine = (a: KwAgg) =>
-    ` ${a.keyword} ${a.orders.size}건 ${a.bottles}병 매출 ${a.sales.toLocaleString("ko-KR")} 이익 ${a.profit.toLocaleString("ko-KR")}`;
+    ` ${a.keyword} ${a.orders.size}건 ${a.bottles}개 매출 ${a.sales.toLocaleString("ko-KR")} 이익 ${a.profit.toLocaleString("ko-KR")}`;
 
   // 스토어(사업자)별 블록 — 키워드(품종)별 건수/병수/매출/이익 + 스토어 총합. 길면 분할.
   const storeBlock = (storeName: string, rows: Row[]): string[] => {
@@ -693,7 +693,7 @@ function buildKakaoMessages(dateStr: string, live: Row[]): string[] {
     const sQty = rows.reduce((s, r) => s + r.bottles, 0);
     const header =
       `[${storeName}] ${dateStr}\n` +
-      `총 ${sOrders}건 ${sQty}병 · 매출 ${sSales.toLocaleString("ko-KR")} · 이익 ${sProfit.toLocaleString("ko-KR")}`;
+      `총 ${sOrders}건 ${sQty}개 · 매출 ${sSales.toLocaleString("ko-KR")} · 이익 ${sProfit.toLocaleString("ko-KR")}`;
     const out: string[] = [];
     let buf = header;
     for (const a of aggByKeyword(rows)) {
@@ -718,7 +718,7 @@ function buildKakaoMessages(dateStr: string, live: Row[]): string[] {
   messages.push(
     `[전체 총합] ${dateStr}\n` +
       `매출 ${tSales.toLocaleString("ko-KR")} · 이익 ${tProfit.toLocaleString("ko-KR")}\n` +
-      `${tOrders}건 · ${tQty}병`,
+      `${tOrders}건 · ${tQty}개`,
   );
 
   // 2) 사업자별 (STORES 정의 순서 우선, 그 외는 뒤에)
