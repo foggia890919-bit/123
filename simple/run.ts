@@ -36,6 +36,7 @@ import {
 // 사장님이 매번 사입 정보 수동 입력. AD = 상품주문번호, AB = 도매가+배송비+박스비 통합 (총비용)
 const YEOGI_WHOLESALE_SPREADSHEET_ID = "10DgfEqudeXOBmFFm8vyOHHuHJp6nZXKaxv4ecpbVhno";
 const YEOGI_WHOLESALE_GID = 30917428;
+const YEOGI_STORE = "여기명품";
 
 async function loadYeogiWholesaleMap(): Promise<Map<string, number>> {
   const map = new Map<string, number>();
@@ -67,6 +68,38 @@ async function loadYeogiWholesaleMap(): Promise<Map<string, number>> {
     console.warn(`[여기명품 사입관리] 시트 읽기 실패 (권한·공유 확인): ${err instanceof Error ? err.message : String(err)}`);
   }
   return map;
+}
+
+/**
+ * 「주문원본」 누적 데이터에서 (채널상품번호|옵션) → 최근 원가단가(개당) 맵.
+ * 여기명품 사입 입력이 늦어 당일 18~24시 주문 원가가 비는 경우,
+ * 같은 옵션의 가장 최근(결제일 기준) 단가로 임시 보정하기 위함.
+ * RAW_HEADERS idx: 0결제일 1스토어 4채널상품번호 6옵션 8수량 15원가
+ */
+async function loadRecentCostByOption(): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (!SHEET_CREDS) return out;
+  try {
+    const rows = await readRange(SHEET_CREDS, "주문원본!A2:R100000");
+    const latest = new Map<string, { date: string; unit: number }>();
+    for (const r of rows) {
+      if (String(r[1] ?? "").trim() !== YEOGI_STORE) continue;
+      const chNo = String(r[4] ?? "").trim();
+      const opt = String(r[6] ?? "").trim();
+      const qty = Number(String(r[8] ?? "").replace(/,/g, "")) || 0;
+      const cost = Number(String(r[15] ?? "").replace(/,/g, "")) || 0;
+      if (!chNo || qty <= 0 || cost <= 0) continue;
+      const key = `${chNo}|${opt}`;
+      const date = String(r[0] ?? "");
+      const prev = latest.get(key);
+      if (!prev || date > prev.date) latest.set(key, { date, unit: cost / qty });
+    }
+    for (const [k, v] of latest) out.set(k, Math.round(v.unit));
+    if (out.size > 0) console.log(`[여기명품] 옵션별 최근 원가단가 ${out.size}건 로드 (사입 누락 보정용)`);
+  } catch (err) {
+    console.warn(`[여기명품] 주문원본 원가이력 로드 실패: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return out;
 }
 
 // ─────────────────── 설정
@@ -708,6 +741,7 @@ async function processDay(
   rules: Rule[],
   productRules: Map<string, OptionMapRule>,
   yeogiMap: Map<string, number>,
+  recentCostByOption: Map<string, number>,
   options: ProcessOptions,
   catalogOptNames?: Map<string, string>,
 ): Promise<void> {
@@ -836,13 +870,23 @@ async function processDay(
         //   1) 여기명품 사입관리 시트 매칭 → AB(총비용) 그대로
         //   2) 자동 합산 (computedCost) → 단품 부위별 합산
         //   3) ⭐옵션매핑 단가 × 수량
-        const yeogiWholesale = store.name === "여기명품" ? yeogiMap.get(po.productOrderId) : undefined;
-        const cost = yeogiWholesale != null && yeogiWholesale > 0
-          ? yeogiWholesale
-          : computedCost >= 0
-            ? computedCost * po.quantity // 자동 합산: 완성 원가 × 주문 수량 (extractBottles X)
-            : costPerUnit * totalUnits;
-        const logistics = yeogiWholesale != null && yeogiWholesale > 0
+        const yeogiWholesale = store.name === YEOGI_STORE ? yeogiMap.get(po.productOrderId) : undefined;
+        const yeogiConfirmed = yeogiWholesale != null && yeogiWholesale > 0;
+        // 여기명품 사입 미입력분: 같은 옵션의 최근 원가단가 × 수량으로 임시 추정
+        let yeogiEstimate: number | undefined;
+        if (store.name === YEOGI_STORE && !yeogiConfirmed) {
+          const unit = recentCostByOption.get(`${channelProductNo}|${po.productOption ?? ""}`);
+          if (unit && unit > 0) yeogiEstimate = unit * po.quantity;
+        }
+        const cost = yeogiConfirmed
+          ? yeogiWholesale!
+          : yeogiEstimate != null
+            ? yeogiEstimate
+            : computedCost >= 0
+              ? computedCost * po.quantity // 자동 합산: 완성 원가 × 주문 수량 (extractBottles X)
+              : costPerUnit * totalUnits;
+        // 여기명품은 사입가(또는 추정가)에 물류비 포함이므로 별도 물류비 0
+        const logistics = yeogiConfirmed || yeogiEstimate != null
           ? 0
           : computedLogistics >= 0
             ? computedLogistics
@@ -1242,6 +1286,7 @@ async function main() {
   console.log(`키워드 룰 ${rules.length}개`);
   const productRules = await loadOptionMapping();
   const yeogiMap = await loadYeogiWholesaleMap();
+  const recentCostByOption = await loadRecentCostByOption();
   const catalogOptNames = await loadCatalogOptionNames();
 
   // 범위 백필: `npx tsx run.ts 2026-04-01 2026-05-01` → 텔레그램 X, 시트만 갱신
@@ -1261,7 +1306,7 @@ async function main() {
     for (let i = 0; i < days.length; i++) {
       console.log(`\n[${i + 1}/${days.length}] ${days[i]}`);
       try {
-        await processDay(dateKstRange(days[i]), rules, productRules, yeogiMap, { sendTelegram: false }, catalogOptNames);
+        await processDay(dateKstRange(days[i]), rules, productRules, yeogiMap, recentCostByOption, { sendTelegram: false }, catalogOptNames);
       } catch (err) {
         console.error(`[${days[i]}] 실패:`, err instanceof Error ? err.message : String(err));
       }
@@ -1272,7 +1317,7 @@ async function main() {
 
   // 단일 날짜 백필: 텔레그램 발송
   if (arg1) {
-    await processDay(dateKstRange(arg1), rules, productRules, yeogiMap, { sendTelegram: true }, catalogOptNames);
+    await processDay(dateKstRange(arg1), rules, productRules, yeogiMap, recentCostByOption, { sendTelegram: true }, catalogOptNames);
     return;
   }
 
@@ -1282,7 +1327,7 @@ async function main() {
     const range = ranges[i];
     const sendTg = (i === 0);
     try {
-      await processDay(range, rules, productRules, yeogiMap, { sendTelegram: sendTg }, catalogOptNames);
+      await processDay(range, rules, productRules, yeogiMap, recentCostByOption, { sendTelegram: sendTg }, catalogOptNames);
     } catch (err) {
       console.error(`[${range.dateStr}] 실패:`, err instanceof Error ? err.message : String(err));
     }
