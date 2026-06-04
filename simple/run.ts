@@ -694,51 +694,66 @@ function buildKakaoMessages(dateStr: string, live: Row[], canceled: Row[]): stri
     }
     return [...m.values()].sort((a, b) => b.sales - a.sales);
   };
-  const aggLine = (a: KwAgg) =>
-    ` ${a.keyword} ${a.orders.size}건 ${a.bottles}개 매출 ${wk(a.sales)} 이익 ${wk(a.profit)}`;
-
-  // 스토어(사업자)별 블록 — 총매출/취소/최종매출 + 키워드별. 길면 분할.
-  const storeBlock = (storeName: string, liveRows: Row[], cancelRows: Row[]): string[] => {
-    const sSales = liveRows.reduce((s, r) => s + r.salesAmount, 0);
-    const sProfit = liveRows.reduce((s, r) => s + r.profit, 0);
-    const sLiveOrders = new Set(liveRows.map((r) => r.orderId)).size;
-    const sQty = liveRows.reduce((s, r) => s + r.bottles, 0);
-    const cancelSales = cancelRows.reduce((s, r) => s + r.salesAmount, 0);
-    const gross = sSales + cancelSales;
-    const totalCnt = new Set([...liveRows, ...cancelRows].map((r) => r.orderId)).size;
-    const head = [`[${storeName}] ${dateStr}`, `총매출 ${wk(gross)} (${totalCnt}건)`];
-    if (cancelRows.length > 0) head.push(`취소 -${wk(cancelSales)} (${cancelRows.length}건)`);
-    head.push(`최종매출 ${wk(sSales)} (${sLiveOrders}건) ${sQty}개 · 이익 ${wk(sProfit)}`);
-    const out: string[] = [];
-    let buf = head.join("\n");
-    for (const a of aggByKeyword(liveRows)) {
-      const line = aggLine(a);
-      if ((buf + "\n" + line).length > KAKAO_MSG_LIMIT) {
-        out.push(buf);
-        buf = `[${storeName}] (계속)\n` + line;
-      } else {
-        buf += "\n" + line;
-      }
+  // 한 스토어의 상품번호별 섹션 — 메인품종(상세) + 추가품종(한 줄). 매출 큰 상품 순.
+  const productLines = (liveRows: Row[]): string[] => {
+    const byProduct = new Map<string, Row[]>();
+    for (const r of liveRows) {
+      const k = r.channelProductNo || r.productName;
+      const l = byProduct.get(k) ?? [];
+      l.push(r);
+      byProduct.set(k, l);
     }
-    out.push(buf);
-    return out;
+    const products = [...byProduct.entries()]
+      .map(([code, rows]) => ({ code, rows, sales: rows.reduce((s, r) => s + r.salesAmount, 0) }))
+      .sort((a, b) => b.sales - a.sales);
+    const lines: string[] = [];
+    for (const p of products) {
+      const aggs = aggByKeyword(p.rows);
+      if (aggs.length === 0) continue;
+      const mainRow = p.rows.find((r) => r.type === "메인");
+      let main: KwAgg;
+      let adds: KwAgg[];
+      if (mainRow) {
+        const mk = kwOf(mainRow);
+        main = aggs.find((a) => a.keyword === mk) ?? aggs[0];
+        adds = aggs.filter((a) => a !== main);
+      } else {
+        main = aggs[0];
+        adds = aggs.slice(1);
+      }
+      lines.push(`${main.keyword} ${p.code}`);
+      lines.push(` ${main.orders.size}건 ${main.bottles}개`);
+      lines.push(` 매출 ${wk(main.sales)}`);
+      lines.push(` 이익 ${wk(main.profit)}`);
+      for (const a of adds) {
+        lines.push(` ${a.keyword} / ${a.orders.size}건 / ${a.bottles}개 / ${wk(a.sales)}`);
+      }
+      lines.push(""); // 상품 간 한 칸 띄움
+    }
+    return lines;
   };
 
-  const messages: string[] = [];
-  // 1) 전체 총합 (총매출 / 취소 / 최종매출)
-  const tLiveSales = live.reduce((s, r) => s + r.salesAmount, 0);
-  const tProfit = live.reduce((s, r) => s + r.profit, 0);
-  const tLiveOrders = new Set(live.map((r) => r.orderId)).size;
-  const tQty = live.reduce((s, r) => s + r.bottles, 0);
-  const tCancelSales = canceled.reduce((s, r) => s + r.salesAmount, 0);
-  const tGross = tLiveSales + tCancelSales;
-  const tTotalCnt = new Set([...live, ...canceled].map((r) => r.orderId)).size;
-  const totalHead = [`[전체 총합] ${dateStr}`, `총매출 ${wk(tGross)} (${tTotalCnt}건)`];
-  if (canceled.length > 0) totalHead.push(`취소 -${wk(tCancelSales)} (${canceled.length}건)`);
-  totalHead.push(`최종매출 ${wk(tLiveSales)} (${tLiveOrders}건) ${tQty}개 · 이익 ${wk(tProfit)}`);
-  messages.push(totalHead.join("\n"));
+  // 한 스토어 합계 블록 (총/최종 건수·수량·매출 + 총이익)
+  const summaryBlock = (storeName: string, liveRows: Row[], cancelRows: Row[]): string[] => {
+    const liveCnt = new Set(liveRows.map((r) => r.orderId)).size;
+    const liveQty = liveRows.reduce((s, r) => s + r.bottles, 0);
+    const liveSales = liveRows.reduce((s, r) => s + r.salesAmount, 0);
+    const profit = liveRows.reduce((s, r) => s + r.profit, 0);
+    const cancelQty = cancelRows.reduce((s, r) => s + r.bottles, 0);
+    const cancelSales = cancelRows.reduce((s, r) => s + r.salesAmount, 0);
+    const totalCnt = new Set([...liveRows, ...cancelRows].map((r) => r.orderId)).size;
+    return [
+      storeName,
+      ` 총건수 ${totalCnt} 총수량 ${liveQty + cancelQty}`,
+      ` 최종건수 ${liveCnt} 최종수량 ${liveQty}`,
+      ``,
+      ` 총매출 ${wk(liveSales + cancelSales)}`,
+      ` 최종매출 ${wk(liveSales)}`,
+      ` 총이익 ${wk(profit)}`,
+    ];
+  };
 
-  // 2) 사업자별 (STORES 정의 순서 우선, 그 외는 뒤에)
+  // 스토어 그룹 + 순서
   const byLive = new Map<string, Row[]>();
   const byCancel = new Map<string, Row[]>();
   for (const r of live) { const l = byLive.get(r.store) ?? []; l.push(r); byLive.set(r.store, l); }
@@ -748,9 +763,29 @@ function buildKakaoMessages(dateStr: string, live: Row[], canceled: Row[]): stri
     ...STORES.map((s) => s.name).filter((n) => names.has(n)),
     ...[...names].filter((n) => !STORES.some((s) => s.name === n)),
   ];
+
+  const messages: string[] = [];
+  // 1) 사업자별 상품 섹션 (길면 분할)
   for (const sn of storeOrder) {
-    messages.push(...storeBlock(sn, byLive.get(sn) ?? [], byCancel.get(sn) ?? []));
+    const secLines = productLines(byLive.get(sn) ?? []);
+    if (secLines.length === 0) continue;
+    let buf = `[${sn}] ${dateStr}`;
+    for (const line of secLines) {
+      if ((buf + "\n" + line).length > KAKAO_MSG_LIMIT) {
+        messages.push(buf);
+        buf = `[${sn}] (계속)`;
+      }
+      buf += "\n" + line;
+    }
+    messages.push(buf);
   }
+  // 2) 사업자별 합계
+  const sum: string[] = [`[합계] ${dateStr}`];
+  for (const sn of storeOrder) {
+    sum.push("", ...summaryBlock(sn, byLive.get(sn) ?? [], byCancel.get(sn) ?? []));
+  }
+  messages.push(sum.join("\n"));
+
   return messages;
 }
 
