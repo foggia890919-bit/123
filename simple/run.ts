@@ -763,6 +763,11 @@ function buildKakaoMessages(dateStr: string, live: Row[], canceled: Row[]): stri
   ];
 
   const messages: string[] = [];
+  // 0) 맨 위 전체 요약 (총매출 / 총이익)
+  const allLiveSales = live.reduce((s, r) => s + r.salesAmount, 0);
+  const allCancelSales = canceled.reduce((s, r) => s + r.salesAmount, 0);
+  const allProfit = live.reduce((s, r) => s + r.profit, 0);
+  messages.push(`[전체] ${dateStr}\n총매출 ${wk(allLiveSales + allCancelSales)}\n총이익 ${wk(allProfit)}`);
   // 1) 사업자별 상품 섹션 (길면 분할)
   for (const sn of storeOrder) {
     const secLines = productLines(byLive.get(sn) ?? []);
@@ -777,11 +782,12 @@ function buildKakaoMessages(dateStr: string, live: Row[], canceled: Row[]): stri
     }
     messages.push(buf);
   }
-  // 2) 사업자별 합계
+  // 2) 합계 (사업자별 + 맨 끝 전체합계)
   const sum: string[] = [`[합계] ${dateStr}`];
   for (const sn of storeOrder) {
-    sum.push("", ...summaryBlock(sn, byLive.get(sn) ?? [], byCancel.get(sn) ?? []));
+    sum.push("", ...summaryBlock(`● ${sn}`, byLive.get(sn) ?? [], byCancel.get(sn) ?? []));
   }
+  sum.push("", ...summaryBlock("◆ 전체합계", live, canceled));
   messages.push(sum.join("\n"));
 
   return messages;
@@ -958,9 +964,13 @@ async function processDay(
         // 배송비: 배송(주문)당 1회, 취소 아니면. 멤버십 무료여도 네이버가 부담 → 셀러는 받으므로 매출·이익에 반영.
         const oidForFee = o.order?.orderId ?? po.orderId ?? "";
         let deliveryFee = 0;
-        if (!isCanceled(po.productOrderStatus ?? "") && oidForFee && !deliveryFeeSeen.has(oidForFee)) {
+        const feeAlreadySeen = deliveryFeeSeen.has(oidForFee);
+        if (!isCanceled(po.productOrderStatus ?? "") && oidForFee && !feeAlreadySeen) {
           deliveryFee = feeByOrder.get(oidForFee) ?? 0;
           deliveryFeeSeen.add(oidForFee);
+        }
+        if (store.name === "와이케이팜") {
+          console.log(`[WK배송] oid="${oidForFee}" raw=${po.deliveryFeeAmount} byOrder=${feeByOrder.get(oidForFee)} 이미봄=${feeAlreadySeen} 취소=${isCanceled(po.productOrderStatus ?? "")} 적용=${deliveryFee}`);
         }
         const profit = settlement - cost - logistics + deliveryFee;
         allRows.push({
