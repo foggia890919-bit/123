@@ -154,6 +154,20 @@ export async function finishJob(
   );
 }
 
+// 청크 진행 상황 저장 — finishJob 전에도 doneCodes/failedCodes 업데이트 가능.
+// 배치 중간에 워커가 죽어도 마지막 청크까지의 진행은 보존됨 → healthcheck가 "마지막 배치" 시각으로 인식.
+export async function updateJobProgress(
+  id: string,
+  stats: { done: number; failed: number }
+): Promise<void> {
+  await getPool().query(
+    `UPDATE "ScrapeJob"
+     SET "doneCodes"=$2, "failedCodes"=$3
+     WHERE "id"=$1`,
+    [id, stats.done, stats.failed]
+  );
+}
+
 // Optional: prune snapshots older than retention window so the table doesn't
 // grow unboundedly. Default 14 days — enough to compare today vs. last week.
 export async function pruneOldSnapshots(retentionDays = 14): Promise<number> {

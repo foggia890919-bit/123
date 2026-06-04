@@ -8,9 +8,13 @@ import {
   saveSnapshots,
   startJob,
   finishJob,
+  updateJobProgress,
   pruneOldSnapshots,
   type SnapshotInsert,
 } from "./db.ts";
+
+// 진행 상황 저장 청크 크기 — 너무 자주 저장하면 DB 쓰기 증가, 너무 드물면 워커 죽었을 때 손실 큼.
+const PROGRESS_CHUNK = Math.max(50, Number(process.env.SCHEDULED_PROGRESS_CHUNK ?? 200));
 
 // Wait between consecutive requests within a single scraping lane.
 // 사용자 의견: 백제/훼밀리는 rate limiter 없음. 기본값을 짧게 둠.
@@ -134,6 +138,17 @@ export async function runScheduledJob(
               } else {
                 console.info(`[scheduler] EMPTY ${site.key}/${insuranceCode}: 도매상에 등록 없음`);
                 stats.done++;
+              }
+              // PROGRESS_CHUNK 단위로 ScrapeJob.doneCodes 업데이트.
+              // 배치 도중 워커가 죽어도 마지막 청크까지의 진행은 보존됨 (헬스체크가 startedAt 기준으로
+              // 정상 판정 가능).
+              if ((stats.done + stats.failed) % PROGRESS_CHUNK === 0) {
+                const jobId = jobIds.get(site.key);
+                if (jobId) {
+                  updateJobProgress(jobId, { done: stats.done, failed: stats.failed }).catch((err) => {
+                    console.warn(`[scheduler] progress update failed: ${(err as Error).message}`);
+                  });
+                }
               }
               await new Promise(r => setTimeout(r, PER_SITE_DELAY_MS));
             }
