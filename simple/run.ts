@@ -38,8 +38,9 @@ const YEOGI_WHOLESALE_SPREADSHEET_ID = "10DgfEqudeXOBmFFm8vyOHHuHJp6nZXKaxv4ecpb
 const YEOGI_WHOLESALE_GID = 30917428;
 const YEOGI_STORE = "여기명품";
 
-async function loadYeogiWholesaleMap(): Promise<Map<string, number>> {
-  const map = new Map<string, number>();
+interface YeogiInfo { wholesale: number; label: string }
+async function loadYeogiWholesaleMap(): Promise<Map<string, YeogiInfo>> {
+  const map = new Map<string, YeogiInfo>();
   if (!SHEET_CREDS) return map;
   try {
     const altCreds: SheetCreds = { ...SHEET_CREDS, sheetId: YEOGI_WHOLESALE_SPREADSHEET_ID };
@@ -55,15 +56,17 @@ async function loadYeogiWholesaleMap(): Promise<Map<string, number>> {
     }
     const rows = await readRange(altCreds, `${tabName}!A2:AD100000`);
     for (const r of rows) {
-      // AB = index 27 (도매가+배송비+박스비 통합 = 총비용), AD = index 29 (상품주문번호)
-      const wholesale = Number(String(r[27] ?? "").replace(/,/g, "")) || 0;
+      // N=13(키워드), Q=16(상품옵션), AB=27(도매가+배송비 총비용), AD=29(상품주문번호)
       const productOrderId = String(r[29] ?? "").trim();
-      if (productOrderId && wholesale > 0) {
-        map.set(productOrderId, wholesale);
-      }
+      if (!productOrderId) continue;
+      const wholesale = Number(String(r[27] ?? "").replace(/,/g, "")) || 0;
+      const n = String(r[13] ?? "").trim();
+      const q = String(r[16] ?? "").trim();
+      const label = [n, q].filter(Boolean).join(" ").trim();
+      map.set(productOrderId, { wholesale, label });
     }
-    if (map.size > 0) console.log(`여기명품 사입관리 ${map.size}건 매핑 로드`);
-    else console.log(`여기명품 사입관리 매핑 0건 — AD열 상품주문번호 입력 확인`);
+    const withCost = [...map.values()].filter((v) => v.wholesale > 0).length;
+    console.log(`여기명품 사입관리 ${map.size}건 로드 (도매가 입력됨 ${withCost}건)`);
   } catch (err) {
     console.warn(`[여기명품 사입관리] 시트 읽기 실패 (권한·공유 확인): ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -739,7 +742,7 @@ async function processDay(
   range: { fromIso: string; toIso: string; dateStr: string },
   rules: Rule[],
   productRules: Map<string, OptionMapRule>,
-  yeogiMap: Map<string, number>,
+  yeogiMap: Map<string, YeogiInfo>,
   recentCostByOption: Map<string, number>,
   options: ProcessOptions,
   catalogOptNames?: Map<string, string>,
@@ -840,7 +843,12 @@ async function processDay(
         const matched = productRule
           ? null
           : classify(po.productName, po.productOption ?? "", rules);
-        const keyword = productRule?.label ?? matched?.keyword ?? "";
+        const yeogiInfo = store.name === YEOGI_STORE ? yeogiMap.get(po.productOrderId) : undefined;
+        let keyword = productRule?.label ?? matched?.keyword ?? "";
+        if (store.name === YEOGI_STORE) {
+          // 여기명품: N열+Q열 라벨로 묶음 (사입관리 AD 매칭). 없으면(시차) 상품명 임시.
+          keyword = yeogiInfo?.label || keyword || po.productName.slice(0, 24);
+        }
         let costPerUnit = productRule?.costPerUnit ?? matched?.costPerUnit ?? 0;
         let logisticsPerOrder = productRule?.logisticsPerOrder ?? matched?.logisticsPerOrder ?? 0;
         // 비타앤오리진: 명시 원가/물류가 없을 때 품종 기본값 적용 (물류비는 주문당 1회)
@@ -869,8 +877,8 @@ async function processDay(
         //   1) 여기명품 사입관리 시트 매칭 → AB(총비용) 그대로
         //   2) 자동 합산 (computedCost) → 단품 부위별 합산
         //   3) ⭐옵션매핑 단가 × 수량
-        const yeogiWholesale = store.name === YEOGI_STORE ? yeogiMap.get(po.productOrderId) : undefined;
-        const yeogiConfirmed = yeogiWholesale != null && yeogiWholesale > 0;
+        const yeogiWholesale = yeogiInfo?.wholesale ?? 0;
+        const yeogiConfirmed = yeogiWholesale > 0;
         // 여기명품 사입 미입력분: 같은 옵션의 최근 원가단가 × 수량으로 임시 추정
         let yeogiEstimate: number | undefined;
         if (store.name === YEOGI_STORE && !yeogiConfirmed) {
@@ -878,7 +886,7 @@ async function processDay(
           if (unit && unit > 0) yeogiEstimate = unit * po.quantity;
         }
         const cost = yeogiConfirmed
-          ? yeogiWholesale!
+          ? yeogiWholesale
           : yeogiEstimate != null
             ? yeogiEstimate
             : computedCost >= 0
