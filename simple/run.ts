@@ -38,7 +38,7 @@ const YEOGI_WHOLESALE_SPREADSHEET_ID = "10DgfEqudeXOBmFFm8vyOHHuHJp6nZXKaxv4ecpb
 const YEOGI_WHOLESALE_GID = 30917428;
 const YEOGI_STORE = "여기명품";
 // 네이버 주문 자동 기록 탭 (사입관리장 VLOOKUP용) — 기존 시트는 안 건드리고 새 탭에만 기록.
-const NAVER_AUTO_TAB = "네이버주문_자동";
+const NAVER_AUTO_TAB = "매출raw";
 const NAVER_AUTO_HEADERS = ["상품주문번호", "결제일", "스토어", "채널상품번호", "상품명", "상품옵션", "수량", "매출", "정산금액", "수수료", "상태"];
 
 interface YeogiInfo { wholesale: number; label: string }
