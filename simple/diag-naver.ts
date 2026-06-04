@@ -89,6 +89,43 @@ async function main() {
         sales += po.totalPaymentAmount; qty += po.quantity; oids.add(o.order?.orderId ?? po.orderId ?? "");
       }
       console.log(`\n========== [${store.name}] 주문 ${orders.length}건 / 매출 ${sales.toLocaleString()} / 배송 ${oids.size}건 / 수량 ${qty} ==========`);
+      const feeStats: Record<string, number> = {};
+      for (const o of orders) { const f = String(o.productOrder.deliveryFeeAmount ?? "(필드없음)"); feeStats[f] = (feeStats[f] || 0) + 1; }
+      console.log(`[${store.name}] deliveryFeeAmount 분포: ${JSON.stringify(feeStats)}`);
+      // 아보카도오일 12449037461 이익 분해
+      const TARGET = "12449037461";
+      const tgt = orders.filter((o) => (o.productOrder.channelProductNo ?? o.productOrder.productId) === TARGET);
+      if (tgt.length > 0) {
+        console.log(`\n=== [${TARGET}] 아보카도오일 ${tgt.length}건 이익 분해 ===`);
+        let sumTotal = 0, sumSettle = 0, sumFee = 0, sumCostQty = 0;
+        for (const o of tgt) {
+          const po: any = o.productOrder;
+          const total = po.totalPaymentAmount ?? 0;
+          const settle = po.expectedSettlementAmount ?? po.settlementAmount ?? 0;
+          const fee = po.deliveryFeeAmount ?? 0;
+          const bottlesM = String(po.productOption ?? "").match(/(\d+)\s*병/);
+          const bottles = bottlesM ? parseInt(bottlesM[1], 10) : po.quantity;
+          sumTotal += total; sumSettle += settle; sumFee += fee; sumCostQty += bottles;
+          console.log(`  opt="${po.productOption}" 매출${total} 정산${settle} 배송비${fee} 병수${bottles} 수수료${total - settle}`);
+        }
+        const cost = sumCostQty * 5000;       // 아보카도 원가 5000/병
+        const logi = tgt.length * 4500;        // 물류 4500/건
+        console.log(`  ─ 합계: 매출 ${sumTotal} / 정산 ${sumSettle} / 배송비 ${sumFee} / 총병수 ${sumCostQty}`);
+        console.log(`  ─ 원가(5000x${sumCostQty})=${cost} / 물류(4500x${tgt.length})=${logi} / 수수료=${sumTotal - sumSettle}`);
+        console.log(`  ─ 이익 = 정산${sumSettle} - 원가${cost} - 물류${logi} + 배송비${sumFee} = ${sumSettle - cost - logi + sumFee}`);
+      }
+      if (orders.length > 0) {
+        const flat = JSON.stringify(orders[0]);
+        console.log("=== 배송비/delivery/shipping 관련 필드 ===");
+        for (const m of flat.matchAll(/"([A-Za-z]*(?:[Ff]ee|[Dd]elivery|[Ss]hipping)[A-Za-z]*)"\s*:\s*("?[^",}]*"?)/g)) {
+          console.log(`  ${m[1]} = ${m[2]}`);
+        }
+        console.log("=== *Amount 필드 전체 ===");
+        for (const m of flat.matchAll(/"([A-Za-z]*[Aa]mount)"\s*:\s*(-?[0-9]+)/g)) {
+          console.log(`  ${m[1]} = ${m[2]}`);
+        }
+        console.log("=== /RAW ===\n");
+      }
       for (const [ch, os] of byProd) {
         let s = 0; for (const o of os) s += o.productOrder.totalPaymentAmount;
         console.log(` [${ch}] ${String(os[0].productOrder.productName).slice(0, 40)} — ${os.length}건 ${s.toLocaleString()}`);
