@@ -19,6 +19,9 @@
 
 import "dotenv/config";
 import bcrypt from "bcryptjs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import {
   applyCancelRedRule,
   ensureTab,
@@ -463,6 +466,89 @@ async function sendTelegram(text: string, maxAttempts = 3): Promise<void> {
   throw lastErr;
 }
 
+// ─────────────────── 카카오톡 나에게 보내기 (memo/default/send)
+// refresh_token 으로 access_token 을 매 실행마다 갱신. 새 refresh_token 이 내려오면
+// (카카오는 만료 1개월 전부터 함께 갱신) simple/.kakao_refresh 에 저장해 영구 자동화.
+const KAKAO_REST_KEY = process.env.KAKAO_REST_API_KEY;
+const KAKAO_SECRET = process.env.KAKAO_CLIENT_SECRET;
+const KAKAO_ENV_REFRESH = process.env.KAKAO_REFRESH_TOKEN;
+const KAKAO_TOKEN_FILE = join(dirname(fileURLToPath(import.meta.url)), ".kakao_refresh");
+
+function getKakaoRefreshToken(): string | undefined {
+  try {
+    if (existsSync(KAKAO_TOKEN_FILE)) {
+      const t = readFileSync(KAKAO_TOKEN_FILE, "utf8").trim();
+      if (t) return t;
+    }
+  } catch { /* 파일 읽기 실패 시 .env 폴백 */ }
+  return KAKAO_ENV_REFRESH;
+}
+
+async function getKakaoAccessToken(): Promise<string | null> {
+  if (!KAKAO_REST_KEY) return null;
+  const refresh = getKakaoRefreshToken();
+  if (!refresh) return null;
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    client_id: KAKAO_REST_KEY,
+    refresh_token: refresh,
+  });
+  if (KAKAO_SECRET) body.set("client_secret", KAKAO_SECRET);
+  try {
+    const res = await fetch("https://kauth.kakao.com/oauth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=utf-8" },
+      body,
+    });
+    if (!res.ok) {
+      console.error(`[카카오] 토큰 갱신 실패 ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      return null;
+    }
+    const data = (await res.json()) as { access_token: string; refresh_token?: string };
+    if (data.refresh_token) {
+      try {
+        writeFileSync(KAKAO_TOKEN_FILE, data.refresh_token, "utf8");
+        console.log("[카카오] refresh_token 자동 갱신·저장됨");
+      } catch (e) {
+        console.warn("[카카오] refresh_token 저장 실패:", e instanceof Error ? e.message : e);
+      }
+    }
+    return data.access_token;
+  } catch (err) {
+    console.error("[카카오] 토큰 갱신 네트워크 오류:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+async function sendKakao(text: string, accessToken: string, maxAttempts = 3): Promise<void> {
+  const body = new URLSearchParams();
+  body.set("template_object", JSON.stringify({
+    object_type: "text",
+    text,
+    link: { web_url: "https://developers.kakao.com", mobile_web_url: "https://developers.kakao.com" },
+  }));
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fetch("https://kapi.kakao.com/v2/api/talk/memo/default/send", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
+        },
+        body,
+      });
+      if (!res.ok) throw new Error(`kakao ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (attempt === maxAttempts) throw err;
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
+    }
+  }
+  throw lastErr;
+}
+
 // ─────────────────── 메인
 const RAW_HEADERS = [
   "결제일", "스토어", "주문번호", "상품주문번호", "상품번호",
@@ -518,6 +604,82 @@ async function loadCatalogOptionNames(): Promise<Map<string, string>> {
     console.warn(`상품목록 옵션명 로드 실패 (자동 합산 안 됨): ${e instanceof Error ? e.message : e}`);
   }
   return map;
+}
+
+// ─────────────────── 카카오 메시지 빌더
+// 형식: 상품번호별 [대표품종] → 품종별(건수/병수/금액), 마지막에 총합.
+// 카카오 메모는 한 통 길이 제한이 있어 상품 섹션을 여러 통으로 청크 분할.
+const KAKAO_MSG_LIMIT = 1000;
+
+function buildKakaoMessages(dateStr: string, live: Row[]): string[] {
+  const kwOf = (r: Row) => r.keyword || `(미분류)${r.productName.slice(0, 10)}`;
+
+  interface KwAgg { keyword: string; orders: Set<string>; bottles: number; sales: number }
+  const aggByKeyword = (rows: Row[]): KwAgg[] => {
+    const m = new Map<string, KwAgg>();
+    for (const r of rows) {
+      const k = kwOf(r);
+      const a = m.get(k) ?? { keyword: k, orders: new Set<string>(), bottles: 0, sales: 0 };
+      a.orders.add(r.orderId);
+      a.bottles += r.bottles;
+      a.sales += r.salesAmount;
+      m.set(k, a);
+    }
+    return [...m.values()].sort((a, b) => b.sales - a.sales);
+  };
+  const aggLine = (a: KwAgg) =>
+    ` ${a.keyword} ${a.orders.size}건 ${a.bottles}병 ${a.sales.toLocaleString("ko-KR")}`;
+
+  // 상품번호별 그룹 (매출 큰 순)
+  const byProduct = new Map<string, Row[]>();
+  for (const r of live) {
+    const key = r.channelProductNo || r.productName;
+    const list = byProduct.get(key) ?? [];
+    list.push(r);
+    byProduct.set(key, list);
+  }
+  const mainKeyword = (rows: Row[]): string => {
+    const mainRow = rows.find((r) => r.type === "메인");
+    if (mainRow) return kwOf(mainRow);
+    return aggByKeyword(rows)[0]?.keyword ?? "";
+  };
+  const products = [...byProduct.entries()]
+    .map(([code, rows]) => ({ code, rows, sales: rows.reduce((s, r) => s + r.salesAmount, 0) }))
+    .sort((a, b) => b.sales - a.sales);
+
+  const productSections: string[] = [];
+  for (const p of products) {
+    const lines = [`${p.code} ${mainKeyword(p.rows)}`];
+    for (const a of aggByKeyword(p.rows)) lines.push(aggLine(a));
+    productSections.push(lines.join("\n"));
+  }
+
+  // 총합
+  const totalSales = live.reduce((s, r) => s + r.salesAmount, 0);
+  const totalOrders = new Set(live.map((r) => r.orderId)).size;
+  const totalBottles = live.reduce((s, r) => s + r.bottles, 0);
+  const totalLines = [
+    `[매출 총합] ${dateStr}`,
+    `총매출 ${totalSales.toLocaleString("ko-KR")}`,
+    `총건수 ${totalOrders}건 · 총소진 ${totalBottles}병`,
+    "",
+    "(품종별)",
+    ...aggByKeyword(live).map(aggLine),
+  ];
+
+  // 메시지 조립: 1통차 = 총합, 이후 = 상품별 섹션 청크
+  const messages: string[] = [totalLines.join("\n")];
+  let buf = `[상품별] ${dateStr}`;
+  for (const sec of productSections) {
+    if ((buf + "\n\n" + sec).length > KAKAO_MSG_LIMIT) {
+      if (buf) messages.push(buf);
+      buf = sec;
+    } else {
+      buf = buf + "\n\n" + sec;
+    }
+  }
+  if (buf) messages.push(buf);
+  return messages;
 }
 
 async function processDay(
@@ -999,6 +1161,24 @@ async function processDay(
       const msg = buildStoreMessage(store.name, data);
       console.log(`\n=== 미리보기 (${store.name}) ===\n` + msg.replace(/<[^>]+>/g, ""));
       await sendTelegram(msg);
+    }
+
+    // ─── 카카오톡 나에게 보내기 (텔레그램과 동시, 상품번호별 품종 집계 포맷) ───
+    try {
+      const kakaoToken = await getKakaoAccessToken();
+      if (kakaoToken) {
+        const kakaoMsgs = buildKakaoMessages(range.dateStr, live);
+        console.log(`\n=== 카카오 미리보기 ===\n` + kakaoMsgs.join("\n---\n"));
+        for (const km of kakaoMsgs) {
+          await sendKakao(km, kakaoToken);
+          await sleep(500);
+        }
+        console.log(`[카카오] ${kakaoMsgs.length}통 발송 완료`);
+      } else {
+        console.log("[카카오] 미설정(KAKAO_* 환경변수 없음) — 발송 skip");
+      }
+    } catch (err) {
+      console.error("[카카오] 발송 실패:", err instanceof Error ? err.message : err);
     }
   }
   console.log(`[${range.dateStr}] ✅ 완료`);
