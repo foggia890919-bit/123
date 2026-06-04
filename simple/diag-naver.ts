@@ -92,6 +92,15 @@ async function main() {
       const feeStats: Record<string, number> = {};
       for (const o of orders) { const f = String(o.productOrder.deliveryFeeAmount ?? "(필드없음)"); feeStats[f] = (feeStats[f] || 0) + 1; }
       console.log(`[${store.name}] deliveryFeeAmount 분포: ${JSON.stringify(feeStats)}`);
+      // 배송비 0 인 주문 상세 (왜 0인지)
+      const zeroFee = orders.filter((o) => (Number(o.productOrder.deliveryFeeAmount ?? 0) || 0) === 0);
+      if (zeroFee.length > 0) {
+        console.log(`[${store.name}] 배송비 0 주문 ${zeroFee.length}건:`);
+        for (const o of zeroFee) {
+          const po: any = o.productOrder;
+          console.log(`   상품="${String(po.productName).slice(0, 20)}" opt="${po.productOption}" total=${po.totalPaymentAmount} 배송정책=${po.deliveryPolicyType} 배송비=${po.deliveryFeeAmount} 배송할인=${po.deliveryDiscountAmount}`);
+        }
+      }
       // 아보카도오일 12449037461 이익 분해
       const TARGET = "12449037461";
       const tgt = orders.filter((o) => (o.productOrder.channelProductNo ?? o.productOrder.productId) === TARGET);
