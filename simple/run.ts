@@ -95,7 +95,25 @@ const DEFAULT_RULES: Rule[] = [
   { pattern: "arbequina", keyword: "아르베키나", costPerUnit: 0, logisticsPerOrder: 0 },
   { pattern: "블렌딩", keyword: "블렌딩", costPerUnit: 0, logisticsPerOrder: 0 },
   { pattern: "blending", keyword: "블렌딩", costPerUnit: 0, logisticsPerOrder: 0 },
+  { pattern: "아보카도", keyword: "아보카도오일", costPerUnit: 0, logisticsPerOrder: 0 },
+  { pattern: "avocado", keyword: "아보카도오일", costPerUnit: 0, logisticsPerOrder: 0 },
+  { pattern: "레몬", keyword: "레몬즙", costPerUnit: 0, logisticsPerOrder: 0 },
+  { pattern: "lemon", keyword: "레몬즙", costPerUnit: 0, logisticsPerOrder: 0 },
 ];
+
+// ─────────────────── 비타앤오리진 기본 원가/물류 (fallback)
+// ⭐옵션매핑·여기명품 사입 등 명시값이 있으면 그게 우선. 없을 때만 아래 기본값 적용.
+// 올리브오일(피쿠알/아르베키나/블렌딩) 5,200/병, 아보카도오일 5,000/병, 레몬즙 3,200/병
+// 물류비는 출고(주문)당 4,500원 — 한 주문에 여러 병이어도 1회만.
+const VITA_STORE = "비타앤오리진";
+const VITA_DEFAULT_LOGISTICS = 4500;
+const VITA_COST_BY_KEYWORD: Record<string, number> = {
+  "피쿠알": 5200,
+  "아르베키나": 5200,
+  "블렌딩": 5200,
+  "아보카도오일": 5000,
+  "레몬즙": 3200,
+};
 
 // ─────────────────── 시간 (KST)
 const KST_OFFSET = 9 * 60 * 60 * 1000;
@@ -614,21 +632,22 @@ const KAKAO_MSG_LIMIT = 1000;
 function buildKakaoMessages(dateStr: string, live: Row[]): string[] {
   const kwOf = (r: Row) => r.keyword || `(미분류)${r.productName.slice(0, 10)}`;
 
-  interface KwAgg { keyword: string; orders: Set<string>; bottles: number; sales: number }
+  interface KwAgg { keyword: string; orders: Set<string>; bottles: number; sales: number; profit: number }
   const aggByKeyword = (rows: Row[]): KwAgg[] => {
     const m = new Map<string, KwAgg>();
     for (const r of rows) {
       const k = kwOf(r);
-      const a = m.get(k) ?? { keyword: k, orders: new Set<string>(), bottles: 0, sales: 0 };
+      const a = m.get(k) ?? { keyword: k, orders: new Set<string>(), bottles: 0, sales: 0, profit: 0 };
       a.orders.add(r.orderId);
       a.bottles += r.bottles;
       a.sales += r.salesAmount;
+      a.profit += r.profit;
       m.set(k, a);
     }
     return [...m.values()].sort((a, b) => b.sales - a.sales);
   };
   const aggLine = (a: KwAgg) =>
-    ` ${a.keyword} ${a.orders.size}건 ${a.bottles}병 ${a.sales.toLocaleString("ko-KR")}`;
+    ` ${a.keyword} ${a.orders.size}건 ${a.bottles}병 매출 ${a.sales.toLocaleString("ko-KR")} 이익 ${a.profit.toLocaleString("ko-KR")}`;
 
   // 상품번호별 그룹 (매출 큰 순)
   const byProduct = new Map<string, Row[]>();
@@ -658,9 +677,11 @@ function buildKakaoMessages(dateStr: string, live: Row[]): string[] {
   const totalSales = live.reduce((s, r) => s + r.salesAmount, 0);
   const totalOrders = new Set(live.map((r) => r.orderId)).size;
   const totalBottles = live.reduce((s, r) => s + r.bottles, 0);
+  const totalProfit = live.reduce((s, r) => s + r.profit, 0);
   const totalLines = [
     `[매출 총합] ${dateStr}`,
     `총매출 ${totalSales.toLocaleString("ko-KR")}`,
+    `총이익 ${totalProfit.toLocaleString("ko-KR")}`,
     `총건수 ${totalOrders}건 · 총소진 ${totalBottles}병`,
     "",
     "(품종별)",
@@ -693,6 +714,7 @@ async function processDay(
   console.log(`\n[${range.dateStr}] ${options.sendTelegram ? '메인 보고' : '시트 동기화 only'}`);
   const allRows: Row[] = [];
   const errors: string[] = [];
+  const vitaLogiSeen = new Set<string>(); // 비타앤오리진 자동 물류비: 주문당 1회만 부과
 
   for (let si = 0; si < STORES.length; si++) {
     if (si > 0) await sleep(3000);
@@ -786,8 +808,19 @@ async function processDay(
           ? null
           : classify(po.productName, po.productOption ?? "", rules);
         const keyword = productRule?.label ?? matched?.keyword ?? "";
-        const costPerUnit = productRule?.costPerUnit ?? matched?.costPerUnit ?? 0;
-        const logisticsPerOrder = productRule?.logisticsPerOrder ?? matched?.logisticsPerOrder ?? 0;
+        let costPerUnit = productRule?.costPerUnit ?? matched?.costPerUnit ?? 0;
+        let logisticsPerOrder = productRule?.logisticsPerOrder ?? matched?.logisticsPerOrder ?? 0;
+        // 비타앤오리진: 명시 원가/물류가 없을 때 품종 기본값 적용 (물류비는 주문당 1회)
+        if (store.name === VITA_STORE) {
+          if (costPerUnit === 0 && keyword) costPerUnit = VITA_COST_BY_KEYWORD[keyword] ?? 0;
+          if (logisticsPerOrder === 0) {
+            const oid = o.order?.orderId ?? po.orderId ?? "";
+            if (oid && !vitaLogiSeen.has(oid)) {
+              logisticsPerOrder = VITA_DEFAULT_LOGISTICS;
+              vitaLogiSeen.add(oid);
+            }
+          }
+        }
         const perUnitBottles = extractBottles(po.productOption ?? po.productName);
         const totalUnits = po.quantity * perUnitBottles;
         const apiCommission =
