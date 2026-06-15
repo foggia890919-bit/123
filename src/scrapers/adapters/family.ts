@@ -117,11 +117,14 @@ export const family: WholesaleAdapter = {
   },
 
   async searchByCode(page: Page, insuranceCode: string): Promise<InventoryItem[]> {
-    if (!/order_search/i.test(page.url())) {
-      await page.goto(SEARCH_URL, { waitUntil: "commit", timeout: 30_000 });
-      await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => {});
-      await page.waitForTimeout(300);
-    }
+    // 매 검색마다 폼을 새로 로드한다. 직전 검색이 남긴 hash(#)/스크립트 상태가 페이지에 남으면
+    // 재검색 submit 이 발동되지 않고 기본 안내문구("조회 조건을 선택하시고...")만 돌아온다(pageChanged=false).
+    // 깨끗한 폼에서 시작하면 이 잔상이 사라지고, 세션이 끊겼으면 /member/ 로 리다이렉트되어
+    // scrapeOne 의 다음 getPage 가 isLoggedIn 검사에서 재로그인한다.
+    // (이전엔 'order_search 페이지면 재사용'이라, 한번 먹통이 된 페이지가 그대로 굳어 백제만 긁히는 원인이었음)
+    await page.goto(SEARCH_URL, { waitUntil: "commit", timeout: 30_000 });
+    await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => {});
+    await page.waitForTimeout(300);
 
     // 드롭다운을 "보험코드" 로 강제 — 페이지의 모든 select 를 순회하며
     // "보험코드" 옵션이 있는 element 를 찾아 직접 value 설정 + change 이벤트 발생.
