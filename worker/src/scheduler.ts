@@ -180,6 +180,20 @@ export async function runScheduledJob(
 let scheduled: cron.ScheduledTask | undefined;
 let isRunning = false;
 
+// 작업 전체의 상한 시간. 어떤 이유로든(스크랩/DB 멈춤) runScheduledJob 이 안 끝나면
+// 이 시간 뒤 강제로 reject → finally 에서 isRunning 이 풀려, 다음 스케줄이 영구 스킵되지 않음.
+// 정상 배치보다 충분히 길게(기본 90분) 잡아 정상 작업을 오인 중단하지 않는다.
+const MAX_JOB_MS = Number(process.env.MAX_JOB_MS ?? 90 * 60 * 1000);
+
+function withJobTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`job exceeded ${Math.round(ms / 60000)}min — forcing reset`)), ms)
+    ),
+  ]);
+}
+
 export function startScheduler(deps: RunJobDeps) {
   if (scheduled) return;
   if (process.env.DISABLE_SCHEDULER === "1") {
@@ -196,7 +210,7 @@ export function startScheduler(deps: RunJobDeps) {
       }
       isRunning = true;
       try {
-        await runScheduledJob(deps);
+        await withJobTimeout(runScheduledJob(deps), MAX_JOB_MS);
       } catch (err) {
         console.error("[scheduler] run failed:", err);
       } finally {
@@ -216,7 +230,7 @@ export async function triggerJobNow(deps: RunJobDeps, opts?: RunOptions) {
   if (isRunning) throw new Error("a job is already running");
   isRunning = true;
   try {
-    return await runScheduledJob(deps, opts);
+    return await withJobTimeout(runScheduledJob(deps, opts), MAX_JOB_MS);
   } finally {
     isRunning = false;
   }
