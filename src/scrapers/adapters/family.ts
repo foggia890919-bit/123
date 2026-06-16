@@ -250,6 +250,12 @@ export const family: WholesaleAdapter = {
       const snippet = bodyText.replace(/\s+/g, " ").slice(0, 250);
       const url = page.url();
       console.warn(`[family] code=${insuranceCode} EMPTY rows=0 url=${url} body="${snippet}"`);
+      // 검색이 실제로 발동하지 않은(pageChanged=false) 먹통 케이스는 "재고 0"이 아니라 "조회 실패"다.
+      // throw 하면 scrapeOne 이 error 로 처리 → 스냅샷 저장 안 함(멀쩡한 값을 0으로 덮지 않음) + 세션 폐기 후 다음 코드는 새 로그인.
+      // 반대로 changed=true(검색 실행됨) + 결과 0건 = 진짜 미취급/품절 → [] 반환 → 스케줄러가 0으로 갱신.
+      if (!changed) {
+        throw new Error(`family search did not execute (pageChanged=false) code=${insuranceCode}`);
+      }
     }
 
     for (const row of rows) {
