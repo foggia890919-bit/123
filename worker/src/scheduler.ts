@@ -112,9 +112,10 @@ export async function runScheduledJob(
 
         await Promise.all(
           lanes.map(async (slice, slot) => {
-            for (const { insuranceCode } of slice) {
+            for (const { insuranceCode, productName } of slice) {
               const row = await deps.scrapeOne(site, insuranceCode, slot);
               if (row.error) {
+                // 조회 실패(네트워크/타임아웃/먹통) → 저장하지 않음. 옛 값을 유지(0으로 덮지 않음).
                 stats.failed++;
               } else if (row.items.length > 0) {
                 const inserts: SnapshotInsert[] = row.items.map(item => ({
@@ -131,6 +132,18 @@ export async function runScheduledJob(
                 }
                 stats.done++;
               } else {
+                // 검색은 정상 실행됐으나 결과 0건 = 도매상 미취급/품절 → stock 0 으로 갱신.
+                // (조회 실패는 위 row.error 로 걸러지므로, 멀쩡한 재고가 0으로 덮이지 않는다)
+                // 이로써 "체크한 모든 품목"이 최신 시점으로 갱신돼, 일부만 옛 값으로 굳는 문제가 사라짐.
+                try {
+                  await saveSnapshots([{
+                    siteKey: site.key,
+                    insuranceCode,
+                    item: { insuranceCode, productName, stock: 0, spec: null, manufacturer: null, unitPrice: null },
+                  }]);
+                } catch (err) {
+                  console.error(`[scheduler] db write(empty) failed for ${site.key}/${insuranceCode}:`, (err as Error).message);
+                }
                 stats.done++;
               }
               await new Promise(r => setTimeout(r, PER_SITE_DELAY_MS));
