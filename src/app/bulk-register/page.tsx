@@ -130,6 +130,8 @@ function BulkRegisterInner() {
   const [addClientSaving, setAddClientSaving] = useState(false);
   const [autoSwitching, setAutoSwitching] = useState(false);
   const [criteriaSet, setCriteriaSet] = useState<Record<string, boolean>>({});
+  // 기본은 정확일치(같은 용량+제형)만 스위칭. 체크 시 다른 용량·제형(정제↔연질캡슐 등)까지 후보 포함.
+  const [includeOtherForms, setIncludeOtherForms] = useState(false);
   const [autoSwitchResult, setAutoSwitchResult] = useState<{ applied: number; skipped: number } | null>(null);
 
   // 행 직접 추가 (인라인 검색)
@@ -236,6 +238,7 @@ function BulkRegisterInner() {
           ingredientName: r.original!.ingredientName,
         })),
         criteria: criteriaList,
+        includeOtherForms,
         userId: userId ?? null,
       };
       const res = await fetch("/api/ai/auto-switch", {
@@ -898,6 +901,30 @@ function BulkRegisterInner() {
                 </div>
               ))}
             </div>
+            <label
+              className={`flex items-start gap-2 mt-3 px-3 py-2 rounded-md border cursor-pointer select-none text-xs transition-colors ${
+                includeOtherForms ? "border-blue-500 bg-blue-50" : "border-gray-200 bg-gray-50 hover:border-gray-300"
+              } ${autoSwitching ? "pointer-events-none opacity-60" : ""}`}
+            >
+              <input
+                type="checkbox"
+                className="sr-only"
+                checked={includeOtherForms}
+                onChange={() => setIncludeOtherForms((v) => !v)}
+                disabled={autoSwitching}
+              />
+              <span
+                className={`w-3.5 h-3.5 mt-0.5 rounded border flex items-center justify-center shrink-0 ${
+                  includeOtherForms ? "border-blue-500 bg-blue-500" : "border-gray-300 bg-white"
+                }`}
+              >
+                {includeOtherForms && <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>}
+              </span>
+              <span>
+                <span className={`font-medium ${includeOtherForms ? "text-blue-700" : "text-gray-700"}`}>다른 용량·제형도 포함</span>
+                <span className="block text-gray-400 mt-0.5">기본은 같은 용량·제형끼리만 스위칭합니다. 체크하면 동일 성분의 다른 용량·제형(정제↔연질캡슐 등)까지 후보에 포함합니다.</span>
+              </span>
+            </label>
             <div className="flex items-center gap-3 mt-3 pt-3 border-t border-gray-100 flex-wrap">
               <button
                 onClick={handleAutoSwitch}

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { normalizeCompanyKey } from "@/lib/utils";
 import { buildRateMap } from "@/lib/rate-utils";
@@ -72,16 +73,28 @@ export async function POST(req: NextRequest) {
   // Accept both single string (legacy) and array (new multi-criteria)
   const criteriaList: string[] = Array.isArray(rawCriteria) ? rawCriteria : [rawCriteria ?? "commission"];
   const userId: string | null = body?.userId ?? null;
+  // 기본(false): 정확일치(같은 용량+제형)만 스위칭.
+  // true: 다른 용량·제형까지 포함(동일 성분 전체) — UI '다른 용량·제형 포함' 체크박스.
+  const includeOtherForms: boolean = body?.includeOtherForms === true;
 
   const validRows = rows.filter((r) => r.ingredientCode);
   if (validRows.length === 0) {
     return NextResponse.json({ results: rows.map((r) => ({ rowId: r.id, medication: null })) });
   }
 
-  const ingredientCodeCodes = [...new Set(validRows.map((r) => r.ingredientCode as string))];
+  // 후보군은 "변경" 모달과 동일하게 6자리 성분 prefix로 동일성분 전체를 가져온다.
+  // (기존: 9자리 완전일치만 → 같은 성분의 다른 용량 대체품이 자동선택에서 통째로 누락됐음)
+  const prefixes6 = [...new Set(
+    validRows
+      .map((r) => (r.ingredientCode as string).slice(0, 6))
+      .filter((p) => p.length >= 6),
+  )];
 
+  const prefixWhere: Prisma.MedicationWhereInput = {
+    OR: prefixes6.map((p) => ({ ingredientCode: { startsWith: p } })),
+  };
   const allMeds = await prisma.medication.findMany({
-    where: { ingredientCode: { in: ingredientCodeCodes } },
+    where: prefixWhere,
     orderBy: [{ isSettlement: "desc" }, { commissionRate: "desc" }],
   });
 
@@ -92,11 +105,22 @@ export async function POST(req: NextRequest) {
     additionalRate: rateMap[normalizeCompanyKey(m.companyName)] ?? null,
   }));
 
-  const medsByIngredientCode = new Map<string, MedicationWithRate[]>();
+  const medsByPrefix6 = new Map<string, MedicationWithRate[]>();
   for (const m of medsWithRate) {
-    if (!m.ingredientCode) continue;
-    if (!medsByIngredientCode.has(m.ingredientCode)) medsByIngredientCode.set(m.ingredientCode, []);
-    medsByIngredientCode.get(m.ingredientCode)!.push(m);
+    if (!m.ingredientCode || m.ingredientCode.length < 6) continue;
+    const p6 = m.ingredientCode.slice(0, 6);
+    if (!medsByPrefix6.has(p6)) medsByPrefix6.set(p6, []);
+    medsByPrefix6.get(p6)!.push(m);
+  }
+
+  // 대체 후보 범위:
+  //  - 기본(includeOtherForms=false): 정확일치(exact) — 9자리 성분코드가 원본과 완전히 동일(같은 용량+제형)
+  //  - includeOtherForms=true: 동일 성분 전체(6자리 prefix) — 다른 용량·제형(same_form/same_ingredient) 포함
+  function candidatesFor(rowCode: string): MedicationWithRate[] {
+    const p6 = rowCode.slice(0, 6);
+    const pool = medsByPrefix6.get(p6) ?? [];
+    if (includeOtherForms) return pool.filter((m) => !!m.ingredientCode);
+    return pool.filter((m) => m.ingredientCode === rowCode);
   }
 
   const medById = new Map(medsWithRate.map((m) => [m.id, m]));
@@ -106,7 +130,7 @@ export async function POST(req: NextRequest) {
     const rowsForAI = rows
       .filter((r) => r.ingredientCode)
       .map((row) => {
-        const alts = (medsByIngredientCode.get(row.ingredientCode!) ?? [])
+        const alts = candidatesFor(row.ingredientCode!)
           .filter((m) => m.id !== row.originalMedicationId)
           .slice(0, 20);
         return {
@@ -177,7 +201,7 @@ ${JSON.stringify(rowsForAI, null, 2)}
   const comparator = buildComparator(criteriaList);
   const results = rows.map((row) => {
     if (!row.ingredientCode) return { rowId: row.id, medication: null };
-    const alts = (medsByIngredientCode.get(row.ingredientCode) ?? [])
+    const alts = candidatesFor(row.ingredientCode)
       .filter((m) => m.id !== row.originalMedicationId)
       .sort(comparator);
     return { rowId: row.id, medication: alts[0] ?? null };
