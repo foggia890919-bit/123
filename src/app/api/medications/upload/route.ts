@@ -26,7 +26,16 @@ export async function POST(req: NextRequest) {
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: "buffer" });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rawRows = XLSX.utils.sheet_to_json<Record<string, string | number>>(sheet, { defval: "" });
+    // 헤더 행 자동 탐지: 일부 요율표(예: 메디펄스)는 0행이 "요율표" 같은 제목줄이고
+    // 실제 헤더가 1행 이하에 있다. 알려진 헤더 토큰이 2개 이상 들어있는 첫 행을 헤더로 본다.
+    const HEADER_TOKENS = ["보험코드", "급여코드", "품목명", "제약사명", "수수료율", "성분명", "약가"];
+    const aoa = XLSX.utils.sheet_to_json<(string | number)[]>(sheet, { header: 1, defval: "" });
+    let headerRowIdx = 0;
+    for (let i = 0; i < Math.min(aoa.length, 20); i++) {
+      const hits = (aoa[i] || []).filter((c) => HEADER_TOKENS.includes(String(c).trim())).length;
+      if (hits >= 2) { headerRowIdx = i; break; }
+    }
+    const rawRows = XLSX.utils.sheet_to_json<Record<string, string | number>>(sheet, { defval: "", range: headerRowIdx });
     // 컬럼명 앞뒤 공백 제거 (Excel 헤더에 공백이 들어있는 경우 대비)
     const rows = rawRows.map((row) => {
       const normalized: Record<string, string | number> = {};
