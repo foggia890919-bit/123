@@ -8,6 +8,103 @@ function normalizeCode(code: string): string {
   return code.replace(/[\s\-]/g, "").toUpperCase();
 }
 
+// ───────── 요율표 헤더/열 자동 인식 (요율표 비교 도구와 동일 알고리즘) ─────────
+// 법인마다 엑셀 양식이 달라도(메디펄스/서원파마 등) 헤더 행과 각 열을 점수로 추정한다.
+const HEADER_KEYS = ["보험코드", "급여코드", "제약사", "제약회사", "제품명", "품목명", "약가", "수수료율", "요율", "성분", "분류", "코드", "회사", "정산"];
+
+function scoreHeaderRow(row: (string | number)[]): number {
+  let s = 0;
+  for (const cell of row) {
+    const t = String(cell ?? "").replace(/\s/g, "");
+    if (HEADER_KEYS.some((k) => t.includes(k))) s++;
+  }
+  return s;
+}
+
+// 제목줄(예: 0행 "요율표")을 건너뛰고 실제 헤더 행 index를 찾는다.
+function detectHeaderRow(rows: (string | number)[][]): number {
+  let best = 0, bi = 0;
+  const lim = Math.min(rows.length, 20);
+  for (let i = 0; i < lim; i++) {
+    const sc = scoreHeaderRow(rows[i] || []);
+    if (sc > best) { best = sc; bi = i; }
+  }
+  return bi;
+}
+
+type ColKind = "code" | "comp" | "prod" | "price" | "rate" | "note" | "ingredient" | "categoryA" | "bio" | "original";
+
+// 각 필드에 가장 잘 맞는 열 index를 유의어 점수로 고른다. (없으면 -1)
+function pickCol(header: string[], kind: ColKind): number {
+  let best = -1, bestScore = 0;
+  header.forEach((h, i) => {
+    const t = String(h ?? "").replace(/\s/g, "");
+    if (!t) return;
+    let sc = 0;
+    if (kind === "code") {
+      if (t === "보험코드" || t === "급여코드") sc = 100;
+      else if (t.includes("보험") && t.includes("코드")) sc = 90;
+      else if (t.includes("급여") && t.includes("코드")) sc = 88;
+      else if (t === "약품코드" || t === "청구코드") sc = 85;
+      else if (/EDI/i.test(t)) sc = 70;
+    } else if (kind === "comp") {
+      if (t.includes("제약회사")) sc = 100;
+      else if (t.includes("제약사")) sc = 98;
+      else if (t === "회사명" || t === "업체명" || t === "공급사") sc = 70;
+      else if (t.includes("제조사")) sc = 30; // 위탁사일 수 있어 낮게
+      else if (t.includes("회사")) sc = 50;
+    } else if (kind === "prod") {
+      if (t.includes("품목명")) sc = 100;
+      else if (t.includes("제품명")) sc = 98;
+      else if (t === "품명" || t === "약품명") sc = 80;
+      else if (t.includes("품목")) sc = 60;
+    } else if (kind === "price") {
+      if (t === "약가") sc = 100;
+      else if (t.includes("약가") && !/[xX*]/.test(t)) sc = 80;
+      else if (t.includes("상한가")) sc = 70;
+    } else if (kind === "rate") {
+      if (t === "수수료율") sc = 100;
+      else if (t === "요율") sc = 98;
+      else if (t.includes("수수료") && !/[xX*]|약가/.test(t)) sc = 80;
+      else if (t.includes("요율")) sc = 75;
+      else if (t === "코드") sc = 55; // 메디펄스: '코드' 열이 요율값
+      else if (t.includes("정산율") || t.includes("지급율")) sc = 70;
+    } else if (kind === "note") {
+      if (t.includes("특이사항")) sc = 100;
+      else if (t === "비고") sc = 95;
+      else if (t.includes("참고")) sc = 90;
+      else if (t.includes("비고")) sc = 85;
+      else if (t.includes("메모") || t.includes("설명") || t.includes("변동") || t.includes("이력")) sc = 70;
+      else if (/note|remark/i.test(t)) sc = 60;
+    } else if (kind === "ingredient") {
+      if (t.includes("성분명")) sc = 100;
+      else if (t === "성분") sc = 80;
+      else if (t.includes("성분")) sc = 60;
+    } else if (kind === "categoryA") {
+      if (t === "분류(A)" || t === "분류A") sc = 100;
+      else if (t.includes("분류") && /A/i.test(t)) sc = 90;
+      else if (t.includes("분류") && !/B/i.test(t)) sc = 50;
+    } else if (kind === "bio") {
+      if (t.includes("생동")) sc = 100;
+      else if (t.includes("생산")) sc = 60;
+    } else if (kind === "original") {
+      if (t.includes("오리지날") || t.includes("오리지널") || t.includes("대조약")) sc = 100;
+    }
+    if (sc > bestScore) { bestScore = sc; best = i; }
+  });
+  return best;
+}
+
+// "50%", "0.5", 46.2 등 → 숫자. (요율 0~1 변환은 호출부에서 처리)
+function numOr(v: string | number | undefined | null): number | null {
+  if (v == null || v === "") return null;
+  if (typeof v === "number") return v;
+  const s = String(v).replace(/[%,\s]/g, "");
+  if (s === "") return null;
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
 export async function POST(req: NextRequest) {
   const guard = await requireAdmin();
   if (isNextResponse(guard)) return guard;
@@ -26,41 +123,45 @@ export async function POST(req: NextRequest) {
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: "buffer" });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    // 헤더 행 자동 탐지: 일부 요율표(예: 메디펄스)는 0행이 "요율표" 같은 제목줄이고
-    // 실제 헤더가 1행 이하에 있다. 알려진 헤더 토큰이 2개 이상 들어있는 첫 행을 헤더로 본다.
-    const HEADER_TOKENS = ["보험코드", "급여코드", "품목명", "제약사명", "수수료율", "성분명", "약가"];
+    // 헤더 행 자동 탐지 + 열 자동 매핑 (고정 컬럼명이 아니라 양식 무관 인식)
     const aoa = XLSX.utils.sheet_to_json<(string | number)[]>(sheet, { header: 1, defval: "" });
-    let headerRowIdx = 0;
-    for (let i = 0; i < Math.min(aoa.length, 20); i++) {
-      const hits = (aoa[i] || []).filter((c) => HEADER_TOKENS.includes(String(c).trim())).length;
-      if (hits >= 2) { headerRowIdx = i; break; }
-    }
-    const rawRows = XLSX.utils.sheet_to_json<Record<string, string | number>>(sheet, { defval: "", range: headerRowIdx });
-    // 컬럼명 앞뒤 공백 제거 (Excel 헤더에 공백이 들어있는 경우 대비)
-    const rows = rawRows.map((row) => {
-      const normalized: Record<string, string | number> = {};
-      for (const [k, v] of Object.entries(row)) normalized[k.trim()] = v as string | number;
-      return normalized;
-    });
+    const headerRowIdx = detectHeaderRow(aoa);
+    const header = (aoa[headerRowIdx] || []).map((x) => String(x ?? "").trim());
+    const dataRows = aoa.slice(headerRowIdx + 1);
+    const col = {
+      code: pickCol(header, "code"),
+      comp: pickCol(header, "comp"),
+      prod: pickCol(header, "prod"),
+      price: pickCol(header, "price"),
+      rate: pickCol(header, "rate"),
+      note: pickCol(header, "note"),
+      ingredient: pickCol(header, "ingredient"),
+      categoryA: pickCol(header, "categoryA"),
+      bio: pickCol(header, "bio"),
+      original: pickCol(header, "original"),
+    };
 
-    const rateRows = rows
-      .filter((row) => row["보험코드"] || row["급여코드"] || row["성분명"] || row["품목명"])
+    const cellAt = (row: (string | number)[], i: number) => (i >= 0 ? row[i] : undefined);
+    const strAt = (row: (string | number)[], i: number) => String(cellAt(row, i) ?? "").trim();
+
+    const rateRows = dataRows
+      .filter((row) => Array.isArray(row) && (strAt(row, col.code) || strAt(row, col.ingredient) || strAt(row, col.prod)))
       .map((row) => {
-        const insuranceCode = String(row["보험코드"] || row["급여코드"] || "").trim() || null;
-        const commissionRaw = parseFloat(String(row["수수료율"] || row["코드"] || ""));
-        const priceRaw = parseInt(String(row["약가"] || ""));
+        let commissionRate = numOr(cellAt(row, col.rate));
+        if (commissionRate != null && commissionRate > 0 && commissionRate <= 1) commissionRate = commissionRate * 100; // 0.5 → 50%
+        const price = numOr(cellAt(row, col.price));
         return {
-          categoryA: String(row["분류(A)"] || row["분류A"] || "").trim() || null,
-          ingredientName: String(row["성분명"] || "").trim(),
+          categoryA: strAt(row, col.categoryA) || null,
+          ingredientName: strAt(row, col.ingredient),
           categoryB: null, // 요율표 분류B 무시 — ATC코드(ingredientCode)로 대체
-          commissionRate: isNaN(commissionRaw) ? null : commissionRaw,
-          companyName: String(row["제약사명"] || "").trim() || "미상",
-          bioStatus: String(row["생동/생산"] || "").trim() || null,
-          productName: String(row["품목명"] || "").trim(),
-          price: isNaN(priceRaw) ? null : priceRaw,
-          originalDrug: String(row["오리지날/대조약"] || "").trim() || null,
-          insuranceCode,
-          notes: String(row["특이사항"] || "").trim() || null,
+          commissionRate,
+          companyName: strAt(row, col.comp) || "미상",
+          bioStatus: strAt(row, col.bio) || null,
+          productName: strAt(row, col.prod),
+          price: price != null ? Math.round(price) : null,
+          originalDrug: strAt(row, col.original) || null,
+          insuranceCode: strAt(row, col.code) || null,
+          notes: strAt(row, col.note) || null,
           isSettlement,
           settlementType,
         };
