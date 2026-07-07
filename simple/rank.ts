@@ -130,9 +130,13 @@ async function scanKeyword(
     const { total, items } = await fetchShopPage(keyword, start);
     items.forEach((it, idx) => {
       const rank = start + idx;
+      // MID 매칭 — (1) API productId (카탈로그 ID), (2) link 의 채널상품번호 (스마트스토어 URL 끝 숫자)
       const pid = String(it.productId ?? "");
-      if (mids.has(pid) && !midInfo.has(pid)) {
-        midInfo.set(pid, { rank, mall: it.mallName || "" });
+      const linkId = it.link?.match(/\/products\/(\d+)/)?.[1] ?? "";
+      for (const cand of [pid, linkId]) {
+        if (cand && mids.has(cand) && !midInfo.has(cand)) {
+          midInfo.set(cand, { rank, mall: it.mallName || "" });
+        }
       }
       const store = mallMap.get(norm(it.mallName || ""));
       if (store) {
@@ -211,7 +215,7 @@ async function sendTelegramReport(today: string, prevDates: string[], reportRows
     } else if (todayBest === null && prev1 !== null) {
       arrow = " ❌ 이탈";
     }
-    const note = r.memo || r.store;
+    const note = r.memo;
     const label = `${escapeHtml(r.keyword)}${note ? ` <i>(${escapeHtml(note)})</i>` : ""}`;
     const rankStr = todayBest !== null ? `<b>${escapeHtml(r.todayCell)}</b>` : "<i>순위밖</i>";
     const trail = prevDates
@@ -258,20 +262,12 @@ function autoStoreText(hits: Hit[]): string {
     .join(" / ");
 }
 
-async function main(): Promise<void> {
-  if (!SHEET_CREDS) throw new Error("Google Sheet 환경변수 없음");
-  if (!CLIENT_ID || !CLIENT_SECRET) {
-    throw new Error("검색 API 키 누락 (NAVER_DEVELOPER_CLIENT_ID/SECRET)");
-  }
-  const ourStores = loadStoreNames();
-  if (ourStores.length === 0) throw new Error("추적할 스토어 없음 (NAVER_STORES_JSON/RANK_MALL_NAMES)");
-
-  // ── 「순위추적」 탭 읽기 ──
-  await ensureTab(SHEET_CREDS, TAB_RANK, []);
-  const matrix = await readRange(SHEET_CREDS, `${TAB_RANK}!A1:ZZ100000`);
+/** 「순위추적」 탭 파싱 + 검색량조회 키워드 병합 (v2 구버전 헤더는 자동 이관) */
+async function readRankRows(): Promise<{ oldDates: string[]; rows: RankRow[] }> {
+  const matrix = await readRange(SHEET_CREDS!, `${TAB_RANK}!A1:ZZ100000`);
   const header = matrix[0] ?? [];
   const isV3 = header[0] === "사업자명"; // A사업자명 B키워드 C MID D메모 E~날짜
-  const isV2 = !isV3 && header[1] === "MID"; // A키워드 B MID C메모 D~날짜 (구버전 → 자동 이관)
+  const isV2 = !isV3 && header[1] === "MID"; // A키워드 B MID C메모 D~날짜 (구버전)
   const oldDates: string[] = isV3 ? header.slice(4).map(String) : isV2 ? header.slice(3).map(String) : [];
   const rows: RankRow[] = [];
   const rowKeySet = new Set<string>(); // 사업자명+키워드+MID 조합 중복 방지
@@ -289,9 +285,8 @@ async function main(): Promise<void> {
       rows.push({ store, keyword, mid, memo, history: oldDates.map((_, i) => String(r[histStart + i] ?? "")) });
     }
   }
-
-  // ── 검색량조회 탭 키워드 → 없는 키워드는 새 행으로 추가 ──
-  const srcRows = await readRange(SHEET_CREDS, `${TAB_SRC}!A4:A10000`);
+  // 검색량조회 탭 키워드 → 없는 키워드는 새 행으로 추가
+  const srcRows = await readRange(SHEET_CREDS!, `${TAB_SRC}!A4:A10000`);
   const existingKw = new Set(rows.map((r) => norm(r.keyword)));
   for (const r of srcRows) {
     const k = String(r[0] ?? "").trim();
@@ -300,6 +295,20 @@ async function main(): Promise<void> {
       rows.push({ store: "", keyword: k, mid: "", memo: "", history: oldDates.map(() => "") });
     }
   }
+  return { oldDates, rows };
+}
+
+async function main(): Promise<void> {
+  if (!SHEET_CREDS) throw new Error("Google Sheet 환경변수 없음");
+  if (!CLIENT_ID || !CLIENT_SECRET) {
+    throw new Error("검색 API 키 누락 (NAVER_DEVELOPER_CLIENT_ID/SECRET)");
+  }
+  const ourStores = loadStoreNames();
+  if (ourStores.length === 0) throw new Error("추적할 스토어 없음 (NAVER_STORES_JSON/RANK_MALL_NAMES)");
+
+  // ── 「순위추적」 탭 읽기 (스캔 대상 파악용 1차 읽기) ──
+  await ensureTab(SHEET_CREDS, TAB_RANK, []);
+  const { rows } = await readRankRows();
   if (rows.length === 0) {
     console.log(`⚠️ 「${TAB_RANK}」 탭 B2 부터 키워드를 입력하고 다시 실행하세요.`);
     return;
@@ -347,6 +356,11 @@ async function main(): Promise<void> {
     await sleep(200);
   }
 
+  // ── 쓰기 직전 시트 재독 — 스캔(수 분) 동안 사장님이 편집한 내용을 덮어쓰지 않게 최신 기준으로 기록 ──
+  const scannedMids = new Set(rows.filter((r) => r.mid).map((r) => r.mid));
+  const fresh = await readRankRows();
+  const oldDates = fresh.oldDates;
+
   // ── 오늘 값 계산 후 E열에 삽입 (같은 날 재실행이면 기존 오늘 열 덮어쓰기) ──
   const todayIdx = oldDates.indexOf(today);
   const remainDates = oldDates.filter((d) => d !== today);
@@ -354,25 +368,39 @@ async function main(): Promise<void> {
   const outMatrix: (string | number)[][] = [newHeader];
   const reportRows: ReportRow[] = [];
   let foundRows = 0;
-  for (const row of rows) {
-    const res = scanResults.get(norm(row.keyword))!;
+  let skippedNew = 0;
+  for (const row of fresh.rows) {
+    const res = scanResults.get(norm(row.keyword));
     let cell: string;
     let storeOut = row.store;
-    if (res.error) {
+    if (!res) {
+      cell = ""; // 스캔 도중 새로 추가된 키워드 — 다음 실행 때 조회
+      skippedNew++;
+    } else if (res.error) {
       cell = "오류";
     } else if (row.mid) {
-      const info = res.midInfo.get(row.mid);
-      cell = info ? `${info.rank}위` : "순위밖";
-      if (!storeOut && info?.mall) storeOut = info.mall;
+      if (!scannedMids.has(row.mid)) {
+        cell = ""; // 스캔 도중 새로 추가된 MID — 다음 실행 때 조회
+        skippedNew++;
+      } else {
+        const info = res.midInfo.get(row.mid);
+        cell = info ? `${info.rank}위` : "순위밖";
+        if (!storeOut && info?.mall) storeOut = info.mall;
+      }
     } else if (row.store && !row.store.includes("/")) {
-      // 지정 판매처 상품만
-      const mine = res.storeHits.filter((h) => norm(h.store) === norm(row.store));
-      cell = ranksCellText(mine);
+      if (!mallMap.has(norm(row.store))) {
+        cell = ""; // 스캔 도중 새로 지정된 판매처 — 다음 실행 때 조회
+        skippedNew++;
+      } else {
+        // 지정 판매처 상품만
+        const mine = res.storeHits.filter((h) => norm(h.store) === norm(row.store));
+        cell = ranksCellText(mine);
+      }
     } else {
       cell = ranksCellText(res.storeHits);
       if (!storeOut && res.storeHits.length > 0) storeOut = autoStoreText(res.storeHits);
     }
-    if (cell !== "순위밖" && cell !== "오류") foundRows++;
+    if (cell && cell !== "순위밖" && cell !== "오류") foundRows++;
     const history = todayIdx === -1 ? row.history : row.history.filter((_, i) => i !== todayIdx);
     reportRows.push({
       store: storeOut,
@@ -396,7 +424,8 @@ async function main(): Promise<void> {
   await appendRows(SHEET_CREDS, `${TAB_LOG}!A2`, logRows);
 
   console.log(
-    `\n✅ 완료: ${rows.length}개 행 중 ${foundRows}개에서 순위 발견 → 「${TAB_RANK}」 E열(${today}) 갱신 + 로그 ${logRows.length}건.`,
+    `\n✅ 완료: ${fresh.rows.length}개 행 중 ${foundRows}개에서 순위 발견 → 「${TAB_RANK}」 E열(${today}) 갱신 + 로그 ${logRows.length}건.` +
+      (skippedNew > 0 ? ` (스캔 중 추가된 ${skippedNew}개 행은 다음 실행 때 조회)` : ""),
   );
 }
 
