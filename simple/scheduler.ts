@@ -57,7 +57,7 @@ const TASKS: TaskDef[] = [
   { name: "시장 카테고리 트리", cmd: "npx tsx market.ts tree", hint: "GO", resultSheet: "시장조사_카테고리" },
   { name: "시장 키워드 (Top500)", cmd: "npx tsx market.ts keywords", hint: "GO", resultSheet: "시장조사_키워드", inputSheet: "⭐시장조사_키워드_추적" },
   { name: "시장 규모 (Top40 매출)", cmd: "npx tsx market.ts size", hint: "GO", resultSheet: "시장조사_시장규모", inputSheet: "⭐시장조사_시장규모_추적" },
-  { name: "순위 추적", cmd: "npx tsx market.ts rank", hint: "GO", resultSheet: "순위추적_데이터", inputSheet: "⭐순위추적_상품" },
+  { name: "순위 추적", cmd: "npx tsx rank.ts", hint: "GO", resultSheet: "순위추적", inputSheet: "순위추적" },
   { name: "📦 재고 보고 (B2C 재고장)", cmd: "npx tsx inventory-report.ts", hint: "GO", resultSheet: "⭐재고이력" },
   { name: STOP_TASK_NAME, cmd: "STOP", hint: "GO" },
 ];
@@ -208,10 +208,16 @@ async function pollAndRun(): Promise<void> {
     let cmd = task.cmd;
     if (task.cmd === "DATE_RANGE") {
       // B = 시작 날짜 (달력), I = 끝 날짜 (달력)
+      // B(시작)가 트리거 겸 입력이라, I(끝)를 고르기 전에 폴링이 돌면 안 됨.
+      // → I(끝)가 아직 비어있으면 = 사용자가 시작일만 고른 중간 상태. 에러/초기화 없이 대기.
+      const toRaw = String(r[8] ?? "").trim(); // I 컬럼 (0-based 8)
+      if (!toRaw) continue;
       const fromDate = normalizeDate(triggerRaw);
-      const toDate = normalizeDate(String(r[8] ?? "")); // I 컬럼 (0-based 8)
+      const toDate = normalizeDate(toRaw);
       if (!fromDate || !toDate) {
-        await writeRow(clearVal, "ERROR", `B(시작) + I(끝) 두 셀 모두 달력으로 날짜 선택해주세요`);
+        // 두 셀 모두 채워졌는데 형식 인식 실패 — 에러 표시 후 I 비워 재시도 가능하게
+        await writeRow(clearVal, "ERROR", `날짜 형식 인식 실패 — B(시작)·I(끝) 달력으로 다시 선택해주세요`);
+        await writeRange(SHEET_CREDS!, `${TAB}!I${rowNum}`, [[""]]);
         continue;
       }
       cmd = `npx tsx run.ts ${fromDate} ${toDate}`;
@@ -278,7 +284,7 @@ async function checkAndHandleStop(): Promise<boolean> {
 
     console.log(`[scheduler] 🛑 STOP 트리거 — tsx 프로세스 강제 종료 시도`);
     try {
-      execSync(`pkill -f "tsx (run|catalog|market|volume)\\.ts" || true`, { stdio: "inherit" });
+      execSync(`pkill -f "tsx (run|catalog|market|volume|rank)\\.ts" || true`, { stdio: "inherit" });
     } catch (e) {
       console.error(`[scheduler] pkill 실패 (무시): ${e instanceof Error ? e.message : e}`);
     }
