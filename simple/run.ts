@@ -495,6 +495,29 @@ function extractBottles(text: string): number {
   return 1;
 }
 
+// 지저분한 옵션명 → "품종 N병" 으로 간소화.
+//   예) "최고급 유기농 올리브오일: 피쿠알 250ml (진한 풍미) / 담을수록 저렴해지는 가격!: 3병"
+//        → "피쿠알 3병"
+//   품종은 DEFAULT_RULES 패턴으로 인식, 병갯수는 "N병" 패턴으로 추출.
+function simplifyOption(optionName: string): string {
+  if (!optionName) return "옵션없음";
+  const lower = optionName.toLowerCase();
+  let variety = "";
+  for (const rule of DEFAULT_RULES) {
+    if (lower.includes(rule.pattern.toLowerCase())) {
+      variety = rule.keyword;
+      break;
+    }
+  }
+  const bottle = optionName.match(/(\d+)\s*병/);
+  const bottleLabel = bottle ? `${bottle[1]}병` : "";
+  if (variety && bottleLabel) return `${variety} ${bottleLabel}`;
+  if (variety) return variety;
+  if (bottleLabel) return bottleLabel;
+  // 품종/병갯수 모두 인식 실패 시 앞부분만 잘라서 표시
+  return optionName.split("/")[0].trim().slice(0, 20);
+}
+
 function isCanceled(status: string): boolean {
   return /취소|반품|환불|cancel|refund|return/i.test(status);
 }
@@ -1295,22 +1318,25 @@ async function processDay(
     const sMains = groupByMain(sLive);
     const sorted = Array.from(sMains.values()).sort((a, b) => b.main.sales - a.main.sales);
     for (const g of sorted) {
-      l.push(`<b>• ${g.main.label}</b> <code>${g.main.productKey}</code>`);
-      l.push(`   ${g.main.bottles}개·${g.main.orderIds.size}건 · ${won(g.main.sales)} · 원가 ${won(g.main.cost)} · <b>이익 ${won(g.main.profit)}</b>`);
-      // 옵션이 2개 이상이면 옵션별 sub-line (옵션 1개면 본 라인과 중복이라 생략)
+      // 상품명(간소화) / 상품번호
+      l.push(`<b>• ${g.main.label}</b> / <code>${g.main.productKey}</code>`);
+      l.push(`   ${g.main.bottles}개 · ${g.main.orderIds.size}건 · ${won(g.main.sales)} · <b>이익 ${won(g.main.profit)}</b>`);
+      l.push("");
+      // 옵션별 (병갯수 단위): 병갯수 · 수량 · 건수 · 매출 · 이익
       if (g.main.options.size >= 2) {
         const opts = Array.from(g.main.options.values()).sort((a, b) => b.sales - a.sales);
         for (const o of opts) {
-          l.push(`   ↳ ${o.optionName}: ${o.bottles}개·${o.orderIds.size}건 · ${won(o.sales)} · 이익 ${won(o.profit)}`);
+          l.push(`   ${simplifyOption(o.optionName)} · ${o.bottles}개 · ${o.orderIds.size}건 · ${won(o.sales)} · 이익 ${won(o.profit)}`);
         }
       }
       // 추가상품
       if (g.additional.size > 0) {
         const adds = Array.from(g.additional.values()).sort((a, b) => b.sales - a.sales);
         for (const a of adds) {
-          l.push(`   ↳ 추가: <b>${a.label}</b> ${a.bottles}개·${a.orderIds.size}건 · ${won(a.sales)} · 원가 ${won(a.cost)} · 이익 ${won(a.profit)}`);
+          l.push(`   추가: <b>${a.label}</b> · ${a.bottles}개 · ${a.orderIds.size}건 · ${won(a.sales)} · 이익 ${won(a.profit)}`);
         }
       }
+      l.push("");
     }
 
     if (sCancel.length > 0) {
@@ -1341,26 +1367,32 @@ async function processDay(
       await sendTelegram(msg);
     }
 
-    // ─── 카카오톡 나에게 보내기 (텔레그램과 동시, 상품번호별 품종 집계 포맷) ───
-    try {
-      const kakaoToken = await getKakaoAccessToken();
-      if (kakaoToken) {
-        const kakaoMsgs = buildKakaoMessages(range.dateStr, live, canceled);
-        console.log(`\n=== 카카오 미리보기 ===\n` + kakaoMsgs.join("\n---\n"));
-        for (const km of kakaoMsgs) {
-          await sendKakao(km, kakaoToken);
-          await sleep(500);
+    // ─── 카카오톡 나에게 보내기 ───
+    // 사장님 요청으로 기본 OFF (텔레그램으로만 보고받음). "나에게 보내기"는 알림톡이 아니라
+    // 직관성이 떨어진다는 피드백. 다시 켜려면 .env 에 KAKAO_ENABLED=1 추가.
+    if (process.env.KAKAO_ENABLED === "1") {
+      try {
+        const kakaoToken = await getKakaoAccessToken();
+        if (kakaoToken) {
+          const kakaoMsgs = buildKakaoMessages(range.dateStr, live, canceled);
+          console.log(`\n=== 카카오 미리보기 ===\n` + kakaoMsgs.join("\n---\n"));
+          for (const km of kakaoMsgs) {
+            await sendKakao(km, kakaoToken);
+            await sleep(500);
+          }
+          if (REMAINING_TASKS.length > 0) {
+            await sendKakao("[남은 개발 작업]\n" + REMAINING_TASKS.map((t, i) => `${i + 1}. ${t}`).join("\n"), kakaoToken);
+            await sleep(500);
+          }
+          console.log(`[카카오] ${kakaoMsgs.length}통 발송 완료`);
+        } else {
+          console.log("[카카오] 미설정(KAKAO_* 환경변수 없음) — 발송 skip");
         }
-        if (REMAINING_TASKS.length > 0) {
-          await sendKakao("[남은 개발 작업]\n" + REMAINING_TASKS.map((t, i) => `${i + 1}. ${t}`).join("\n"), kakaoToken);
-          await sleep(500);
-        }
-        console.log(`[카카오] ${kakaoMsgs.length}통 발송 완료`);
-      } else {
-        console.log("[카카오] 미설정(KAKAO_* 환경변수 없음) — 발송 skip");
+      } catch (err) {
+        console.error("[카카오] 발송 실패:", err instanceof Error ? err.message : err);
       }
-    } catch (err) {
-      console.error("[카카오] 발송 실패:", err instanceof Error ? err.message : err);
+    } else {
+      console.log("[카카오] 비활성화 (KAKAO_ENABLED≠1) — 발송 안 함");
     }
   }
   console.log(`[${range.dateStr}] ✅ 완료`);
