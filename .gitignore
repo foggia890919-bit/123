@@ -38,6 +38,23 @@ yarn-error.log*
 # vercel
 .vercel
 
+# EP bot (credentials + page dumps — never commit)
+/ep-bot/ep_login.json
+/ep-bot/db.json
+/ep-bot/dumps/
+/ep_login.html
+
+# 시크릿 키 포함 설정 (Supabase service_role) — never commit
+/bot_config.json
+
+# 세션 임시 산출물 (UIA 자동화 디버깅 스크립트/덤프)
+/_*.ps1
+/_oauth_tmp/
+/*_dump.txt
+/screen*.png
+/stock_*.csv
+/NOW()
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
