@@ -57,7 +57,7 @@ const TASKS: TaskDef[] = [
   { name: "시장 카테고리 트리", cmd: "npx tsx market.ts tree", hint: "GO", resultSheet: "시장조사_카테고리" },
   { name: "시장 키워드 (Top500)", cmd: "npx tsx market.ts keywords", hint: "GO", resultSheet: "시장조사_키워드", inputSheet: "⭐시장조사_키워드_추적" },
   { name: "시장 규모 (Top40 매출)", cmd: "npx tsx market.ts size", hint: "GO", resultSheet: "시장조사_시장규모", inputSheet: "⭐시장조사_시장규모_추적" },
-  { name: "순위 추적", cmd: "npx tsx rank.ts", hint: "GO", resultSheet: "순위추적", inputSheet: "순위추적" },
+  { name: "순위 추적", cmd: "npx tsx rank.ts", hint: "GO", resultSheet: "순위추적누적", inputSheet: "순위추적누적" },
   { name: "📦 재고 보고 (B2C 재고장)", cmd: "npx tsx inventory-report.ts", hint: "GO", resultSheet: "⭐재고이력" },
   { name: STOP_TASK_NAME, cmd: "STOP", hint: "GO" },
 ];

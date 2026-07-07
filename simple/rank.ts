@@ -13,7 +13,7 @@
  * 셀 표기:
  *   - MID 없는 행: 해당 스토어 상품 전부 → "1위 · 11위 · 13위" (상위 5개까지)
  *   - MID 있는 행: 그 상품의 순위만 → "13위"
- *   - 1,000위 안에 없으면 "순위밖"
+ *   - 탐색 범위(기본 400위 = 쇼핑화면 10페이지) 안에 없으면 "순위밖"
  *
  * 「순위추적로그」 탭: 발견 상품 상세(순위/스토어/상품명/가격/링크) 날짜별 누적
  *
@@ -22,7 +22,7 @@
  *
  * 순위 기준:
  *   - 쇼핑 검색 API(sort=sim) 노출 순서 = 광고 제외 순수 검색순위
- *   - 키워드당 100개 × 10페이지 = 1,000위까지 탐색
+ *   - 키워드당 기본 400위까지 탐색 (RANK_MAX_PAGES 환경변수로 조정, 1페이지=100위)
  *   - 가격비교(카탈로그) 묶임 상품은 스토어명 매칭이 안 될 수 있음 → MID 입력으로 해결
  *
  * 실행: cd /home/ubuntu/sales/simple && npx tsx rank.ts
@@ -38,11 +38,13 @@ const CLIENT_ID = process.env.NAVER_DEVELOPER_CLIENT_ID;
 const CLIENT_SECRET = process.env.NAVER_DEVELOPER_CLIENT_SECRET;
 
 const TAB_SRC = "검색량조회";
-const TAB_RANK = "순위추적";
+const TAB_RANK = "순위추적누적"; // 사장님이 보는 탭 (gid 1183927482) — 이름 바꾸면 새 탭이 생기니 주의
 const TAB_LOG = "순위추적로그";
 const FIXED_HEADERS = ["사업자명", "키워드", "MID", "메모"];
 const LOG_HEADERS = ["날짜", "키워드", "순위", "스토어", "상품명", "가격", "링크"];
-const MAX_PAGES = Number(process.env.RANK_MAX_PAGES || 10); // 100개 × 10페이지 = 1,000위까지
+// 400위 = 네이버 쇼핑 화면 10페이지(페이지당 40개). 더 깊게 보려면 RANK_MAX_PAGES 로 조정 (API 100개/페이지)
+const MAX_PAGES = Number(process.env.RANK_MAX_PAGES || 4);
+const MAX_RANK = MAX_PAGES * 100;
 const MAX_RANKS_IN_CELL = 5;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -193,7 +195,7 @@ async function sendTelegramReport(today: string, prevDates: string[], reportRows
   const lines: string[] = [];
   lines.push(`<b>📈 ${today} 순위 보고 (쇼핑 검색)</b>`);
   if (prevDates.length > 0) {
-    lines.push(`<i>오늘 ← 전일${prevDates.length > 1 ? " ← 전전일" : ""} 순 · 1,000위까지 탐색</i>`);
+    lines.push(`<i>오늘 ← 전일${prevDates.length > 1 ? " ← 전전일" : ""} 순 · ${MAX_RANK}위까지 탐색</i>`);
   }
   lines.push("");
 
@@ -223,7 +225,7 @@ async function sendTelegramReport(today: string, prevDates: string[], reportRows
       .join("");
     lines.push(`• ${label}: ${rankStr}${trail}${arrow}`);
   }
-  if (outOfRank === reportRows.length) lines.push("오늘 순위권(1,000위) 내 상품 없음");
+  if (outOfRank === reportRows.length) lines.push(`오늘 순위권(${MAX_RANK}위) 내 상품 없음`);
   if (outOfRank > 0) lines.push("", `<i>그 외 ${outOfRank}개 키워드: 순위밖</i>`);
 
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -285,14 +287,17 @@ async function readRankRows(): Promise<{ oldDates: string[]; rows: RankRow[] }> 
       rows.push({ store, keyword, mid, memo, history: oldDates.map((_, i) => String(r[histStart + i] ?? "")) });
     }
   }
-  // 검색량조회 탭 키워드 → 없는 키워드는 새 행으로 추가
-  const srcRows = await readRange(SHEET_CREDS!, `${TAB_SRC}!A4:A10000`);
-  const existingKw = new Set(rows.map((r) => norm(r.keyword)));
-  for (const r of srcRows) {
-    const k = String(r[0] ?? "").trim();
-    if (k && !existingKw.has(norm(k))) {
-      existingKw.add(norm(k));
-      rows.push({ store: "", keyword: k, mid: "", memo: "", history: oldDates.map(() => "") });
+  // 검색량조회 탭 키워드 자동 가져오기 — 기본 꺼짐 (검색량 조사용 대량 키워드가 순위추적을 폭증시킴).
+  // 켜려면 RANK_IMPORT_SRC=1
+  if (process.env.RANK_IMPORT_SRC === "1") {
+    const srcRows = await readRange(SHEET_CREDS!, `${TAB_SRC}!A4:A10000`);
+    const existingKw = new Set(rows.map((r) => norm(r.keyword)));
+    for (const r of srcRows) {
+      const k = String(r[0] ?? "").trim();
+      if (k && !existingKw.has(norm(k))) {
+        existingKw.add(norm(k));
+        rows.push({ store: "", keyword: k, mid: "", memo: "", history: oldDates.map(() => "") });
+      }
     }
   }
   return { oldDates, rows };
@@ -338,23 +343,33 @@ async function main(): Promise<void> {
     { storeHits: Hit[]; midInfo: Map<string, { rank: number; mall: string }>; error: boolean }
   >();
   const logRows: (string | number)[][] = [];
-  let gi = 0;
-  for (const [gkey, g] of groups) {
-    gi++;
-    process.stdout.write(`  [${gi}/${groups.size}] ${g.keyword}: `);
-    try {
-      const { storeHits, midInfo, scanned } = await scanKeyword(g.keyword, mallMap, g.mids);
-      scanResults.set(gkey, { storeHits, midInfo, error: false });
-      console.log(storeHits.length > 0 ? ranksCellText(storeHits) : `순위밖 (${scanned}개 탐색)`);
-      for (const h of [...storeHits].sort((a, b) => a.rank - b.rank).slice(0, 10)) {
-        logRows.push([today, g.keyword, h.rank, h.store, h.title, h.price, h.link]);
+  // 키워드 3개 동시 조회 — 네이버 검색 API 초당 한도(~10회) 안에서 3배 가속
+  const CONCURRENCY = Number(process.env.RANK_CONCURRENCY || 3);
+  const queue = [...groups.entries()];
+  let done = 0;
+  async function scanWorker(): Promise<void> {
+    for (;;) {
+      const next = queue.shift();
+      if (!next) return;
+      const [gkey, g] = next;
+      try {
+        const { storeHits, midInfo, scanned } = await scanKeyword(g.keyword, mallMap, g.mids);
+        scanResults.set(gkey, { storeHits, midInfo, error: false });
+        done++;
+        console.log(
+          `  [${done}/${groups.size}] ${g.keyword}: ${storeHits.length > 0 ? ranksCellText(storeHits) : `순위밖 (${scanned}개 탐색)`}`,
+        );
+        for (const h of [...storeHits].sort((a, b) => a.rank - b.rank).slice(0, 10)) {
+          logRows.push([today, g.keyword, h.rank, h.store, h.title, h.price, h.link]);
+        }
+      } catch (err) {
+        scanResults.set(gkey, { storeHits: [], midInfo: new Map(), error: true });
+        done++;
+        console.log(`  [${done}/${groups.size}] ${g.keyword} 실패: ${err instanceof Error ? err.message.slice(0, 60) : String(err)}`);
       }
-    } catch (err) {
-      scanResults.set(gkey, { storeHits: [], midInfo: new Map(), error: true });
-      console.log(`실패: ${err instanceof Error ? err.message.slice(0, 60) : String(err)}`);
     }
-    await sleep(200);
   }
+  await Promise.all(Array.from({ length: CONCURRENCY }, () => scanWorker()));
 
   // ── 쓰기 직전 시트 재독 — 스캔(수 분) 동안 사장님이 편집한 내용을 덮어쓰지 않게 최신 기준으로 기록 ──
   const scannedMids = new Set(rows.filter((r) => r.mid).map((r) => r.mid));
