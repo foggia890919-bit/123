@@ -152,26 +152,29 @@ async function main(): Promise<void> {
   const today = new Date().toISOString().slice(0, 10);
   const BATCH = 5;
   const results = new Map<string, { pc: number; mb: number; comp: string }>();
+  // API 가 공백 포함 키워드를 400 으로 거부 → 공백 제거 + 대문자 통일본으로 조회/매칭
+  const norm = (s: string) => s.replace(/\s+/g, "").toUpperCase();
+  const queries = [...new Set(items.map((x) => norm(x.keyword)))];
 
-  for (let i = 0; i < items.length; i += BATCH) {
-    const batch = items.slice(i, i + BATCH).map((x) => x.keyword);
-    process.stdout.write(`  [${i + 1}-${Math.min(i + BATCH, items.length)}/${items.length}] ${batch.join(", ")}: `);
+  for (let i = 0; i < queries.length; i += BATCH) {
+    const batch = queries.slice(i, i + BATCH);
+    process.stdout.write(`  [${i + 1}-${Math.min(i + BATCH, queries.length)}/${queries.length}] ${batch.join(", ")}: `);
     try {
       const list = await fetchKeywordTool(batch);
-      for (const k of batch) {
-        const found = list.find((row) => row.relKeyword === k || row.relKeyword === k.replace(/\s+/g, ""));
+      for (const q of batch) {
+        const found = list.find((row) => norm(row.relKeyword) === q);
         if (found) {
           const pc = num(found.monthlyPcQcCnt);
           const mb = num(found.monthlyMobileQcCnt);
-          results.set(k, { pc, mb, comp: found.compIdx || "" });
+          results.set(q, { pc, mb, comp: found.compIdx || "" });
         } else {
-          results.set(k, { pc: 0, mb: 0, comp: "데이터없음" });
+          results.set(q, { pc: 0, mb: 0, comp: "데이터없음" });
         }
       }
       console.log("OK");
     } catch (err) {
       console.log(`실패: ${err instanceof Error ? err.message.slice(0, 60) : String(err)}`);
-      for (const k of batch) results.set(k, { pc: 0, mb: 0, comp: "오류" });
+      for (const q of batch) results.set(q, { pc: 0, mb: 0, comp: "오류" });
     }
     await sleep(300);
   }
@@ -179,7 +182,7 @@ async function main(): Promise<void> {
   // 시트에 batch update — 한 번의 HTTP 요청으로 quota 1회만 소비 (분당 60회 write 한도 회피)
   // 행 번호가 비연속일 수 있어서 range 별 묶음 형식 사용
   const updates = items.map((item) => {
-    const r = results.get(item.keyword)!;
+    const r = results.get(norm(item.keyword))!;
     return {
       range: `${TAB}!B${item.row}:F${item.row}`,
       values: [[r.pc, r.mb, r.pc + r.mb, r.comp, today]],
