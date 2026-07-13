@@ -177,8 +177,11 @@ export async function GET(req: NextRequest) {
   // 사용자 요청: "기존에 가져왔던 재고를 검색 즉시 보여주고, 시점도 표시".
   // stock=0 → 품절, stock=null → "-"(데이터 없음). 시점은 화면에서 "N시간 전" 으로 표기하고
   // 4시간 초과면 빨갛게 강조 — 사용자가 신선도를 직접 판단할 수 있게 함.
-  const insuranceCodes = result.map((m) => m.insuranceCode).filter((c): c is string => !!c);
-  if (!fast && insuranceCodes.length > 0) {
+  // 조회 키: 보험코드 있는 약은 insuranceCode, 없는 약(비급여)은 의사 키 `NC:{id}`.
+  // 워커가 비급여 재고를 InventorySnapshot.insuranceCode 컬럼에 `NC:{medicationId}` 로
+  // 쌓으므로, 두 종류의 키를 한 배열로 합쳐 한 번의 쿼리로 조회한다.
+  const stockKeys = result.map((m) => (m.insuranceCode ? m.insuranceCode : `NC:${m.id}`));
+  if (!fast && stockKeys.length > 0) {
     // 빠른 단순 쿼리 — UNIQUE (siteKey, insuranceCode) 덕분에 키별 1줄만 존재.
     // DISTINCT ON / ORDER BY 불필요 → planner 가 인덱스 만으로 즉시 조회.
     const rows = await prisma.$queryRaw<Array<{ insuranceCode: string; stock: number | null; scrapedAt: Date }>>`
@@ -186,7 +189,7 @@ export async function GET(req: NextRequest) {
              "stock",
              "scrapedAt"
       FROM "InventorySnapshot"
-      WHERE "insuranceCode" = ANY(${insuranceCodes}::text[])
+      WHERE "insuranceCode" = ANY(${stockKeys}::text[])
         AND "siteKey" IN ('ibjp', 'family')
     `;
     const STALE_MS = 6 * 60 * 60 * 1000;
@@ -209,9 +212,11 @@ export async function GET(req: NextRequest) {
       }
     }
     for (const m of result) {
-      if (m.insuranceCode && sumByCode.has(m.insuranceCode)) {
-        m.stock = sumByCode.get(m.insuranceCode) ?? null;
-        const latest = latestByCode.get(m.insuranceCode);
+      // 보험코드 있으면 그 코드, 없으면 의사 키로 조회 (매핑도 동일 키 사용)
+      const key = m.insuranceCode ? m.insuranceCode : `NC:${m.id}`;
+      if (sumByCode.has(key)) {
+        m.stock = sumByCode.get(key) ?? null;
+        const latest = latestByCode.get(key);
         if (latest) m.stockScrapedAt = latest.toISOString();
       }
     }

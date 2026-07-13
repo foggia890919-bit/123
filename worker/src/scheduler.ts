@@ -1,10 +1,11 @@
 import cron from "node-cron";
 import { ALL_ADAPTERS, DISABLED_SITES } from "../../src/scrapers/adapters/index.ts";
-import type { Credentials, WholesaleAdapter } from "../../src/scrapers/core/types.ts";
+import type { Credentials, InventoryItem, WholesaleAdapter } from "../../src/scrapers/core/types.ts";
 import {
   hasDb,
   ensureSite,
   loadExcelMedicationCodes,
+  loadNonInsuredTargets,
   saveSnapshots,
   startJob,
   finishJob,
@@ -25,13 +26,17 @@ const PER_SITE_DELAY_MS = Number(process.env.SCHEDULED_DELAY_MS ?? 100);
 // Default 2 = 2× throughput with acceptable memory on a small instance.
 const CONCURRENCY_PER_SITE = Math.max(1, Number(process.env.CONCURRENCY_PER_SITE ?? 2));
 
+type ScrapeRowLike = {
+  siteKey: string;
+  insuranceCode: string;
+  items: InventoryItem[];
+  error?: string;
+};
+
 interface RunJobDeps {
-  scrapeOne: (adapter: WholesaleAdapter, code: string, slot?: number) => Promise<{
-    siteKey: string;
-    insuranceCode: string;
-    items: { insuranceCode?: string; productName: string; spec?: string; manufacturer?: string; unitPrice?: number; stock?: number; raw?: unknown }[];
-    error?: string;
-  }>;
+  scrapeOne: (adapter: WholesaleAdapter, code: string, slot?: number) => Promise<ScrapeRowLike>;
+  // 비급여 제품명 검색 — 지정되면 코드 배치 뒤에 이름 배치를 실행한다.
+  scrapeOneByName?: (adapter: WholesaleAdapter, medicationId: string, productName: string, slot?: number) => Promise<ScrapeRowLike>;
   getCreds: (siteKey: string) => Credentials | null;
 }
 
@@ -39,6 +44,8 @@ interface RunOptions {
   limit?: number;        // first N codes only (for smoke testing)
   sites?: string[];      // only these adapter keys
   mode?: string;         // ScrapeJob.mode label, default "scheduled"
+  skipNames?: boolean;   // true 면 비급여 이름 배치 생략 (기본 false)
+  namesOnly?: boolean;   // true 면 코드 배치 생략, 비급여 이름 배치만 실행 (기본 false)
 }
 
 export async function runScheduledJob(
@@ -50,7 +57,7 @@ export async function runScheduledJob(
     return { totalCodes: 0, sitesRun: [], written: 0, failed: 0 };
   }
 
-  let codes = await loadExcelMedicationCodes();
+  let codes = opts.namesOnly ? [] : await loadExcelMedicationCodes();
   if (opts.limit && opts.limit > 0) {
     codes = codes.slice(0, opts.limit);
   }
@@ -67,12 +74,31 @@ export async function runScheduledJob(
     sitesWithCreds = sitesWithCreds.filter(a => want.has(a.key));
   }
 
-  if (codes.length === 0) {
-    console.warn("[scheduler] no Excel medications with insurance codes — skipping");
-    return { totalCodes: 0, sitesRun: [], written: 0, failed: 0 };
-  }
   if (sitesWithCreds.length === 0) {
     console.warn("[scheduler] no sites have credentials configured — skipping");
+    return { totalCodes: 0, sitesRun: [], written: 0, failed: 0 };
+  }
+
+  // namesOnly: 코드 배치 전체를 건너뛰고 비급여 이름 배치만 실행.
+  if (opts.namesOnly) {
+    console.log("[scheduler] namesOnly — 코드 배치 생략, 비급여 이름 배치만 실행");
+    // 이름 배치도 InventorySnapshot.siteKey FK 를 타므로 WholesaleSite 행 보장 필요.
+    for (const site of sitesWithCreds) {
+      await ensureSite(site).catch(err =>
+        console.error(`[scheduler] ensureSite failed for ${site.key}:`, (err as Error).message)
+      );
+    }
+    const { nameWritten, nameFailed } = await runNameBatch(deps, opts, sitesWithCreds);
+    return {
+      totalCodes: 0,
+      sitesRun: sitesWithCreds.map(s => s.key),
+      written: nameWritten,
+      failed: nameFailed,
+    };
+  }
+
+  if (codes.length === 0) {
+    console.warn("[scheduler] no Excel medications with insurance codes — skipping");
     return { totalCodes: 0, sitesRun: [], written: 0, failed: 0 };
   }
 
@@ -176,6 +202,10 @@ export async function runScheduledJob(
     `[scheduler] batch finished in ${elapsedMin} min — written: ${totalDone}, failed: ${totalFailed}`
   );
 
+  // ---------------- 비급여 이름 배치 ----------------
+  // 코드 배치가 끝난 뒤, 보험코드 없는 약을 제품명으로 검색해 의사 키 NC:{medicationId} 로 저장.
+  const { nameWritten, nameFailed } = await runNameBatch(deps, opts, sitesWithCreds);
+
   // Best-effort prune of stale rows
   try {
     const pruned = await pruneOldSnapshots(14);
@@ -187,9 +217,98 @@ export async function runScheduledJob(
   return {
     totalCodes: codes.length,
     sitesRun: sitesWithCreds.map(s => s.key),
-    written: totalDone,
-    failed: totalFailed,
+    written: totalDone + nameWritten,
+    failed: totalFailed + nameFailed,
   };
+}
+
+// 비급여 이름 배치 — 코드 배치와 동일한 사이트별/lane 분할 구조로 순회.
+// 각 결과는 saveSnapshots 에 snapshotKey=`NC:{medicationId}` 로 저장한다.
+async function runNameBatch(
+  deps: RunJobDeps,
+  opts: RunOptions,
+  sitesWithCreds: WholesaleAdapter[]
+): Promise<{ nameWritten: number; nameFailed: number }> {
+  if (opts.skipNames || !deps.scrapeOneByName) {
+    return { nameWritten: 0, nameFailed: 0 };
+  }
+  const scrapeByName = deps.scrapeOneByName;
+
+  // searchByName 을 지원하는 사이트만 대상.
+  const nameSites = sitesWithCreds.filter(s => typeof s.searchByName === "function");
+  if (nameSites.length === 0) {
+    console.log("[scheduler] 비급여 이름배치: searchByName 지원 사이트 없음 — 건너뜀");
+    return { nameWritten: 0, nameFailed: 0 };
+  }
+
+  let targets = await loadNonInsuredTargets();
+  if (opts.limit && opts.limit > 0) targets = targets.slice(0, opts.limit);
+  if (targets.length === 0) {
+    console.log("[scheduler] 비급여 이름배치: 대상 없음 — 건너뜀");
+    return { nameWritten: 0, nameFailed: 0 };
+  }
+
+  console.log(`[scheduler] 비급여 이름배치: ${targets.length} 품목 × ${nameSites.length} 사이트`);
+
+  const statsBySite = new Map<string, { done: number; failed: number }>();
+  for (const s of nameSites) statsBySite.set(s.key, { done: 0, failed: 0 });
+
+  await Promise.all(
+    nameSites.map(async site => {
+      const st = statsBySite.get(site.key)!;
+      // 코드 배치와 동일하게 interleaving(round-robin) 으로 lane 분할.
+      const lanes = Array.from({ length: CONCURRENCY_PER_SITE }, (_, slot) =>
+        targets.filter((_, i) => i % CONCURRENCY_PER_SITE === slot)
+      );
+      await Promise.all(
+        lanes.map(async (slice, slot) => {
+          for (const t of slice) {
+            let row: ScrapeRowLike;
+            try {
+              row = await scrapeByName(site, t.medicationId, t.productName, slot);
+            } catch (err) {
+              console.warn(`[scheduler] NAME-FAIL ${site.key}/${t.productName}: ${(err as Error).message}`);
+              st.failed++;
+              await new Promise(r => setTimeout(r, PER_SITE_DELAY_MS));
+              continue;
+            }
+            if (row.error) {
+              console.warn(`[scheduler] NAME-FAIL ${site.key}/${t.productName}: ${row.error}`);
+              st.failed++;
+            } else if (row.items.length > 0) {
+              // 의사 키는 medication 당 1행 → 대표 항목 하나만 저장 (재고 최대치 우선).
+              const best = row.items.reduce((a, b) => ((b.stock ?? -1) > (a.stock ?? -1) ? b : a));
+              const insert: SnapshotInsert = {
+                siteKey: site.key,
+                insuranceCode: t.medicationId,
+                item: best,
+                snapshotKey: `NC:${t.medicationId}`,
+              };
+              try {
+                await saveSnapshots([insert]);
+                st.done++;
+              } catch (err) {
+                console.error(`[scheduler] db write failed for ${site.key}/${t.productName}:`, (err as Error).message);
+                st.failed++;
+              }
+            } else {
+              st.done++;
+            }
+            await new Promise(r => setTimeout(r, PER_SITE_DELAY_MS));
+          }
+        })
+      );
+    })
+  );
+
+  let nameWritten = 0;
+  let nameFailed = 0;
+  for (const st of statsBySite.values()) {
+    nameWritten += st.done;
+    nameFailed += st.failed;
+  }
+  console.log(`[scheduler] 비급여 이름배치 완료 — done: ${nameWritten}, failed: ${nameFailed}`);
+  return { nameWritten, nameFailed };
 }
 
 // Three runs per day, KST: 06:00, 12:00, 18:00

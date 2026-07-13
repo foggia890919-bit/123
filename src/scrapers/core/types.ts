@@ -23,6 +23,8 @@ export interface WholesaleAdapter {
   login(page: Page, creds: Credentials): Promise<void>;
   isLoggedIn(page: Page): Promise<boolean>;
   searchByCode(page: Page, insuranceCode: string): Promise<InventoryItem[]>;
+  // 비급여(보험코드 없음) 품목을 제품명으로 검색. 지원 어댑터만 구현.
+  searchByName?(page: Page, productName: string): Promise<InventoryItem[]>;
 }
 
 export interface ScrapeResult {

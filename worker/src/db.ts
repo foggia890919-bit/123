@@ -1,5 +1,7 @@
 import { Pool } from "pg";
 import { createId } from "@paralleldrive/cuid2";
+import { readFileSync, existsSync } from "node:fs";
+import { resolve } from "node:path";
 import type { InventoryItem, WholesaleAdapter } from "../../src/scrapers/core/types.ts";
 
 // Worker uses pg directly (no Prisma). All schemas mirror prisma/schema.prisma.
@@ -59,10 +61,69 @@ export async function loadExcelMedicationCodes(): Promise<ExcelMedRow[]> {
   return rows;
 }
 
+// 비급여(보험코드 없음) 대상 — 제품명으로 검색해야 하는 약들.
+export interface NonInsuredTarget {
+  medicationId: string;
+  productName: string;
+}
+
+export async function loadNonInsuredTargets(): Promise<NonInsuredTarget[]> {
+  const limit = Math.max(1, Number(process.env.NONINSURED_LIMIT ?? 2000));
+  const pool = getPool();
+
+  const { rows } = await pool.query<NonInsuredTarget>(
+    `SELECT id AS "medicationId", "productName"
+     FROM "Medication"
+     WHERE ("insuranceCode" IS NULL OR "insuranceCode" = '')
+       AND ("isSettlement" = true OR source = 'EXCEL' OR "paymentType" = '비급여')
+     ORDER BY "createdAt" DESC
+     LIMIT ${limit}`
+  );
+
+  const byId = new Map<string, NonInsuredTarget>();
+  for (const r of rows) byId.set(r.medicationId, r);
+
+  // 선택: noninsured-extra.txt 에 적힌 제품명을 추가 대상으로 편입.
+  // 한 줄에 하나, 빈 줄/# 주석 무시. DB에서 이름으로 찾아 medicationId 확보.
+  try {
+    const extraPath = resolve(process.cwd(), "noninsured-extra.txt");
+    if (existsSync(extraPath)) {
+      const content = readFileSync(extraPath, "utf-8");
+      const names = content
+        .split("\n")
+        .map(l => l.trim())
+        .filter(l => l.length > 0 && !l.startsWith("#"));
+      for (const name of names) {
+        const { rows: matched } = await pool.query<NonInsuredTarget>(
+          `SELECT id AS "medicationId", "productName"
+           FROM "Medication"
+           WHERE "productName" ILIKE '%' || $1 || '%'
+           LIMIT 5`,
+          [name]
+        );
+        if (matched.length === 0) {
+          console.warn(`[noninsured] "${name}" DB 미매칭 — 건너뜀`);
+          continue;
+        }
+        for (const m of matched) {
+          if (!byId.has(m.medicationId)) byId.set(m.medicationId, m);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`[noninsured] extra 파일 처리 실패: ${(err as Error).message}`);
+  }
+
+  return Array.from(byId.values());
+}
+
 export interface SnapshotInsert {
   siteKey: string;
   insuranceCode: string;
   item: InventoryItem;
+  // 스냅샷 저장에 쓸 키를 명시적으로 지정 (비급여 이름배치의 의사 키 `NC:{medicationId}` 등).
+  // 지정되면 item.insuranceCode / insuranceCode 대신 이 값을 그대로 사용한다.
+  snapshotKey?: string;
 }
 
 export async function saveSnapshots(rows: SnapshotInsert[]): Promise<number> {
@@ -82,7 +143,7 @@ export async function saveSnapshots(rows: SnapshotInsert[]): Promise<number> {
         values.push(
           id,
           r.siteKey,
-          r.item.insuranceCode || r.insuranceCode,
+          r.snapshotKey ?? (r.item.insuranceCode || r.insuranceCode),
           r.item.productName,
           r.item.spec ?? null,
           r.item.manufacturer ?? null,

@@ -49,3 +49,4 @@ next-env.d.ts
 
 # google sheet sync cache (Stop hook output)
 /.sheet_tasks.json
+worker/logs/

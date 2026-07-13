@@ -46,6 +46,100 @@ async function waitAny(page: Page, selector: string, timeout = 15_000): Promise<
   return page.locator(selector).first();
 }
 
+// 전문/급여 badges sometimes get concatenated with the product name
+// (e.g. "전문급여플라그렐정(병)"). Strip leading badge prefixes.
+function stripBadges(s: string): string {
+  return s.replace(/^(전문|일반|급여|비급여)+/g, "").trim();
+}
+
+// cells 배열에서 단가/재고/제품명 추출 — searchByCode / searchByName 공용.
+// `rest` 는 code 셀을 제외한 나머지 셀들 (code 가 없으면 전체 셀).
+function extractIbjpItem(code: string, rest: string[], allCells: string[]): InventoryItem {
+  const numericCells = rest.filter(c => /^[\d,]+$/.test(c.replace(/\s/g, "")));
+  const [priceRaw, stockRaw] = numericCells;
+  const priceStr = priceRaw?.replace(/[^\d]/g, "") ?? "";
+  const stockStr = stockRaw?.replace(/[^\d]/g, "") ?? "";
+
+  const nameCandidates = rest
+    .filter(c => !/^(전문|일반|급여|비급여|담기|반품|이력|관심)$/.test(c) && !/^[\d,\s]+$/.test(c));
+
+  const productName = stripBadges(nameCandidates[0] ?? "");
+  const spec = nameCandidates[1] ?? null;
+  const manufacturer = nameCandidates[2] ?? null;
+
+  return {
+    insuranceCode: code,
+    productName,
+    spec,
+    manufacturer,
+    unitPrice: priceStr ? Number(priceStr) : null,
+    stock: stockStr ? Number(stockStr) : null,
+    raw: { cells: allCells },
+  };
+}
+
+// 검색창에 keyword 를 넣고 결과 테이블의 행(셀 배열 목록)을 돌려준다.
+// searchByCode / searchByName 이 공유하는 SPA 검색 흐름.
+async function ibjpSearch(page: Page, keyword: string, baseUrl: string): Promise<string[][]> {
+  // 페이지 진입 직후만 SPA 렌더링 대기 — 같은 페이지에서 연속 검색은 짧게.
+  const onOrderPage = await page.locator(SEL.searchInput).first().isVisible().catch(() => false);
+  if (!onOrderPage) {
+    await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => {});
+    await page.waitForTimeout(400);
+    // /dist/comOrd is the integrated-order route observed after login.
+    await page.goto(baseUrl + SEL.orderPath, { waitUntil: "commit", timeout: 30_000 });
+    await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => {});
+    await page.waitForTimeout(400);
+  }
+
+  // Dismiss any dialog that may have appeared on page navigation
+  await dismissQDialogs(page);
+
+  const input = await waitAny(page, SEL.searchInput, 30_000);
+  await input.click();
+  await input.fill(keyword);  // type → fill (타이핑 지연 제거)
+
+  // Prefer clicking 검색 button over Enter — Enter behaviour varies by SPA.
+  const btn = page.locator(SEL.searchBtn).first();
+  if (await btn.isVisible().catch(() => false)) {
+    await btn.click();
+  } else {
+    await page.keyboard.press("Enter");
+  }
+
+  // Result table is updated via AJAX, not navigation. Wait for either
+  // a populated row or the "no results" text to appear.
+  await page
+    .waitForFunction(
+      () => {
+        const rows = document.querySelectorAll("table tbody tr");
+        if (rows.length === 0) return false;
+        for (const r of Array.from(rows)) {
+          const tds = r.querySelectorAll("td");
+          if (tds.length > 0) return true;
+        }
+        return false;
+      },
+      { timeout: 5_000 }
+    )
+    .catch(() => {});
+  await page.waitForTimeout(200);
+
+  const rows = await page.locator(SEL.resultRows).all();
+  const out: string[][] = [];
+  for (const row of rows) {
+    const cells = (await row.locator("td").allTextContents()).map(c => c.trim()).filter(Boolean);
+    if (cells.length > 0) out.push(cells);
+  }
+  return out;
+}
+
+// 괄호 안 내용 제거 + 공백 제거 후 검색어를 포함하는지 비교하기 위한 정규화.
+function normalizeForNameMatch(s: string): string {
+  return s.replace(/\([^)]*\)/g, "").replace(/\s+/g, "");
+}
+
 async function dismissQDialogs(page: Page): Promise<void> {
   for (let i = 0; i < 4; i++) {
     const visible = await page.locator(".q-dialog__backdrop").first().isVisible({ timeout: 800 }).catch(() => false);
@@ -99,95 +193,41 @@ export const ibjp: WholesaleAdapter = {
   },
 
   async searchByCode(page: Page, insuranceCode: string): Promise<InventoryItem[]> {
-    // 페이지 진입 직후만 SPA 렌더링 대기 — 같은 페이지에서 연속 검색은 짧게.
-    const onOrderPage = await page.locator(SEL.searchInput).first().isVisible().catch(() => false);
-    if (!onOrderPage) {
-      await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => {});
-      await page.waitForTimeout(400);
-      // /dist/comOrd is the integrated-order route observed after login.
-      await page.goto(this.baseUrl + SEL.orderPath, { waitUntil: "commit", timeout: 30_000 });
-      await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => {});
-      await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => {});
-      await page.waitForTimeout(400);
-    }
-
-    // Dismiss any dialog that may have appeared on page navigation
-    await dismissQDialogs(page);
-
-    const input = await waitAny(page, SEL.searchInput, 30_000);
-    await input.click();
-    await input.fill(insuranceCode);  // type → fill (타이핑 지연 제거)
-
-    // Prefer clicking 검색 button over Enter — Enter behaviour varies by SPA.
-    const btn = page.locator(SEL.searchBtn).first();
-    if (await btn.isVisible().catch(() => false)) {
-      await btn.click();
-    } else {
-      await page.keyboard.press("Enter");
-    }
-
-    // Result table is updated via AJAX, not navigation. Wait for either
-    // a populated row or the "no results" text to appear.
-    await page
-      .waitForFunction(
-        () => {
-          const rows = document.querySelectorAll("table tbody tr");
-          if (rows.length === 0) return false;
-          for (const r of Array.from(rows)) {
-            const tds = r.querySelectorAll("td");
-            if (tds.length > 0) return true;
-          }
-          return false;
-        },
-        { timeout: 5_000 }
-      )
-      .catch(() => {});
-    await page.waitForTimeout(200);
-
-    const rows = await page.locator(SEL.resultRows).all();
+    const rows = await ibjpSearch(page, insuranceCode, this.baseUrl);
     const items: InventoryItem[] = [];
 
-    for (const row of rows) {
-      const cells = (await row.locator("td").allTextContents()).map(c => c.trim()).filter(Boolean);
-      if (cells.length === 0) continue;
-
+    for (const cells of rows) {
       // Only accept rows where the first cell is the insurance code itself.
       // This excludes the 제품정보 panel below the table, whose rows look
       // like ["보험코드", "643703630", ...].
       const code = cells[0];
       if (!/^\d{9,12}$/.test(code)) continue;
 
-      const numericCells = cells
-        .slice(1)
-        .filter(c => /^[\d,]+$/.test(c.replace(/\s/g, "")));
-      const [priceRaw, stockRaw] = numericCells;
-      const priceStr = priceRaw?.replace(/[^\d]/g, "") ?? "";
-      const stockStr = stockRaw?.replace(/[^\d]/g, "") ?? "";
-
-      const nameCandidates = cells
-        .slice(1)
-        .filter(c => !/^(전문|일반|급여|비급여|담기|반품|이력|관심)$/.test(c) && !/^[\d,\s]+$/.test(c));
-
-      // 전문/급여 badges sometimes get concatenated with the product name
-      // (e.g. "전문급여플라그렐정(병)"). Strip leading badge prefixes.
-      const stripBadges = (s: string) =>
-        s.replace(/^(전문|일반|급여|비급여)+/g, "").trim();
-
-      const productName = stripBadges(nameCandidates[0] ?? "");
-      const spec = nameCandidates[1] ?? null;
-      const manufacturer = nameCandidates[2] ?? null;
-
-      items.push({
-        insuranceCode: code,
-        productName,
-        spec,
-        manufacturer,
-        unitPrice: priceStr ? Number(priceStr) : null,
-        stock: stockStr ? Number(stockStr) : null,
-        raw: { cells },
-      });
+      items.push(extractIbjpItem(code, cells.slice(1), cells));
     }
 
     return items;
+  },
+
+  async searchByName(page: Page, productName: string): Promise<InventoryItem[]> {
+    const rows = await ibjpSearch(page, productName, this.baseUrl);
+    const items: InventoryItem[] = [];
+
+    for (const cells of rows) {
+      // 비급여 품목은 코드가 없거나 다른 형식일 수 있으니 완화:
+      // 첫 셀이 코드 형식이면 insuranceCode 로, 아니면 "" 로 두고 파싱 계속.
+      const first = cells[0];
+      const hasCode = /^\d{9,12}$/.test(first);
+      const code = hasCode ? first : "";
+      const rest = hasCode ? cells.slice(1) : cells;
+      items.push(extractIbjpItem(code, rest, cells));
+    }
+
+    // 검색어를 포함하는 품목만 반환 (괄호 안 내용/공백 무시).
+    const needle = normalizeForNameMatch(productName);
+    const filtered = items.filter(it => normalizeForNameMatch(it.productName).includes(needle));
+
+    console.log(`[ibjp] name="${productName}" rows=${rows.length} items=${filtered.length}`);
+    return filtered;
   },
 };

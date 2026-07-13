@@ -72,6 +72,62 @@ async function waitAny(page: Page, selector: string, timeout = 20_000): Promise<
   return page.locator(selector).first();
 }
 
+function familyStripBadges(s: string): string {
+  return s.replace(/^\d+\.\s*/, "").replace(/^(전문|일반|급여|비급여|전|보)+/g, "").trim();
+}
+
+// 한 행(셀 배열)에서 품목 정보를 추출 — searchByCode / searchByName 공용.
+// requireCode=true 면 보험코드가 없는 행은 버린다(코드 검색). false 면
+// 코드가 없어도 insuranceCode="" 로 파싱을 계속한다(이름 검색).
+function extractFamilyItem(cells: string[], requireCode: boolean): InventoryItem | null {
+  if (cells.length === 0) return null;
+
+  // First cell may be the ★ favourite icon (empty text) — find the
+  // insurance code in the first two positions.
+  let codeIdx = -1;
+  for (let i = 0; i < Math.min(2, cells.length); i++) {
+    if (/^\d{9,12}$/.test(cells[i])) {
+      codeIdx = i;
+      break;
+    }
+  }
+  if (codeIdx === -1 && requireCode) return null;
+
+  const code = codeIdx === -1 ? "" : cells[codeIdx];
+  const rest = codeIdx === -1 ? cells : cells.slice(codeIdx + 1);
+  // After 보험코드: [제조원, 품명, 구분(badges), 단가, 재고, 수량]
+  // 구분 column contains badge images that render with no text, so we
+  // can't blindly trust positions. Strategy: pick the last 2 numeric
+  // cells before 수량 (price + stock).
+  const numericIndices = rest
+    .map((c, i) => ({ c, i }))
+    .filter(x => /^[\d,\s]+$/.test(x.c) && x.c.replace(/[^\d]/g, "").length > 0);
+  // Last numeric in row is usually the 수량 input (often empty), so the
+  // visible numerics tend to be [price, stock]
+  const priceCell = numericIndices[0];
+  const stockCell = numericIndices[1];
+
+  const textBeforePrice = rest
+    .slice(0, priceCell?.i ?? rest.length)
+    .map(c => familyStripBadges(c))
+    .filter(c => c.length > 0 && !/^[\d,\s]+$/.test(c));
+
+  return {
+    insuranceCode: code,
+    productName: textBeforePrice[1] ?? textBeforePrice[0] ?? "",
+    spec: null,
+    manufacturer: textBeforePrice[0] ?? null,
+    unitPrice: priceCell ? Number(priceCell.c.replace(/[^\d]/g, "")) : null,
+    stock: stockCell ? Number(stockCell.c.replace(/[^\d]/g, "")) : null,
+    raw: { cells },
+  };
+}
+
+// 괄호 안 내용 제거 + 공백 제거 후 검색어 포함 여부 비교용 정규화.
+function normalizeForNameMatch(s: string): string {
+  return s.replace(/\([^)]*\)/g, "").replace(/\s+/g, "");
+}
+
 export const family: WholesaleAdapter = {
   key: "family",
   name: "훼밀리팜",
@@ -251,54 +307,65 @@ export const family: WholesaleAdapter = {
 
     for (const row of rows) {
       const cells = (await row.locator("td").allTextContents()).map(c => c.trim());
-      if (cells.length === 0) continue;
-
-      // First cell may be the ★ favourite icon (empty text) — find the
-      // insurance code in the first two positions.
-      let codeIdx = -1;
-      for (let i = 0; i < Math.min(2, cells.length); i++) {
-        if (/^\d{9,12}$/.test(cells[i])) {
-          codeIdx = i;
-          break;
-        }
-      }
-      if (codeIdx === -1) continue;
-
-      const code = cells[codeIdx];
-      const rest = cells.slice(codeIdx + 1);
-      // After 보험코드: [제조원, 품명, 구분(badges), 단가, 재고, 수량]
-      // 구분 column contains badge images that render with no text, so we
-      // can't blindly trust positions. Strategy: pick the last 2 numeric
-      // cells before 수량 (price + stock).
-      const stripBadges = (s: string) =>
-        s.replace(/^\d+\.\s*/, "").replace(/^(전문|일반|급여|비급여|전|보)+/g, "").trim();
-
-      const numericIndices = rest
-        .map((c, i) => ({ c, i }))
-        .filter(x => /^[\d,\s]+$/.test(x.c) && x.c.replace(/[^\d]/g, "").length > 0);
-      // Last numeric in row is usually the 수량 input (often empty), so the
-      // visible numerics tend to be [price, stock]
-      const priceCell = numericIndices[0];
-      const stockCell = numericIndices[1];
-
-      const textBeforePrice = rest
-        .slice(0, priceCell?.i ?? rest.length)
-        .map(c => stripBadges(c))
-        .filter(c => c.length > 0 && !/^[\d,\s]+$/.test(c));
-
-      items.push({
-        insuranceCode: code,
-        productName: textBeforePrice[1] ?? textBeforePrice[0] ?? "",
-        spec: null,
-        manufacturer: textBeforePrice[0] ?? null,
-        unitPrice: priceCell ? Number(priceCell.c.replace(/[^\d]/g, "")) : null,
-        stock: stockCell ? Number(stockCell.c.replace(/[^\d]/g, "")) : null,
-        raw: { cells },
-      });
+      const item = extractFamilyItem(cells, true);
+      if (item) items.push(item);
     }
 
     // 결과 카운트 1줄 요약 — 항상 출력 (0건도 포함). 0건이면 위 row[0] 로그로 원인 파악.
     console.log(`[family] code=${insuranceCode} DONE items=${items.length}` + (items.length > 0 ? ` firstStock=${items[0].stock}` : ""));
     return items;
+  },
+
+  async searchByName(page: Page, productName: string): Promise<InventoryItem[]> {
+    // 검증된 방식: GET 파라미터로 직접 진입 (selkeyword=goods_nm + keywordtext).
+    // 이 폼은 POST 로 한글 검색어를 보내면 서버가 인식하지 못하므로,
+    // 조회 버튼 클릭 대신 URL 쿼리스트링으로 바로 이동한다 (실기기 검증 완료).
+    const url = `${SEARCH_URL}?selkeyword=goods_nm&keywordtext=${encodeURIComponent(productName)}`;
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    await page.waitForLoadState("networkidle", { timeout: 3_000 }).catch(() => {});
+
+    // 결과 테이블(보험코드 헤더가 있는 표)에 행이 생길 때까지 대기.
+    await page
+      .waitForFunction(
+        () => {
+          const tables = document.querySelectorAll("table");
+          for (const t of Array.from(tables)) {
+            const ths = t.querySelectorAll("th");
+            const isResultTable = Array.from(ths).some(th => /보험코드/.test(th.textContent ?? ""));
+            if (!isResultTable) continue;
+            const rows = t.querySelectorAll("tbody tr, tr:has(td)");
+            return rows.length > 0;
+          }
+          return false;
+        },
+        { timeout: 5_000 }
+      )
+      .catch(() => {});
+    await page.waitForTimeout(150);
+
+    // "조회 조건을 선택..." 안내문구 페이지는 결과 없음으로 처리.
+    const isPlaceholder = await page
+      .evaluate(() => /조회\s*조건을\s*선택/.test(document.body.innerText))
+      .catch(() => false);
+    if (isPlaceholder) {
+      console.log(`[family] name="${productName}" rows=0 items=0 (안내문구 — 결과 아님)`);
+      return [];
+    }
+
+    const rows = await page.locator(SEL.resultRows).all();
+    const items: InventoryItem[] = [];
+    for (const row of rows) {
+      const cells = (await row.locator("td").allTextContents()).map(c => c.trim());
+      // 비급여 품목은 보험코드가 없어도 파싱 (requireCode=false).
+      const item = extractFamilyItem(cells, false);
+      if (item) items.push(item);
+    }
+
+    // 검색어를 포함하는 품목만 반환 (괄호 안 내용/공백 무시).
+    const needle = normalizeForNameMatch(productName);
+    const filtered = items.filter(it => normalizeForNameMatch(it.productName).includes(needle));
+
+    console.log(`[family] name="${productName}" rows=${rows.length} items=${filtered.length}`);
+    return filtered;
   },
 };

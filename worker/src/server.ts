@@ -8,6 +8,8 @@ import type { Credentials, InventoryItem, WholesaleAdapter } from "../../src/scr
 import { startScheduler, triggerJobNow, isJobRunning } from "./scheduler.ts";
 import { hasDb } from "./db.ts";
 import { startEpharmsScheduler } from "./epharms/cron.ts";
+import cron from "node-cron";
+import { runMasterSync, isMasterSyncRunning } from "./master-sync.ts";
 import { isEpharmsSyncRunning, runEpharmsSync, forceResetSync } from "./epharms/sync.ts";
 import { isProductSyncRunning, syncProductMaster } from "./epharms/products.ts";
 
@@ -179,6 +181,61 @@ async function scrapeOne(adapter: WholesaleAdapter, code: string, slot = 0): Pro
   }
 }
 
+// 비급여 제품명 검색 — scrapeOne 과 동일 구조(세션/rateLimit/0건 재시도)이되
+// adapter.searchByName 을 호출한다. searchByName 미지원 사이트는 error 반환.
+async function scrapeOneByName(
+  adapter: WholesaleAdapter,
+  medicationId: string,
+  productName: string,
+  slot = 0
+): Promise<ScrapeRow> {
+  const start = Date.now();
+  const creds = getCreds(adapter.key);
+  if (!creds) {
+    return {
+      siteKey: adapter.key,
+      insuranceCode: medicationId,
+      items: [],
+      error: "no credentials configured for this site",
+      durationMs: 0,
+      scrapedAt: new Date().toISOString(),
+    };
+  }
+  if (typeof adapter.searchByName !== "function") {
+    return {
+      siteKey: adapter.key,
+      insuranceCode: medicationId,
+      items: [],
+      error: `searchByName not supported by ${adapter.key}`,
+      durationMs: 0,
+      scrapedAt: new Date().toISOString(),
+    };
+  }
+  await rateLimit(adapter.key, slot);
+  const sessionKey = `${adapter.key}:${slot}`;
+  try {
+    const page = await getPage(adapter, creds, slot);
+    let items = await adapter.searchByName!(page, productName);
+    // 결과 0건이면 한 번 더 시도 (사이트 일시 응답 변동 보강).
+    if (items.length === 0) {
+      await new Promise(r => setTimeout(r, 600));
+      const retry = await adapter.searchByName!(page, productName).catch(() => [] as InventoryItem[]);
+      if (retry.length > 0) items = retry;
+    }
+    return { siteKey: adapter.key, insuranceCode: medicationId, items, durationMs: Date.now() - start, scrapedAt: new Date().toISOString() };
+  } catch (err) {
+    await invalidate(sessionKey);
+    return {
+      siteKey: adapter.key,
+      insuranceCode: medicationId,
+      items: [],
+      error: (err as Error).message,
+      durationMs: Date.now() - start,
+      scrapedAt: new Date().toISOString(),
+    };
+  }
+}
+
 // -------------------- HTTP server -----------------------------------
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -257,6 +314,7 @@ app.post("/epharms/sync-products", async (req, res) => {
 //   ?limit=N         only scrape the first N codes (smoke test)
 //   ?sites=ibjp,family   only these adapter keys
 //   ?mode=label      override ScrapeJob.mode (default "manual")
+//   ?namesOnly=1     코드 배치 생략, 비급여 이름 배치만 실행
 app.post("/scrape-batch", async (req, res) => {
   if (!hasDb()) {
     res.status(503).json({ error: "DATABASE_URL not configured on worker" });
@@ -274,12 +332,34 @@ app.post("/scrape-batch", async (req, res) => {
     ? sitesRaw.split(",").map(s => s.trim()).filter(Boolean)
     : undefined;
   const mode = typeof modeRaw === "string" ? modeRaw : "manual";
+  // ?namesOnly=1 → 코드 배치 생략, 비급여 이름 배치만 실행 (skipNames 와 반대 방향)
+  const namesOnly = req.query.namesOnly === "1" || req.query.namesOnly === "true";
 
   // Fire-and-forget so the HTTP request doesn't time out for hours-long runs
-  triggerJobNow({ scrapeOne, getCreds }, { limit, sites, mode }).catch(err =>
+  triggerJobNow({ scrapeOne, scrapeOneByName, getCreds }, { limit, sites, mode, namesOnly }).catch(err =>
     console.error("[server] manual batch failed:", err)
   );
-  res.json({ ok: true, started: true, limit, sites, mode });
+  res.json({ ok: true, started: true, limit, sites, mode, namesOnly });
+});
+
+// 공공데이터 마스터 동기화 수동 트리거 (주간 cron 과 동일 로직)
+//   POST /sync-master?mode=full|mfds|prices&maxPages=N
+app.post("/sync-master", (req, res) => {
+  if (!hasDb()) {
+    res.status(503).json({ error: "DATABASE_URL not configured" });
+    return;
+  }
+  if (isMasterSyncRunning()) {
+    res.status(409).json({ error: "master sync already running" });
+    return;
+  }
+  const modeRaw = typeof req.query.mode === "string" ? req.query.mode : "full";
+  const mode = (["full", "mfds", "prices"].includes(modeRaw) ? modeRaw : "full") as "full" | "mfds" | "prices";
+  const maxPages = typeof req.query.maxPages === "string" ? Number(req.query.maxPages) : undefined;
+  runMasterSync(mode, { maxPages }).catch(err =>
+    console.error("[master-sync] manual run failed:", err)
+  );
+  res.json({ ok: true, started: true, mode, maxPages: maxPages ?? null });
 });
 
 app.get("/sites", (_req, res) => {
@@ -344,12 +424,43 @@ app.post("/scrape-one", async (req, res) => {
   res.json(row);
 });
 
+// 비급여 제품명 검색 테스트용 — adapter.searchByName 직접 호출.
+//   POST /scrape-name  body: { site: string, name: string }
+app.post("/scrape-name", async (req, res) => {
+  const { site, name } = req.body as { site: string; name: string };
+  const adapter = ALL_ADAPTERS[site];
+  if (!adapter) {
+    res.status(400).json({ error: `unknown site: ${site}` });
+    return;
+  }
+  if (!name) {
+    res.status(400).json({ error: "name required" });
+    return;
+  }
+  // 테스트 경로라 medicationId 는 name 을 그대로 사용.
+  const row = await scrapeOneByName(adapter, name, name, LIVE_SLOT_BASE);
+  res.json(row);
+});
+
 const server = app.listen(PORT, () => {
   console.log(`[worker] listening on :${PORT}`);
   console.log(`[worker] adapters: ${Object.keys(ALL_ADAPTERS).join(", ")}`);
   console.log(`[worker] db: ${hasDb() ? "configured" : "NOT configured (scheduler will skip)"}`);
-  startScheduler({ scrapeOne, getCreds });
+  startScheduler({ scrapeOne, scrapeOneByName, getCreds });
   startEpharmsScheduler();
+
+  // 공공데이터 마스터 주간 동기화 — 기본: 일요일 02:00 KST
+  if (hasDb() && process.env.DISABLE_MASTER_SYNC !== "1") {
+    const masterCron = process.env.SCHEDULE_MASTER_CRON ?? "0 2 * * 0";
+    cron.schedule(masterCron, () => {
+      if (isMasterSyncRunning()) {
+        console.warn("[master-sync] previous run still in progress — skipping");
+        return;
+      }
+      runMasterSync("full").catch(err => console.error("[master-sync] scheduled run failed:", err));
+    }, { timezone: "Asia/Seoul" });
+    console.log(`[master-sync] registered cron "${masterCron}" (Asia/Seoul)`);
+  }
 });
 
 async function shutdown() {

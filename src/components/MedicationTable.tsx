@@ -136,6 +136,35 @@ function StockColumnCell({ code, productName, fallbackStock, fallbackScrapedAt }
   );
 }
 
+// 보험코드 없는 약(비급여) 전용 — 실시간 조회 불가라 재고확인/↻ 버튼 없이
+// API 캐시값(stock/scrapedAt)만 표시 전용으로 렌더. StockColumnCell 의 idle 표시와 동일한 모양.
+function StockDisplayOnly({ stock, scrapedAt }: { stock: number | null; scrapedAt: string | null }) {
+  const ago = formatStockAgo(scrapedAt);
+  const isStale = scrapedAt != null && Date.now() - new Date(scrapedAt).getTime() > STOCK_STALE_MS;
+
+  const numberNode = stock == null
+    ? <span className="text-gray-300">-</span>
+    : stock > 0
+      ? <span className="text-green-700 font-medium">{stock.toLocaleString()}</span>
+      : <span className="text-red-400">품절</span>;
+
+  const agoNode = ago ? (
+    <span
+      className={`text-[10px] tabular-nums ml-1 ${isStale ? "text-red-500 font-medium" : "text-gray-400"}`}
+      title={scrapedAt ? `마지막 크롤링: ${new Date(scrapedAt).toLocaleString("ko-KR")}` : ""}
+    >
+      {ago}
+    </span>
+  ) : null;
+
+  return (
+    <span className="inline-flex items-center gap-0.5">
+      {numberNode}
+      {agoNode}
+    </span>
+  );
+}
+
 type SortKey = "productName" | "price" | "commissionRate" | "additionalRate" | "totalRate" | "settlement";
 type SortDir = "asc" | "desc";
 
@@ -542,7 +571,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                               <span className="flex items-center gap-1">
                                 {med.insuranceCode
                                   ? <StockColumnCell code={med.insuranceCode} productName={med.productName} fallbackStock={med.stock ?? null} fallbackScrapedAt={med.stockScrapedAt ?? null} />
-                                  : <span className="text-gray-300">-</span>}
+                                  : <StockDisplayOnly stock={med.stock ?? null} scrapedAt={med.stockScrapedAt ?? null} />}
                               </span>
                             </div>
                           )}
@@ -579,7 +608,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                       <td className="hidden sm:table-cell px-3 py-2.5 text-right whitespace-nowrap">
                         {med.insuranceCode
                           ? <StockColumnCell code={med.insuranceCode} productName={med.productName} fallbackStock={med.stock ?? null} fallbackScrapedAt={med.stockScrapedAt ?? null} />
-                          : <span className="text-gray-300">-</span>}
+                          : <StockDisplayOnly stock={med.stock ?? null} scrapedAt={med.stockScrapedAt ?? null} />}
                       </td>
                     )}
                     {showPrice && <td className="hidden sm:table-cell px-3 py-2.5 text-right text-gray-700 whitespace-nowrap">{formatPrice(med.price)}</td>}
