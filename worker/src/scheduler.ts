@@ -13,6 +13,7 @@ import {
   pruneOldSnapshots,
   type SnapshotInsert,
 } from "./db.ts";
+import { exportStockToYkOrder } from "./export-ykorder.ts";
 
 // 진행 상황 저장 청크 크기 — 너무 자주 저장하면 DB 쓰기 증가, 너무 드물면 워커 죽었을 때 손실 큼.
 const PROGRESS_CHUNK = Math.max(50, Number(process.env.SCHEDULED_PROGRESS_CHUNK ?? 200));
@@ -205,6 +206,15 @@ export async function runScheduledJob(
   // ---------------- 비급여 이름 배치 ----------------
   // 코드 배치가 끝난 뒤, 보험코드 없는 약을 제품명으로 검색해 의사 키 NC:{medicationId} 로 저장.
   const { nameWritten, nameFailed } = await runNameBatch(deps, opts, sitesWithCreds);
+
+  // ---------------- ykpharm-order 재고 내보내기 ----------------
+  // 크롤링이 끝난 재고 합계를 ykpharm-order(Supabase) products.stock 으로 push.
+  // 실패해도 배치 결과에는 영향 없음 (best-effort).
+  try {
+    await exportStockToYkOrder();
+  } catch (err) {
+    console.error("[scheduler] ykorder 재고 내보내기 실패:", (err as Error).message);
+  }
 
   // Best-effort prune of stale rows
   try {

@@ -12,6 +12,7 @@ import cron from "node-cron";
 import { runMasterSync, isMasterSyncRunning } from "./master-sync.ts";
 import { isEpharmsSyncRunning, runEpharmsSync, forceResetSync } from "./epharms/sync.ts";
 import { isProductSyncRunning, syncProductMaster } from "./epharms/products.ts";
+import { exportStockToYkOrder } from "./export-ykorder.ts";
 
 // 시작 시 .env 중복 키 검증 — dotenv는 첫 값을 적용하므로 같은 키가 여러 번 적혀있으면 의도와 다른 값이 적용될 수 있음.
 function checkEnvDuplicates() {
@@ -340,6 +341,21 @@ app.post("/scrape-batch", async (req, res) => {
     console.error("[server] manual batch failed:", err)
   );
   res.json({ ok: true, started: true, limit, sites, mode, namesOnly });
+});
+
+// ykpharm-order(Supabase) 재고 내보내기 수동 트리거 — 몇 초면 끝나는 작업이라
+// fire-and-forget 이 아닌 동기 실행으로 결과를 그대로 반환. 인증은 기존 Bearer 미들웨어.
+app.post("/export-ykorder", async (_req, res) => {
+  try {
+    const result = await exportStockToYkOrder();
+    if (!result) {
+      res.status(503).json({ error: "YKORDER_DATABASE_URL (또는 DATABASE_URL) not configured" });
+      return;
+    }
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
 });
 
 // 공공데이터 마스터 동기화 수동 트리거 (주간 cron 과 동일 로직)

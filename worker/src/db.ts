@@ -16,7 +16,7 @@ export function hasDb(): boolean {
   return !!url;
 }
 
-function getPool(): Pool {
+export function getPool(): Pool {
   if (!url) throw new Error("DATABASE_URL not set");
   if (!pool) {
     pool = new Pool({
