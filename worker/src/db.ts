@@ -128,28 +128,72 @@ export interface SnapshotInsert {
 
 export async function saveSnapshots(rows: SnapshotInsert[]): Promise<number> {
   if (rows.length === 0) return 0;
+
+  // 같은 (siteKey, 스냅샷 키)가 한 INSERT 문 안에 두 번 들어가면 ON CONFLICT 가
+  // "cannot affect row a second time" 로 실패한다 — 한 코드에 규격이 2개 이상(items 2+)이면
+  // 항상 발생해 그 코드의 데이터가 전부 유실됐다. INSERT 전에 키 단위로 병합:
+  //   stock = null-safe 합산 (모두 null 이면 null, 하나라도 숫자면 숫자 합)
+  //   productName/spec/manufacturer/raw = 첫 항목 값
+  //   unitPrice = 첫 non-null 값
+  // (src/app/api/inventory/check/route.ts 라이브 경로의 aggMap 과 동일한 규칙.)
+  // 청크 간 중복도 문제없도록 병합은 전체 rows 에 대해 먼저 수행한다.
+  interface MergedSnapshot {
+    siteKey: string;
+    key: string;                     // InventorySnapshot.insuranceCode 에 들어갈 값
+    productName: string;
+    spec: string | null;
+    manufacturer: string | null;
+    unitPrice: number | null;
+    stock: number | null;
+    raw: Record<string, unknown> | undefined;
+  }
+  const aggMap = new Map<string, MergedSnapshot>();
+  for (const r of rows) {
+    const key = r.snapshotKey ?? (r.item.insuranceCode || r.insuranceCode);
+    const mapKey = `${r.siteKey}|${key}`;
+    const cur = aggMap.get(mapKey);
+    if (!cur) {
+      aggMap.set(mapKey, {
+        siteKey: r.siteKey,
+        key,
+        productName: r.item.productName,
+        spec: r.item.spec ?? null,
+        manufacturer: r.item.manufacturer ?? null,
+        unitPrice: r.item.unitPrice ?? null,
+        stock: r.item.stock ?? null,
+        raw: r.item.raw,
+      });
+    } else {
+      cur.stock = cur.stock != null && r.item.stock != null
+        ? cur.stock + r.item.stock
+        : cur.stock ?? r.item.stock ?? null;
+      if (cur.unitPrice == null && r.item.unitPrice != null) cur.unitPrice = r.item.unitPrice;
+    }
+  }
+  const merged = Array.from(aggMap.values());
+
   const client = await getPool().connect();
   try {
     // Batch insert in chunks of 500 to keep parameter count under postgres limit (65k)
     const CHUNK = 500;
     let written = 0;
-    for (let i = 0; i < rows.length; i += CHUNK) {
-      const slice = rows.slice(i, i + CHUNK);
+    for (let i = 0; i < merged.length; i += CHUNK) {
+      const slice = merged.slice(i, i + CHUNK);
       const values: unknown[] = [];
       const placeholders: string[] = [];
       let p = 1;
-      for (const r of slice) {
+      for (const m of slice) {
         const id = createId();
         values.push(
           id,
-          r.siteKey,
-          r.snapshotKey ?? (r.item.insuranceCode || r.insuranceCode),
-          r.item.productName,
-          r.item.spec ?? null,
-          r.item.manufacturer ?? null,
-          r.item.unitPrice ?? null,
-          r.item.stock ?? null,
-          r.item.raw ? JSON.stringify(r.item.raw) : null,
+          m.siteKey,
+          m.key,
+          m.productName,
+          m.spec,
+          m.manufacturer,
+          m.unitPrice,
+          m.stock,
+          m.raw ? JSON.stringify(m.raw) : null,
         );
         placeholders.push(
           `($${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, NOW())`
