@@ -197,10 +197,26 @@ export const family: WholesaleAdapter = {
         .map(c => stripBadges(c))
         .filter(c => c.length > 0 && !/^[\d,\s]+$/.test(c));
 
+      // 훼밀리팜은 별도 spec 컬럼이 없고 품명 안에 함량·포장단위가 같이 박혀 있음.
+      // 예: "모나에스캡슐(일) 100/180C", "모나에스캡슐(일) 100/90C" — 같은 보험코드의
+      //     포장단위 다른 두 SKU. spec=null 로 두면 (site,code,spec,scrapedAt) unique
+      //     충돌로 createMany skipDuplicates 가 한 행을 버려서 화면에 한 spec 만 보임.
+      //
+      // 1) 마지막 토큰이 "100/180C" 처럼 숫자로 시작하면 spec 으로 분리
+      // 2) 패턴 매칭 실패 시 productName 자체를 spec 으로 fallback (dedup 분리만이라도 보장)
+      const productNameRaw = textBeforePrice[1] ?? textBeforePrice[0] ?? "";
+      const specMatch = productNameRaw.match(/^(.+?)\s+(\d[\d.,/]*[A-Za-z]*)\s*$/);
+      let productName = productNameRaw;
+      let spec: string | null = productNameRaw || null;
+      if (specMatch && specMatch[1].trim().length > 0) {
+        productName = specMatch[1].trim();
+        spec = specMatch[2];
+      }
+
       items.push({
         insuranceCode: code,
-        productName: textBeforePrice[1] ?? textBeforePrice[0] ?? "",
-        spec: null,
+        productName,
+        spec,
         manufacturer: textBeforePrice[0] ?? null,
         unitPrice: priceCell ? Number(priceCell.c.replace(/[^\d]/g, "")) : null,
         stock: stockCell ? Number(stockCell.c.replace(/[^\d]/g, "")) : null,

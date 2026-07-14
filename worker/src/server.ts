@@ -257,15 +257,26 @@ app.post("/scrape", async (req, res) => {
     return;
   }
 
-  // Sites are scraped in parallel for each code; codes are still sequential
-  // so we don't open dozens of contexts on the same site at once.
+  // 사이트 병렬 × 사이트당 CONCURRENCY_PER_SITE lane 병렬. scheduler.ts 와 같은 패턴.
+  // 한 lane = 한 로그인 세션 = codes 슬라이스를 순차 처리.
+  // 총 동시 브라우저 컨텍스트 = sites.length × CONCURRENCY_PER_SITE → 메모리 한계 주의.
   const results: ScrapeRow[] = [];
-  for (const code of codes) {
-    const rows = await Promise.all(
-      targetKeys.map(key => scrapeOne(ALL_ADAPTERS[key], code))
-    );
-    results.push(...rows);
-  }
+  await Promise.all(
+    targetKeys.map(async key => {
+      const adapter = ALL_ADAPTERS[key];
+      const lanes = Array.from({ length: CONCURRENCY_PER_SITE }, (_, slot) =>
+        codes.filter((_, i) => i % CONCURRENCY_PER_SITE === slot)
+      );
+      await Promise.all(
+        lanes.map(async (slice, slot) => {
+          for (const code of slice) {
+            const row = await scrapeOne(adapter, code, slot);
+            results.push(row);
+          }
+        })
+      );
+    })
+  );
   res.json({ results });
 });
 

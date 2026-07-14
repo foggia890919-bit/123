@@ -70,14 +70,15 @@ export async function POST(req: NextRequest) {
   }
 
   if (!live) {
-    // DB path — read latest snapshot per (siteKey, insuranceCode)
+    // DB path — read latest snapshot per (siteKey, insuranceCode, spec).
+    // spec 포함: 같은 보험코드 안에 포장단위(30T/500T) 다른 행을 각각 최신 1개씩 반환.
     const rows = await prisma.$queryRaw<ResultRow[]>`
-      SELECT DISTINCT ON ("siteKey", "insuranceCode")
+      SELECT DISTINCT ON ("siteKey", "insuranceCode", "spec")
         "siteKey", "insuranceCode", "productName", "spec", "manufacturer",
         "unitPrice", "stock", "scrapedAt"
       FROM "InventorySnapshot"
       WHERE "insuranceCode" = ANY(${codes}::text[])
-      ORDER BY "siteKey", "insuranceCode", "scrapedAt" DESC
+      ORDER BY "siteKey", "insuranceCode", "spec", "scrapedAt" DESC
     `;
     interface OutRow {
       siteKey: string;

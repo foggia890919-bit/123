@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, Fragment } from "react";
+import { useSession } from "next-auth/react";
 import { ShoppingCart, ChevronUp, ChevronDown, ChevronsUpDown, Plus, FileText, Loader2 } from "lucide-react";
 import type { IcdResult } from "@/app/api/medications/icd-analysis/route";
 import { formatPrice } from "@/lib/utils";
@@ -10,6 +11,58 @@ import { getStock, subscribeStock, fetchStock, type StockEntry } from "@/lib/sto
 
 // 인천약품 제외, 백제약품+훼밀리팜만 표시
 const STOCK_SITES = ["ibjp", "family"];
+const SITE_NAMES: Record<string, string> = { ibjp: "백제약품", family: "훼밀리팜" };
+
+// 펼침 영역의 도매상별·규격별 재고 상세 표 (ADMIN 전용).
+function StockDetailPanel({ code }: { code: string }) {
+  const entry = useStockEntry(code);
+  if (entry.status === "idle") {
+    return <p className="text-gray-400 text-xs">재고 데이터 없음 (재고확인 또는 새로고침 클릭)</p>;
+  }
+  if (entry.status === "loading") {
+    return (
+      <p className="text-gray-500 text-xs flex items-center gap-1">
+        <Loader2 className="w-3 h-3 animate-spin" />조회 중...
+      </p>
+    );
+  }
+  if (entry.status === "error") {
+    return <p className="text-red-500 text-xs">오류: {entry.error}</p>;
+  }
+  const rows = (entry.results ?? []).filter((r) => !r.error);
+  if (rows.length === 0) return <p className="text-gray-400 text-xs">재고 없음</p>;
+  return (
+    <div>
+      <p className="text-gray-400 mb-1">도매상별 재고</p>
+      <table className="text-xs w-full">
+        <thead>
+          <tr className="text-gray-500 border-b">
+            <th className="text-left py-1">도매상</th>
+            <th className="text-left py-1">규격</th>
+            <th className="text-right py-1">단가</th>
+            <th className="text-right py-1">재고</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.flatMap((r) =>
+            r.items.map((i, idx) => (
+              <tr key={`${r.siteKey}-${idx}`} className="border-b last:border-0">
+                <td className="py-1">{SITE_NAMES[r.siteKey] ?? r.siteKey}</td>
+                <td className="py-1">{i.spec ?? "-"}</td>
+                <td className="text-right py-1 tabular-nums">
+                  {i.unitPrice != null ? i.unitPrice.toLocaleString() + "원" : "-"}
+                </td>
+                <td className={`text-right py-1 tabular-nums font-medium ${(i.stock ?? 0) > 0 ? "text-green-700" : "text-gray-400"}`}>
+                  {i.stock ?? 0}
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 function useStockEntry(code: string | null): StockEntry {
   const [entry, setEntry] = useState<StockEntry>(() => (code ? getStock(code) : { status: "idle" }));
@@ -73,18 +126,47 @@ function StockColumnCell({ code, productName, fallbackStock }: { code: string; p
     );
   }
   const rows = (entry.results ?? []).filter((r) => STOCK_SITES.includes(r.siteKey) && !r.error);
-  const total = rows.reduce((sum, r) => sum + r.items.reduce((s, i) => s + (i.stock ?? 0), 0), 0);
-  const hasData = rows.length > 0;
-  if (!hasData) return (
+  if (rows.length === 0) return (
     <span className="inline-flex items-center gap-0.5">
       <span className="text-gray-300 text-[10px]">-</span>
       {refreshBtn}
     </span>
   );
-  return (
+  // spec 별로 stock 합산 (사이트는 합산). 같은 보험코드 안에 30T/500T 등 포장단위 다른 행이 있으면 분리.
+  const bySpec = new Map<string, number>();
+  for (const r of rows) {
+    for (const i of r.items) {
+      const k = i.spec ?? "";
+      bySpec.set(k, (bySpec.get(k) ?? 0) + (i.stock ?? 0));
+    }
+  }
+  const entries = [...bySpec.entries()];
+  if (entries.length === 0) return (
     <span className="inline-flex items-center gap-0.5">
-      <span className={total > 0 ? "text-green-700 font-medium" : "text-red-400"}>
-        {total > 0 ? total.toLocaleString() : "품절"}
+      <span className="text-gray-300 text-[10px]">-</span>
+      {refreshBtn}
+    </span>
+  );
+  if (entries.length === 1 && entries[0][0] === "") {
+    const total = entries[0][1];
+    return (
+      <span className="inline-flex items-center gap-0.5">
+        <span className={total > 0 ? "text-green-700 font-medium" : "text-red-400"}>
+          {total > 0 ? total.toLocaleString() : "품절"}
+        </span>
+        {refreshBtn}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-start gap-0.5">
+      <span className="flex flex-col text-[10px] leading-tight">
+        {entries.map(([spec, total]) => (
+          <span key={spec || "_"} className={total > 0 ? "text-green-700 font-medium" : "text-red-400"}>
+            <span className="text-gray-500 mr-1">{spec || "-"}</span>
+            {total > 0 ? total.toLocaleString() : "품절"}
+          </span>
+        ))}
       </span>
       {refreshBtn}
     </span>
@@ -259,6 +341,9 @@ function PaymentTypeBadge({ value }: { value: string | null | undefined }) {
 
 export default function MedicationTable({ medications, loading, userId, showCategoryA, showIngredientName, showCategoryB, showRate, showBioStatus, showPrice, showOriginalDrug, showInsuranceCode, showNotes, showStock }: Props) {
   const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null; productName?: string } | null>(null);
+  const { data: session } = useSession();
+  const isAdmin = session?.user?.role === "ADMIN";
+
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -407,6 +492,8 @@ export default function MedicationTable({ medications, loading, userId, showCate
   if (medications.length === 0) return <div className="flex justify-center py-16 text-gray-400 text-sm">검색 결과가 없어요.</div>;
 
   const hasDetailPanel = showIngredientName || showBioStatus || showOriginalDrug || showInsuranceCode || showCategoryA || showCategoryB || showNotes;
+  // ADMIN 은 stock 도매상별 상세 패널이 있으므로 펼침 chevron 항상 표시.
+  const showExpandButton = hasDetailPanel || isAdmin;
 
   return (
     <>
@@ -481,7 +568,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                             )}
                           </div>
                         </div>
-                        {hasDetailPanel && (
+                        {showExpandButton && (
                           <button type="button" onClick={() => toggleRow(med.id)}
                             className="shrink-0 p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors">
                             {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -547,28 +634,36 @@ export default function MedicationTable({ medications, loading, userId, showCate
                       </>
                     )}
                   </tr>
-                  {isExpanded && hasDetailPanel && (
+                  {isExpanded && showExpandButton && (
                     <tr className={isSelected ? "bg-blue-50/30" : "bg-gray-50/60"}>
                       <td />
                       <td colSpan={(showStock ? 1 : 0) + 1 + (showPrice ? 1 : 0) + (showRate ? 4 : 0)} className="px-4 pb-3 pt-1">
                         <div className="rounded-lg border border-gray-100 bg-white px-3 py-2.5 space-y-3 text-xs">
-                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2.5">
-                            {showIngredientName && <div className="col-span-2 sm:col-span-3"><p className="text-gray-400 mb-0.5">성분명</p><p className="text-gray-700"><IngredientName name={med.ingredientName} /></p></div>}
-                            {showBioStatus && <div><p className="text-gray-400 mb-0.5">생동/생산</p><p className="text-gray-700">{med.bioStatus || "-"}</p></div>}
-                            {showOriginalDrug && <div><p className="text-gray-400 mb-0.5">오리지날/대조약</p><p className="text-gray-700">{med.originalDrug || "-"}</p></div>}
-                            {showInsuranceCode && <div><p className="text-gray-400 mb-0.5">보험코드</p><p className="font-mono text-gray-700">{med.insuranceCode || "-"}</p></div>}
-                            {showCategoryA && <div><p className="text-gray-400 mb-0.5">분류(A)</p><p className="text-gray-700">{med.categoryA || "-"}</p></div>}
-                            {showCategoryB && <div><p className="text-gray-400 mb-0.5">ATC코드</p><p className="text-gray-700 font-mono">{med.ingredientCode || "-"}</p></div>}
-                            {showNotes && <div className="col-span-2 sm:col-span-3"><p className="text-gray-400 mb-0.5">특이사항</p><p className="text-gray-700">{med.notes || "-"}</p></div>}
-                          </div>
-                          {/* 상병코드 조회 */}
-                          <IcdPanel
-                            medId={med.id}
-                            productName={med.productName}
-                            ingredientName={med.ingredientName}
-                            icdResults={icdResults}
-                            fetchIcd={fetchIcd}
-                          />
+                          {hasDetailPanel && (
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2.5">
+                              {showIngredientName && <div className="col-span-2 sm:col-span-3"><p className="text-gray-400 mb-0.5">성분명</p><p className="text-gray-700"><IngredientName name={med.ingredientName} /></p></div>}
+                              {showBioStatus && <div><p className="text-gray-400 mb-0.5">생동/생산</p><p className="text-gray-700">{med.bioStatus || "-"}</p></div>}
+                              {showOriginalDrug && <div><p className="text-gray-400 mb-0.5">오리지날/대조약</p><p className="text-gray-700">{med.originalDrug || "-"}</p></div>}
+                              {showInsuranceCode && <div><p className="text-gray-400 mb-0.5">보험코드</p><p className="font-mono text-gray-700">{med.insuranceCode || "-"}</p></div>}
+                              {showCategoryA && <div><p className="text-gray-400 mb-0.5">분류(A)</p><p className="text-gray-700">{med.categoryA || "-"}</p></div>}
+                              {showCategoryB && <div><p className="text-gray-400 mb-0.5">ATC코드</p><p className="text-gray-700 font-mono">{med.ingredientCode || "-"}</p></div>}
+                              {showNotes && <div className="col-span-2 sm:col-span-3"><p className="text-gray-400 mb-0.5">특이사항</p><p className="text-gray-700">{med.notes || "-"}</p></div>}
+                            </div>
+                          )}
+                          {/* 도매상별 재고 상세 — ADMIN 전용 */}
+                          {isAdmin && med.insuranceCode && (
+                            <StockDetailPanel code={med.insuranceCode} />
+                          )}
+                          {hasDetailPanel && (
+                            /* 상병코드 조회 */
+                            <IcdPanel
+                              medId={med.id}
+                              productName={med.productName}
+                              ingredientName={med.ingredientName}
+                              icdResults={icdResults}
+                              fetchIcd={fetchIcd}
+                            />
+                          )}
                         </div>
                       </td>
                     </tr>

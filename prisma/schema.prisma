@@ -342,7 +342,10 @@ model InventorySnapshot {
   raw           Json?
   scrapedAt     DateTime      @default(now())
 
-  @@unique([siteKey, insuranceCode, scrapedAt])
+  // spec 포함: 같은 보험코드 안에 포장단위(30T/500T 등) 다른 행을 별개로 저장.
+  // 이전엔 spec 없이 (site,code,scrapedAt) 만 unique 라 createMany skipDuplicates 가
+  // 두 spec 중 하나만 남기고 버려서 화면에 한 규격만 보였음.
+  @@unique([siteKey, insuranceCode, spec, scrapedAt])
   @@index([insuranceCode])
   @@index([siteKey, insuranceCode])
   @@index([scrapedAt])
