@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
  * Phase 1B — 권한 계층 헬퍼.
  *
  * User.parentUserId 로 표현되는 트리에서 (self + all descendants) 의 id 를 모은다.
- * - SALES_REP: 자기 자신만
+ * - BUSINESS: 자기 자신만
  * - 본인법인 BIZ: 자기 + 자기 밑 영업사원
  * - 상위법인 BIZ: 자기 + 본인법인 + 본인법인 밑 영업사원…
  *

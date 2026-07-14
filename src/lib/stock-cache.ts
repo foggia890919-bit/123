@@ -71,8 +71,15 @@ function applyError(code: string, error: string) {
 }
 
 export function fetchStock(code: string, productName: string, live = false, sites?: string[]) {
-  if (cache.get(code)?.status === "loading") return;
-  cache.set(code, { status: "loading" });
+  const prev = cache.get(code);
+  if (prev?.status === "loading") return;
+  // 로딩 중에도 화면에서 직전 값이 그대로 보이도록 results/source/fetchedAt 보존.
+  cache.set(code, {
+    status: "loading",
+    results: prev?.results,
+    source: prev?.source,
+    fetchedAt: prev?.fetchedAt,
+  });
   notify(code);
 
   const url = live ? "/api/inventory/check?live=1" : "/api/inventory/check";
@@ -104,7 +111,14 @@ export function fetchStockBatch(codes: string[], live = false, sites?: string[])
   if (targets.length === 0) return;
 
   for (const code of targets) {
-    cache.set(code, { status: "loading" });
+    const prev = cache.get(code);
+    // 로딩 중에도 직전 값을 화면에 유지 — results/source/fetchedAt 그대로 보존.
+    cache.set(code, {
+      status: "loading",
+      results: prev?.results,
+      source: prev?.source,
+      fetchedAt: prev?.fetchedAt,
+    });
     notify(code);
   }
 

@@ -31,6 +31,22 @@ let browser: Browser | undefined;
 const sessions = new Map<string, { ctx: BrowserContext; page: Page; lastLogin: number }>();
 const lastCallAt = new Map<string, number>();
 
+// 한 번의 스크랩이 무한 대기로 배치 전체를 영구 정지시키는 것을 막는 하드 타임아웃.
+// (도매 사이트가 응답을 끊거나 페이지가 영영 로딩 중이면 Playwright await 가 안 풀려
+//  runScheduledJob 이 끝나지 않고, 스케줄러의 isRunning 가드가 영원히 안 풀림 → 정기갱신 영구 스킵)
+const SCRAPE_TIMEOUT_MS = Number(process.env.SCRAPE_TIMEOUT_MS ?? 60_000);
+
+class TimeoutError extends Error {}
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new TimeoutError(`timeout ${ms}ms: ${label}`)), ms);
+    p.then(
+      v => { clearTimeout(t); resolve(v); },
+      e => { clearTimeout(t); reject(e); }
+    );
+  });
+}
+
 async function ensureBrowser() {
   if (browser) return browser;
   browser = await chromium.launch({
@@ -71,8 +87,8 @@ async function getPage(adapter: WholesaleAdapter, creds: Credentials, slot = 0):
 async function invalidate(key: string) {
   const ex = sessions.get(key);
   if (!ex) return;
-  await ex.ctx.close().catch(() => {});
-  sessions.delete(key);
+  sessions.delete(key);             // 먼저 풀에서 제거 — 멈춘 세션이 재사용되지 않도록
+  ex.ctx.close().catch(() => {});   // close 가 멈춰도 await 하지 않음 (배치 정지 방지)
 }
 
 function getCreds(siteKey: string): Credentials | null {
@@ -96,6 +112,7 @@ interface ScrapeRow {
   items: InventoryItem[];
   error?: string;
   durationMs: number;
+  scrapedAt: string;  // 응답이 만들어진 시각 — 화면이 "방금" 으로 갱신할 수 있게.
 }
 
 async function scrapeOne(adapter: WholesaleAdapter, code: string, slot = 0): Promise<ScrapeRow> {
@@ -108,22 +125,35 @@ async function scrapeOne(adapter: WholesaleAdapter, code: string, slot = 0): Pro
       items: [],
       error: "no credentials configured for this site",
       durationMs: 0,
+      scrapedAt: new Date().toISOString(),
     };
   }
   await rateLimit(adapter.key, slot);
   const sessionKey = `${adapter.key}:${slot}`;
   try {
-    const page = await getPage(adapter, creds, slot);
-    const items = await adapter.searchByCode(page, code);
-    return { siteKey: adapter.key, insuranceCode: code, items, durationMs: Date.now() - start };
+    // 전체 스크랩 과정을 하드 타임아웃으로 감싼다 — 한 코드가 멈춰도 배치는 계속 진행.
+    const items = await withTimeout((async () => {
+      const page = await getPage(adapter, creds, slot);
+      let found = await adapter.searchByCode(page, code);
+      // 보강: 결과 0건이면 한 번 더 시도. 사이트 일시 응답 변동 / 페이지 미로딩 케이스 보강.
+      // 진짜 품절(결과 있으나 stock=0)은 found.length>0 이라 재시도 대상 아님.
+      if (found.length === 0) {
+        await new Promise(r => setTimeout(r, 600));
+        const retry = await adapter.searchByCode(page, code).catch(() => [] as InventoryItem[]);
+        if (retry.length > 0) found = retry;
+      }
+      return found;
+    })(), SCRAPE_TIMEOUT_MS, `${adapter.key}/${code}`);
+    return { siteKey: adapter.key, insuranceCode: code, items, durationMs: Date.now() - start, scrapedAt: new Date().toISOString() };
   } catch (err) {
-    await invalidate(sessionKey);
+    await invalidate(sessionKey);   // 멈춘/실패 세션 폐기 → 다음 코드는 새 로그인으로 진행
     return {
       siteKey: adapter.key,
       insuranceCode: code,
       items: [],
       error: (err as Error).message,
       durationMs: Date.now() - start,
+      scrapedAt: new Date().toISOString(),
     };
   }
 }
@@ -242,6 +272,12 @@ app.get("/sites", (_req, res) => {
   });
 });
 
+// 라이브 호출 전용 lane — 풀배치(scheduler) 가 slot 0..CONCURRENCY_PER_SITE-1 을
+// 점유하는 동안에도 사용자 검색은 별도 브라우저 세션으로 즉시 처리.
+// 슬롯 번호를 충분히 큰 값(+100)으로 띄워 풀배치와 절대 안 겹치게 한다.
+const LIVE_SLOT_BASE = 100;
+const LIVE_CONCURRENCY = Math.max(1, Number(process.env.LIVE_CONCURRENCY ?? 2));
+
 app.post("/scrape", async (req, res) => {
   const { sites, codes } = req.body as { sites?: string[]; codes: string[] };
   if (!Array.isArray(codes) || codes.length === 0) {
@@ -257,12 +293,15 @@ app.post("/scrape", async (req, res) => {
     return;
   }
 
-  // Sites are scraped in parallel for each code; codes are still sequential
-  // so we don't open dozens of contexts on the same site at once.
+  // 사이트는 코드별로 병렬 — 사이트당 LIVE_CONCURRENCY lane 까지 동시 처리.
+  // 풀배치와 별도 슬롯이라 lane 경쟁 없음.
   const results: ScrapeRow[] = [];
-  for (const code of codes) {
+  for (let i = 0; i < codes.length; i += LIVE_CONCURRENCY) {
+    const codeChunk = codes.slice(i, i + LIVE_CONCURRENCY);
     const rows = await Promise.all(
-      targetKeys.map(key => scrapeOne(ALL_ADAPTERS[key], code))
+      codeChunk.flatMap((code, j) =>
+        targetKeys.map(key => scrapeOne(ALL_ADAPTERS[key], code, LIVE_SLOT_BASE + j))
+      )
     );
     results.push(...rows);
   }
@@ -280,7 +319,7 @@ app.post("/scrape-one", async (req, res) => {
     res.status(400).json({ error: "code required" });
     return;
   }
-  const row = await scrapeOne(adapter, code);
+  const row = await scrapeOne(adapter, code, LIVE_SLOT_BASE);
   res.json(row);
 });
 

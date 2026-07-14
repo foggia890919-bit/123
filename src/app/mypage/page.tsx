@@ -9,13 +9,14 @@ import { Button } from "@/components/ui/button";
 import {
   User, KeyRound, CheckCircle, ArrowUpCircle, ChevronRight,
   Building2, FileSpreadsheet, FileText, Upload, Pencil, Loader2, Briefcase,
+  Network,
 } from "lucide-react";
 import { ROLE_LABELS, ROLE_COLORS, type UserRole } from "@/lib/roles";
 
 const KAKAO_URL = "https://open.kakao.com/me/ykmedi";
 
 const editableRoles = [
-  { value: "SALES_REP",  label: "영업사원 (CSO)" },
+  { value: "BUSINESS",  label: "사업자" },
   { value: "DOCTOR",     label: "의사" },
   { value: "PHARMACIST", label: "약사" },
   { value: "BASIC",      label: "일반회원" },
@@ -29,6 +30,8 @@ interface BizClient {
 interface ProfileInfo {
   name: string; email: string; phone: string | null;
   carrier: string | null; role: string;
+  isBusinessApproved: boolean;
+  parent: { id: string; name: string | null; email: string } | null;
   documents: { id: string; docType: string; fileName: string; createdAt: string }[];
   bizClient: BizClient | null;
 }
@@ -85,6 +88,13 @@ export default function MyPage() {
 
   // 사업자 정보
   const bizDocFileRef = useRef<HTMLInputElement>(null);
+  // IME(한글 입력) 미반영 케이스 방어용 — 입력칸 DOM 값을 직접 읽기 위함
+  const editBizNameRef = useRef<HTMLInputElement>(null);
+  const editBizNumberRef = useRef<HTMLInputElement>(null);
+  const editBizAddressRef = useRef<HTMLInputElement>(null);
+  // 국세청 진위확인 상태 — 사업자번호 10자리 입력시 자동 조회.
+  const [ntsVerifyStatus, setNtsVerifyStatus] = useState<"idle" | "checking" | "valid" | "closed" | "invalid" | "error">("idle");
+  const [ntsVerifyMessage, setNtsVerifyMessage] = useState<string>("");
   const [editBizNumber, setEditBizNumber] = useState("");
   const [editBizName, setEditBizName] = useState("");
   const [editBizAddress, setEditBizAddress] = useState("");
@@ -113,6 +123,50 @@ export default function MyPage() {
   useEffect(() => {
     if (status === "authenticated") loadProfile();
   }, [status]);
+
+  // 사업자번호 10자리 + 형식 검증 통과시 국세청 자동 조회 (debounce 600ms).
+  useEffect(() => {
+    const digits = editBizNumber.replace(/\D/g, "");
+    if (digits.length !== 10 || bizNumberError) {
+      setNtsVerifyStatus("idle");
+      setNtsVerifyMessage("");
+      return;
+    }
+    setNtsVerifyStatus("checking");
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/biz-verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ bizNumber: digits }),
+        });
+        const data = await res.json();
+        if (res.status === 503) {
+          // API 키 미설정 — 자체 검증만으로 통과시키되 안내는 안 띄움
+          setNtsVerifyStatus("idle");
+          setNtsVerifyMessage("");
+          return;
+        }
+        if (data.valid === true) {
+          setNtsVerifyStatus("valid");
+          setNtsVerifyMessage(`국세청 확인 완료 (${data.statusText || "계속사업자"})`);
+        } else if (data.closed) {
+          setNtsVerifyStatus("closed");
+          setNtsVerifyMessage("폐업한 사업자번호예요.");
+        } else if (data.valid === false) {
+          setNtsVerifyStatus("invalid");
+          setNtsVerifyMessage("국세청에 등록되지 않은 사업자번호예요.");
+        } else {
+          setNtsVerifyStatus("error");
+          setNtsVerifyMessage(data.error || "조회 실패");
+        }
+      } catch {
+        setNtsVerifyStatus("error");
+        setNtsVerifyMessage("조회 중 오류가 발생했어요.");
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [editBizNumber, bizNumberError]);
 
   async function loadProfile() {
     setProfileLoading(true);
@@ -151,6 +205,12 @@ export default function MyPage() {
     } else {
       setBizNumberError("");
     }
+    // 10자리 형식 통과시 국세청 자동 조회 트리거 (debounce 는 useEffect 에서)
+    if (digits.length === 10 && validateBizNumber(fmt)) {
+      setNtsVerifyStatus("idle"); // useEffect 가 다시 잡아서 'checking' 으로 바꿈
+    } else {
+      setNtsVerifyStatus("idle");
+    }
   }
 
   async function handleProfileSave() {
@@ -170,11 +230,25 @@ export default function MyPage() {
 
   async function handleBizSave() {
     setBizError(""); setBizSuccess(false);
-    if (!editBizNumber.trim()) { setBizError("사업자등록번호를 입력해주세요."); return; }
+    // input 의 실제 DOM 값을 우선 읽음 — IME(한글) 입력 직후 submit 케이스 방어.
+    // state 가 아직 업데이트되지 않은 상태에서 사용자는 화면에 값이 보이는데
+    // "상호명을 입력해주세요" 같은 잘못된 에러가 뜨는 문제를 막는다.
+    const bizNumberVal = (editBizNumberRef.current?.value ?? editBizNumber).trim();
+    const bizNameVal = (editBizNameRef.current?.value ?? editBizName).trim();
+    const bizAddressVal = (editBizAddressRef.current?.value ?? editBizAddress).trim();
+    // state 와 DOM 동기화 — 이후 화면이 다시 그려질 때 일관되게.
+    if (bizNumberVal !== editBizNumber) setEditBizNumber(bizNumberVal);
+    if (bizNameVal !== editBizName) setEditBizName(bizNameVal);
+    if (bizAddressVal !== editBizAddress) setEditBizAddress(bizAddressVal);
+
+    if (!bizNumberVal) { setBizError("사업자등록번호를 입력해주세요."); return; }
     if (bizNumberError) { setBizError(bizNumberError); return; }
-    const digits = editBizNumber.replace(/\D/g, "");
+    const digits = bizNumberVal.replace(/\D/g, "");
     if (digits.length !== 10) { setBizError("사업자등록번호 10자리를 입력해주세요."); return; }
-    if (!editBizName.trim()) { setBizError("상호명을 입력해주세요."); return; }
+    if (ntsVerifyStatus === "closed") { setBizError("폐업한 사업자번호는 등록할 수 없어요."); return; }
+    if (ntsVerifyStatus === "invalid") { setBizError("국세청에 등록되지 않은 사업자번호예요."); return; }
+    if (ntsVerifyStatus === "checking") { setBizError("국세청 조회가 끝날 때까지 잠시 기다려주세요."); return; }
+    if (!bizNameVal) { setBizError("상호명을 입력해주세요."); return; }
     setBizSaving(true);
     try {
       let bizDocument: { fileName: string; fileData: string } | null = null;
@@ -194,15 +268,19 @@ export default function MyPage() {
         body: JSON.stringify({
           biz: {
             id: profileInfo?.bizClient?.id ?? undefined,
-            clientName: editBizName.trim(),
+            clientName: bizNameVal,
             bizNumber: digits,
-            address: editBizAddress.trim() || null,
+            address: bizAddressVal || null,
             bizDocument,
           },
         }),
       });
       const data = await res.json();
-      if (!res.ok) { setBizError(data.error || "저장 실패"); }
+      if (!res.ok) {
+        // 저장 실패 — 폼 state 를 서버 실제값으로 되돌려서 사용자가 "저장된 줄 알고 새로고침" 하는 혼란 방지.
+        setBizError(data.error || "저장 실패");
+        await loadProfile();
+      }
       else { setBizSuccess(true); setBizDocFile(null); await loadProfile(); }
     } catch {
       setBizError("저장 중 오류가 발생했어요.");
@@ -345,20 +423,37 @@ export default function MyPage() {
             <label className="text-sm font-medium text-gray-700">사업자등록번호 <span className="text-red-500">*</span></label>
             <Input
               value={editBizNumber}
+              ref={editBizNumberRef}
               onChange={(e) => handleBizNumberChange(e.target.value)}
               placeholder="000-00-00000"
               maxLength={12}
               className={bizNumberError ? "border-red-400" : ""}
             />
             {bizNumberError && <p className="text-xs text-red-500">{bizNumberError}</p>}
+            {!bizNumberError && ntsVerifyStatus === "checking" && (
+              <p className="text-xs text-gray-500 flex items-center gap-1">
+                <Loader2 className="w-3 h-3 animate-spin" />국세청 조회 중...
+              </p>
+            )}
+            {!bizNumberError && ntsVerifyStatus === "valid" && (
+              <p className="text-xs text-green-600 flex items-center gap-1">
+                <CheckCircle className="w-3 h-3" />{ntsVerifyMessage}
+              </p>
+            )}
+            {!bizNumberError && (ntsVerifyStatus === "closed" || ntsVerifyStatus === "invalid") && (
+              <p className="text-xs text-red-500">{ntsVerifyMessage}</p>
+            )}
+            {!bizNumberError && ntsVerifyStatus === "error" && (
+              <p className="text-xs text-amber-600">{ntsVerifyMessage}</p>
+            )}
           </div>
           <div className="space-y-1">
             <label className="text-sm font-medium text-gray-700">상호명 <span className="text-red-500">*</span></label>
-            <Input value={editBizName} onChange={(e) => setEditBizName(e.target.value)} placeholder="병원명 / 상호명" />
+            <Input ref={editBizNameRef} value={editBizName} onChange={(e) => setEditBizName(e.target.value)} placeholder="병원명 / 상호명" />
           </div>
           <div className="space-y-1">
             <label className="text-sm font-medium text-gray-700">주소 <span className="text-gray-400 font-normal text-xs">(선택)</span></label>
-            <Input value={editBizAddress} onChange={(e) => setEditBizAddress(e.target.value)} placeholder="예: 서울시 강남구 테헤란로 123" />
+            <Input ref={editBizAddressRef} value={editBizAddress} onChange={(e) => setEditBizAddress(e.target.value)} placeholder="예: 서울시 강남구 테헤란로 123" />
           </div>
           <div className="space-y-1">
             <label className="text-sm font-medium text-gray-700">
@@ -388,12 +483,63 @@ export default function MyPage() {
         </div>
       </div>
 
+      {/* 회원 등급 — 일반회원 vs 사업자회원 */}
+      <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
+        <div className="flex items-center gap-2">
+          <Network className="w-5 h-5 text-gray-600" />
+          <h2 className="text-lg font-semibold text-gray-800">회원 등급</h2>
+        </div>
+
+        <div className="flex flex-wrap gap-2 items-center">
+          {profileInfo?.isBusinessApproved ? (
+            <span className="px-2.5 py-1 text-xs font-semibold bg-emerald-100 text-emerald-700 border border-emerald-300 rounded">
+              사업자회원 (인증 완료)
+            </span>
+          ) : (
+            <span className="px-2.5 py-1 text-xs font-semibold bg-gray-100 text-gray-600 border border-gray-300 rounded">
+              일반회원
+            </span>
+          )}
+          {profileInfo?.parent && (
+            <span className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded">
+              하위 회원 (상위: {profileInfo.parent.name || profileInfo.parent.email})
+            </span>
+          )}
+        </div>
+
+        {!profileInfo?.isBusinessApproved && (
+          <div className="text-xs text-gray-600 bg-amber-50 border border-amber-200 rounded p-3 space-y-1">
+            <p className="font-medium text-amber-800">📌 사업자회원이 되면</p>
+            <ul className="list-disc list-inside text-amber-700 space-y-0.5">
+              <li>다른 회원의 상위·하위법인 검색에 <span className="font-semibold">우선 노출</span></li>
+              <li>통계제출처 자동 라우팅 등 사업자 전용 기능 사용 가능</li>
+            </ul>
+            <p className="text-amber-700 mt-1">
+              위 <span className="font-semibold">사업자 정보</span> 카드에서 상호명·사업자번호·사업자등록증을 등록하면 관리자 승인 후 사업자회원으로 전환됩니다.
+            </p>
+          </div>
+        )}
+
+        <div className="text-xs text-gray-600 bg-blue-50 border border-blue-200 rounded p-3 space-y-1">
+          <p className="font-medium text-blue-700">상위 회원과 연결하려면?</p>
+          <p>
+            <Link href="/submission-routes" className="underline font-semibold text-blue-700 hover:text-blue-900">통계제출처 메뉴</Link>
+            에서 상위 회원에게 이메일로 연결 요청을 보내거나, 거래처관리(의료기관) &gt; 제약사 필터링 탭에서 상위법인을 검색·선택하세요.
+          </p>
+        </div>
+      </div>
+
       {/* 서류 관리 */}
       <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
         <div className="flex items-center gap-2">
           <FileText className="w-5 h-5 text-gray-600" />
           <h2 className="text-lg font-semibold text-gray-800">서류 관리</h2>
         </div>
+        {profileInfo?.role === "BUSINESS" && !profileInfo.documents.some((d) => d.docType === "사업자등록증") && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm p-3 rounded-lg">
+            사업자등록증을 아직 업로드하지 않으셨어요. 아래 &quot;새 서류 첨부&quot; 에서 종류를 &quot;사업자등록증&quot; 으로 선택해 업로드해주세요.
+          </div>
+        )}
         {profileInfo && profileInfo.documents.length > 0 ? (
           <div className="space-y-2">
             <p className="text-xs font-medium text-gray-500">등록된 서류</p>

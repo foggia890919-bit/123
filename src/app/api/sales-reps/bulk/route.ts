@@ -4,7 +4,7 @@
 //   { name, email, phone?, password, bizNumbers: ["2110948285", ...] }
 //
 // 처리:
-//   1) User 생성 (role=SALES_REP, approved=true, S코드 자동 발급)
+//   1) User 생성 (role=BUSINESS, approved=true, S코드 자동 발급)
 //   2) bizNumber 마다 EpharmsAccount 조회 → clientName 가져옴 (없으면 placeholder)
 //   3) UserClient (approved=true) 매핑 생성 (중복 키는 update)
 //
@@ -130,7 +130,7 @@ export async function POST(req: NextRequest) {
         const created = await prisma.user.create({
           data: {
             email, name, phone, password: hashed,
-            role: "SALES_REP", approved: true, salesCode: newCode,
+            role: "BUSINESS", approved: true, salesCode: newCode,
           },
           select: { id: true, salesCode: true },
         });

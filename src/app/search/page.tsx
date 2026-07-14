@@ -38,7 +38,7 @@ function formatRelativeTime(iso: string): string {
 
 export default function SearchPage() {
   const { data: session } = useSession();
-  const isSalesRep = hasRole(session?.user?.role, "SALES_REP");
+  const isSalesRep = hasRole(session?.user?.role, "BUSINESS");
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const [results, setResults] = useState<MedicationItem[]>([]);
@@ -188,7 +188,7 @@ export default function SearchPage() {
       if (cos.size > 0) params.set("companies", Array.from(cos).join(","));
       const activePaymentType = pt !== undefined ? pt : selectedPaymentType;
       if (activePaymentType) params.set("paymentType", activePaymentType);
-      params.set("limit", "500");
+      params.set("limit", "200");
       const res = await fetch(`/api/medications/search?${params.toString()}`);
       const data = await res.json();
       const count = data.total || 0;
@@ -225,7 +225,7 @@ export default function SearchPage() {
       if (nextSet.size > 0) params.set("companies", Array.from(nextSet).join(","));
       const activePaymentType = pt !== undefined ? pt : selectedPaymentType;
       if (activePaymentType) params.set("paymentType", activePaymentType);
-      params.set("limit", "500");
+      params.set("limit", "200");
       const res = await fetch(`/api/medications/search?${params.toString()}`);
       const data = await res.json();
       const count = data.total || 0;
@@ -242,32 +242,36 @@ export default function SearchPage() {
     refetchWithCompanies(next);
   }
 
-  // 검색 결과 로드 시 도매상 캐시 자동 워밍업
-  // - m.stock != null (snapshot DB 에 있음): snapshot 경로로 캐시 채움 (DB 조회, 거의 무비용)
-  // - m.stock == null (snapshot DB 에 없음): 자동 라이브 스크랩 (워커 호출, 50개 한도)
-  // 두 그룹은 disjoint 라 같은 코드가 두 번 호출되지 않는다.
-  // (예전 구현은 1단계가 모든 idle 코드를 loading 으로 잡아버려서
-  //  2단계 fetchStockBatch 의 loading/done 필터에 걸려 라이브 호출이 영원히 skip 됐다.)
+  // 검색 결과 로드 시 자동 재고 워밍업.
+  // - 캐시 있고 신선(4시간 이내): snapshot 경로 (DB 즉시 조회)
+  // - 캐시 있는데 stale(4시간 초과) 또는 캐시 없음: 라이브 경로 (워커 호출)
+  // → stale 데이터를 검색 직후 자동으로 "방금" 값으로 갱신해주는 효과.
+  // 핵심: 로딩 중에도 stock-cache 가 직전 결과를 보존하므로, 화면에서 기존 숫자가
+  // 사라지지 않는다. spinner 만 옆에 돌고 새 값 도착하면 자연스럽게 교체.
+  const STOCK_STALE_MS = 4 * 60 * 60 * 1000; // 4시간 — 워커 풀배치 간격과 일치
   useEffect(() => {
-    const codesWithSnapshot: string[] = [];
-    const codesWithoutSnapshot: string[] = [];
+    const snapshotTargets: string[] = [];
+    const liveTargets: string[] = [];
     for (const m of results) {
       if (!m.insuranceCode) continue;
       const e = getStock(m.insuranceCode);
       if (e.status === "done" || e.status === "loading") continue;
-      if (m.stock == null) codesWithoutSnapshot.push(m.insuranceCode);
-      else codesWithSnapshot.push(m.insuranceCode);
+      const cachedAt = m.stockScrapedAt ? new Date(m.stockScrapedAt).getTime() : 0;
+      const isStale = !cachedAt || (Date.now() - cachedAt) > STOCK_STALE_MS;
+      if (m.stock == null || isStale) {
+        liveTargets.push(m.insuranceCode);
+      } else {
+        snapshotTargets.push(m.insuranceCode);
+      }
     }
-
-    if (codesWithSnapshot.length > 0) {
-      fetchStockBatch(codesWithSnapshot, false, STOCK_SITES);
+    if (snapshotTargets.length > 0) {
+      fetchStockBatch(snapshotTargets, false, STOCK_SITES);
     }
-    // 라이브 경로 한도가 50 이므로 최대 50개만 트리거. 나머지는 사용자가 "전체재고 새로고침"
-    const liveTargets = codesWithoutSnapshot.slice(0, 50);
+    // 라이브 경로 한도가 50 — stale + 캐시 없는 것 우선 처리.
     if (liveTargets.length > 0) {
-      fetchStockBatch(liveTargets, true, STOCK_SITES);
+      fetchStockBatch(liveTargets.slice(0, 50), true, STOCK_SITES);
     }
-  }, [results]);
+  }, [results, STOCK_STALE_MS]);
 
   // "전체재고 새로고침" — 모든 행을 실시간 라이브 스크랩으로 갱신 (한 번의 API 호출)
   function refreshAllLive() {

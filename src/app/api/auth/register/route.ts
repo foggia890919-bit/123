@@ -40,8 +40,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "이미 사용 중인 이메일이에요." }, { status: 409 });
     }
 
-    const validRoles = ["SALES_REP", "BIZ", "BASIC", "DOCTOR", "PHARMACIST"];
-    const safeRole = validRoles.includes(role) ? role : "SALES_REP";
+    const validRoles = ["BUSINESS", "BIZ", "BASIC", "DOCTOR", "PHARMACIST"];
+    const safeRole = validRoles.includes(role) ? role : "BUSINESS";
 
     const hashed = await bcrypt.hash(password, 12);
 
@@ -52,6 +52,8 @@ export async function POST(req: NextRequest) {
         phone: phone || null,
         carrier: carrier || null,
         approved: true,
+        // 신규 회원은 default 일반회원 (isBusinessApproved=false).
+        // 가입 후 마이페이지에서 사업자등록증 제출 + 관리자 승인 시 true 로 전환.
         updatedAt: new Date(),
       },
       select: { id: true, email: true, name: true, role: true },
@@ -109,6 +111,17 @@ export async function POST(req: NextRequest) {
         }
       }
     }
+
+    // 가입 직후 사업자 인증 안내 알람 즉시 생성 — 가입자가 다음 로그인 시 종 아이콘에 빨강 배지로 확인.
+    await prisma.notification.create({
+      data: {
+        userId: user.id,
+        type: "BUSINESS_PROMPT",
+        title: "사업자 등록하고 모든 기능을 사용해보세요",
+        body: "지금은 통합검색만 이용 가능해요. 마이페이지에서 사업자등록증을 등록하고 관리자 승인을 받으면 제약사 필터링·통계제출처·제안서·통계 업로드 등 모든 기능을 사용할 수 있어요.",
+        link: "/mypage",
+      },
+    }).catch(() => undefined);
 
     await prisma.$executeRawUnsafe(`DELETE FROM "SmsOtp" WHERE "phone"=$1`, digits);
 

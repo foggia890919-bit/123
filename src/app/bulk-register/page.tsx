@@ -107,7 +107,7 @@ function BulkRegisterInner() {
   const router = useRouter();
   const userId = session?.user?.id;
   const userRole = session?.user?.role;
-  const isSalesRep = hasRole(userRole, "SALES_REP");
+  const isSalesRep = hasRole(userRole, "BUSINESS");
 
   const [title, setTitle] = useState("대체제안서");
   const [clientName, setClientName] = useState("");

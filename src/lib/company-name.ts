@@ -1,16 +1,46 @@
-// 제약사명 정규화 — (주), 주식회사, (유), 유한회사 등 법인형태 접두/접미 제거
+// 제약사명 정규화 — (주), 주식회사, (유), 유한회사, ㈜ 등 법인 형태 + (본사), (파트너스) 등
+// 부서/지점 표기 모두 제거. 사용자 표시용.
 export function normalizeCompanyName(name: string): string {
+  if (!name) return "";
   return name
-    .replace(/^\(주\)\s*/g, "")
-    .replace(/\s*\(주\)$/g, "")
-    .replace(/^주식회사\s+/g, "")
-    .replace(/\s+주식회사$/g, "")
-    .replace(/^\(유\)\s*/g, "")
-    .replace(/\s*\(유\)$/g, "")
-    .replace(/^유한회사\s+/g, "")
-    .replace(/\s+유한회사$/g, "")
+    // 회사 형태 — 앞뒤 둘 다
+    .replace(/^\(주\)\s*|\s*\(주\)$/g, "")
+    .replace(/^㈜\s*|\s*㈜$/g, "")
+    .replace(/^주식회사\s+|\s+주식회사$/g, "")
+    .replace(/^\(유\)\s*|\s*\(유\)$/g, "")
+    .replace(/^유한회사\s+|\s+유한회사$/g, "")
     .replace(/^\(재\)\s*/g, "")
     .replace(/^\(사\)\s*/g, "")
     .replace(/^\(합\)\s*/g, "")
+    // 부서/지점/영업소 등 부수 표기
+    .replace(/\s*\(본사\)$/g, "")
+    .replace(/\s*\(지사\)$/g, "")
+    .replace(/\s*\(지점\)$/g, "")
+    .replace(/\s*\(파트너스\)$/g, "")
+    .replace(/\s*\(파트너즈\)$/g, "")
+    .replace(/\s*\(파너스\)$/g, "")     // 흔한 오타
+    .replace(/\s*\(영업소\)$/g, "")
+    .replace(/\s*\(영업부\)$/g, "")
+    .replace(/\s*\(영업\)$/g, "")
+    // 영문 회사 형태
+    .replace(/\s*Co\.\s*,?\s*Ltd\.?$/gi, "")
+    .replace(/\s*Corp\.?$/gi, "")
+    .replace(/\s*Corporation$/gi, "")
+    .replace(/\s*Inc\.?$/gi, "")
     .trim();
+}
+
+// 제약사명 fingerprint key — 매출 합산/매칭 비교용.
+// "(주)셀트리온제약", "셀트리온제약 (주)", "셀트리온제약(본사)", "셀트리온제약(파트너스)"
+// 모두 같은 키 "셀트리온제약" 으로 묶임.
+//
+// 작동:
+// 1) normalizeCompanyName 으로 부수 표기 제거
+// 2) 남은 모든 공백/괄호/구두점 제거
+// 3) 소문자화
+export function companyNameKey(name: string): string {
+  if (!name) return "";
+  return normalizeCompanyName(name)
+    .replace(/[\s.,()/\-_·]/g, "")
+    .toLowerCase();
 }

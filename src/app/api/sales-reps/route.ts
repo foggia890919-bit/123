@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q") ?? "";
   const reps = await prisma.user.findMany({
     where: {
-      role: "SALES_REP",
+      role: "BUSINESS",
       ...(q ? {
         OR: [
           { name: { contains: q, mode: "insensitive" } },

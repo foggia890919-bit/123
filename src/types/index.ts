@@ -1,4 +1,4 @@
-export type Role = "ADMIN" | "SALES_REP" | "DOCTOR" | "PHARMACIST";
+export type Role = "ADMIN" | "BUSINESS" | "BIZ" | "BASIC" | "DOCTOR" | "PHARMACIST";
 
 /**
  * HIRA 주성분코드 정밀 매칭 레벨
@@ -25,6 +25,7 @@ export interface MedicationItem {
   insuranceCode: string | null;
   notes: string | null;
   stock?: number | null;
+  stockScrapedAt?: string | null;  // 캐시 재고의 마지막 크롤링 시각 (ISO)
   isSettlement: boolean;
   settlementType?: string | null;
   source: "EXCEL" | "PUBLIC_API";

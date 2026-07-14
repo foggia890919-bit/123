@@ -7,6 +7,7 @@ import { Building2, Plus, Trash2, FileText, CheckCircle2, XCircle, Loader2, Aler
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import RequireRole from "@/components/RequireRole";
+import { normalizeCompanyName } from "@/lib/company-name";
 import Link from "next/link";
 
 /* ───── 거래처 등록 타입 ───── */
@@ -62,12 +63,18 @@ export default function ClientsPage() {
 
   /* ── 거래처 등록 state ── */
   const [clients, setClients] = useState<UserClient[]>([]);
+  // 본인 대표 사업자 (마이페이지 "사업자 정보" 카드와 같은 row) — 거래처 list 에서 제외용
+  const [myBizClientId, setMyBizClientId] = useState<string | null>(null);
   const [listLoading, setListLoading] = useState(true);
   const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
   const [editingAddressVal, setEditingAddressVal] = useState("");
   const [name, setName] = useState("");
   const [biz, setBiz] = useState("");
   const [address, setAddress] = useState("");
+  // 한글 IME 입력 직후 즉시 버튼 클릭 시 state 미반영 케이스 대비 — DOM 값 직접 읽기
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const bizInputRef = useRef<HTMLInputElement>(null);
+  const addressInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [registering, setRegistering] = useState(false);
   const [regError, setRegError] = useState("");
@@ -95,8 +102,18 @@ export default function ClientsPage() {
   const [showProposalMenu, setShowProposalMenu] = useState(false);
   const [companyStatuses, setCompanyStatuses] = useState<Record<string, string>>({});
   const [myRequests, setMyRequests] = useState<MyRequest[]>([]);
+  // SubmissionRoute 매칭 — 조회 요청 표에 어느 상위법인에 등록됐는지 표시용
+  const [myRoutes, setMyRoutes] = useState<{ clientName: string; companyName: string; submissionEntity: string }[]>([]);
   const [requestFilter, setRequestFilter] = useState<string>("all");
   const [requestsLoading, setRequestsLoading] = useState(false);
+
+  /* ── 상위법인 (필터링 시 선택 — DB 매칭된 dealer 만 선택 가능, 자유 입력 금지) ── */
+  const [selectedSubmissionEntity, setSelectedSubmissionEntity] = useState<{ clientName: string; bizNumber: string; userId?: string } | null>(null);
+  const [entityMenuOpen, setEntityMenuOpen] = useState(false);
+  const [entityQuery, setEntityQuery] = useState("");
+  const [entityResults, setEntityResults] = useState<{ clientName: string; bizNumber: string; dealerType: string | null; userId?: string; email?: string; name?: string; isBusinessApproved?: boolean; role?: string; category?: "ADMIN" | "DOCTOR" | "PHARMACIST" | "BUSINESS_APPROVED" | "GENERAL" }[]>([]);
+  const [entitySearching, setEntitySearching] = useState(false);
+  const entityMenuRef = useRef<HTMLDivElement>(null);
 
   /* ── 초기 로드 ── */
   useEffect(() => {
@@ -105,8 +122,25 @@ export default function ClientsPage() {
     fetch("/api/medications/companies").then((r) => r.json()).then(setCompanies);
     fetch(`/api/proposals?userId=${session.user.id}`).then((r) => r.json()).then((d) => setProposals(Array.isArray(d) ? d : []));
     fetch(`/api/filter-request/company-status?userId=${session.user.id}`).then((r) => r.json()).then(setCompanyStatuses);
+    // 본인 대표 사업자 id — 거래처 list 에서 자동 제외용 (회원가입 시 자동 생성된 UserClient).
+    fetch("/api/mypage").then((r) => (r.ok ? r.json() : null)).then((d) => {
+      if (d?.bizClient?.id) setMyBizClientId(d.bizClient.id);
+    }).catch(() => undefined);
     loadMyRequests(session.user.id);
   }, [session?.user?.id]);
+
+  /* 상위법인 검색 — debounce 후 /api/dealers/search 호출. 빈 쿼리면 결과 비움. */
+  useEffect(() => {
+    if (!entityMenuOpen) return;
+    const t = setTimeout(() => {
+      setEntitySearching(true);
+      fetch(`/api/dealers/search?q=${encodeURIComponent(entityQuery)}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((d) => setEntityResults(Array.isArray(d) ? d : []))
+        .finally(() => setEntitySearching(false));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [entityQuery, entityMenuOpen]);
 
   useEffect(() => {
     fetch("/api/user-clients").then((r) => r.json()).then((d) => setMyClients(Array.isArray(d) ? d : []));
@@ -129,20 +163,28 @@ export default function ClientsPage() {
   useEffect(() => {
     const h = (e: MouseEvent) => {
       if (proposalMenuRef.current && !proposalMenuRef.current.contains(e.target as Node)) setShowProposalMenu(false);
+      if (entityMenuOpen && entityMenuRef.current && !entityMenuRef.current.contains(e.target as Node)) setEntityMenuOpen(false);
       if (!clientMenuOpen && !companyMenuOpen) return;
       if (clientMenuRef.current && !clientMenuRef.current.contains(e.target as Node)) setClientMenuOpen(false);
       if (companyMenuRef.current && !companyMenuRef.current.contains(e.target as Node)) setCompanyMenuOpen(false);
     };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
-  }, [clientMenuOpen, companyMenuOpen]);
+  }, [clientMenuOpen, companyMenuOpen, entityMenuOpen]);
 
   async function loadMyRequests(uid: string) {
     setRequestsLoading(true);
     try {
-      const res = await fetch(`/api/filter-request?userId=${uid}`);
+      const [res, routesRes] = await Promise.all([
+        fetch(`/api/filter-request?userId=${uid}`),
+        fetch("/api/submission-routes"),
+      ]);
       const data = await res.json();
       setMyRequests(Array.isArray(data) ? data : []);
+      if (routesRes.ok) {
+        const r = await routesRes.json();
+        setMyRoutes(Array.isArray(r) ? r.map((x: { clientName: string; companyName: string; submissionEntity: string }) => ({ clientName: x.clientName, companyName: x.companyName, submissionEntity: x.submissionEntity })) : []);
+      }
     } finally {
       setRequestsLoading(false);
     }
@@ -157,7 +199,8 @@ export default function ClientsPage() {
   }
 
   const filteredCompanies = companies.filter((c) => !companySearch.trim() || c.name.toLowerCase().includes(companySearch.toLowerCase()));
-  const displayClients = clientQuery.trim() ? clientResults : myClients;
+  // 본인 대표 사업자 (마이페이지 사업자 정보) 는 거래처 선택 후보에서도 제외
+  const displayClients = (clientQuery.trim() ? clientResults : myClients).filter((c) => c.id !== myBizClientId);
 
   // 선택된 거래처의 제약사별 필터링 요청 맵
   const clientRequestMap = useMemo(() => {
@@ -211,10 +254,14 @@ export default function ClientsPage() {
 
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault(); setRegError("");
-    if (!name.trim() || !biz.trim()) { setRegError("거래처명과 사업자번호를 입력해주세요."); return; }
+    // input 의 실제 DOM 값을 우선 읽음 — 한글 IME 미반영 케이스 방어
+    const nameVal = (nameInputRef.current?.value ?? name).trim();
+    const bizVal = (bizInputRef.current?.value ?? biz).trim();
+    const addressVal = (addressInputRef.current?.value ?? address).trim();
+    if (!nameVal || !bizVal) { setRegError("거래처명과 사업자번호를 입력해주세요."); return; }
     if (bizError) { setRegError(bizError); return; }
     if (dupChecked === "dup") { setRegError("이미 등록된 사업자번호예요."); return; }
-    const digits = biz.replace(/\D/g, "");
+    const digits = bizVal.replace(/\D/g, "");
     if (!validateBizNumber(digits)) { setRegError("유효하지 않은 사업자등록번호예요."); return; }
     setRegistering(true);
     let bizDocument: string | null = null, bizFileName: string | null = null;
@@ -222,11 +269,16 @@ export default function ClientsPage() {
       bizDocument = await new Promise<string>((resolve) => { const r = new FileReader(); r.readAsDataURL(file); r.onload = () => resolve(r.result as string); });
       bizFileName = file.name;
     }
-    const res = await fetch("/api/user-clients", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientName: name.trim(), bizNumber: digits, address: address.trim() || null, bizDocument, bizFileName, dealerType: null }) });
+    const res = await fetch("/api/user-clients", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientName: nameVal, bizNumber: digits, address: addressVal || null, bizDocument, bizFileName, dealerType: null }) });
     if (res.ok) {
       const newClient = await res.json();
       setClients((prev) => [newClient, ...prev]);
       setName(""); setBiz(""); setAddress(""); setFile(null); setDupChecked("none");
+      // ref 의 DOM value 도 강제 정리 — controlled value 와 동기화 (IME 케이스 방어)
+      if (nameInputRef.current) nameInputRef.current.value = "";
+      if (bizInputRef.current) bizInputRef.current.value = "";
+      if (addressInputRef.current) addressInputRef.current.value = "";
+      setRegError("");
     } else { setRegError((await res.json()).error || "등록 중 오류가 발생했어요."); }
     setRegistering(false);
   }
@@ -243,18 +295,61 @@ export default function ClientsPage() {
   }
 
   /* ── 필터링 제출 ── */
+  // 1) /api/filter-request 호출 — 기존 필터링 요청 등록
+  // 2) 선택된 각 제약사마다 SubmissionRoute upsert — 통계제출처 자동 등록
+  //    (사용자 요구: "필터링시 선택한 상위법인은 통계제출처에 자동 등록, 수정은 통계제출처 메뉴에서")
   async function handleFilterSubmit(e: React.FormEvent) {
     e.preventDefault(); setFilterError("");
     if (selected.size === 0) { setFilterError("제약사를 1개 이상 선택해주세요."); return; }
     if (!selectedFilterClient) { setFilterError("거래처를 선택해주세요."); return; }
+    if (!selectedSubmissionEntity) { setFilterError("상위법인을 선택해주세요. (DB 에 등록된 법인만 선택 가능)"); return; }
     setFilterLoading(true);
-    const res = await fetch("/api/filter-request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId: session!.user.id, userName: session!.user.name || session!.user.email, clientName: selectedFilterClient.clientName, bizNumber: selectedFilterClient.bizNumber, companies: Array.from(selected) }) });
-    if (res.ok) {
-      setFilterSuccess(true); setSelected(new Set());
+    try {
+      const res = await fetch("/api/filter-request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId: session!.user.id, userName: session!.user.name || session!.user.email, clientName: selectedFilterClient.clientName, bizNumber: selectedFilterClient.bizNumber, companies: Array.from(selected) }) });
+      if (!res.ok) { setFilterError((await res.json()).error || "요청 중 오류가 발생했어요."); return; }
+
+      // 통계제출처 자동 등록 — 선택된 각 제약사마다. 실패 시 사용자에게 명확히 표시.
+      const entity = normalizeCompanyName(selectedSubmissionEntity.clientName);
+      const routeResults = await Promise.all(
+        Array.from(selected).map(async (companyName) => {
+          try {
+            const r = await fetch("/api/submission-routes", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                clientName: selectedFilterClient.clientName.trim(),
+                companyName: normalizeCompanyName(companyName),
+                submissionEntity: entity,
+                parentUserId: selectedSubmissionEntity.userId ?? null,
+                requestType: "신규",
+              }),
+            });
+            if (r.ok) return { ok: true, companyName, error: null };
+            const body = await r.json().catch(() => ({}));
+            return { ok: false, companyName, error: body?.error || `HTTP ${r.status}` };
+          } catch (e) {
+            return { ok: false, companyName, error: String(e).slice(0, 100) };
+          }
+        }),
+      );
+      const failures = routeResults.filter((r) => !r.ok);
+      if (failures.length > 0) {
+        const detail = failures.map((f) => `${f.companyName}: ${f.error}`).join(" / ");
+        setFilterError(
+          `필터링 요청은 성공했지만 통계제출처 자동 등록 ${failures.length}/${routeResults.length}건 실패\n→ ${detail}\n통계제출처 메뉴에서 직접 등록해주세요.`
+        );
+        // 실패 있으면 success 표시 안 함 (사용자가 에러를 봐야)
+      } else {
+        setFilterSuccess(true);
+      }
+
+      setSelected(new Set());
+      setSelectedSubmissionEntity(null);
       fetch(`/api/filter-request/company-status?userId=${session!.user.id}`).then((r) => r.json()).then(setCompanyStatuses);
       loadMyRequests(session!.user.id);
-    } else { setFilterError((await res.json()).error || "요청 중 오류가 발생했어요."); }
-    setFilterLoading(false);
+    } finally {
+      setFilterLoading(false);
+    }
   }
 
 
@@ -287,7 +382,7 @@ export default function ClientsPage() {
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-600">사업자등록번호 <span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <Input value={biz} onChange={(e) => handleBizChange(e.target.value)} placeholder="000-00-00000" maxLength={12}
+                    <Input ref={bizInputRef} value={biz} onChange={(e) => handleBizChange(e.target.value)} placeholder="000-00-00000" maxLength={12}
                       className={bizError || dupChecked === "dup" || dupChecked === "corp" ? "border-red-400 pr-9" : dupChecked === "ok" ? "border-green-400 pr-9" : "pr-9"} />
                     {dupChecked === "checking" && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-gray-400" />}
                     {dupChecked === "ok" && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-green-500" />}
@@ -304,11 +399,11 @@ export default function ClientsPage() {
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-600">거래처명 <span className="text-red-500">*</span></label>
-                  <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="상호명" />
+                  <Input ref={nameInputRef} value={name} onChange={(e) => setName(e.target.value)} placeholder="상호명" />
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-600">주소 <span className="text-gray-400 font-normal">(선택)</span></label>
-                  <Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="예: 서울시 강남구 테헤란로 123" />
+                  <Input ref={addressInputRef} value={address} onChange={(e) => setAddress(e.target.value)} placeholder="예: 서울시 강남구 테헤란로 123" />
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-600">사업자등록증 <span className="text-gray-400 font-normal">(선택)</span></label>
@@ -467,8 +562,92 @@ export default function ClientsPage() {
                     </div>
                   )}
 
+                  {/* 상위법인 선택 — DB 에 등록된 dealer 만 선택 가능. 자유 입력 금지. */}
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-gray-600">상위법인 선택 <span className="text-red-500">*</span></label>
+                    <div className="relative" ref={entityMenuRef}>
+                      <button type="button" onClick={() => setEntityMenuOpen((v) => !v)}
+                        className="w-full h-10 px-3 border border-gray-300 rounded-md bg-white hover:bg-gray-50 text-left text-sm flex items-center justify-between gap-2">
+                        {selectedSubmissionEntity ? (
+                          <span className="flex items-center gap-2 flex-1 min-w-0">
+                            <CheckCircle2 className="w-4 h-4 text-blue-500 shrink-0" />
+                            <span className="font-medium text-gray-800 truncate">{selectedSubmissionEntity.clientName}</span>
+                            <span className="text-gray-400 font-mono text-xs shrink-0">{selectedSubmissionEntity.bizNumber}</span>
+                          </span>
+                        ) : (
+                          <span className="text-gray-400 flex items-center gap-1.5"><Search className="w-3.5 h-3.5" />상위법인 검색 (아이디·이름·사업자번호·업체명)</span>
+                        )}
+                        <div className="flex items-center gap-1 shrink-0">
+                          {selectedSubmissionEntity && (
+                            <span onClick={(e) => { e.stopPropagation(); setSelectedSubmissionEntity(null); setEntityQuery(""); }}
+                              className="p-0.5 text-gray-400 hover:text-gray-600 rounded">
+                              <X className="w-3.5 h-3.5" />
+                            </span>
+                          )}
+                          <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${entityMenuOpen ? "rotate-180" : ""}`} />
+                        </div>
+                      </button>
+                      {entityMenuOpen && (
+                        <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg">
+                          <div className="p-2 border-b border-gray-100">
+                            <div className="relative">
+                              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+                              <input autoFocus value={entityQuery} onChange={(e) => setEntityQuery(e.target.value)}
+                                placeholder="아이디(이메일)·이름·사업자번호·업체명 검색..."
+                                className="w-full h-8 pl-8 pr-8 border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                              {entitySearching && <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 animate-spin text-gray-400" />}
+                            </div>
+                          </div>
+                          <div className="max-h-56 overflow-y-auto">
+                            {entityResults.length === 0 ? (
+                              entityQuery.trim() && !entitySearching ? (
+                                <div className="py-4 px-3 text-center bg-red-50 border-t border-red-100">
+                                  <AlertCircle className="w-5 h-5 text-red-500 mx-auto mb-1.5" />
+                                  <p className="text-xs font-semibold text-red-700 mb-0.5">등록되지 않은 상위법인입니다</p>
+                                  <p className="text-[11px] text-red-600">검색 결과에 해당 회원이 없거나,<br />그 회원이 상위 노출을 허용하지 않았어요.<br />관리자에게 문의하세요.</p>
+                                </div>
+                              ) : (
+                                <div className="py-5 px-3 text-center">
+                                  <p className="text-xs text-gray-400">{entityQuery.trim() ? "검색 중..." : "상위법인명 또는 사업자번호를 입력하세요"}</p>
+                                </div>
+                              )
+                            ) : (
+                              entityResults.map((d) => {
+                                const cat = d.category;
+                                const badge = cat === "ADMIN"
+                                  ? { label: "관리자", color: "bg-purple-100 text-purple-700 border border-purple-300" }
+                                  : cat === "DOCTOR"
+                                  ? { label: "병원", color: "bg-rose-100 text-rose-700" }
+                                  : cat === "PHARMACIST"
+                                  ? { label: "약국", color: "bg-emerald-100 text-emerald-700" }
+                                  : d.isBusinessApproved
+                                  ? { label: "사업자 인증", color: "bg-blue-100 text-blue-700" }
+                                  : { label: "일반회원", color: "bg-gray-100 text-gray-600" };
+                                return (
+                                  <button key={`${d.clientName}-${d.bizNumber}`} type="button"
+                                    onClick={() => { setSelectedSubmissionEntity({ clientName: d.clientName, bizNumber: d.bizNumber, userId: d.userId }); setEntityMenuOpen(false); setEntityQuery(""); }}
+                                    className="w-full text-left px-3 py-2.5 text-xs hover:bg-gray-50 border-b border-gray-50 last:border-0">
+                                    <div className="flex items-center gap-1.5 mb-0.5">
+                                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0 ${badge.color}`}>{badge.label}</span>
+                                      <p className="font-medium text-gray-800 truncate">{d.clientName}</p>
+                                    </div>
+                                    <p className="text-gray-400 font-mono">{d.bizNumber}</p>
+                                  </button>
+                                );
+                              })
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-1.5 leading-relaxed">
+                      필터링 시 체크하는 상위법인은 <span className="font-semibold">통계제출처에 자동 등록</span>됩니다.<br />
+                      이후 수정은 <Link href="/submission-routes" className="underline font-semibold hover:text-blue-900">통계제출처 메뉴</Link>에서 가능합니다.
+                    </p>
+                  </div>
+
                   {filterError && <p className="text-sm text-red-600 bg-red-50 p-3 rounded-lg">{filterError}</p>}
-                  <Button type="submit" className="w-full" disabled={filterLoading || selected.size === 0 || !selectedFilterClient}>
+                  <Button type="submit" className="w-full" disabled={filterLoading || selected.size === 0 || !selectedFilterClient || !selectedSubmissionEntity}>
                     <Send className="w-4 h-4 mr-2" />{filterLoading ? "요청 중..." : `${selected.size}개 제약사 조회 등록`}
                   </Button>
                 </form>
@@ -507,17 +686,24 @@ export default function ClientsPage() {
                     <tr className="text-xs text-gray-500 font-semibold">
                       <th className="px-4 py-2.5 text-left">거래처명</th>
                       <th className="px-4 py-2.5 text-left">제약사명</th>
+                      <th className="px-4 py-2.5 text-left">상위법인</th>
                       <th className="px-4 py-2.5 text-center">거래가능</th>
                       <th className="px-4 py-2.5 text-center">거래불가</th>
                       <th className="px-4 py-2.5 text-left">날짜</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {filteredRequests.map((r) => (
+                    {filteredRequests.map((r) => {
+                      // 같은 거래처+제약사 매핑된 상위법인 찾기 (SubmissionRoute)
+                      const matchedRoute = myRoutes.find((mr) => mr.clientName === r.clientName && mr.companyName === r.companyName);
+                      return (
                       <Fragment key={r.id}>
                         <tr className="hover:bg-gray-50">
                           <td className="px-4 py-2.5 text-gray-700 text-xs">{r.clientName}</td>
                           <td className="px-4 py-2.5 text-gray-800 text-xs">{r.companyName}</td>
+                          <td className="px-4 py-2.5 text-gray-700 text-xs">
+                            {matchedRoute ? matchedRoute.submissionEntity : <span className="text-gray-300">—</span>}
+                          </td>
                           <td className="px-4 py-2.5 text-center">
                             {r.status === "APPROVED" && <span className="text-green-600 font-bold text-sm">✓</span>}
                           </td>
@@ -531,14 +717,15 @@ export default function ClientsPage() {
                         </tr>
                         {r.replyText && (
                           <tr className="bg-blue-50/40">
-                            <td colSpan={5} className="px-4 py-2">
+                            <td colSpan={6} className="px-4 py-2">
                               <div className="text-xs text-blue-800"><span className="font-semibold">관리자 회신</span>{r.repliedAt && <span className="text-blue-400 ml-2">({new Date(r.repliedAt).toLocaleString("ko-KR")})</span>}</div>
                               <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap">{r.replyText}</p>
                             </td>
                           </tr>
                         )}
                       </Fragment>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -546,18 +733,21 @@ export default function ClientsPage() {
           </div>
         )}
 
-        {/* 등록된 거래처 목록 */}
+        {/* 등록된 거래처 목록 — 본인 대표 사업자 (마이페이지 "사업자 정보") 는 자동 제외 */}
+        {(() => {
+          const externalClients = clients.filter((c) => c.id !== myBizClientId);
+          return (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
-            <h2 className="font-semibold text-gray-800">등록된 거래처<span className="ml-2 text-sm font-normal text-gray-400">({clients.length}개)</span></h2>
+            <h2 className="font-semibold text-gray-800">등록된 거래처<span className="ml-2 text-sm font-normal text-gray-400">({externalClients.length}개)</span></h2>
           </div>
           {listLoading ? (
             <div className="flex justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>
-          ) : clients.length === 0 ? (
+          ) : externalClients.length === 0 ? (
             <div className="text-center py-12"><Building2 className="w-8 h-8 text-gray-200 mx-auto mb-2" /><p className="text-sm text-gray-400">아직 등록된 거래처가 없어요</p></div>
           ) : (
             <div className="divide-y divide-gray-100">
-              {clients.map((c) => (
+              {externalClients.map((c) => (
                 <div key={c.id} className="flex items-center gap-3 px-5 py-3.5 hover:bg-gray-50">
                   <Stethoscope className="w-4 h-4 text-gray-300 shrink-0" />
                   <div className="flex-1 min-w-0">
@@ -592,6 +782,8 @@ export default function ClientsPage() {
             </div>
           )}
         </div>
+          );
+        })()}
       </div>
     </RequireRole>
   );

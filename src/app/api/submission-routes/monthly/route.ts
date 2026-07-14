@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { requireSession, isNextResponse, canManageSubmissionRoutes } from "@/lib/auth-guard";
+import { getViewableUserIds } from "@/lib/hierarchy";
+
+async function visibleOwnerIds(user: { id: string; role: string }): Promise<string[] | null> {
+  if (user.role === "ADMIN") return null;
+  const [viewable, admins] = await Promise.all([
+    getViewableUserIds(user.id),
+    prisma.user.findMany({ where: { role: "ADMIN" }, select: { id: true } }),
+  ]);
+  return [...new Set([...viewable, ...admins.map((a) => a.id)])];
+}
 
 // GET /api/submission-routes/monthly?yearMonth=YYYY-MM
 // 해당 월의 제출처별 제출 체크리스트 (제출처 그룹 + 미제출 강조)
@@ -13,21 +23,20 @@ import { requireSession, isNextResponse } from "@/lib/auth-guard";
 //   body: { yearMonth, submissionEntity, submitted }
 //   해당 제출처 전체 일괄 토글
 
-function bizOrAdmin(role: string) { return role === "BIZ" || role === "ADMIN"; }
-
 const YM_RE = /^\d{4}-\d{2}$/;
 
 export async function GET(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
-  if (!bizOrAdmin(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+  if (!canManageSubmissionRoutes(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
   const yearMonth = req.nextUrl.searchParams.get("yearMonth");
   if (!yearMonth || !YM_RE.test(yearMonth))
     return NextResponse.json({ error: "yearMonth (YYYY-MM) 필요" }, { status: 400 });
 
+  const owners = await visibleOwnerIds(user);
   const routes = await prisma.submissionRoute.findMany({
-    where: { active: true },
+    where: { active: true, ...(owners ? { ownerId: { in: owners } } : {}) },
     orderBy: [{ submissionEntity: "asc" }, { clientName: "asc" }],
   });
 
@@ -86,7 +95,7 @@ export async function GET(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
-  if (!bizOrAdmin(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+  if (!canManageSubmissionRoutes(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
   const { yearMonth, submissionRouteId, submitted, memo } = await req.json();
   if (!yearMonth || !YM_RE.test(yearMonth))
@@ -94,8 +103,11 @@ export async function PATCH(req: NextRequest) {
   if (!submissionRouteId)
     return NextResponse.json({ error: "submissionRouteId 필요" }, { status: 400 });
 
-  const route = await prisma.submissionRoute.findUnique({ where: { id: submissionRouteId } });
+  const route = await prisma.submissionRoute.findUnique({ where: { id: submissionRouteId }, select: { id: true, ownerId: true } });
   if (!route) return NextResponse.json({ error: "제출처를 찾을 수 없어요." }, { status: 404 });
+  const owners = await visibleOwnerIds(user);
+  if (owners && !owners.includes(route.ownerId))
+    return NextResponse.json({ error: "권한이 없어요." }, { status: 403 });
 
   const submittedBool = !!submitted;
   const submittedAt = submittedBool ? new Date() : null;
@@ -125,7 +137,7 @@ export async function PATCH(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
-  if (!bizOrAdmin(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+  if (!canManageSubmissionRoutes(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
   const { yearMonth, submissionEntity, submitted } = await req.json();
   if (!yearMonth || !YM_RE.test(yearMonth))
@@ -133,8 +145,9 @@ export async function POST(req: NextRequest) {
   if (!submissionEntity)
     return NextResponse.json({ error: "submissionEntity 필요" }, { status: 400 });
 
+  const owners = await visibleOwnerIds(user);
   const routes = await prisma.submissionRoute.findMany({
-    where: { active: true, submissionEntity },
+    where: { active: true, submissionEntity, ...(owners ? { ownerId: { in: owners } } : {}) },
     select: { id: true },
   });
   if (routes.length === 0)

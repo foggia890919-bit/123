@@ -99,19 +99,16 @@ export const ibjp: WholesaleAdapter = {
   },
 
   async searchByCode(page: Page, insuranceCode: string): Promise<InventoryItem[]> {
-    // Make sure the SPA has finished rendering after login before we
-    // probe for the input.
-    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
-    await page.waitForTimeout(1500);
-
-    let inputAlreadyVisible = await page.locator(SEL.searchInput).first().isVisible().catch(() => false);
-    if (!inputAlreadyVisible) {
+    // 페이지 진입 직후만 SPA 렌더링 대기 — 같은 페이지에서 연속 검색은 짧게.
+    const onOrderPage = await page.locator(SEL.searchInput).first().isVisible().catch(() => false);
+    if (!onOrderPage) {
+      await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => {});
+      await page.waitForTimeout(400);
       // /dist/comOrd is the integrated-order route observed after login.
       await page.goto(this.baseUrl + SEL.orderPath, { waitUntil: "commit", timeout: 30_000 });
-      await page.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => {});
-      await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
-      await page.waitForTimeout(1500);
-      inputAlreadyVisible = await page.locator(SEL.searchInput).first().isVisible().catch(() => false);
+      await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => {});
+      await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => {});
+      await page.waitForTimeout(400);
     }
 
     // Dismiss any dialog that may have appeared on page navigation
@@ -119,8 +116,7 @@ export const ibjp: WholesaleAdapter = {
 
     const input = await waitAny(page, SEL.searchInput, 30_000);
     await input.click();
-    await input.fill("");
-    await input.type(insuranceCode, { delay: 30 });
+    await input.fill(insuranceCode);  // type → fill (타이핑 지연 제거)
 
     // Prefer clicking 검색 button over Enter — Enter behaviour varies by SPA.
     const btn = page.locator(SEL.searchBtn).first();
@@ -143,10 +139,10 @@ export const ibjp: WholesaleAdapter = {
           }
           return false;
         },
-        { timeout: 10_000 }
+        { timeout: 5_000 }
       )
       .catch(() => {});
-    await page.waitForTimeout(800);
+    await page.waitForTimeout(200);
 
     const rows = await page.locator(SEL.resultRows).all();
     const items: InventoryItem[] = [];

@@ -1,6 +1,16 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { requireSession, isNextResponse, canManageSubmissionRoutes } from "@/lib/auth-guard";
+import { getViewableUserIds } from "@/lib/hierarchy";
+
+async function visibleOwnerIds(user: { id: string; role: string }): Promise<string[] | null> {
+  if (user.role === "ADMIN") return null;
+  const [viewable, admins] = await Promise.all([
+    getViewableUserIds(user.id),
+    prisma.user.findMany({ where: { role: "ADMIN" }, select: { id: true } }),
+  ]);
+  return [...new Set([...viewable, ...admins.map((a) => a.id)])];
+}
 
 // GET /api/submission-routes/check
 // 제출처별 사업자등록증 매칭 현황 반환
@@ -15,12 +25,12 @@ interface MissingItem {
 export async function GET() {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
-  if (user.role !== "BIZ" && user.role !== "ADMIN")
+  if (!canManageSubmissionRoutes(user.role))
     return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
-  // 활성 제출처 전체 조회
+  const owners = await visibleOwnerIds(user);
   const routes = await prisma.submissionRoute.findMany({
-    where: { active: true },
+    where: { active: true, ...(owners ? { ownerId: { in: owners } } : {}) },
     select: { clientName: true, companyName: true, submissionEntity: true },
     orderBy: [{ submissionEntity: "asc" }, { clientName: "asc" }],
   });

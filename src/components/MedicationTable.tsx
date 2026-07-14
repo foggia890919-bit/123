@@ -41,7 +41,20 @@ function StockButton({ code, productName }: { code: string; productName: string 
   );
 }
 
-function StockColumnCell({ code, productName, fallbackStock }: { code: string; productName: string; fallbackStock: number | null }) {
+const STOCK_STALE_MS = 4 * 60 * 60 * 1000; // 4시간 — 워커 크론 간격에 맞춤
+
+function formatStockAgo(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diffMs / 60000);
+  if (m < 1) return "방금";
+  if (m < 60) return `${m}분 전`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}시간 전`;
+  return `${Math.floor(h / 24)}일 전`;
+}
+
+function StockColumnCell({ code, productName, fallbackStock, fallbackScrapedAt }: { code: string; productName: string; fallbackStock: number | null; fallbackScrapedAt: string | null }) {
   const entry = useStockEntry(code);
   const refreshBtn = (
     <button
@@ -53,39 +66,68 @@ function StockColumnCell({ code, productName, fallbackStock }: { code: string; p
       ↻
     </button>
   );
-  if (entry.status === "idle") {
+
+  // 표시할 숫자 계산 — entry.results 가 있으면 거기서 합산, 없으면 fallbackStock (검색 API 캐시값).
+  // stock-cache 가 loading 상태에서도 직전 results 를 보존하므로, 라이브 호출 중에도 이전 값이 그대로 보임.
+  const rows = (entry.results ?? []).filter((r) => STOCK_SITES.includes(r.siteKey) && !r.error);
+  const totalFromResults = rows.length > 0
+    ? rows.reduce((sum, r) => sum + r.items.reduce((s, i) => s + (i.stock ?? 0), 0), 0)
+    : null;
+  const displayedStock = totalFromResults != null ? totalFromResults : fallbackStock;
+
+  // 표시할 시점 계산 — entry 의 가장 최신 scrapedAt, 없으면 fallbackScrapedAt (검색 API 가 같이 준 값)
+  const latestFromResults = rows
+    .map((r) => r.scrapedAt)
+    .filter((s): s is string => !!s)
+    .reduce<string | null>((acc, cur) => !acc || new Date(cur) > new Date(acc) ? cur : acc, null);
+  const displayedScrapedAt = latestFromResults ?? fallbackScrapedAt;
+  const ago = formatStockAgo(displayedScrapedAt);
+  const isStale = displayedScrapedAt != null && Date.now() - new Date(displayedScrapedAt).getTime() > STOCK_STALE_MS;
+
+  const numberNode = displayedStock == null
+    ? <span className="text-gray-300">-</span>
+    : displayedStock > 0
+      ? <span className="text-green-700 font-medium">{displayedStock.toLocaleString()}</span>
+      : <span className="text-red-400">품절</span>;
+
+  const agoNode = ago ? (
+    <span
+      className={`text-[10px] tabular-nums ml-1 ${
+        entry.status === "loading"
+          ? "text-emerald-600"
+          : isStale ? "text-red-500 font-medium" : "text-gray-400"
+      }`}
+      title={displayedScrapedAt ? `마지막 크롤링: ${new Date(displayedScrapedAt).toLocaleString("ko-KR")}` : ""}
+    >
+      {ago}
+    </span>
+  ) : null;
+
+  if (entry.status === "loading") {
+    // 라이브 조회 진행 중 — 기존 숫자 + 시점 유지, 옆에 작은 스피너만.
     return (
       <span className="inline-flex items-center gap-0.5">
-        <span className="text-gray-400">
-          {fallbackStock != null ? (fallbackStock > 0 ? fallbackStock.toLocaleString() : "품절") : "-"}
-        </span>
-        {refreshBtn}
+        {numberNode}
+        {agoNode}
+        <Loader2 className="w-3 h-3 animate-spin text-emerald-500 ml-1" />
       </span>
     );
   }
-  if (entry.status === "loading") return <Loader2 className="w-3 h-3 animate-spin text-gray-400" />;
   if (entry.status === "error") {
     return (
       <span className="inline-flex items-center gap-0.5">
-        <span className="text-red-400 text-[10px]" title={entry.error}>오류</span>
+        {numberNode}
+        {agoNode}
+        <span className="text-red-400 text-[10px] ml-1" title={entry.error}>오류</span>
         {refreshBtn}
       </span>
     );
   }
-  const rows = (entry.results ?? []).filter((r) => STOCK_SITES.includes(r.siteKey) && !r.error);
-  const total = rows.reduce((sum, r) => sum + r.items.reduce((s, i) => s + (i.stock ?? 0), 0), 0);
-  const hasData = rows.length > 0;
-  if (!hasData) return (
-    <span className="inline-flex items-center gap-0.5">
-      <span className="text-gray-300 text-[10px]">-</span>
-      {refreshBtn}
-    </span>
-  );
+  // idle / done — 평소 표시
   return (
     <span className="inline-flex items-center gap-0.5">
-      <span className={total > 0 ? "text-green-700 font-medium" : "text-red-400"}>
-        {total > 0 ? total.toLocaleString() : "품절"}
-      </span>
+      {numberNode}
+      {agoNode}
       {refreshBtn}
     </span>
   );
@@ -496,7 +538,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                               <span className="text-gray-400">재고</span>
                               <span className="flex items-center gap-1">
                                 {med.insuranceCode
-                                  ? <StockColumnCell code={med.insuranceCode} productName={med.productName} fallbackStock={med.stock ?? null} />
+                                  ? <StockColumnCell code={med.insuranceCode} productName={med.productName} fallbackStock={med.stock ?? null} fallbackScrapedAt={med.stockScrapedAt ?? null} />
                                   : <span className="text-gray-300">-</span>}
                               </span>
                             </div>
@@ -533,7 +575,7 @@ export default function MedicationTable({ medications, loading, userId, showCate
                     {showStock && (
                       <td className="hidden sm:table-cell px-3 py-2.5 text-right whitespace-nowrap">
                         {med.insuranceCode
-                          ? <StockColumnCell code={med.insuranceCode} productName={med.productName} fallbackStock={med.stock ?? null} />
+                          ? <StockColumnCell code={med.insuranceCode} productName={med.productName} fallbackStock={med.stock ?? null} fallbackScrapedAt={med.stockScrapedAt ?? null} />
                           : <span className="text-gray-300">-</span>}
                       </td>
                     )}

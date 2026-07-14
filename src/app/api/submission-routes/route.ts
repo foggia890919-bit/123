@@ -1,14 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireSession, isNextResponse } from "@/lib/auth-guard";
+import { requireSession, isNextResponse, canManageSubmissionRoutes } from "@/lib/auth-guard";
 import { normalizeCompanyName } from "@/lib/company-name";
+import { getViewableUserIds } from "@/lib/hierarchy";
 
-function bizOrAdmin(role: string) { return role === "BIZ" || role === "ADMIN"; }
+// 본인 hierarchy + ADMIN 소유 row (글로벌 master) 의 ownerId 집합.
+// ADMIN 호출 시에는 null 반환 (필터 없음 = 전체 조회).
+async function visibleOwnerIds(user: { id: string; role: string }): Promise<string[] | null> {
+  if (user.role === "ADMIN") return null;
+  const [viewable, admins] = await Promise.all([
+    getViewableUserIds(user.id),
+    prisma.user.findMany({ where: { role: "ADMIN" }, select: { id: true } }),
+  ]);
+  return [...new Set([...viewable, ...admins.map((a) => a.id)])];
+}
 
 export async function GET(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
-  if (!bizOrAdmin(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+  if (!canManageSubmissionRoutes(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
   const { searchParams } = req.nextUrl;
   const clientName = searchParams.get("clientName");
@@ -16,12 +26,14 @@ export async function GET(req: NextRequest) {
   const entity = searchParams.get("entity");
   const activeParam = searchParams.get("active");
 
+  const owners = await visibleOwnerIds(user);
+
   const rows = await prisma.submissionRoute.findMany({
     where: {
+      ...(owners ? { ownerId: { in: owners } } : {}),
       ...(clientName ? { clientName: { contains: clientName, mode: "insensitive" } } : {}),
       ...(companyName ? { companyName: { contains: companyName, mode: "insensitive" } } : {}),
       ...(entity ? { submissionEntity: { contains: entity, mode: "insensitive" } } : {}),
-      // active=true → 활성만, active=false → 비활성만, 파라미터 없음 → 전체
       ...(activeParam === "true" ? { active: true } : activeParam === "false" ? { active: false } : {}),
     },
     orderBy: [{ submissionEntity: "asc" }, { clientName: "asc" }],
@@ -32,33 +44,46 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
-  if (!bizOrAdmin(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+  if (!canManageSubmissionRoutes(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
   const body = await req.json();
-  // 저장 전 정규화 — FilterRequest.clientName 과 일치 보장
   const clientName = normalizeCompanyName(String(body.clientName ?? "").trim());
   const companyName = normalizeCompanyName(String(body.companyName ?? "").trim());
   const submissionEntity = normalizeCompanyName(String(body.submissionEntity ?? "").trim());
   const { submissionEmail, requestType, memo } = body;
+  // 상위법인 회원 id (선택) — 거래처관리에서 상위법인 선택 시 회원 정보까지 받음.
+  // 이걸 저장하면 통계 사진 자동 라우팅 가능 (상위법인 회원이 본인 매핑된 통계 모아봄).
+  const parentUserId = typeof body.parentUserId === "string" && body.parentUserId.trim() ? body.parentUserId.trim() : null;
   if (!clientName || !companyName || !submissionEntity)
     return NextResponse.json({ error: "거래처명, 제약사명, 제출처는 필수입니다." }, { status: 400 });
   const rt = requestType === "이관" ? "이관" : "신규";
 
-  const row = await prisma.submissionRoute.upsert({
-    where: { clientName_companyName: { clientName, companyName } },
-    create: { id: crypto.randomUUID(), clientName, companyName, submissionEntity, submissionEmail: submissionEmail || null, requestType: rt, memo: memo || null, updatedAt: new Date() },
-    update: { submissionEntity, submissionEmail: submissionEmail || null, requestType: rt, memo: memo || null, active: true, updatedAt: new Date() },
-  });
-  return NextResponse.json(row, { status: 201 });
+  try {
+    const row = await prisma.submissionRoute.upsert({
+      where: { ownerId_clientName_companyName: { ownerId: user.id, clientName, companyName } },
+      create: { ownerId: user.id, clientName, companyName, submissionEntity, parentUserId, submissionEmail: submissionEmail || null, requestType: rt, memo: memo || null },
+      update: { submissionEntity, parentUserId, submissionEmail: submissionEmail || null, requestType: rt, memo: memo || null, active: true },
+    });
+    return NextResponse.json(row, { status: 201 });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[submission-routes POST]", msg);
+    return NextResponse.json({ error: msg.slice(0, 300) }, { status: 500 });
+  }
 }
 
 export async function PATCH(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
-  if (!bizOrAdmin(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+  if (!canManageSubmissionRoutes(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
   const { id, submissionEntity, submissionEmail, requestType, memo, active } = await req.json();
   if (!id) return NextResponse.json({ error: "id 필수" }, { status: 400 });
+
+  const existing = await prisma.submissionRoute.findUnique({ where: { id }, select: { ownerId: true } });
+  if (!existing) return NextResponse.json({ error: "제출처를 찾을 수 없어요." }, { status: 404 });
+  if (existing.ownerId !== user.id && user.role !== "ADMIN")
+    return NextResponse.json({ error: "본인이 등록한 제출처만 수정할 수 있어요." }, { status: 403 });
 
   const row = await prisma.submissionRoute.update({
     where: { id },
@@ -77,10 +102,16 @@ export async function PATCH(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
-  if (!bizOrAdmin(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+  if (!canManageSubmissionRoutes(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
   const id = req.nextUrl.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id 필수" }, { status: 400 });
+
+  const existing = await prisma.submissionRoute.findUnique({ where: { id }, select: { ownerId: true } });
+  if (!existing) return NextResponse.json({ error: "제출처를 찾을 수 없어요." }, { status: 404 });
+  if (existing.ownerId !== user.id && user.role !== "ADMIN")
+    return NextResponse.json({ error: "본인이 등록한 제출처만 삭제할 수 있어요." }, { status: 403 });
+
   await prisma.submissionRoute.delete({ where: { id } });
   return NextResponse.json({ success: true });
 }

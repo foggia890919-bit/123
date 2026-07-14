@@ -7,6 +7,11 @@ import { getViewableUserIds } from "@/lib/hierarchy";
 import JSZip from "jszip";
 import ExcelJS from "exceljs";
 
+// Vercel serverless 기본 10s timeout 안에 ZIP 빌드 끝나지 않음 (100+ 사진 / Storage round-trip).
+// photo-auto/route.ts 처럼 nodejs runtime + 300s 까지 늘림.
+export const runtime = "nodejs";
+export const maxDuration = 300;
+
 // GET /api/biz/submission-package?year=2026&month=5&entity=메디펄스(optional)
 //
 // 월별 처방통계를 (제출처 → 제약사) 별로 분리하여 ZIP 으로 반환.
@@ -24,11 +29,13 @@ import ExcelJS from "exceljs";
 //   ├── {제출처}/
 //   │   ├── {제약사}_{YYYYMM}.xlsx     ← 겉표지 시트 + 세부내역 시트
 //   │   └── {제약사}_이미지/
-//   │       └── {병원명}_{제약사}_{YYYYMM}.jpg
+//   │       └── {거래처}_{YYYYMM}_{제약사}_{순번}.jpg   ← 사용자 지정 파일명 규칙
 //   ├── _미매핑.txt
 //   └── _요약.txt
 
 const UNMAPPED = "_미매핑";
+// 거래처명에 "::" 가 들어있을 가능성 (안전망) — 그래도 깨지지 않도록 non-printable U+001F 사용.
+const PAIR_SEP = "\x1f";
 
 interface FinalDrug {
   insuranceCode?: string;
@@ -122,7 +129,8 @@ export async function GET(req: NextRequest) {
   // 2) 모든 (clientName × companyName) 쌍 수집
   type Pair = { clientName: string; companyName: string };
   const pairSet = new Set<string>();
-  const drugRowsByPair = new Map<string, DrugRow[]>(); // key = clientName::companyName
+  // key = clientName + PAIR_SEP + companyName. PAIR_SEP 는 U+001F 라 입력에 등장 가능성 ~0.
+  const drugRowsByPair = new Map<string, DrugRow[]>();
 
   for (const r of reports) {
     const clientName = r.client?.clientName ?? r.hospitalName ?? "(미상)";
@@ -142,7 +150,7 @@ export async function GET(req: NextRequest) {
         insuranceCode: d.insuranceCode || "", productName: d.productName || "",
         quantity: qty, unitPrice: price, amount,
       };
-      const key = `${clientName}::${companyName}`;
+      const key = `${clientName}${PAIR_SEP}${companyName}`;
       pairSet.add(key);
       if (!drugRowsByPair.has(key)) drugRowsByPair.set(key, []);
       drugRowsByPair.get(key)!.push(row);
@@ -172,7 +180,9 @@ export async function GET(req: NextRequest) {
   const unmapped: Pair[] = [];
 
   for (const [pairKey, rows] of drugRowsByPair) {
-    const [clientName, companyName] = pairKey.split("::");
+    const sepIdx = pairKey.indexOf(PAIR_SEP);
+    const clientName = sepIdx >= 0 ? pairKey.slice(0, sepIdx) : pairKey;
+    const companyName = sepIdx >= 0 ? pairKey.slice(sepIdx + 1) : "";
     const entity = lookupEntity(clientName, companyName) ?? UNMAPPED;
     if (entity === UNMAPPED) unmapped.push({ clientName, companyName });
     if (entityFilter && entity !== entityFilter) continue;
@@ -255,11 +265,11 @@ export async function GET(req: NextRequest) {
       const wbBuf = await wb.xlsx.writeBuffer();
       entityFolder.file(`${safeName(companyName)}_${yymm}.xlsx`, wbBuf);
 
-      // ── 이미지 사본
+      // ── 이미지 사본 — 사용자 지정 파일명 `{거래처}_{년월}_{제약사}_{순번}.jpg`
       const clientNamesForCompany = [...new Set(rows.map((r) => r.hospitalName))];
       const imgFolder = entityFolder.folder(`${safeName(companyName)}_이미지`)!;
       for (const clientName of clientNamesForCompany) {
-        const matchingReports = reports.filter((r) =>
+        const matchingReports = reports.filter((r: (typeof reports)[number]) =>
           (r.client?.clientName ?? r.hospitalName) === clientName &&
           ((r.ocrData as { finalDrugs?: FinalDrug[] } | null)?.finalDrugs ?? []).some(
             (d) => ((d.companyName || "").trim() || "(미분류)") === companyName,
@@ -270,8 +280,8 @@ export async function GET(req: NextRequest) {
           const img = await getImage(rep);
           if (!img) continue;
           copyIdx++;
-          const suffix = matchingReports.length > 1 ? `_${copyIdx}` : "";
-          const fname = `${safeName(clientName)}_${safeName(companyName)}_${yymm}${suffix}.${img.ext || "jpg"}`;
+          // 사용자 결정: 동일 거래처 1장이라도 항상 _1 부터 시작. 검수 시 직관적 정렬.
+          const fname = `${safeName(clientName)}_${yymm}_${safeName(companyName)}_${copyIdx}.${img.ext || "jpg"}`;
           imgFolder.file(fname, img.buf);
           imageWriteCount++;
         }

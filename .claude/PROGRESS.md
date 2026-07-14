@@ -95,3 +95,29 @@ CREATE INDEX IF NOT EXISTS "UserClient_isRateTarget_idx"        ON "UserClient"(
 7. 대량 병렬 디스패치: 한 번에 4~5건 동시 진행
 8. 끝나면 종합 보고서 1방
 - 2026-05-18 12:23 | qa-crosscheck | epharms forceResetSync plan | CONDITIONAL_PASS
+
+- 2026-05-21 14:40 | qa-crosscheck | AI처방통계 A/B/C plan (행정확도/N제약사분리/zip다운) | CONDITIONAL_PASS
+
+- 2026-05-24 00:00 | qa-crosscheck | SubmissionRoute ownerId + ParentLinkRequest Plan (7-step) | FAIL
+
+- 2026-05-24 10:00 | qa-crosscheck | Gemini self-check + resolveDrugIdentity 9-step Plan | CONDITIONAL_PASS
+
+- 2026-05-24 12:00 | stats-extract | Phase 2 — Gemini 자가검증 + 검증대상 UI (15982d2)
+  - 신규 `src/lib/gemini-self-validate.ts` — 텍스트 API 자가검증 + 8s timeout + pLimit(3)
+  - ValidationResult 별도 인터페이스 (Architect 권장)
+  - 마스터DB miss row 만 self-validate (Skeptic 우려 흡수)
+  - UI: 노란 "검증대상" 배지 + "검증대상만 보기" 필터 + 색상 중첩 가드
+  - ENV `GEMINI_SELFVALIDATE_ENABLED=true` (Vercel 추가 필요)
+  - DB 스키마 변경 없음 (ocrData Json 안에 reviewReason/validation 저장)
+2026-05-24 12:47 | qa-crosscheck | Phase 3 양방향 자가검증 Plan | CONDITIONAL_PASS
+
+- 2026-05-24 13:30 | stats-extract | Phase 3 — 양방향 자가검증 (e9ee858)
+  - 마스터DB 와 독립 — 모든 행 검증 (사용자 요구: 사진 자체 정확도 판별)
+  - 한 호출에 byCode + byName 양방향 cross-check
+  - 약품명 실존 X (hallucination 의심) → 보험코드 답 채택
+  - OCR 약가=0 → unitPrice 검증 skip
+  - byCode/byName 둘 다 모름 → 마킹 안 함 (false positive 통제)
+  - 100-row kill switch + pLimit(2) 안전마진
+  - QA B2 픽스: productName 공백/대소문자 정규화
+  - ENV `GEMINI_SELFVALIDATE_ENABLED=true` + 옵션 `GEMINI_SELFVALIDATE_DEBUG=true`
+- 2026-05-24 15:00 | qa-crosscheck | canBeParent 9-step Plan (dealer 분류+상위법인 매핑) | FAIL

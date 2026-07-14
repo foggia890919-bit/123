@@ -13,9 +13,8 @@ import {
 } from "./db.ts";
 
 // Wait between consecutive requests within a single scraping lane.
-// Lowered default: the browser interaction itself takes 2-4s, so extra
-// delay is only needed to avoid triggering the site's rate limiter.
-const PER_SITE_DELAY_MS = Number(process.env.SCHEDULED_DELAY_MS ?? 300);
+// 사용자 의견: 백제/훼밀리는 rate limiter 없음. 기본값을 짧게 둠.
+const PER_SITE_DELAY_MS = Number(process.env.SCHEDULED_DELAY_MS ?? 100);
 
 // Number of parallel browser sessions per site. Each slot logs in
 // independently and processes a separate slice of the code list.
@@ -113,9 +112,10 @@ export async function runScheduledJob(
 
         await Promise.all(
           lanes.map(async (slice, slot) => {
-            for (const { insuranceCode } of slice) {
+            for (const { insuranceCode, productName } of slice) {
               const row = await deps.scrapeOne(site, insuranceCode, slot);
               if (row.error) {
+                // 조회 실패(네트워크/타임아웃/먹통) → 저장하지 않음. 옛 값을 유지(0으로 덮지 않음).
                 stats.failed++;
               } else if (row.items.length > 0) {
                 const inserts: SnapshotInsert[] = row.items.map(item => ({
@@ -132,6 +132,18 @@ export async function runScheduledJob(
                 }
                 stats.done++;
               } else {
+                // 검색은 정상 실행됐으나 결과 0건 = 도매상 미취급/품절 → stock 0 으로 갱신.
+                // (조회 실패는 위 row.error 로 걸러지므로, 멀쩡한 재고가 0으로 덮이지 않는다)
+                // 이로써 "체크한 모든 품목"이 최신 시점으로 갱신돼, 일부만 옛 값으로 굳는 문제가 사라짐.
+                try {
+                  await saveSnapshots([{
+                    siteKey: site.key,
+                    insuranceCode,
+                    item: { insuranceCode, productName, stock: 0, spec: null, manufacturer: null, unitPrice: null },
+                  }]);
+                } catch (err) {
+                  console.error(`[scheduler] db write(empty) failed for ${site.key}/${insuranceCode}:`, (err as Error).message);
+                }
                 stats.done++;
               }
               await new Promise(r => setTimeout(r, PER_SITE_DELAY_MS));
@@ -181,6 +193,20 @@ export async function runScheduledJob(
 let scheduled: cron.ScheduledTask | undefined;
 let isRunning = false;
 
+// 작업 전체의 상한 시간. 어떤 이유로든(스크랩/DB 멈춤) runScheduledJob 이 안 끝나면
+// 이 시간 뒤 강제로 reject → finally 에서 isRunning 이 풀려, 다음 스케줄이 영구 스킵되지 않음.
+// 정상 배치보다 충분히 길게(기본 90분) 잡아 정상 작업을 오인 중단하지 않는다.
+const MAX_JOB_MS = Number(process.env.MAX_JOB_MS ?? 90 * 60 * 1000);
+
+function withJobTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`job exceeded ${Math.round(ms / 60000)}min — forcing reset`)), ms)
+    ),
+  ]);
+}
+
 export function startScheduler(deps: RunJobDeps) {
   if (scheduled) return;
   if (process.env.DISABLE_SCHEDULER === "1") {
@@ -197,7 +223,7 @@ export function startScheduler(deps: RunJobDeps) {
       }
       isRunning = true;
       try {
-        await runScheduledJob(deps);
+        await withJobTimeout(runScheduledJob(deps), MAX_JOB_MS);
       } catch (err) {
         console.error("[scheduler] run failed:", err);
       } finally {
@@ -217,7 +243,7 @@ export async function triggerJobNow(deps: RunJobDeps, opts?: RunOptions) {
   if (isRunning) throw new Error("a job is already running");
   isRunning = true;
   try {
-    return await runScheduledJob(deps, opts);
+    return await withJobTimeout(runScheduledJob(deps, opts), MAX_JOB_MS);
   } finally {
     isRunning = false;
   }

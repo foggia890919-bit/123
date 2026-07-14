@@ -1,7 +1,7 @@
 // ePharms 거래처별 로그인 계정 CRUD.
 // PW는 절대 평문 응답하지 않음 — 등록/수정 요청 시에만 받아 즉시 암호화 저장.
 //
-// GET ?own=true       → 영업사원 본인 담당 원내거래처만 반환 (SALES_REP 포함 모든 역할)
+// GET ?own=true       → 영업사원 본인 담당 원내거래처만 반환 (BUSINESS 포함 모든 역할)
 // GET (BIZ/ADMIN)     → 전체 목록 (페이지네이션)
 
 import { NextRequest, NextResponse } from "next/server";
@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
 
   // 영업사원이 본인 담당 원내거래처 조회 (원내주문 화면용)
   // salesRepId(담당 영업사원) OR kmdUserId(병·의원 본인계정) 둘 중 하나라도 매칭되면 포함
-  if (own || (!bizOrAdmin(user.role) && user.role === "SALES_REP")) {
+  if (own || (!bizOrAdmin(user.role) && user.role === "BUSINESS")) {
     const rows = await prisma.epharmsAccount.findMany({
       where: {
         active: true,

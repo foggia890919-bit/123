@@ -216,10 +216,67 @@ export async function POST(req: NextRequest) {
           });
         }
       }
-      if (snapshots.length > 0) {
-        await prisma.inventorySnapshot.createMany({ data: snapshots, skipDuplicates: true }).catch(err => {
-          console.error("[inventory/check] persist live snapshots failed:", err);
-        });
+      // 같은 (siteKey, insuranceCode) 가 여러 번 들어오면 (한 검색어에 여러 규격 등)
+      // ON CONFLICT 가 한 번의 INSERT 안에서 같은 키를 두 번 만나 실패한다
+      // ("cannot affect row a second time"). 그래서 키 단위로 합산 (stock SUM,
+      // 메타데이터는 첫 값) 한 뒤 row 당 1개씩 upsert.
+      const aggMap = new Map<string, {
+        siteKey: string;
+        insuranceCode: string;
+        productName: string | null;
+        spec: string | null;
+        manufacturer: string | null;
+        unitPrice: number | null;
+        stock: number | null;
+      }>();
+      for (const s of snapshots) {
+        const key = `${s.siteKey}|${s.insuranceCode}`;
+        const cur = aggMap.get(key);
+        if (!cur) {
+          aggMap.set(key, { ...s });
+        } else {
+          cur.stock = (cur.stock ?? 0) + (s.stock ?? 0);
+          // unitPrice 가 비어있던 경우 채워주기
+          if (cur.unitPrice == null && s.unitPrice != null) cur.unitPrice = s.unitPrice;
+        }
+      }
+      const aggregated = Array.from(aggMap.values());
+
+      if (aggregated.length > 0) {
+        // Prisma upsert 로 1건씩 처리 — 라이브 응답은 최대 50건이라 비용 미미.
+        // raw SQL ON CONFLICT 대비 에러 추적도 명확하다.
+        const persistErrors: string[] = [];
+        await Promise.all(aggregated.map(async (s) => {
+          try {
+            await prisma.inventorySnapshot.upsert({
+              where: { siteKey_insuranceCode: { siteKey: s.siteKey, insuranceCode: s.insuranceCode } },
+              update: {
+                productName: s.productName,
+                spec: s.spec,
+                manufacturer: s.manufacturer,
+                unitPrice: s.unitPrice,
+                stock: s.stock,
+                scrapedAt: new Date(),
+              },
+              create: {
+                siteKey: s.siteKey,
+                insuranceCode: s.insuranceCode,
+                productName: s.productName,
+                spec: s.spec,
+                manufacturer: s.manufacturer,
+                unitPrice: s.unitPrice,
+                stock: s.stock,
+              },
+            });
+          } catch (err) {
+            const msg = `${s.siteKey}/${s.insuranceCode}: ${(err as Error).message}`;
+            persistErrors.push(msg);
+            console.error(`[inventory/check] upsert failed — ${msg}`);
+          }
+        }));
+        if (persistErrors.length > 0) {
+          console.error(`[inventory/check] ${persistErrors.length}/${aggregated.length} snapshots failed to persist`);
+        }
       }
     }
 

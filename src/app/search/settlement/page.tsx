@@ -13,7 +13,7 @@ import { useGuestLimit } from "@/hooks/useGuestLimit";
 
 export default function SettlementSearchPage() {
   const { data: session } = useSession();
-  const isSalesRep = session?.user?.role === "SALES_REP";
+  const isSalesRep = session?.user?.role === "BUSINESS";
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<MedicationItem[]>([]);
   const [total, setTotal] = useState(0);
