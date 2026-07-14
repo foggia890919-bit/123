@@ -103,6 +103,24 @@ function StockColumnCell({ code, productName, fallbackStock, fallbackScrapedAt }
     </span>
   ) : null;
 
+  // 실패 사유 수집 — 사이트별 실패 + 전체 호출 실패. "재고 0"(미취급)과 명확히 구분해 눈에 보이게 띄운다.
+  const siteLabel = (k: string) => (k === "ibjp" ? "백제" : k === "family" ? "훼밀리" : k);
+  const siteFailures = (entry.results ?? [])
+    .filter((r) => STOCK_SITES.includes(r.siteKey) && r.error)
+    .map((r) => `${siteLabel(r.siteKey)}: ${r.error}`);
+  const failures = [
+    ...(entry.status === "error" && entry.error ? [entry.error] : []),
+    ...siteFailures,
+  ];
+  const failNode = failures.length > 0 ? (
+    <span
+      className="text-red-500 text-[10px] ml-1 align-middle max-w-[220px] truncate inline-block cursor-help"
+      title={`조회 실패\n${failures.join("\n")}`}
+    >
+      ✕ 실패: {failures[0]}
+    </span>
+  ) : null;
+
   if (entry.status === "loading") {
     // 라이브 조회 진행 중 — 기존 숫자 + 시점 유지, 옆에 작은 스피너만.
     return (
@@ -114,20 +132,21 @@ function StockColumnCell({ code, productName, fallbackStock, fallbackScrapedAt }
     );
   }
   if (entry.status === "error") {
+    // 전체 조회 실패 — 마지막 값(있으면)은 회색으로 흐리게, 실패 사유를 빨간 글씨로 노출.
     return (
       <span className="inline-flex items-center gap-0.5">
-        {numberNode}
-        {agoNode}
-        <span className="text-red-400 text-[10px] ml-1" title={entry.error}>오류</span>
+        {displayedStock != null && <span className="text-gray-300 line-through">{displayedStock.toLocaleString()}</span>}
+        {failNode ?? <span className="text-red-500 text-[10px] ml-1">✕ 실패</span>}
         {refreshBtn}
       </span>
     );
   }
-  // idle / done — 평소 표시
+  // idle / done — 평소 표시 (한쪽 사이트만 실패한 경우 failNode 로 함께 노출)
   return (
     <span className="inline-flex items-center gap-0.5">
       {numberNode}
       {agoNode}
+      {failNode}
       {refreshBtn}
     </span>
   );
