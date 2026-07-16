@@ -217,6 +217,7 @@ export default function StatsPage() {
           matchedMedicationId: d.matchedMedicationId,
           bboxYPercent: d.bboxYPercent,
           bbox: d.bbox ?? null,
+          qtyBbox: d.qtyBbox ?? null,
           rowStatus: d.rowStatus ?? null,
           verify: d.verify ?? null,
         }));
