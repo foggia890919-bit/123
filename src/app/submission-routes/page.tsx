@@ -330,18 +330,25 @@ function Workbench({
     return Array.from(byKey.values()).sort((a, b) => a.clientName.localeCompare(b.clientName, "ko"));
   }, [clients, routes]);
 
+  // 후보 = 입력값 부분일치(공백/대소문자 무시)로만. 무매칭이면 0개.
+  // 사업자번호 매칭은 입력에 숫자가 있을 때만 (빈 문자열 .includes("") 전체매칭 방지).
   const clientMatches = useMemo(() => {
-    const q = clientQuery.trim().toLowerCase();
-    const qDigits = clientQuery.replace(/\D/g, "");
-    const list = q
-      ? clientCandidates.filter((c) => c.clientName.toLowerCase().includes(q) || (qDigits.length > 0 && c.bizNumber.includes(qDigits)))
-      : clientCandidates;
-    return list.slice(0, 20);
+    const raw = clientQuery.trim();
+    if (!raw) return clientCandidates.slice(0, 20); // 빈 입력(포커스) → 전체 목록 브라우즈
+    const q = raw.replace(/\s+/g, "").toLowerCase();
+    const qDigits = raw.replace(/\D/g, "");
+    return clientCandidates
+      .filter((c) =>
+        c.clientName.replace(/\s+/g, "").toLowerCase().includes(q) ||
+        (qDigits.length > 0 && c.bizNumber.replace(/\D/g, "").includes(qDigits)),
+      )
+      .slice(0, 20);
   }, [clientCandidates, clientQuery]);
-  const exactClientMatch = useMemo(
-    () => clientCandidates.find((c) => c.clientName.trim() === clientQuery.trim()),
-    [clientCandidates, clientQuery],
-  );
+  const exactClientMatch = useMemo(() => {
+    const q = clientQuery.trim().replace(/\s+/g, "").toLowerCase();
+    if (!q) return undefined;
+    return clientCandidates.find((c) => c.clientName.replace(/\s+/g, "").toLowerCase() === q);
+  }, [clientCandidates, clientQuery]);
 
   const companyMatches = useMemo(() => {
     const q = companyQuery.trim().toLowerCase();
