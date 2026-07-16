@@ -35,7 +35,9 @@ export interface DualReadRow {
 
 export interface DualReadStats {
   clovaWords: number;
-  matched: number; // 클로바에서 행 앵커를 찾은 행 수
+  matched: number; // 클로바에서 행 앵커를 찾은 행 수 (matchedByCode + matchedByAmount)
+  matchedByCode: number; // 보험코드(9자리) 앵커로 매칭한 행 수
+  matchedByAmount: number; // 금액(예비) 앵커로 매칭한 행 수 — 코드 컬럼 없는 양식용
   agree: number;
   adopted: number;
   geminiKept: number;
@@ -55,6 +57,18 @@ export interface DualReadResult<T extends DualReadRow> {
 const ROW_BAND_FRAC = 0.6;
 // 수량 열 x 매칭 허용치 = 이미지 폭의 이 비율.
 const QTY_X_TOL_FRAC = 0.18;
+// 금액 앵커 폴백에서 "4자리 이상 숫자" 최소값(= 금액 열이 확실히 인쇄된 값만 앵커로).
+const AMOUNT_ANCHOR_MIN = 1000;
+// 금액 앵커: 동일 값 후보가 여러 개일 때 최근접·차근접의 y거리 차가 이미지높이의 이 비율
+// 이내면 "bbox 로도 못 가름"으로 보고 앵커 포기(오매칭 방지, 안전 우선).
+const AMOUNT_AMBIGUOUS_FRAC = 0.05;
+
+// 앵커 종류. code = 보험코드 9자리, amount = 금액(예비) 앵커.
+type AnchorKind = "code" | "amount";
+interface ResolvedAnchor {
+  word: ClovaWord;
+  kind: AnchorKind;
+}
 
 // 콤마·단위·공백 제거 후 순수 숫자 파싱. 숫자가 아니면 null.
 function parseNum(text: string): number | null {
@@ -106,6 +120,83 @@ function findAnchor(words: ClovaWord[], code: string): ClovaWord | null {
   return null;
 }
 
+// 금액 앵커 후보값: totalPrice 우선, 없으면 quantity. 4자리 이상(≥1000)일 때만 유효.
+function amountAnchorValue(row: DualReadRow): number | null {
+  const v = row.totalPrice ?? row.quantity;
+  if (v === null) return null;
+  return Math.abs(Math.round(v)) >= AMOUNT_ANCHOR_MIN ? v : null;
+}
+
+// bbox 가 [0,0,0,0] (Gemini 가 좌표를 안 준 경우) 인지.
+function isZeroBbox(b: [number, number, number, number]): boolean {
+  return b[0] === 0 && b[1] === 0 && b[2] === 0 && b[3] === 0;
+}
+
+// 클로바 단어의 숫자값이 목표값과 사실상 같은가.
+function wordEqualsValue(w: ClovaWord, value: number): boolean {
+  const n = parseNum(w.text);
+  return n !== null && numEq(n, value);
+}
+
+// 모든 행의 앵커를 한 번에 해석. 코드 앵커 우선 → 실패 행은 금액(예비) 앵커 폴백.
+// 한 클로바 단어가 두 행의 앵커로 중복 사용되지 않도록 소비(consumed) 처리 — 동일 금액이
+// 여러 행에 걸친 표에서의 오매칭을 막는다.
+function resolveAnchors(drugs: DualReadRow[], clova: ClovaOcrResult): (ResolvedAnchor | null)[] {
+  const H = clova.imageHeight;
+  const anchors: (ResolvedAnchor | null)[] = new Array(drugs.length).fill(null);
+  const consumed = new Set<ClovaWord>();
+
+  // 1) 보험코드(9자리) 앵커.
+  drugs.forEach((row, i) => {
+    const code = digits(row.code);
+    if (code.length !== 9) return;
+    const w = findAnchor(clova.words, code);
+    if (w && !consumed.has(w)) {
+      anchors[i] = { word: w, kind: "code" };
+      consumed.add(w);
+    }
+  });
+
+  // 2a) 금액 앵커 — Gemini 가 행 bbox 를 준 행: 행 y중심 근접으로 후보 선택 + 모호성 검사.
+  const zeroBboxRows: number[] = [];
+  drugs.forEach((row, i) => {
+    if (anchors[i]) return;
+    const av = amountAnchorValue(row);
+    if (av === null) return;
+    if (isZeroBbox(row.bbox)) {
+      zeroBboxRows.push(i);
+      return;
+    }
+    const cands = clova.words.filter((w) => !consumed.has(w) && wordEqualsValue(w, av));
+    if (cands.length === 0) return;
+    const targetY = ((row.bbox[1] + row.bbox[3]) / 2) * H;
+    const ranked = cands
+      .map((w) => ({ w, dist: Math.abs(w.yCenter - targetY) }))
+      .sort((a, b) => a.dist - b.dist);
+    // 최근접·차근접이 거의 같은 거리면 어느 행인지 못 가림 → 안전하게 앵커 포기.
+    if (ranked.length >= 2 && ranked[1].dist - ranked[0].dist < H * AMOUNT_AMBIGUOUS_FRAC) {
+      return;
+    }
+    anchors[i] = { word: ranked[0].w, kind: "amount" };
+    consumed.add(ranked[0].w);
+  });
+
+  // 2b) 금액 앵커 — bbox 가 [0,0,0,0] 인 행: 행 인덱스 순서(위→아래) ↔ 후보 y오름차순 정렬 매칭.
+  //   zeroBboxRows 는 이미 인덱스 오름차순 → 각 행에 미소비 후보 중 최상단을 배정.
+  for (const i of zeroBboxRows) {
+    const av = amountAnchorValue(drugs[i]);
+    if (av === null) continue;
+    const cands = clova.words
+      .filter((w) => !consumed.has(w) && wordEqualsValue(w, av))
+      .sort((a, b) => a.yCenter - b.yCenter);
+    if (cands.length === 0) continue;
+    anchors[i] = { word: cands[0], kind: "amount" };
+    consumed.add(cands[0]);
+  }
+
+  return anchors;
+}
+
 // 앵커와 같은 행(높이대)에 있는 단어들 — 앵커 상단 모서리 기울기로 사진 기울임 보정.
 function wordsInRow(words: ClovaWord[], anchor: ClovaWord): ClovaWord[] {
   const v = anchor.vertices;
@@ -147,6 +238,7 @@ function processRow(
   row: DualReadRow,
   clova: ClovaOcrResult,
   masterUnitPrice: number | null,
+  anchor: ResolvedAnchor | null,
 ): {
   info: DualReadInfo;
   quantity: number | null;
@@ -154,6 +246,7 @@ function processRow(
   totalPrice: number | null;
   bbox: [number, number, number, number] | null; // null = 좌표 교체 안 함
   qtyBbox: [number, number, number, number] | null | undefined; // undefined = 기존 유지
+  anchorKind: AnchorKind | null; // 어떤 앵커로 매칭했는가 (null = 매칭 실패)
 } {
   const code = digits(row.code);
   const noop = {
@@ -163,16 +256,16 @@ function processRow(
     totalPrice: row.totalPrice,
     bbox: null,
     qtyBbox: undefined,
+    anchorKind: null,
   };
-  if (code.length !== 9) return noop;
-
-  const anchor = findAnchor(clova.words, code);
   if (!anchor) return noop;
 
-  const rowWords = wordsInRow(clova.words, anchor);
-  // 앵커(코드) 자신·코드와 같은 숫자열은 후보에서 제외.
+  const anchorWord = anchor.word;
+  const isCodeAnchor = anchor.kind === "code";
+  const rowWords = wordsInRow(clova.words, anchorWord);
+  // 앵커 단어 자신은 후보에서 제외. 코드 앵커는 코드와 같은 숫자열도 제외.
   const numTokens = rowWords
-    .filter((w) => w !== anchor && digits(w.text) !== code)
+    .filter((w) => w !== anchorWord && (!isCodeAnchor || digits(w.text) !== code))
     .map((w) => ({ w, n: parseNum(w.text) }))
     .filter((x): x is { w: ClovaWord; n: number } => x.n !== null)
     .sort((a, b) => a.w.xCenter - b.w.xCenter);
@@ -183,7 +276,7 @@ function processRow(
 
   // ── 좌표: 행 bbox(행 전체 단어의 x/y 범위) ──
   const bbox: [number, number, number, number] = [
-    clamp01(Math.min(anchor.xMin, ...rowWords.map((w) => w.xMin)) / W),
+    clamp01(Math.min(anchorWord.xMin, ...rowWords.map((w) => w.xMin)) / W),
     clamp01(Math.min(...rowWords.map((w) => w.yMin)) / H),
     clamp01(Math.max(...rowWords.map((w) => w.xMax)) / W),
     clamp01(Math.max(...rowWords.map((w) => w.yMax)) / H),
@@ -255,11 +348,13 @@ function processRow(
   }
 
   // 불일치 존재 여부(값이 양쪽 다 있는데 클로바 행에 Gemini 값이 안 보임) 기록 — agree 판정용.
+  // 금액 앵커일 때 금액은 앵커 단어(후보에서 제외)로 이미 확정된 값이므로 불일치 판정에서 뺀다.
   for (const [label, val] of [
     ["수량", row.quantity],
     ["단가", row.unitPrice],
     ["금액", row.totalPrice],
   ] as [string, number | null][]) {
+    if (label === "금액" && !isCodeAnchor) continue;
     if (val !== null && rowNumbers.length > 0 && !inRow(val)) disagreements.push(label);
   }
 
@@ -317,6 +412,7 @@ function processRow(
     totalPrice: working.totalPrice,
     bbox,
     qtyBbox,
+    anchorKind: anchor.kind,
   };
 }
 
@@ -330,6 +426,8 @@ export function dualRead<T extends DualReadRow>(
   const stats: DualReadStats = {
     clovaWords: clova.words.length,
     matched: 0,
+    matchedByCode: 0,
+    matchedByAmount: 0,
     agree: 0,
     adopted: 0,
     geminiKept: 0,
@@ -338,9 +436,12 @@ export function dualRead<T extends DualReadRow>(
     clovaMs: clova.durationMs,
   };
 
+  // 앵커를 전 행 한 번에 해석(코드 우선 → 금액 폴백, 단어 중복사용 방지).
+  const anchors = resolveAnchors(drugs, clova);
+
   const out = drugs.map((row, i) => {
     const master = masterUnitPriceByCode.get(digits(row.code)) ?? null;
-    const r = processRow(row, clova, master);
+    const r = processRow(row, clova, master, anchors[i]);
     infos[i] = r.info;
 
     switch (r.info.tag) {
@@ -360,6 +461,8 @@ export function dualRead<T extends DualReadRow>(
         stats.geminiOnly++;
         break;
     }
+    if (r.anchorKind === "code") stats.matchedByCode++;
+    else if (r.anchorKind === "amount") stats.matchedByAmount++;
 
     const next: T = { ...row, quantity: r.quantity, unitPrice: r.unitPrice, totalPrice: r.totalPrice };
     if (r.bbox) {
