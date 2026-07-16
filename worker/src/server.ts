@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { ALL_ADAPTERS } from "../../src/scrapers/adapters/index.ts";
 import type { Credentials, InventoryItem, WholesaleAdapter } from "../../src/scrapers/core/types.ts";
 import { startScheduler, triggerJobNow, isJobRunning } from "./scheduler.ts";
+import { startRefreshPoller } from "./refresh-poller.ts";
 import { hasDb } from "./db.ts";
 import { startEpharmsScheduler } from "./epharms/cron.ts";
 import cron from "node-cron";
@@ -464,6 +465,11 @@ const server = app.listen(PORT, () => {
   console.log(`[worker] db: ${hasDb() ? "configured" : "NOT configured (scheduler will skip)"}`);
   startScheduler({ scrapeOne, scrapeOneByName, getCreds });
   startEpharmsScheduler();
+
+  // 실시간 재고 조회 대기줄 폴러 — KMD API 가 만든 RefreshRequest 를 집어 크롤.
+  if (hasDb()) {
+    startRefreshPoller({ scrapeOne, getCreds });
+  }
 
   // 공공데이터 마스터 주간 동기화 — 기본: 일요일 02:00 KST
   if (hasDb() && process.env.DISABLE_MASTER_SYNC !== "1") {

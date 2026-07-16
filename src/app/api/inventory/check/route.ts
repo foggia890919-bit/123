@@ -4,8 +4,13 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
 // Stock check: by default returns the most recent snapshot per site from the
-// scheduled batch (DB query — fast). Pass `?live=1` to bypass cache and trigger
-// a real-time scrape via the worker (slow, can take 30s+).
+// scheduled batch (DB query — fast). Pass `?live=1` to request a real-time scrape.
+//
+// Live path uses a DB-mediated job queue instead of a direct worker call:
+// Vercel cannot reach the office PC (no inbound), so it inserts a RefreshRequest
+// row (PENDING) and polls until the PC worker picks it up, scrapes, writes fresh
+// InventorySnapshot rows, and flips the request to DONE/ERROR. The response shape
+// is identical to the snapshot path so the frontend is unchanged.
 
 export const maxDuration = 300;
 
@@ -20,18 +25,55 @@ interface ResultRow {
   scrapedAt: string;
 }
 
-function isNetworkError(msg: string): boolean {
-  return (
-    msg === "fetch failed" ||
-    msg.includes("ECONNREFUSED") ||
-    msg.includes("ETIMEDOUT") ||
-    msg.includes("ENOTFOUND") ||
-    msg.includes("UND_ERR") ||
-    msg.includes("TimeoutError") ||
-    msg.includes("The operation was aborted") ||
-    msg.includes("network")
-  );
+// SiteResult 형태 (src/lib/stock-cache.ts) 그대로 — 프런트 계약 불변.
+interface OutRow {
+  siteKey: string;
+  insuranceCode: string;
+  items: Array<{
+    insuranceCode: string;
+    productName: string;
+    spec: string | null;
+    manufacturer: string | null;
+    unitPrice: number | null;
+    stock: number | null;
+  }>;
+  scrapedAt?: string;
+  error?: string;
 }
+
+// 최신 스냅샷을 (siteKey, insuranceCode) 단위로 읽어 프런트 SiteResult 형태로 변환.
+// 스냅샷 경로와 라이브 완료(DONE) 경로가 동일한 결과 형태를 반환하도록 공용화.
+async function queryLatestSnapshots(codes: string[]): Promise<OutRow[]> {
+  const rows = await prisma.$queryRaw<ResultRow[]>`
+    SELECT DISTINCT ON ("siteKey", "insuranceCode")
+      "siteKey", "insuranceCode", "productName", "spec", "manufacturer",
+      "unitPrice", "stock", "scrapedAt"
+    FROM "InventorySnapshot"
+    WHERE "insuranceCode" = ANY(${codes}::text[])
+    ORDER BY "siteKey", "insuranceCode", "scrapedAt" DESC
+  `;
+  return codes.flatMap<OutRow>(code => {
+    const matched = rows.filter(r => r.insuranceCode === code);
+    if (matched.length === 0) return [];
+    return matched.map(r => ({
+      siteKey: r.siteKey,
+      insuranceCode: code,
+      items: [
+        {
+          insuranceCode: r.insuranceCode,
+          productName: r.productName,
+          spec: r.spec,
+          manufacturer: r.manufacturer,
+          unitPrice: r.unitPrice,
+          stock: r.stock,
+        },
+      ],
+      scrapedAt: r.scrapedAt,
+    }));
+  });
+}
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -60,7 +102,7 @@ export async function POST(req: NextRequest) {
     ? body.sites.filter((s): s is string => typeof s === "string")
     : undefined;
 
-  // Live path proxies to the worker (slow per-code) so cap at 50.
+  // Live path enqueues one job per request (worker scrapes per-code) so cap at 50.
   // Snapshot path is just a DB query; allow up to 1000 codes.
   if (live && codes.length > 50) {
     return NextResponse.json({ error: "max 50 codes per live request" }, { status: 400 });
@@ -71,227 +113,87 @@ export async function POST(req: NextRequest) {
 
   if (!live) {
     // DB path — read latest snapshot per (siteKey, insuranceCode)
-    const rows = await prisma.$queryRaw<ResultRow[]>`
-      SELECT DISTINCT ON ("siteKey", "insuranceCode")
-        "siteKey", "insuranceCode", "productName", "spec", "manufacturer",
-        "unitPrice", "stock", "scrapedAt"
-      FROM "InventorySnapshot"
-      WHERE "insuranceCode" = ANY(${codes}::text[])
-      ORDER BY "siteKey", "insuranceCode", "scrapedAt" DESC
-    `;
-    interface OutRow {
-      siteKey: string;
-      insuranceCode: string;
-      items: Array<{
-        insuranceCode: string;
-        productName: string;
-        spec: string | null;
-        manufacturer: string | null;
-        unitPrice: number | null;
-        stock: number | null;
-      }>;
-      scrapedAt?: string;
-      error?: string;
-    }
-    const results: OutRow[] = codes.flatMap<OutRow>(code => {
-      const matched = rows.filter(r => r.insuranceCode === code);
-      if (matched.length === 0) return [];
-      return matched.map(r => ({
-        siteKey: r.siteKey,
-        insuranceCode: code,
-        items: [
-          {
-            insuranceCode: r.insuranceCode,
-            productName: r.productName,
-            spec: r.spec,
-            manufacturer: r.manufacturer,
-            unitPrice: r.unitPrice,
-            stock: r.stock,
-          },
-        ],
-        scrapedAt: r.scrapedAt,
-      }));
-    });
+    const results = await queryLatestSnapshots(codes);
     return NextResponse.json({ results, source: "snapshot" });
   }
 
-  // Live fallback path — proxy to worker (Playwright/Chromium on Lightsail).
-  // The scrapers use a headless browser and cannot run inline in this API route.
-  //
-  // Outer try-catch ensures any unexpected synchronous throw (e.g. bad URL
-  // construction, AbortSignal unavailable) still produces a JSON response
-  // instead of a bare 500 with no body, which the browser reports as a
-  // network-level "fetch failed" error.
+  // ---------------- Live path — DB job queue ----------------
+  // 1) 오래된 잔여 요청 정리 (1시간 지난 PENDING/RUNNING → EXPIRED). best effort.
+  // 2) RefreshRequest(PENDING) 생성. 사무실 PC 워커가 폴링으로 집어 처리한다.
+  // 3) 요청 status 를 폴링 (2초 간격, 최대 240초). DONE 이면 갱신된 스냅샷을 읽어
+  //    { results, source: "live" } 로 반환. ERROR/타임아웃은 기존 에러 포맷 유지.
   try {
-    const workerUrl = process.env.WORKER_URL;
-    const workerToken = process.env.WORKER_TOKEN;
-    if (!workerUrl || !workerToken) {
-      return NextResponse.json(
-        {
-          error:
-            "실시간 조회 서버가 설정되지 않았습니다. " +
-            "Vercel 환경변수에 WORKER_URL과 WORKER_TOKEN을 설정하고 Lightsail 워커를 실행하세요. " +
-            "캐시 데이터는 자동으로 매일 06시/12시/18시(KST)에 갱신됩니다.",
-          workerConfigured: false,
+    // 1) stale 요청 정리
+    await prisma.refreshRequest
+      .updateMany({
+        where: {
+          status: { in: ["PENDING", "RUNNING"] },
+          createdAt: { lt: new Date(Date.now() - 60 * 60 * 1000) },
         },
-        { status: 503 }
-      );
-    }
-
-    const base = workerUrl.replace(/\/$/, "");
-
-    // Fast reachability pre-flight before the potentially 280-second /scrape call.
-    // Caps failure latency at ~5 s when the Lightsail server is down.
-    try {
-      const health = await fetch(`${base}/health`, {
-        signal: AbortSignal.timeout(5_000),
+        data: { status: "EXPIRED" },
+      })
+      .catch(err => {
+        console.warn("[inventory/check] stale RefreshRequest 정리 실패:", (err as Error).message);
       });
-      if (!health.ok) {
+
+    // 2) 대기줄에 요청 등록
+    const request = await prisma.refreshRequest.create({
+      data: { codes, sites: sites ?? [], status: "PENDING" },
+      select: { id: true, createdAt: true },
+    });
+    const requestCreatedAt = request.createdAt;
+
+    // 3) 폴링 루프
+    const POLL_MS = 2_000;
+    const DEADLINE = Date.now() + 240_000;
+    while (Date.now() < DEADLINE) {
+      await sleep(POLL_MS);
+      const row = await prisma.refreshRequest.findUnique({
+        where: { id: request.id },
+        select: { status: true, error: true },
+      });
+      if (!row) {
+        // 방어적: 정리 배치 등으로 사라졌으면 계속 폴링해봐야 소용 없음.
         return NextResponse.json(
-          {
-            error:
-              `실시간 조회 서버가 응답하지 않습니다 (HTTP ${health.status}). ` +
-              "Lightsail 워커 프로세스 상태를 확인하세요.",
-          },
-          { status: 503 }
+          { error: "재고 요청이 사라졌습니다. 다시 시도해 주세요." },
+          { status: 500 }
         );
       }
-    } catch (healthErr) {
-      const hmsg = (healthErr as Error).message ?? "";
-      return NextResponse.json(
-        {
-          error: isNetworkError(hmsg)
-            ? "실시간 조회 서버에 연결할 수 없습니다. " +
-              "Lightsail 워커가 실행 중인지, 방화벽(포트 8080)이 열려 있는지 확인하세요. " +
-              "캐시 데이터는 자동으로 매일 06시/12시/18시(KST)에 갱신됩니다."
-            : `실시간 조회 서버 연결 확인 중 오류: ${hmsg}`,
-        },
-        { status: 503 }
-      );
+      if (row.status === "ERROR") {
+        return NextResponse.json(
+          { error: row.error || "PC 크롤러가 재고 조회 중 오류를 반환했습니다." },
+          { status: 502 }
+        );
+      }
+      if (row.status === "DONE") {
+        // 워커는 saveSnapshots 완료 후에야 DONE 으로 표시하므로, 이 시점의 스냅샷은
+        // 이번 요청 시각(requestCreatedAt) 이후로 갱신된 최신값이다.
+        const results = await queryLatestSnapshots(codes);
+        const fresh = results.filter(
+          r => r.scrapedAt && new Date(r.scrapedAt) >= requestCreatedAt
+        ).length;
+        console.log(
+          `[inventory/check] live DONE ${request.id} — ${results.length} rows (${fresh} fresh)`
+        );
+        return NextResponse.json({ results, source: "live" });
+      }
+      // PENDING / RUNNING → 계속 폴링
     }
 
-    const r = await fetch(`${base}/scrape`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${workerToken}`,
+    // 240초 초과 — 워커가 응답하지 않음
+    return NextResponse.json(
+      {
+        error:
+          "PC 크롤러가 응답하지 않습니다. 사무실 PC가 켜져 있는지 확인하세요 " +
+          "(자동 갱신은 하루 6번 계속됩니다).",
       },
-      body: JSON.stringify({ codes, sites }),
-      signal: AbortSignal.timeout(280_000),
-    });
-
-    if (!r.ok) {
-      const text = await r.text().catch(() => "");
-      return NextResponse.json(
-        { error: `worker error ${r.status}: ${text.slice(0, 500)}` },
-        { status: 502 }
-      );
-    }
-    const data = await r.json();
-
-    // Persist live results to InventorySnapshot so subsequent default-path
-    // requests see the data without re-scraping (shared cache for all users).
-    if (Array.isArray(data?.results)) {
-      const snapshots: Array<{
-        siteKey: string;
-        insuranceCode: string;
-        productName: string | null;
-        spec: string | null;
-        manufacturer: string | null;
-        unitPrice: number | null;
-        stock: number | null;
-      }> = [];
-      for (const row of data.results) {
-        if (!row || row.error || !Array.isArray(row.items)) continue;
-        for (const item of row.items) {
-          if (!row.siteKey || !row.insuranceCode) continue;
-          snapshots.push({
-            siteKey: row.siteKey,
-            insuranceCode: row.insuranceCode,
-            productName: item.productName ?? null,
-            spec: item.spec ?? null,
-            manufacturer: item.manufacturer ?? null,
-            unitPrice: item.unitPrice ?? null,
-            stock: item.stock ?? null,
-          });
-        }
-      }
-      // 같은 (siteKey, insuranceCode) 가 여러 번 들어오면 (한 검색어에 여러 규격 등)
-      // ON CONFLICT 가 한 번의 INSERT 안에서 같은 키를 두 번 만나 실패한다
-      // ("cannot affect row a second time"). 그래서 키 단위로 합산 (stock SUM,
-      // 메타데이터는 첫 값) 한 뒤 row 당 1개씩 upsert.
-      const aggMap = new Map<string, {
-        siteKey: string;
-        insuranceCode: string;
-        productName: string | null;
-        spec: string | null;
-        manufacturer: string | null;
-        unitPrice: number | null;
-        stock: number | null;
-      }>();
-      for (const s of snapshots) {
-        const key = `${s.siteKey}|${s.insuranceCode}`;
-        const cur = aggMap.get(key);
-        if (!cur) {
-          aggMap.set(key, { ...s });
-        } else {
-          cur.stock = cur.stock != null && s.stock != null
-            ? cur.stock + s.stock
-            : cur.stock ?? s.stock;
-          // unitPrice 가 비어있던 경우 채워주기
-          if (cur.unitPrice == null && s.unitPrice != null) cur.unitPrice = s.unitPrice;
-        }
-      }
-      const aggregated = Array.from(aggMap.values());
-
-      if (aggregated.length > 0) {
-        // Prisma upsert 로 1건씩 처리 — 라이브 응답은 최대 50건이라 비용 미미.
-        // raw SQL ON CONFLICT 대비 에러 추적도 명확하다.
-        const persistErrors: string[] = [];
-        await Promise.all(aggregated.map(async (s) => {
-          try {
-            await prisma.inventorySnapshot.upsert({
-              where: { siteKey_insuranceCode: { siteKey: s.siteKey, insuranceCode: s.insuranceCode } },
-              update: {
-                productName: s.productName,
-                spec: s.spec,
-                manufacturer: s.manufacturer,
-                unitPrice: s.unitPrice,
-                stock: s.stock,
-                scrapedAt: new Date(),
-              },
-              create: {
-                siteKey: s.siteKey,
-                insuranceCode: s.insuranceCode,
-                productName: s.productName,
-                spec: s.spec,
-                manufacturer: s.manufacturer,
-                unitPrice: s.unitPrice,
-                stock: s.stock,
-              },
-            });
-          } catch (err) {
-            const msg = `${s.siteKey}/${s.insuranceCode}: ${(err as Error).message}`;
-            persistErrors.push(msg);
-            console.error(`[inventory/check] upsert failed — ${msg}`);
-          }
-        }));
-        if (persistErrors.length > 0) {
-          console.error(`[inventory/check] ${persistErrors.length}/${aggregated.length} snapshots failed to persist`);
-        }
-      }
-    }
-
-    return NextResponse.json({ ...data, source: "live" });
+      { status: 504 }
+    );
   } catch (err) {
     const msg = (err as Error).message ?? "";
     return NextResponse.json(
-      {
-        error: isNetworkError(msg)
-          ? "실시간 조회 서버와의 통신이 끊어졌습니다. Lightsail 워커 상태를 확인하세요."
-          : `실시간 조회 중 오류가 발생했습니다: ${msg}`,
-      },
-      { status: 504 }
+      { error: `실시간 조회 요청 처리 중 오류가 발생했습니다: ${msg}` },
+      { status: 500 }
     );
   }
 }
