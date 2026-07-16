@@ -1,10 +1,14 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { X, Check, RotateCcw, Pencil, Square, Info } from "lucide-react";
+import { X, Check, RotateCcw, RotateCw, Pencil, Square, Info } from "lucide-react";
+import { detectDocumentCorners, detectShouldRotate90 } from "./documentDetect";
 
 interface Point { x: number; y: number }
 type Corners = [Point, Point, Point, Point]; // TL, TR, BR, BL (normalized 0-1)
+
+type AutoStatus = "idle" | "detecting" | "done" | "failed";
+type Rotation = 0 | 90 | 180 | 270;
 
 type Mode = "corners" | "polygon";
 
@@ -31,6 +35,9 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
   const [polygon, setPolygon] = useState<Point[]>([]);
   const [dragging, setDragging] = useState<{ kind: Mode; idx: number } | null>(null);
   const [busy, setBusy] = useState(false);
+  // 자동 감지 상태 + 출력 회전 (미리보기는 회전하지 않고 최종 출력에만 적용 — 코너 좌표계 정합 안전)
+  const [autoStatus, setAutoStatus] = useState<AutoStatus>("idle");
+  const [rotation, setRotation] = useState<Rotation>(0);
   const overlayRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   // 점 핸들 위에서 mousedown 이 일어났는지 추적 — 그러면 컨테이너 click 으로 점 추가가 일어나지 않도록 차단
@@ -47,6 +54,38 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
     if (!img) return;
     setImgSize({ w: img.naturalWidth, h: img.naturalHeight });
   }, []);
+
+  // 모달 오픈 시 1회 자동 감지 (imgUrl + imgSize 준비 후). UI 는 막지 않는다 —
+  // 감지 도중에도 코너 드래그/모드 전환/버튼 조작 즉시 가능. 완료 후 setCorners 로 반영.
+  useEffect(() => {
+    if (!imgUrl || !imgSize) return;
+    let cancelled = false;
+    setAutoStatus("detecting");
+    (async () => {
+      let detected: Corners | null = null;
+      try {
+        detected = await detectDocumentCorners(imgUrl, imgSize);
+      } catch {
+        detected = null;
+      }
+      if (cancelled) return;
+      if (detected) setCorners(detected);
+      // 회전 판별은 감지된 코너(없으면 현재 기본 코너)로 수행
+      try {
+        const cForRot = detected ?? defaultCorners();
+        const rot = await detectShouldRotate90(imgUrl, cForRot, imgSize);
+        if (!cancelled && rot) setRotation(90);
+      } catch {
+        /* 회전 판별 실패 — 회전 없음 */
+      }
+      if (!cancelled) setAutoStatus(detected ? "done" : "failed");
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // imgUrl/imgSize 준비 시 1회. 파일 변경으로 둘 다 바뀌면 재실행.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imgUrl, imgSize]);
 
   function switchMode(next: Mode) {
     if (next === "polygon" && polygon.length === 0) setPolygon([]);
@@ -128,9 +167,9 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
     try {
       let corrected: File;
       if (mode === "corners") {
-        corrected = await applyPerspective(imgUrl, corners, imgSize, file.type || "image/jpeg", file.name);
+        corrected = await applyPerspective(imgUrl, corners, imgSize, file.type || "image/jpeg", file.name, rotation);
       } else {
-        corrected = await applyPolygonCrop(imgUrl, polygon, imgSize, file.type || "image/jpeg", file.name);
+        corrected = await applyPolygonCrop(imgUrl, polygon, imgSize, file.type || "image/jpeg", file.name, rotation);
       }
       onConfirm(corrected);
     } catch (e) {
@@ -187,6 +226,22 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
               <Pencil className="w-3.5 h-3.5" /> 외곽 자르기 (다각형)
             </button>
           </div>
+          {autoStatus === "detecting" && (
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-blue-200">
+              <span className="w-3 h-3 rounded-full border-2 border-blue-300/40 border-t-blue-300 animate-spin" />
+              자동 감지 중...
+            </span>
+          )}
+          {autoStatus === "done" && (
+            <span className="text-[11px] text-emerald-300">
+              문서 자동 감지됨 — 필요하면 코너 미세조정
+            </span>
+          )}
+          {rotation !== 0 && (
+            <span className="inline-flex items-center gap-1 text-[11px] text-amber-200 bg-amber-500/10 border border-amber-400/30 rounded px-2 py-0.5">
+              출력 시 {rotation}° 회전됨
+            </span>
+          )}
         </div>
 
         {/* 촬영 안내 — 꾸겨짐 펴기는 기술적 한계로 제거됨, 사용자에게 미리 안내 */}
@@ -250,6 +305,11 @@ export default function DocumentScanner({ file, onConfirm, onSkip, onCancel }: P
                     className="px-3 py-2 text-xs bg-white/10 hover:bg-white/20 text-white rounded inline-flex items-center gap-1 disabled:opacity-50">
               <RotateCcw className="w-3.5 h-3.5" /> 초기화
             </button>
+            <button onClick={() => setRotation((r) => ((r + 90) % 360) as Rotation)} disabled={busy}
+                    className="px-3 py-2 text-xs bg-white/10 hover:bg-white/20 text-white rounded inline-flex items-center gap-1 disabled:opacity-50"
+                    title="최종 출력 이미지를 90도 회전합니다 (미리보기는 그대로)">
+              <RotateCw className="w-3.5 h-3.5" /> 90° 회전
+            </button>
             <button onClick={onSkip} disabled={busy}
                     className="px-3 py-2 text-xs bg-white/10 hover:bg-white/20 text-white rounded disabled:opacity-50">
               보정 없이 사용
@@ -279,6 +339,7 @@ async function applyPerspective(
   imgSize: { w: number; h: number },
   mimeType: string,
   fileName: string,
+  rotation: Rotation = 0,
 ): Promise<File> {
   const c = cornersNorm.map((p) => ({ x: p.x * imgSize.w, y: p.y * imgSize.h }));
   const widthTop = Math.hypot(c[1].x - c[0].x, c[1].y - c[0].y);
@@ -305,7 +366,8 @@ async function applyPerspective(
   // 가벼운 Canvas-only 대비 보정 — OpenCV 의존성 제거 (freeze 회피).
   // 본격적인 dewarping/denoise 는 서버측 Document AI 의 ML 이 담당.
   enhanceContrast(outCtx, W, H);
-  return await canvasToFile(outCanvas, mimeType, fileName);
+  const finalCanvas = rotateCanvas(outCanvas, rotation);
+  return await canvasToFile(finalCanvas, mimeType, fileName);
 }
 
 // ─────────── Polygon crop (외곽 자르기) ───────────
@@ -316,6 +378,7 @@ async function applyPolygonCrop(
   imgSize: { w: number; h: number },
   mimeType: string,
   fileName: string,
+  rotation: Rotation = 0,
 ): Promise<File> {
   const pts = polygonNorm.map((p) => ({ x: p.x * imgSize.w, y: p.y * imgSize.h }));
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -352,10 +415,32 @@ async function applyPolygonCrop(
   outCtx.restore();
 
   enhanceContrast(outCtx, W, H);
-  return await canvasToFile(outCanvas, mimeType, fileName);
+  const finalCanvas = rotateCanvas(outCanvas, rotation);
+  return await canvasToFile(finalCanvas, mimeType, fileName);
 }
 
 // ─────────── 공용 유틸 ───────────
+
+// enhanceContrast 이후, canvasToFile 직전에 최종 캔버스를 회전. 90/270 은 W/H 스왑.
+// EXIF: 최신 크롬은 <img>/drawImage 에 EXIF orientation 을 기본 적용하므로 별도 EXIF
+// 파싱 라이브러리는 도입하지 않음. EXIF 없는 90도 눕힘은 detectShouldRotate90 휴리스틱
+// + 수동 "90° 회전" 버튼으로 커버한다.
+function rotateCanvas(canvas: HTMLCanvasElement, rotation: Rotation): HTMLCanvasElement {
+  if (rotation === 0) return canvas;
+  const w = canvas.width, h = canvas.height;
+  const swap = rotation === 90 || rotation === 270;
+  const out = document.createElement("canvas");
+  out.width = swap ? h : w;
+  out.height = swap ? w : h;
+  const ctx = out.getContext("2d");
+  if (!ctx) return canvas;
+  ctx.save();
+  ctx.translate(out.width / 2, out.height / 2);
+  ctx.rotate((rotation * Math.PI) / 180);
+  ctx.drawImage(canvas, -w / 2, -h / 2);
+  ctx.restore();
+  return out;
+}
 
 async function loadSourceImageData(imgUrl: string, imgSize: { w: number; h: number }) {
   const img = await loadImage(imgUrl);
