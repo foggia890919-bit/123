@@ -64,7 +64,7 @@ function formatBizNumber(v: string) {
   return `${d.slice(0, 3)}-${d.slice(3, 5)}-${d.slice(5, 10)}`;
 }
 
-const EMPTY_EDIT = { submissionEntity: "", submissionEmail: "", requestType: "신규" as "신규" | "이관", memo: "" };
+const EMPTY_EDIT = { clientName: "", companyName: "", submissionEntity: "", submissionEmail: "", requestType: "신규" as "신규" | "이관", memo: "" };
 
 export default function SubmissionRoutesPage() {
   const { data: session, status } = useSession();
@@ -142,7 +142,7 @@ export default function SubmissionRoutesPage() {
         refresh={refresh}
       />
 
-      <StatusList me={me} role={role} routes={routes} loading={loading} refresh={refresh} />
+      <StatusList me={me} role={role} routes={routes} clients={clients} companies={companies} loading={loading} refresh={refresh} />
 
       <CorpLinkPanel me={me} outgoing={outgoing} incoming={incoming} refresh={refresh} />
     </div>
@@ -215,6 +215,7 @@ function DealerDropdown({
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
               <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)}
+                onCompositionEnd={(e) => setQuery(e.currentTarget.value)}
                 placeholder="아이디(이메일)·이름·사업자번호·업체명 검색..."
                 className="w-full h-8 pl-8 pr-8 border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
               {searching && <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 animate-spin text-gray-400" />}
@@ -288,6 +289,10 @@ function Workbench({
   const [clientRegError, setClientRegError] = useState("");
   const [clientRegistering, setClientRegistering] = useState(false);
   const clientRef = useRef<HTMLDivElement>(null);
+  // 선택된 거래처가 사업자번호 없을 때 인라인 보완
+  const [bizFixValue, setBizFixValue] = useState("");
+  const [bizFixSaving, setBizFixSaving] = useState(false);
+  const [bizFixError, setBizFixError] = useState("");
 
   // ── ② 제약사 (칩 다중선택) ──
   const [companyQuery, setCompanyQuery] = useState("");
@@ -406,6 +411,47 @@ function Workbench({
     }
   }
 
+  function clearClient() {
+    setSelectedClient(null);
+    setClientQuery("");
+    setClientMenuOpen(false);
+    setShowBizInput(false);
+    setClientRegError("");
+    setSelectedCompanies([]);
+    setCompanyQuery("");
+    setFilterMsg("");
+    setBizFixValue(""); setBizFixError("");
+  }
+
+  const clientHasBiz = !!selectedClient && selectedClient.bizNumber.replace(/\D/g, "").length > 0;
+
+  // 사업자번호 없는 선택 거래처 인라인 보완 — UserClient 있으면 PATCH, 없으면 POST 신규
+  async function saveBizFix() {
+    if (!selectedClient) return;
+    setBizFixError("");
+    const digits = bizFixValue.replace(/\D/g, "");
+    if (!validateBizNumber(digits)) { setBizFixError("유효한 사업자등록번호(10자리)를 입력해주세요."); return; }
+    setBizFixSaving(true);
+    try {
+      const res = selectedClient.id
+        ? await fetch(`/api/user-clients?id=${selectedClient.id}`, {
+            method: "PATCH", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ bizNumber: digits }),
+          })
+        : await fetch("/api/user-clients", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ clientName: selectedClient.clientName, bizNumber: digits, dealerType: null }),
+          });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setBizFixError(data.error || "저장 실패"); return; }
+      await refresh();
+      setSelectedClient({ id: selectedClient.id ?? data.id, clientName: selectedClient.clientName, bizNumber: digits });
+      setBizFixValue("");
+    } finally {
+      setBizFixSaving(false);
+    }
+  }
+
   function addCompany(name: string) {
     setSelectedCompanies((prev) => (prev.includes(name) ? prev : [...prev, name]));
     setCompanyQuery("");
@@ -511,11 +557,17 @@ function Workbench({
             <Input
               value={clientQuery}
               onChange={(e) => { setClientQuery(e.target.value); setSelectedClient(null); setClientMenuOpen(true); setShowBizInput(false); }}
+              onCompositionEnd={(e) => { setClientQuery(e.currentTarget.value); setSelectedClient(null); setClientMenuOpen(true); setShowBizInput(false); }}
               onFocus={() => setClientMenuOpen(true)}
               placeholder="거래처명 입력 (자동완성)"
               className={selectedClient ? "border-blue-400 pr-9" : ""}
             />
-            {selectedClient && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-blue-500" />}
+            {selectedClient && (
+              <button type="button" onClick={clearClient} title="선택 해제"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 text-blue-500 hover:text-red-500">
+                <X className="w-4 h-4" />
+              </button>
+            )}
           </div>
           {clientMenuOpen && !selectedClient && (clientMatches.length > 0 || (clientQuery.trim() && !exactClientMatch)) && (
             <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto">
@@ -554,11 +606,24 @@ function Workbench({
       {/* ② 제약사 (칩 다중선택) */}
       <div className={`space-y-1.5 ${!selectedClient ? "opacity-50 pointer-events-none" : ""}`}>
         <StepLabel n={2} done={!!stepDone(2)} icon={Pill} text="제약사 (복수 선택)" />
+        {selectedClient && !clientHasBiz && (
+          <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-md space-y-1.5">
+            <p className="text-xs text-amber-800 flex items-center gap-1"><AlertCircle className="w-3.5 h-3.5 shrink-0" />이 거래처는 사업자번호가 없어 필터링 요청을 못 보내요. 여기서 바로 보완하세요.</p>
+            <div className="flex gap-2">
+              <Input placeholder="사업자등록번호 *" value={bizFixValue} onChange={(e) => setBizFixValue(formatBizNumber(e.target.value))} maxLength={12} className="flex-1 h-9" />
+              <Button type="button" size="sm" onClick={saveBizFix} disabled={bizFixSaving}>
+                {bizFixSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : "저장"}
+              </Button>
+            </div>
+            {bizFixError && <p className="text-xs text-red-600">{bizFixError}</p>}
+          </div>
+        )}
         <div className="relative" ref={companyRef}>
           <div className="relative">
             <Input
               value={companyQuery}
               onChange={(e) => { setCompanyQuery(e.target.value); setCompanyMenuOpen(true); }}
+              onCompositionEnd={(e) => { setCompanyQuery(e.currentTarget.value); setCompanyMenuOpen(true); }}
               onFocus={() => setCompanyMenuOpen(true)}
               placeholder="제약사명 입력 → 자동완성에서 선택 (여러 개 추가 가능)"
             />
@@ -653,15 +718,61 @@ function StepLabel({ n, done, icon: Icon, text }: { n: number; done: boolean; ic
   );
 }
 
+/* 한글 IME 안전 자동완성 텍스트 입력 — 자유 입력 + 후보 선택 겸용.
+   Input 이 조합 중 부모 onChange 를 막으므로 onCompositionEnd 로 DOM 값을 강제 동기화. */
+function Autocomplete({
+  value, onChange, options, placeholder, className,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: string[];
+  placeholder?: string;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const h = (e: MouseEvent) => { if (open && ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+  const q = value.trim().replace(/\s+/g, "").toLowerCase();
+  const matches = (q ? options.filter((o) => o.replace(/\s+/g, "").toLowerCase().includes(q)) : options).slice(0, 20);
+  return (
+    <div className="relative" ref={ref}>
+      <Input
+        value={value}
+        onChange={(e) => { onChange(e.target.value); setOpen(true); }}
+        onCompositionEnd={(e) => { onChange(e.currentTarget.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        placeholder={placeholder}
+        className={className}
+      />
+      {open && matches.length > 0 && (
+        <div className="absolute z-30 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+          {matches.map((o) => (
+            <button key={o} type="button" onClick={() => { onChange(o); setOpen(false); }}
+              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-b border-gray-50 last:border-0 text-gray-800">
+              {o}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─────────────────────────────────────────────────────────────
    세팅된 매핑 현황 (법인 > 거래처 > 제약사, 가나다순, 수정/삭제)
    ───────────────────────────────────────────────────────────── */
 function StatusList({
-  me, role, routes, loading, refresh,
+  me, role, routes, clients, companies, loading, refresh,
 }: {
   me: MeInfo | null;
   role: string;
   routes: SubmissionRoute[];
+  clients: UserClient[];
+  companies: Company[];
   loading: boolean;
   refresh: () => Promise<void>;
 }) {
@@ -680,6 +791,18 @@ function StatusList({
   }, [routes, search]);
   const matchCount = filteredRoutes.length;
 
+  // 수정 폼 자동완성 후보 — 거래처: 내 UserClient ∪ route clientName, 제약사: medications/companies
+  const clientOptions = useMemo(() => {
+    const s = new Set<string>();
+    for (const c of clients) s.add(c.clientName);
+    for (const r of routes) s.add(r.clientName);
+    return Array.from(s).sort((a, b) => a.localeCompare(b, "ko"));
+  }, [clients, routes]);
+  const companyOptions = useMemo(
+    () => companies.map((c) => c.name).sort((a, b) => normalizeCompanyName(a).localeCompare(normalizeCompanyName(b), "ko")),
+    [companies],
+  );
+
   // 평면 정렬: 제출처 → 거래처 → 제약사 가나다순 (normalizeCompanyName 기준)
   const sortedRows = useMemo(() => {
     return filteredRoutes.slice().sort((a, b) => {
@@ -696,6 +819,8 @@ function StatusList({
     setEditingId(r.id);
     setEditError("");
     setEditForm({
+      clientName: r.clientName,
+      companyName: r.companyName,
       submissionEntity: r.submissionEntity,
       submissionEmail: r.submissionEmail ?? "",
       requestType: r.requestType === "이관" ? "이관" : "신규",
@@ -706,6 +831,8 @@ function StatusList({
   async function submitEdit(e: React.FormEvent) {
     e.preventDefault();
     setEditError("");
+    if (!editForm.clientName.trim()) { setEditError("거래처명은 필수예요."); return; }
+    if (!editForm.companyName.trim()) { setEditError("제약사명은 필수예요."); return; }
     if (!editForm.submissionEntity.trim()) { setEditError("제출법인은 필수예요."); return; }
     setEditSubmitting(true);
     try {
@@ -713,6 +840,8 @@ function StatusList({
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: editingId,
+          clientName: normalizeCompanyName(editForm.clientName),
+          companyName: normalizeCompanyName(editForm.companyName),
           submissionEntity: normalizeCompanyName(editForm.submissionEntity),
           submissionEmail: editForm.submissionEmail.trim(),
           requestType: editForm.requestType,
@@ -745,6 +874,7 @@ function StatusList({
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            onCompositionEnd={(e) => setSearch(e.currentTarget.value)}
             placeholder="병원·제출법인·제약사 통합검색"
             className="pl-8 pr-8 h-9"
           />
@@ -761,14 +891,20 @@ function StatusList({
 
       {editingId && (
         <form onSubmit={submitEdit} className="grid grid-cols-1 md:grid-cols-2 gap-2 p-3 bg-amber-50 border border-amber-200 rounded-md">
-          <p className="md:col-span-2 text-xs text-amber-800 font-semibold">매핑 수정 중 — 거래처/제약사는 변경 불가, 제출법인·이메일·구분·메모만 수정</p>
-          <Input placeholder="제출법인 *" value={editForm.submissionEntity} onChange={(e) => setEditForm({ ...editForm, submissionEntity: e.target.value })} />
+          <p className="md:col-span-2 text-xs text-amber-800 font-semibold">매핑 수정 중 — 거래처·제약사·제출법인 모두 수정 가능</p>
+          <label className="text-[11px] text-amber-700 font-medium">거래처
+            <Autocomplete value={editForm.clientName} onChange={(v) => setEditForm({ ...editForm, clientName: v })} options={clientOptions} placeholder="거래처명 *" />
+          </label>
+          <label className="text-[11px] text-amber-700 font-medium">제약사
+            <Autocomplete value={editForm.companyName} onChange={(v) => setEditForm({ ...editForm, companyName: v })} options={companyOptions} placeholder="제약사명 *" />
+          </label>
+          <Input placeholder="제출법인 *" value={editForm.submissionEntity} onChange={(e) => setEditForm({ ...editForm, submissionEntity: e.target.value })} onCompositionEnd={(e) => setEditForm({ ...editForm, submissionEntity: e.currentTarget.value })} />
           <Input placeholder="제출 이메일 (선택)" type="email" value={editForm.submissionEmail} onChange={(e) => setEditForm({ ...editForm, submissionEmail: e.target.value })} />
           <select value={editForm.requestType} onChange={(e) => setEditForm({ ...editForm, requestType: e.target.value as "신규" | "이관" })} className="border border-gray-300 rounded-md px-3 py-2 text-sm">
             <option value="신규">신규</option>
             <option value="이관">이관</option>
           </select>
-          <Input placeholder="메모 (선택)" value={editForm.memo} onChange={(e) => setEditForm({ ...editForm, memo: e.target.value })} />
+          <Input placeholder="메모 (선택)" value={editForm.memo} onChange={(e) => setEditForm({ ...editForm, memo: e.target.value })} onCompositionEnd={(e) => setEditForm({ ...editForm, memo: e.currentTarget.value })} />
           <div className="md:col-span-2 flex gap-2 justify-end">
             <Button type="button" variant="outline" onClick={() => { setEditingId(null); setEditForm(EMPTY_EDIT); setEditError(""); }}>취소</Button>
             <Button type="submit" disabled={editSubmitting}>{editSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Pencil className="w-4 h-4 mr-1" />수정 저장</>}</Button>

@@ -411,8 +411,9 @@ export async function PATCH(req: NextRequest) {
 
   if (approved !== undefined && !isAdmin) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
   if (parentCorpId !== undefined && !isAdmin) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
-  // 거래처명·사업자번호·유형 수정은 어드민 전용 (소유자 직접 수정은 마이페이지/거래처관리 UI 통해서만).
-  if ((clientName !== undefined || bizNumber !== undefined || dealerType !== undefined) && !isAdmin) {
+  // 거래처명·유형 수정은 어드민 전용. 사업자번호는 소유자 본인도 보완 가능
+  // (통계제출처 작업대에서 사업자번호 없는 거래처를 인라인으로 채우는 흐름).
+  if ((clientName !== undefined || dealerType !== undefined) && !isAdmin) {
     return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
   }
   if ((bizDocument !== undefined || bizFileName !== undefined) && !isAdmin && !isOwner) {

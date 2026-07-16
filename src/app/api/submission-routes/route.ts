@@ -1,8 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse, canManageSubmissionRoutes } from "@/lib/auth-guard";
 import { normalizeCompanyName } from "@/lib/company-name";
 import { getViewableUserIds } from "@/lib/hierarchy";
+import { syncSubmissionRoutesSheet } from "@/lib/google/sheets-submission-routes";
 
 // 본인 hierarchy + ADMIN 소유 row (글로벌 master) 의 ownerId 집합.
 // ADMIN 호출 시에는 null 반환 (필터 없음 = 전체 조회).
@@ -64,6 +65,7 @@ export async function POST(req: NextRequest) {
       create: { ownerId: user.id, clientName, companyName, submissionEntity, parentUserId, submissionEmail: submissionEmail || null, requestType: rt, memo: memo || null },
       update: { submissionEntity, parentUserId, submissionEmail: submissionEmail || null, requestType: rt, memo: memo || null, active: true },
     });
+    after(() => syncSubmissionRoutesSheet());
     return NextResponse.json(row, { status: 201 });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -77,7 +79,7 @@ export async function PATCH(req: NextRequest) {
   if (isNextResponse(user)) return user;
   if (!canManageSubmissionRoutes(user.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
 
-  const { id, submissionEntity, submissionEmail, requestType, memo, active } = await req.json();
+  const { id, clientName, companyName, submissionEntity, submissionEmail, requestType, memo, active } = await req.json();
   if (!id) return NextResponse.json({ error: "id 필수" }, { status: 400 });
 
   const existing = await prisma.submissionRoute.findUnique({ where: { id }, select: { ownerId: true } });
@@ -85,18 +87,38 @@ export async function PATCH(req: NextRequest) {
   if (existing.ownerId !== user.id && user.role !== "ADMIN")
     return NextResponse.json({ error: "본인이 등록한 제출처만 수정할 수 있어요." }, { status: 403 });
 
-  const row = await prisma.submissionRoute.update({
-    where: { id },
-    data: {
-      ...(submissionEntity !== undefined ? { submissionEntity } : {}),
-      ...(submissionEmail !== undefined ? { submissionEmail: submissionEmail || null } : {}),
-      ...(requestType !== undefined ? { requestType: requestType === "이관" ? "이관" : "신규" } : {}),
-      ...(memo !== undefined ? { memo: memo || null } : {}),
-      ...(active !== undefined ? { active } : {}),
-      updatedAt: new Date(),
-    },
-  });
-  return NextResponse.json(row);
+  // 거래처명·제약사명 수정 허용 — normalizeCompanyName 적용. 빈 값은 무시.
+  // id 는 유지(in-place) → MonthlySubmissionLog 관계 보존.
+  const nextClientName = clientName !== undefined ? normalizeCompanyName(String(clientName).trim()) : undefined;
+  const nextCompanyName = companyName !== undefined ? normalizeCompanyName(String(companyName).trim()) : undefined;
+  if (nextClientName !== undefined && !nextClientName)
+    return NextResponse.json({ error: "거래처명은 비울 수 없어요." }, { status: 400 });
+  if (nextCompanyName !== undefined && !nextCompanyName)
+    return NextResponse.json({ error: "제약사명은 비울 수 없어요." }, { status: 400 });
+
+  try {
+    const row = await prisma.submissionRoute.update({
+      where: { id },
+      data: {
+        ...(nextClientName !== undefined ? { clientName: nextClientName } : {}),
+        ...(nextCompanyName !== undefined ? { companyName: nextCompanyName } : {}),
+        ...(submissionEntity !== undefined ? { submissionEntity: normalizeCompanyName(String(submissionEntity).trim()) } : {}),
+        ...(submissionEmail !== undefined ? { submissionEmail: submissionEmail || null } : {}),
+        ...(requestType !== undefined ? { requestType: requestType === "이관" ? "이관" : "신규" } : {}),
+        ...(memo !== undefined ? { memo: memo || null } : {}),
+        ...(active !== undefined ? { active } : {}),
+        updatedAt: new Date(),
+      },
+    });
+    after(() => syncSubmissionRoutesSheet());
+    return NextResponse.json(row);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("Unique constraint"))
+      return NextResponse.json({ error: "이미 같은 매핑이 있습니다 (거래처 + 제약사 조합 중복)." }, { status: 409 });
+    console.error("[submission-routes PATCH]", msg);
+    return NextResponse.json({ error: msg.slice(0, 300) }, { status: 500 });
+  }
 }
 
 export async function DELETE(req: NextRequest) {
@@ -113,5 +135,6 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: "본인이 등록한 제출처만 삭제할 수 있어요." }, { status: 403 });
 
   await prisma.submissionRoute.delete({ where: { id } });
+  after(() => syncSubmissionRoutesSheet());
   return NextResponse.json({ success: true });
 }
