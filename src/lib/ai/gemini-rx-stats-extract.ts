@@ -21,6 +21,10 @@ export interface RxDrugRow {
   // 검수 페이지에서 표 행 focus 시 사진 위에 노란 highlight overlay + 자동 스크롤용.
   // Gemini 의 spatial understanding 활용. 못 잡으면 [0,0,0,0].
   bbox: [number, number, number, number];
+  // qtyBbox: 그 행의 "수량(총사용량) 숫자"가 차지하는 최소 영역 [x1,y1,x2,y2] 비율 (0~1).
+  // 실무자는 수량만 입력하므로 하이라이트의 진짜 기준점. 사진이 기울어도 수량 칸을 정확히 가리킨다.
+  // 수량이 판독 불가(null)거나 위치를 못 잡으면 null.
+  qtyBbox: [number, number, number, number] | null;
 }
 
 export interface RxStatsSummary {
@@ -53,7 +57,7 @@ const DEFAULT_MODEL: GeminiRxModel = "gemini-3.5-flash";
 
 const DRUG_ITEM_SCHEMA = {
   type: Type.OBJECT,
-  required: ["name", "code", "companyName", "quantity", "prescriptions", "unitPrice", "totalPrice", "category", "efficacy", "bbox"],
+  required: ["name", "code", "companyName", "quantity", "prescriptions", "unitPrice", "totalPrice", "category", "efficacy", "bbox", "qtyBbox"],
   properties: {
     name: { type: Type.STRING, description: "약품명 (한글+영문 그대로, 용량/제형 포함)" },
     code: { type: Type.STRING, description: "보험코드 9자리 숫자. 모르면 빈 문자열." },
@@ -76,6 +80,12 @@ const DRUG_ITEM_SCHEMA = {
     bbox: {
       type: Type.ARRAY,
       description: "이 약품 행의 사진 내 위치를 비율(0~1) 4개 숫자로: [x1, y1, x2, y2]. 사진 좌상단이 (0,0), 우하단이 (1,1). 약품명 행 전체를 감싸는 사각형. 못 잡으면 [0,0,0,0].",
+      items: { type: Type.NUMBER },
+    },
+    qtyBbox: {
+      type: Type.ARRAY,
+      nullable: true,
+      description: "이 행의 '수량(총사용량)' 숫자가 사진에서 차지하는 최소 영역을 비율(0~1) 4개 숫자로: [x1, y1, x2, y2]. 행 전체가 아니라 수량 숫자 셀만 딱 감싸는 작은 사각형. 사진이 기울어도 그 숫자 위치를 정확히 가리킬 것. 수량을 판독 못 했거나(quantity=null) 위치를 못 잡으면 null.",
       items: { type: Type.NUMBER },
     },
   },
@@ -128,6 +138,7 @@ function buildPrompt(): string {
     "     · 이 규칙은 quantity(수량)·unitPrice(단가)·totalPrice(금액) 에 적용. 확실히 읽은 값만 숫자로.",
     "7) period 는 반드시 YYYY-MM 형식 (예: '2026-04'). 사진에 '2026년 4월' 로 보여도 변환.",
     "8) **각 약품 행의 사진 내 위치 bbox**: [x1, y1, x2, y2] 비율 (0~1). 사진 좌상단이 (0,0), 우하단이 (1,1). 그 약품 행 전체(왼쪽 보험코드부터 오른쪽 금액 끝까지)를 감싸는 사각형. 못 잡으면 [0,0,0,0].",
+    "8-1) **각 약품 행의 qtyBbox**: 그 행의 '수량(총사용량)' 숫자가 사진에서 차지하는 최소 영역 [x1, y1, x2, y2] 비율 (0~1). 행 전체가 아니라 그 수량 숫자 셀만 딱 감싸는 작은 사각형. 실무자가 실제로 입력하는 값이 수량뿐이라, 사진이 기울어도 이 좌표가 수량 칸을 정확히 가리키게 하는 것이 핵심. 수량을 판독 못 했거나(quantity=null) 위치를 못 잡으면 qtyBbox=null.",
     "",
     "응답은 지정된 JSON 스키마만. 자유 텍스트 금지.",
   ].join("\n");
@@ -209,6 +220,13 @@ function normalizeDrug(d: Record<string, unknown>): RxDrugRow {
     ? [clamp01(rawBbox[0]), clamp01(rawBbox[1]), clamp01(rawBbox[2]), clamp01(rawBbox[3])]
     : [0, 0, 0, 0];
 
+  // qtyBbox 정규화: 4개 number 이고 하나라도 > 0 이면 clamp 해서 유지, 아니면 null (수량 위치 없음).
+  const rawQtyBbox = Array.isArray(d.qtyBbox) ? d.qtyBbox : [];
+  const qtyBbox: [number, number, number, number] | null =
+    rawQtyBbox.length === 4 && rawQtyBbox.some((v) => Number(v) > 0)
+      ? [clamp01(rawQtyBbox[0]), clamp01(rawQtyBbox[1]), clamp01(rawQtyBbox[2]), clamp01(rawQtyBbox[3])]
+      : null;
+
   return {
     name: String(d.name ?? "").trim(),
     code: String(d.code ?? "").replace(/\D/g, ""),
@@ -220,6 +238,7 @@ function normalizeDrug(d: Record<string, unknown>): RxDrugRow {
     category: String(d.category ?? "").trim(),
     efficacy: String(d.efficacy ?? "").trim(),
     bbox,
+    qtyBbox,
   };
 }
 

@@ -205,28 +205,50 @@ export default function ImagePanel({
               <img ref={imageElRef} src={imageUrl} alt="처방전"
                 style={{ width: "100%", display: "block" }}
                 className="rounded" draggable={false} />
-              {/* 실좌표 bbox 하이라이트 — 포커스된 행의 사진 내 실제 위치를 상태색 박스로.
-                  verified=초록 / mismatch=빨강 / unreadable=주황. 옛 방식(균등 간격 바) 제거됨.
-                  실좌표 없는 행(직접 추가/옛 데이터)은 표시 안 함. */}
+              {/* 실좌표 하이라이트 — 포커스된 행의 사진 내 실제 위치를 상태색 박스로.
+                  verified=초록 / mismatch=빨강 / unreadable=주황.
+                  실무 입력값은 수량뿐이라 수량 좌표(qtyBbox)에 진한 박스를 찍고,
+                  행 좌표(bbox)는 맥락용 얇은 반투명 테두리로만 유지.
+                  qtyBbox 없으면(옛 데이터·null) 기존처럼 행 bbox 에 진한 박스로 폴백.
+                  실좌표 전혀 없는 행(직접 추가/옛 데이터)은 표시 안 함. */}
               {focusedIdx != null && (() => {
                 const fd = manualDrugs[focusedIdx];
-                const b = fd?.bbox;
-                if (!b || !b.some((v) => v > 0)) return null;
-                const st = fd?.rowStatus;
+                if (!fd) return null;
+                const rowB = fd.bbox && fd.bbox.some((v) => v > 0) ? fd.bbox : null;
+                const qtyB = fd.qtyBbox && fd.qtyBbox.some((v) => v > 0) ? fd.qtyBbox : null;
+                const strongB = qtyB ?? rowB;   // 수량 좌표 우선, 없으면 행 좌표 폴백
+                if (!strongB) return null;
+                const st = fd.rowStatus;
                 const color = st === "mismatch" ? "#dc2626" : st === "unreadable" ? "#d97706" : "#16a34a";
                 return (
-                  <div
-                    className="absolute pointer-events-none rounded-sm transition-all"
-                    style={{
-                      left: `${b[0] * 100}%`,
-                      top: `${b[1] * 100}%`,
-                      width: `${(b[2] - b[0]) * 100}%`,
-                      height: `${(b[3] - b[1]) * 100}%`,
-                      border: `2px solid ${color}`,
-                      backgroundColor: `${color}26`,
-                      boxShadow: "0 0 0 2px rgba(255,255,255,0.45)",
-                    }}
-                  />
+                  <>
+                    {/* 맥락용 행 테두리 — qtyBbox 로 강조 중일 때만, 얇은 반투명 점선 */}
+                    {qtyB && rowB && (
+                      <div
+                        className="absolute pointer-events-none rounded-sm"
+                        style={{
+                          left: `${rowB[0] * 100}%`,
+                          top: `${rowB[1] * 100}%`,
+                          width: `${(rowB[2] - rowB[0]) * 100}%`,
+                          height: `${(rowB[3] - rowB[1]) * 100}%`,
+                          border: `1px dashed ${color}80`,
+                        }}
+                      />
+                    )}
+                    {/* 진한 상태색 박스 — 수량 위치(없으면 행 폴백) */}
+                    <div
+                      className="absolute pointer-events-none rounded-sm transition-all"
+                      style={{
+                        left: `${strongB[0] * 100}%`,
+                        top: `${strongB[1] * 100}%`,
+                        width: `${(strongB[2] - strongB[0]) * 100}%`,
+                        height: `${(strongB[3] - strongB[1]) * 100}%`,
+                        border: `2px solid ${color}`,
+                        backgroundColor: `${color}26`,
+                        boxShadow: "0 0 0 2px rgba(255,255,255,0.45)",
+                      }}
+                    />
+                  </>
                 );
               })()}
               {showDebug && editOcr && (

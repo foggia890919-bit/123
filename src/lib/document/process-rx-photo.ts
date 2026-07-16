@@ -143,6 +143,7 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
         finalConfidence: score.overall,
         bboxYPercent: null,
         bbox: d.bbox,
+        qtyBbox: d.qtyBbox,
         rowStatus: verify.status,
         verify,
         mismatch: match.nameCodeMismatch

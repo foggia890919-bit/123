@@ -25,6 +25,8 @@ export interface FusionDrug {
   bboxYPercent: number | null;
   // Gemini 실좌표 bbox [x1,y1,x2,y2] (0~1). 사진 위 실위치 하이라이트용. 옛 데이터는 없을 수 있음.
   bbox?: [number, number, number, number];
+  // 수량(총사용량) 값 셀의 실좌표 [x1,y1,x2,y2] (0~1). 하이라이트/스크롤의 우선 기준점. 없으면 행 bbox 폴백.
+  qtyBbox?: [number, number, number, number] | null;
   // 이중 검산 3단계 상태 (verified/mismatch/unreadable) + 상세.
   rowStatus?: RxRowStatus;
   verify?: RxRowVerification;
@@ -159,6 +161,8 @@ export interface ManualDrug {
   bboxYPercent: number | null;   // 이미지 내 행 Y 위치 (%) — 옛 방식(폴백)
   // 실좌표 bbox — 사진 위 실위치 하이라이트 + 자동 스크롤용. 행 이동/재정렬해도 이 행에 붙어 다님.
   bbox?: [number, number, number, number] | null;
+  // 수량 값 셀 실좌표 — 실무 입력값(수량) 위치. 하이라이트/스크롤 우선 기준. 없으면 bbox 폴백.
+  qtyBbox?: [number, number, number, number] | null;
   // OCR 시점 3단계 검산 상태 스냅샷 — 행 색상/배지용. 사용자가 직접 추가한 행은 null/없음.
   rowStatus?: RxRowStatus | null;
   verify?: RxRowVerification | null;
@@ -178,5 +182,5 @@ export interface AutocompleteOption {
 }
 
 export function emptyManualDrug(): ManualDrug {
-  return { insuranceCode: "", companyName: "", productName: "", quantity: "", unitPrice: null, commissionRate: null, additionalRate: null, matchedMedicationId: null, bboxYPercent: null, bbox: null, rowStatus: null, verify: null };
+  return { insuranceCode: "", companyName: "", productName: "", quantity: "", unitPrice: null, commissionRate: null, additionalRate: null, matchedMedicationId: null, bboxYPercent: null, bbox: null, qtyBbox: null, rowStatus: null, verify: null };
 }

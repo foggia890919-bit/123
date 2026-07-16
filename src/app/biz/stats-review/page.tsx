@@ -92,6 +92,8 @@ interface ReportRow {
         revenueMatch?: { applicable?: boolean; matched?: boolean; detail?: string };
       };
       bbox?: [number, number, number, number];
+      // 수량 값 셀 실좌표 — 하이라이트/스크롤 우선 기준. 없으면(옛 데이터·null) 행 bbox 폴백.
+      qtyBbox?: [number, number, number, number] | null;
       // 이중검산 + 3단계 상태 (신규 업로드부터. 옛 데이터엔 없음 → optional).
       rowStatus?: RxRowStatus;
       verify?: RxRowVerification;
@@ -832,7 +834,8 @@ interface EditableDrugRow {
     mismatchFields: string[];
     suggestion: { productName?: string; insuranceCode?: string; unitPrice?: number };
   } | null;
-  bbox: [number, number, number, number];        // 사진 highlight overlay 좌표
+  bbox: [number, number, number, number];        // 사진 highlight overlay 좌표 (행 전체)
+  qtyBbox: [number, number, number, number] | null;   // 수량 값 셀 좌표 — 하이라이트/스크롤 우선. 없으면 bbox 폴백.
   // 이중검산 3단계 상태 (신규 업로드부터). 옛 데이터는 undefined → 기존 색상 로직 사용.
   rowStatus?: RxRowStatus;
   verify?: RxRowVerification;
@@ -881,6 +884,10 @@ function ReviewPhotoCard({
       const bbox: [number, number, number, number] = Array.isArray(d.bbox) && d.bbox.length === 4
         ? [d.bbox[0], d.bbox[1], d.bbox[2], d.bbox[3]]
         : [0, 0, 0, 0];
+      const qtyBbox: [number, number, number, number] | null =
+        Array.isArray(d.qtyBbox) && d.qtyBbox.length === 4 && d.qtyBbox.some((v) => v > 0)
+          ? [d.qtyBbox[0], d.qtyBbox[1], d.qtyBbox[2], d.qtyBbox[3]]
+          : null;
       const q = d.qualityChecks;
       return {
         insuranceCode: d.insuranceCode ?? "",
@@ -914,6 +921,7 @@ function ReviewPhotoCard({
             }
           : null,
         bbox,
+        qtyBbox,
         // 신규 이중검산 필드 — 옛 데이터는 undefined 로 남아 하위호환(기존 색상) 처리됨.
         rowStatus: d.rowStatus,
         verify: d.verify,
@@ -965,15 +973,20 @@ function ReviewPhotoCard({
     setIsDragging(false);
   }
 
-  // focusedIdx 가 바뀌면 사진의 해당 bbox 가 보이도록 자동 스크롤
+  // focusedIdx 가 바뀌면 사진의 해당 위치가 보이도록 자동 스크롤.
+  // 실무 입력값은 수량뿐이라 수량 좌표(qtyBbox)를 우선 기준으로, 없으면 행 bbox 폴백.
   useEffect(() => {
     if (focusedIdx === null) return;
-    const bbox = rows[focusedIdx]?.bbox;
-    if (!bbox || !bbox.some((v) => v > 0)) return;
+    const r = rows[focusedIdx];
+    if (!r) return;
+    const qtyB = r.qtyBbox && r.qtyBbox.some((v) => v > 0) ? r.qtyBbox : null;
+    const rowB = r.bbox && r.bbox.some((v) => v > 0) ? r.bbox : null;
+    const box = qtyB ?? rowB;
+    if (!box) return;
     const scroller = imgScrollRef.current;
     const img = imgElRef.current;
     if (!scroller || !img) return;
-    const centerY = ((bbox[1] + bbox[3]) / 2) * img.clientHeight * zoom;
+    const centerY = ((box[1] + box[3]) / 2) * img.clientHeight * zoom;
     const targetTop = Math.max(0, centerY - scroller.clientHeight / 2);
     scroller.scrollTo({ top: targetTop, behavior: "smooth" });
   }, [focusedIdx, rows, zoom]);
@@ -1111,6 +1124,7 @@ function ReviewPhotoCard({
       reviewReason: "",
       validation: null,
       bbox: [0, 0, 0, 0],
+      qtyBbox: null,
     }]);
     setDirty(true);
   }
@@ -1356,24 +1370,53 @@ function ReviewPhotoCard({
                 <img ref={imgElRef} src={imgData} alt="원본 사진"
                   draggable={false}
                   className="max-w-none rounded shadow block pointer-events-none" />
-                {/* bbox highlight — focused row 의 좌표를 사진 위에 노란 박스로.
-                    옛 데이터엔 bbox 없어서 [0,0,0,0] → 안 그림. 새 업로드부터 작동. */}
-                {focusedIdx !== null && rows[focusedIdx]?.bbox && rows[focusedIdx].bbox.some((v) => v > 0) && (
-                  <div
-                    className={`absolute border-2 pointer-events-none transition-all duration-150 ${
-                      rows[focusedIdx].rowStatus === "mismatch" ? "border-red-500 bg-red-400/20"
-                      : rows[focusedIdx].rowStatus === "unreadable" ? "border-amber-500 bg-amber-400/20"
-                      : rows[focusedIdx].rowStatus === "verified" ? "border-emerald-500 bg-emerald-400/20"
-                      : "border-yellow-400 bg-yellow-300/20"
-                    }`}
-                    style={{
-                      left: `${rows[focusedIdx].bbox[0] * 100}%`,
-                      top: `${rows[focusedIdx].bbox[1] * 100}%`,
-                      width: `${(rows[focusedIdx].bbox[2] - rows[focusedIdx].bbox[0]) * 100}%`,
-                      height: `${(rows[focusedIdx].bbox[3] - rows[focusedIdx].bbox[1]) * 100}%`,
-                    }}
-                  />
-                )}
+                {/* highlight — 실무 입력값은 수량뿐이라 수량 좌표(qtyBbox)에 진한 상태색 박스를 찍고,
+                    행 좌표(bbox)는 맥락용 얇은 반투명 점선으로만. qtyBbox 없으면(옛 데이터·null) 행 bbox 로 폴백.
+                    실좌표 전혀 없으면(옛 데이터) 안 그림 → 아래 안내 배너. */}
+                {focusedIdx !== null && (() => {
+                  const r = rows[focusedIdx];
+                  if (!r) return null;
+                  const qtyB = r.qtyBbox && r.qtyBbox.some((v) => v > 0) ? r.qtyBbox : null;
+                  const rowB = r.bbox && r.bbox.some((v) => v > 0) ? r.bbox : null;
+                  const strongB = qtyB ?? rowB;
+                  if (!strongB) return null;
+                  const strongCls =
+                    r.rowStatus === "mismatch" ? "border-red-500 bg-red-400/20"
+                    : r.rowStatus === "unreadable" ? "border-amber-500 bg-amber-400/20"
+                    : r.rowStatus === "verified" ? "border-emerald-500 bg-emerald-400/20"
+                    : "border-yellow-400 bg-yellow-300/20";
+                  const ctxCls =
+                    r.rowStatus === "mismatch" ? "border-red-400/50"
+                    : r.rowStatus === "unreadable" ? "border-amber-400/50"
+                    : r.rowStatus === "verified" ? "border-emerald-400/50"
+                    : "border-yellow-400/50";
+                  return (
+                    <>
+                      {/* 맥락용 행 테두리 — qtyBbox 로 강조 중일 때만 */}
+                      {qtyB && rowB && (
+                        <div
+                          className={`absolute border border-dashed pointer-events-none ${ctxCls}`}
+                          style={{
+                            left: `${rowB[0] * 100}%`,
+                            top: `${rowB[1] * 100}%`,
+                            width: `${(rowB[2] - rowB[0]) * 100}%`,
+                            height: `${(rowB[3] - rowB[1]) * 100}%`,
+                          }}
+                        />
+                      )}
+                      {/* 진한 상태색 박스 — 수량 위치(없으면 행 폴백) */}
+                      <div
+                        className={`absolute border-2 pointer-events-none transition-all duration-150 ${strongCls}`}
+                        style={{
+                          left: `${strongB[0] * 100}%`,
+                          top: `${strongB[1] * 100}%`,
+                          width: `${(strongB[2] - strongB[0]) * 100}%`,
+                          height: `${(strongB[3] - strongB[1]) * 100}%`,
+                        }}
+                      />
+                    </>
+                  );
+                })()}
               </div>
             ) : (
               <div className="aspect-[3/4] flex items-center justify-center text-gray-400 text-xs">

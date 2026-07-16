@@ -40,6 +40,8 @@ interface FusionDrug {
   nameAutoReplaced: boolean;
   // Gemini bbox [x1, y1, x2, y2] 비율 0~1 — 검수 페이지에서 표 행 ↔ 사진 위치 매칭용
   bbox: [number, number, number, number];
+  // 수량 값 셀 실좌표 [x1,y1,x2,y2] 0~1 — 하이라이트/스크롤 우선 기준. 못 잡으면 null (행 bbox 폴백).
+  qtyBbox: [number, number, number, number] | null;
   // 이중 검산(산술 A + 마스터약가 B) 3단계 상태 — 검수 UI 색상/클릭 하이라이트용.
   rowStatus: RxRowStatus;
   verify: RxRowVerification;
@@ -260,6 +262,7 @@ export async function extractStatsLikeFusion(
       originalProductName: match.originalProductName,
       nameAutoReplaced: match.nameAutoReplaced,
       bbox: d.bbox,
+      qtyBbox: d.qtyBbox,
       rowStatus: verify.status,
       verify,
     };
