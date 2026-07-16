@@ -202,6 +202,12 @@ export default function StatsPage() {
       try { data = JSON.parse(text); }
       catch { throw new Error(`서버 응답 오류 (${res.status}): ${text.slice(0, 200)}`); }
       if (data.error) throw new Error(data.error);
+      // 서버가 자동 회전/보정한 이미지가 오면 화면 사진을 보정본으로 교체 —
+      // 응답의 bbox/qtyBbox 좌표가 전부 보정본 기준이라 원본에 그리면 어긋남.
+      const pre = (data as { preprocessed?: { imageBase64?: string; mimeType?: string } }).preprocessed;
+      if (pre?.imageBase64) {
+        setImageUrl(`data:${pre.mimeType || "image/jpeg"};base64,${pre.imageBase64}`);
+      }
       setOcr(data);
       setEditOcr(JSON.parse(JSON.stringify(data)));
       // 사람 확정 패널 초기화 — manualInitMode 에 따라
