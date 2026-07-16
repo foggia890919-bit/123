@@ -234,6 +234,16 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
     const dominantCompany = Array.from(companyRowCount.entries())
       .sort((a, b) => b[1] - a[1])[0]?.[0] ?? rx.pharma ?? "";
 
+    // 사용자가 업로드 시 제약사를 지정했으면(declaredCompany) OCR dominant 로 덮지 않고 유지.
+    // dominant 와 declared 가 다르면 검수 화면이 쓸 수 있게 경고만 기록.
+    const declaredCompany = typeof baseOcr.declaredCompany === "string" ? baseOcr.declaredCompany.trim() : "";
+    const finalCompanyName = declaredCompany || dominantCompany;
+    const companyMismatchWarning =
+      declaredCompany && dominantCompany &&
+      companyNameKey(declaredCompany) !== companyNameKey(dominantCompany)
+        ? { declared: declaredCompany, dominant: dominantCompany }
+        : null;
+
     let sheetUrl: string | null = null;
     let sheetBatchId: string | null = null;
     let sheetWarning: string | null = null;
@@ -264,13 +274,18 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
       where: { id: reportId },
       data: {
         status: "PENDING_REVIEW",
-        companyName: dominantCompany,
+        companyName: finalCompanyName,
         totalFee,
         ocrData: {
           source: "gemini-direct-photo-auto",
           vendor: "unknown",
           captureType: "photo",
           imageHash: baseOcr.imageHash ?? null,    // 중복 차단용 보존
+          // 행 단위 업로드 메타 보존 + dominant≠declared 경고.
+          declaredCompany: declaredCompany || null,
+          submissionEntity: baseOcr.submissionEntity ?? null,
+          dominantCompany,
+          companyMismatchWarning,
           finalDrugs,
           aiDrugs: finalDrugs,
           avgConfidence,

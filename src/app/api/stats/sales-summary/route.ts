@@ -167,6 +167,9 @@ export async function GET(req: NextRequest) {
       prevPrevSales: Math.round(agg.prevPrev.sales),
       prevPrevQuantity: Math.round(agg.prevPrev.quantity * 10) / 10,
       currentPhotoCount: agg.current.photoCount,
+      // 전월/전전월 사진 수 — "전월 조합 불러오기" 에서 전월 제출 제약사 판별용.
+      prevPhotoCount: agg.prev.photoCount,
+      prevPrevPhotoCount: agg.prevPrev.photoCount,
     }))
     // 거래 외 + 매출 + 수량 모두 0 = 노이즈. 거래가능은 0 이라도 표시.
     .filter((c) =>

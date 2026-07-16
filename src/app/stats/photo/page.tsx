@@ -2,12 +2,20 @@
 
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useSession } from "next-auth/react";
-import { Upload, CheckCircle, AlertCircle, Trash2, Sparkles, Building2, Loader2, RefreshCw } from "lucide-react";
+import {
+  CheckCircle, AlertCircle, Trash2, Sparkles, Building2,
+  Loader2, RefreshCw, Plus, History, ChevronDown, ChevronRight, Shuffle,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { normalizeCompanyName, companyNameKey } from "@/lib/company-name";
 
-// AI 처방통계 등록 — 사진 1장 또는 여러 장 한꺼번에 업로드 → 서버 백그라운드에서
-// Gemini 분석 + 마스터 매칭 + DB + 구글 시트 저장. 사용자는 전송만 누르면 끝.
+// AI 처방통계 등록 — 거래처×제약사 "행 목록" 방식.
+// 거래처/년/월을 고르면 그 거래처에 매핑된 제약사가 행으로 뜨고, 각 행에 (+)/드래그로
+// 사진을 붙인 뒤 마지막에 [업로드하기] 한 번. 저장은 제출처>제약사_거래처명 계층으로 정리.
+// 제약사 없이 섞인 사진은 맨 아래 「자동 분류」 행으로 올리면 기존 OCR 자동 방식으로 처리.
 // 검수는 별도 메뉴 "AI 처방통계 검수" 에서 사진과 함께 좌우 분할로 진행.
+
+const AUTO_ROW_KEY = "__auto__";
 
 interface UserClient {
   id: string;
@@ -19,8 +27,19 @@ interface UserClient {
 interface BatchItem {
   id: string;
   file: File;
+  rowKey: string;           // 어느 행에 붙었는지 (AUTO_ROW_KEY = 자동 분류)
+  companyName: string;      // 사용자 지정 제약사 ("" = 자동 분류)
+  submissionEntity: string; // 제출처 표시명 ("" = 자동 분류)
   status: "pending" | "sending" | "queued" | "error";
   errorMsg?: string;
+}
+
+interface RowDef {
+  key: string;
+  companyName: string;      // 표시명 (normalize)
+  submissionEntity: string;
+  prevSubmitted: boolean;   // 전월 제출 (전월 조합 불러오기)
+  noMapping: boolean;       // 전월엔 있는데 현재 매핑 없음
 }
 
 // stats/page.tsx 의 동일 함수 — 1600px / JPEG 0.78 로 클라이언트 압축.
@@ -50,6 +69,127 @@ async function compressImage(file: File, maxDim = 1600, quality = 0.78): Promise
   );
 }
 
+// 첨부 썸네일 — object URL 을 스스로 생성/해제.
+function Thumb({ file }: { file: File }) {
+  const url = useMemo(() => URL.createObjectURL(file), [file]);
+  useEffect(() => () => URL.revokeObjectURL(url), [url]);
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={url} alt="" className="w-10 h-10 object-cover rounded border border-gray-200" />;
+}
+
+// 개별 행 카드 — 모듈 스코프에 두어 부모 리렌더 시 remount(썸네일 object URL 재생성) 방지.
+function RowCard({
+  row, isAuto, clientName, items, isSubmitted, batchRunning, onAdd, onRemoveItem, onClearRow,
+}: {
+  row: RowDef;
+  isAuto: boolean;
+  clientName: string;
+  items: BatchItem[];
+  isSubmitted: boolean;
+  batchRunning: boolean;
+  onAdd: (files: FileList | File[] | null) => void;
+  onRemoveItem: (id: string) => void;
+  onClearRow: () => void;
+}) {
+  const done = items.filter((i) => i.status === "queued").length;
+  const err = items.filter((i) => i.status === "error").length;
+  const sending = items.filter((i) => i.status === "sending").length;
+  const pend = items.filter((i) => i.status === "pending").length;
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  return (
+    <div
+      className={`border rounded-lg p-3 ${isAuto ? "border-dashed border-gray-300 bg-gray-50" : "border-gray-200 bg-white"}`}
+      onDragOver={(e) => e.preventDefault()}
+      onDragEnter={(e) => e.preventDefault()}
+      onDrop={(e) => { e.preventDefault(); if (!isSubmitted) onAdd(e.dataTransfer.files); }}
+    >
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {isAuto ? (
+              <span className="text-sm font-semibold text-gray-700 inline-flex items-center gap-1">
+                <Shuffle className="w-3.5 h-3.5 text-gray-500" /> 자동 분류 (제약사 혼합 사진)
+              </span>
+            ) : (
+              <span className="text-sm font-medium text-gray-900 truncate">
+                {clientName} · {row.companyName}
+              </span>
+            )}
+            {row.prevSubmitted && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 font-semibold">전월 제출</span>
+            )}
+            {row.noMapping && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold">매핑 없음</span>
+            )}
+          </div>
+          {isAuto ? (
+            <div className="text-[11px] text-gray-500 mt-0.5">제약사 미지정 — 기존 방식대로 사진에서 OCR 자동 분류.</div>
+          ) : (
+            <div className="text-[11px] text-gray-500 mt-0.5">제출처: {row.submissionEntity}</div>
+          )}
+        </div>
+
+        {items.length > 0 && (
+          <div className="text-[10px] text-gray-500 flex items-center gap-1.5">
+            {done > 0 && <span className="text-green-700">완료 {done}</span>}
+            {sending > 0 && <span className="text-blue-700 inline-flex items-center gap-0.5"><Loader2 className="w-3 h-3 animate-spin" />{sending}</span>}
+            {pend > 0 && <span>대기 {pend}</span>}
+            {err > 0 && <span className="text-red-600">실패 {err}</span>}
+          </div>
+        )}
+
+        <button
+          type="button"
+          disabled={isSubmitted}
+          onClick={() => inputRef.current?.click()}
+          className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 disabled:opacity-40"
+        >
+          <Plus className="w-3.5 h-3.5" /> 사진
+        </button>
+        <input
+          ref={inputRef} type="file" accept="image/*" multiple className="hidden"
+          onChange={(e) => { onAdd(e.target.files); e.target.value = ""; }}
+        />
+        {items.length > 0 && !batchRunning && (
+          <button type="button" onClick={onClearRow} className="text-gray-400 hover:text-red-500" title="이 행 사진 비우기">
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+
+      {items.length === 0 ? (
+        <div className="mt-2 text-[11px] text-gray-400 border border-dashed border-gray-200 rounded py-2 text-center">
+          여기로 사진을 드래그하거나 (+ 사진) 을 누르세요
+        </div>
+      ) : (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {items.map((it) => (
+            <div key={it.id} className="relative group">
+              <Thumb file={it.file} />
+              <span className={`absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full border border-white ${
+                it.status === "queued" ? "bg-green-500" :
+                it.status === "sending" ? "bg-blue-500" :
+                it.status === "error" ? "bg-red-500" : "bg-gray-300"
+              }`} title={it.errorMsg || it.status} />
+              {!batchRunning && it.status !== "sending" && (
+                <button
+                  type="button"
+                  onClick={() => onRemoveItem(it.id)}
+                  className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 rounded transition-opacity"
+                  title="제거"
+                >
+                  <Trash2 className="w-4 h-4 text-white" />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function StatsPhotoPage() {
   const { data: session } = useSession();
   const now = new Date();
@@ -57,15 +197,14 @@ export default function StatsPhotoPage() {
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [clients, setClients] = useState<UserClient[]>([]);
   const [selectedClientId, setSelectedClientId] = useState<string>("");
-  const [, setClientQuery] = useState("");
   // 본인 대표 사업자 (마이페이지 "사업자 정보" 카드와 같은 row) — 거래처 드롭다운에서 제외용
   const [myBizClientId, setMyBizClientId] = useState<string | null>(null);
 
   const [error, setError] = useState<string>("");
 
-  // 거래처별 거래가능 제약사 + 제출완료 상태
-  const [allowedCompanies, setAllowedCompanies] = useState<string[]>([]);
-  const [companiesLoading, setCompaniesLoading] = useState(false);
+  // 거래처별 거래가능 제약사 (제약사명 + 제출처) — 행 목록의 기반.
+  const [routeRows, setRouteRows] = useState<{ companyName: string; submissionEntity: string }[]>([]);
+  const [routesLoading, setRoutesLoading] = useState(false);
   const [submissionStatus, setSubmissionStatus] = useState<{
     submitted: boolean;
     photoCount: number;
@@ -73,7 +212,6 @@ export default function StatsPhotoPage() {
   } | null>(null);
 
   // 제약사별 매출 요약 (당월/전월/전전월) — 거래처 선택 시 자동 fetch + 백그라운드 처리 중 polling.
-  // 매출 = 단가×수량 합계 (원). 수량 = 처방수량 합계 (정). 비급여는 단가 0 이라 매출만으론 불충분.
   interface SalesSummaryRow {
     companyName: string;
     isAllowed: boolean;
@@ -84,6 +222,8 @@ export default function StatsPhotoPage() {
     prevPrevSales: number;
     prevPrevQuantity: number;
     currentPhotoCount: number;
+    prevPhotoCount: number;
+    prevPrevPhotoCount: number;
   }
   interface SalesSummary {
     year: number;
@@ -98,6 +238,8 @@ export default function StatsPhotoPage() {
   }
   const [salesSummary, setSalesSummary] = useState<SalesSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [showSalesTable, setShowSalesTable] = useState(false);
+  const [prevLoaded, setPrevLoaded] = useState(false);
 
   function refreshSalesSummary() {
     if (!selectedClientId || !year || !month) { setSalesSummary(null); return; }
@@ -112,7 +254,6 @@ export default function StatsPhotoPage() {
   // 배치 등록 state
   const [batchItems, setBatchItems] = useState<BatchItem[]>([]);
   const [batchRunning, setBatchRunning] = useState(false);
-  const batchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!session?.user?.id) return;
@@ -120,27 +261,36 @@ export default function StatsPhotoPage() {
       .then((r) => r.json())
       .then((data) => Array.isArray(data) ? setClients(data) : setClients([]))
       .catch(() => setClients([]));
-    // 본인 대표 사업자 id — 거래처 드롭다운에서 자동 제외
     fetch("/api/mypage")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { if (d?.bizClient?.id) setMyBizClientId(d.bizClient.id); })
       .catch(() => undefined);
   }, [session?.user?.id]);
 
-  // 거래처 선택 시 거래가능제약사 목록 fetch
+  // 거래처 선택 시 매핑 제약사(+제출처) 목록 fetch
   useEffect(() => {
-    if (!selectedClientId) { setAllowedCompanies([]); return; }
+    setPrevLoaded(false);
+    if (!selectedClientId) { setRouteRows([]); return; }
     const client = clients.find((c) => c.id === selectedClientId);
     if (!client) return;
-    setCompaniesLoading(true);
+    setRoutesLoading(true);
     fetch(`/api/submission-routes?clientName=${encodeURIComponent(client.clientName)}&active=true`)
       .then((r) => r.ok ? r.json() : [])
-      .then((data: { companyName: string }[]) => {
-        const names = Array.from(new Set((data ?? []).map((d) => d.companyName).filter(Boolean)));
-        setAllowedCompanies(names);
+      .then((data: { companyName: string; submissionEntity?: string }[]) => {
+        const seen = new Set<string>();
+        const rows: { companyName: string; submissionEntity: string }[] = [];
+        for (const d of data ?? []) {
+          const name = (d.companyName || "").trim();
+          if (!name) continue;
+          const k = companyNameKey(name) || name;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          rows.push({ companyName: name, submissionEntity: (d.submissionEntity || "").trim() });
+        }
+        setRouteRows(rows);
       })
-      .catch(() => setAllowedCompanies([]))
-      .finally(() => setCompaniesLoading(false));
+      .catch(() => setRouteRows([]))
+      .finally(() => setRoutesLoading(false));
   }, [selectedClientId, clients]);
 
   // 거래처+월 선택 시 제출완료 여부 자동 조회. 제출완료면 업로드 disable.
@@ -165,25 +315,16 @@ export default function StatsPhotoPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClientId, year, month]);
 
-  // 사진 전송 완료 후 백그라운드 처리 중 자동 갱신 polling.
-  // 클라이언트가 방금 보낸 사진(queued) 만 추적 — 옛 PROCESSING row 가 stuck 이면
-  // 영원히 polling 돌던 버그 fix. 3분 timeout. 페이지 나가도 백엔드는 계속 처리.
+  // 사진 전송 완료 후 백그라운드 처리 중 자동 갱신 polling. 3분 timeout.
   const [pollStartAt, setPollStartAt] = useState<number | null>(null);
   useEffect(() => {
     if (!selectedClientId) return;
     const hasQueued = batchItems.some((it) => it.status === "queued");
-    if (!hasQueued) {
-      // queued 가 모두 끝나면 polling 종료 (옛 PROCESSING row 와 무관)
-      setPollStartAt(null);
-      return;
-    }
-    // 첫 polling 시작 시각 기록
+    if (!hasQueued) { setPollStartAt(null); return; }
     if (pollStartAt === null) setPollStartAt(Date.now());
-
     const id = setInterval(() => {
-      const now = Date.now();
-      // 3분 후 자동 종료
-      if (pollStartAt !== null && now - pollStartAt > 3 * 60 * 1000) {
+      const nowMs = Date.now();
+      if (pollStartAt !== null && nowMs - pollStartAt > 3 * 60 * 1000) {
         clearInterval(id);
         setPollStartAt(null);
         return;
@@ -207,22 +348,77 @@ export default function StatsPhotoPage() {
   }, [batchRunning]);
 
   const selectedClient = clients.find((c) => c.id === selectedClientId);
-  const allowedSet = useMemo(() => new Set(allowedCompanies.map((n) => n.trim())), [allowedCompanies]);
-  void allowedSet;  // 안내용 — 검수 페이지에서 활용
 
-  function addBatchFiles(files: FileList | File[] | null) {
+  // ── 행 목록 구성 ─────────────────────────────────────────────────────────
+  // 기본: 매핑 제약사 행 (가나다순). "전월 조합 불러오기" 누르면 전월 제출 제약사 강조·상단
+  // 정렬 + 매핑에 없는 전월 제약사는 "매핑 없음" 행으로 추가.
+  const rows: RowDef[] = useMemo(() => {
+    const base: RowDef[] = routeRows.map((r) => ({
+      key: companyNameKey(r.companyName) || r.companyName,
+      companyName: normalizeCompanyName(r.companyName) || r.companyName,
+      submissionEntity: r.submissionEntity || "미지정",
+      prevSubmitted: false,
+      noMapping: false,
+    }));
+    const byKey = new Map(base.map((b) => [b.key, b]));
+
+    if (prevLoaded && salesSummary) {
+      for (const c of salesSummary.byCompany) {
+        if ((c.prevPhotoCount ?? 0) <= 0) continue;
+        const k = companyNameKey(c.companyName) || c.companyName;
+        const existing = byKey.get(k);
+        if (existing) {
+          existing.prevSubmitted = true;
+        } else {
+          const row: RowDef = {
+            key: k,
+            companyName: normalizeCompanyName(c.companyName) || c.companyName,
+            submissionEntity: "미지정",
+            prevSubmitted: true,
+            noMapping: true,
+          };
+          base.push(row);
+          byKey.set(k, row);
+        }
+      }
+    }
+
+    base.sort((a, b) => {
+      if (prevLoaded && a.prevSubmitted !== b.prevSubmitted) return a.prevSubmitted ? -1 : 1;
+      return a.companyName.localeCompare(b.companyName, "ko");
+    });
+    return base;
+  }, [routeRows, salesSummary, prevLoaded]);
+
+  const prevCombinationCount = useMemo(
+    () => (salesSummary?.byCompany ?? []).filter((c) => (c.prevPhotoCount ?? 0) > 0).length,
+    [salesSummary],
+  );
+
+  // ── 파일 추가 ────────────────────────────────────────────────────────────
+  function addFilesToRow(row: { key: string; companyName?: string; submissionEntity?: string }, files: FileList | File[] | null) {
     if (!files) return;
-    // 같은 파일 (이름+크기+수정시각) 이미 batchItems 에 있으면 중복 추가 거부.
-    // 서버 측에선 SHA-256 hash 로 중복 차단되지만 클라이언트에서 미리 거름.
     const incoming = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    if (incoming.length === 0) return;
     setBatchItems((prev) => {
-      const seen = new Set(prev.map((it) => `${it.file.name}|${it.file.size}|${it.file.lastModified}`));
+      // 같은 행 안에서 (이름+크기+수정시각) 중복만 거름.
+      const seen = new Set(
+        prev.filter((it) => it.rowKey === row.key)
+          .map((it) => `${it.file.name}|${it.file.size}|${it.file.lastModified}`),
+      );
       const newItems: BatchItem[] = [];
       for (const f of incoming) {
-        const key = `${f.name}|${f.size}|${f.lastModified}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        newItems.push({ id: crypto.randomUUID(), file: f, status: "pending" });
+        const dk = `${f.name}|${f.size}|${f.lastModified}`;
+        if (seen.has(dk)) continue;
+        seen.add(dk);
+        newItems.push({
+          id: crypto.randomUUID(),
+          file: f,
+          rowKey: row.key,
+          companyName: row.key === AUTO_ROW_KEY ? "" : (row.companyName ?? ""),
+          submissionEntity: row.key === AUTO_ROW_KEY ? "" : (row.submissionEntity ?? ""),
+          status: "pending",
+        });
       }
       return [...prev, ...newItems];
     });
@@ -231,15 +427,18 @@ export default function StatsPhotoPage() {
   function removeBatchItem(id: string) {
     setBatchItems((prev) => prev.filter((it) => it.id !== id));
   }
+  function clearRow(rowKey: string) {
+    setBatchItems((prev) => prev.filter((it) => it.rowKey !== rowKey));
+  }
+  function clearBatch() {
+    setBatchItems([]);
+  }
 
   // 한 사진 전송 — 압축 후 /api/stats/photo-auto POST.
-  // 응답이 빠르고 (1~2초) 백그라운드 처리는 서버가 알아서.
   async function sendBatchItem(item: BatchItem): Promise<void> {
     const update = (patch: Partial<BatchItem>) =>
       setBatchItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, ...patch } : it)));
-
     update({ status: "sending" });
-
     try {
       const compressed = await compressImage(item.file);
       const fd = new FormData();
@@ -247,6 +446,9 @@ export default function StatsPhotoPage() {
       fd.append("clientId", selectedClientId);
       fd.append("year", String(year));
       fd.append("month", String(month));
+      // 행 단위 — 제약사/제출처가 있으면 페이로드에 포함 (자동 분류 행은 미포함).
+      if (item.companyName) fd.append("companyName", item.companyName);
+      if (item.submissionEntity) fd.append("submissionEntity", item.submissionEntity);
       const res = await fetch("/api/stats/photo-auto", { method: "POST", body: fd });
       const text = await res.text();
       let data: { ok?: boolean; error?: string; duplicate?: boolean; sheetWarning?: string | null };
@@ -255,7 +457,6 @@ export default function StatsPhotoPage() {
       } catch {
         data = { error: text.slice(0, 200) || `HTTP ${res.status} 응답 파싱 실패` };
       }
-      // 409 = 중복 사진. 사용자에게 명확히 표시 (실패 아님 — 이미 있음)
       if (res.status === 409 || data.duplicate) {
         update({ status: "error", errorMsg: data.error || "이미 등록된 사진 (중복)" });
         return;
@@ -275,19 +476,15 @@ export default function StatsPhotoPage() {
   }
 
   async function runBatch() {
-    if (!selectedClientId) {
-      setError("거래처를 먼저 선택하세요");
-      return;
-    }
-    if (batchItems.length === 0) return;
+    if (!selectedClientId) { setError("거래처를 먼저 선택하세요"); return; }
+    const pending = batchItems.filter((it) => it.status === "pending" || it.status === "error");
+    if (pending.length === 0) return;
     setBatchRunning(true);
     setError("");
     try {
-      // Concurrency 3 — Vercel 동시 호출 부담 회피 + 응답 안정성
       const CONCURRENCY = 3;
-      const targets = batchItems.filter((it) => it.status === "pending" || it.status === "error");
-      for (let i = 0; i < targets.length; i += CONCURRENCY) {
-        const chunk = targets.slice(i, i + CONCURRENCY);
+      for (let i = 0; i < pending.length; i += CONCURRENCY) {
+        const chunk = pending.slice(i, i + CONCURRENCY);
         await Promise.all(chunk.map((it) => sendBatchItem(it)));
       }
     } finally {
@@ -295,9 +492,9 @@ export default function StatsPhotoPage() {
     }
   }
 
-  function clearBatch() {
-    setBatchItems([]);
-  }
+  const totalPending = batchItems.filter((it) => it.status === "pending" || it.status === "error").length;
+  const totalQueued = batchItems.filter((it) => it.status === "queued").length;
+  const isSubmitted = !!submissionStatus?.submitted;
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-6">
@@ -306,10 +503,10 @@ export default function StatsPhotoPage() {
         <h1 className="text-2xl font-bold text-gray-900">AI 처방통계 등록</h1>
       </div>
       <p className="text-sm text-gray-500 -mt-2">
-        사진 1장이든 여러 장이든 선택 → "전송". 사진이 서버에 즉시 저장되고 백그라운드에서 Gemini 분석 + 매칭 + 시트.
-        페이지 닫거나 다른 작업 하셔도 OK. 결과는{" "}
-        <a href="/biz/stats-review" className="text-orange-600 underline">AI 처방통계 검수</a> 에서
-        사진과 함께 확인. (Gemini 가 처리 못한 사진은 검수에서 "처리 실패" 로 표시되어 재업로드 가능)
+        거래처/년/월을 고르면 매핑된 제약사가 행으로 뜹니다. 행마다 (+ 사진) 또는 드래그로 사진을 붙이고
+        마지막에 [업로드하기] 한 번. 사진은 서버에 즉시 저장되고 백그라운드에서 Gemini 분석 + 매칭 + 시트.
+        결과는{" "}
+        <a href="/biz/stats-review" className="text-orange-600 underline">AI 처방통계 검수</a> 에서 확인.
       </p>
 
       {/* 거래처/월 선택 */}
@@ -333,7 +530,7 @@ export default function StatsPhotoPage() {
             <label className="text-xs font-medium text-gray-500">병원 (거래처)</label>
             <select
               value={selectedClientId}
-              onChange={(e) => { setSelectedClientId(e.target.value); setClientQuery(""); }}
+              onChange={(e) => setSelectedClientId(e.target.value)}
               className="mt-1 w-full border rounded px-3 py-2 text-sm bg-white"
             >
               <option value="">— 거래처 선택 —</option>
@@ -353,7 +550,7 @@ export default function StatsPhotoPage() {
         </div>
 
         {/* 제출완료 거래처×월 — 업로드 차단 배너 */}
-        {submissionStatus?.submitted && (
+        {isSubmitted && (
           <div className="bg-red-50 border border-red-200 rounded px-3 py-2.5 flex items-start gap-2">
             <CheckCircle className="w-4 h-4 text-red-600 mt-0.5 flex-shrink-0" />
             <div className="text-xs text-red-800 flex-1">
@@ -361,7 +558,7 @@ export default function StatsPhotoPage() {
                 ✅ 제출완료 — {selectedClient?.clientName} · {year}년 {month}월
               </div>
               <div className="text-red-700 mt-0.5">
-                사진 {submissionStatus.photoCount}장 / 약품 {submissionStatus.rowCount}건이 이미 제출완료된
+                사진 {submissionStatus?.photoCount}장 / 약품 {submissionStatus?.rowCount}건이 이미 제출완료된
                 거래처×월입니다. 추가 업로드 불가. 잘못 올린 거면{" "}
                 <a href="/biz/stats-review" className="underline font-semibold">검수 페이지</a>에서
                 삭제 후 다시 업로드하세요.
@@ -370,222 +567,228 @@ export default function StatsPhotoPage() {
           </div>
         )}
 
-        {/* 거래가능 제약사 + 제약사별 매출 표 (당월/전월/전전월) */}
-        {selectedClientId && salesSummary && (
-          <div className="bg-white border border-gray-200 rounded overflow-hidden">
-            <div className="flex items-center gap-2 px-3 py-2 border-b bg-gray-50">
-              <Building2 className="w-3.5 h-3.5 text-gray-600" />
-              <span className="text-xs font-semibold text-gray-700">
-                제약사별 매출 ({salesSummary.byCompany.length}개사)
-              </span>
-              {(batchItems.some((it) => it.status === "queued") && pollStartAt !== null) && (
+        {/* 행 목록 */}
+        {selectedClientId && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Building2 className="w-4 h-4 text-gray-600" />
+              <span className="text-sm font-semibold text-gray-700">제약사별 사진 붙이기</span>
+              {routesLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400" />}
+              {(totalQueued > 0 && pollStartAt !== null) && (
                 <span className="ml-2 text-[11px] text-blue-600 inline-flex items-center gap-1">
-                  <RefreshCw className="w-3 h-3 animate-spin" />
-                  처리 중 — 자동 갱신 (5초). <span className="font-semibold ml-1">옆에 나가도 업데이트는 됨</span>
+                  <RefreshCw className="w-3 h-3 animate-spin" /> 처리 중 — 자동 갱신
                 </span>
               )}
-              <button onClick={refreshSalesSummary} disabled={summaryLoading}
-                className="ml-auto text-[11px] text-gray-500 hover:text-gray-800 inline-flex items-center gap-1">
-                <RefreshCw className={`w-3 h-3 ${summaryLoading ? "animate-spin" : ""}`} /> 새로고침
-              </button>
+              {batchItems.length > 0 && !batchRunning && (
+                <button onClick={clearBatch} className="ml-auto text-[11px] text-gray-500 hover:text-red-600">전체 초기화</button>
+              )}
             </div>
-            {salesSummary.byCompany.length === 0 ? (
-              <div className="px-3 py-4 text-[11px] text-gray-500 text-center">
-                거래가능 제약사도 매출 실적도 없음.{" "}
-                <a href="/submission-routes" className="text-blue-600 underline">통계제출처 관리</a> 에서 제약사 등록.
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead className="bg-gray-50 text-gray-500">
-                    <tr>
-                      <th className="text-left px-3 py-1.5" rowSpan={2}>제약사</th>
-                      <th className="text-center px-3 py-1 border-l" colSpan={2}>
-                        {salesSummary.prevPrevYear}.{String(salesSummary.prevPrevMonth).padStart(2, "0")}
-                      </th>
-                      <th className="text-center px-3 py-1 border-l" colSpan={2}>
-                        {salesSummary.prevYear}.{String(salesSummary.prevMonth).padStart(2, "0")}
-                      </th>
-                      <th className="text-center px-3 py-1 border-l bg-orange-50 text-orange-700 font-semibold" colSpan={2}>
-                        {salesSummary.year}.{String(salesSummary.month).padStart(2, "0")} (당월)
-                      </th>
-                      <th className="text-center px-2 py-1.5 w-14 border-l" rowSpan={2}>사진</th>
-                    </tr>
-                    <tr>
-                      <th className="text-right px-2 py-1 w-20 border-l font-normal text-[10px]">수량</th>
-                      <th className="text-right px-2 py-1 w-24 font-normal text-[10px]">금액</th>
-                      <th className="text-right px-2 py-1 w-20 border-l font-normal text-[10px]">수량</th>
-                      <th className="text-right px-2 py-1 w-24 font-normal text-[10px]">금액</th>
-                      <th className="text-right px-2 py-1 w-20 border-l bg-orange-50 font-normal text-[10px] text-orange-700">수량</th>
-                      <th className="text-right px-2 py-1 w-24 bg-orange-50 font-normal text-[10px] text-orange-700">금액</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {salesSummary.byCompany.map((c) => (
-                      <tr key={c.companyName} className={`border-t ${c.isAllowed ? "" : "bg-amber-50"}`}>
-                        <td className="px-3 py-1.5">
-                          <span className="text-gray-800">{c.companyName}</span>
-                          {!c.isAllowed && c.companyName !== "(미분류)" && (
-                            <span className="ml-1.5 text-[10px] text-amber-700 font-semibold">⚠ 거래 외</span>
-                          )}
-                        </td>
-                        <td className="px-2 py-1.5 text-right font-mono text-gray-500 border-l">
-                          {c.prevPrevQuantity > 0 ? c.prevPrevQuantity.toLocaleString() : "-"}
-                        </td>
-                        <td className="px-2 py-1.5 text-right font-mono text-gray-500">
-                          {c.prevPrevSales > 0 ? c.prevPrevSales.toLocaleString() : "-"}
-                        </td>
-                        <td className="px-2 py-1.5 text-right font-mono text-gray-500 border-l">
-                          {c.prevQuantity > 0 ? c.prevQuantity.toLocaleString() : "-"}
-                        </td>
-                        <td className="px-2 py-1.5 text-right font-mono text-gray-500">
-                          {c.prevSales > 0 ? c.prevSales.toLocaleString() : "-"}
-                        </td>
-                        <td className="px-2 py-1.5 text-right font-mono font-bold bg-orange-50 text-orange-900 border-l">
-                          {c.currentQuantity > 0 ? c.currentQuantity.toLocaleString() : "-"}
-                        </td>
-                        <td className="px-2 py-1.5 text-right font-mono font-bold bg-orange-50 text-orange-900">
-                          {c.currentSales > 0 ? c.currentSales.toLocaleString() : "-"}
-                        </td>
-                        <td className="px-2 py-1.5 text-center text-[11px] text-gray-500 border-l">
-                          {c.currentPhotoCount > 0 ? `${c.currentPhotoCount}장` : "-"}
-                        </td>
-                      </tr>
-                    ))}
-                    <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
-                      <td className="px-3 py-2 text-gray-700">합계</td>
-                      <td className="px-2 py-2 text-right font-mono text-gray-600 border-l">
-                        {salesSummary.byCompany.reduce((s, c) => s + c.prevPrevQuantity, 0).toLocaleString()}
-                      </td>
-                      <td className="px-2 py-2 text-right font-mono text-gray-600">
-                        {salesSummary.byCompany.reduce((s, c) => s + c.prevPrevSales, 0).toLocaleString()}원
-                      </td>
-                      <td className="px-2 py-2 text-right font-mono text-gray-600 border-l">
-                        {salesSummary.byCompany.reduce((s, c) => s + c.prevQuantity, 0).toLocaleString()}
-                      </td>
-                      <td className="px-2 py-2 text-right font-mono text-gray-600">
-                        {salesSummary.byCompany.reduce((s, c) => s + c.prevSales, 0).toLocaleString()}원
-                      </td>
-                      <td className="px-2 py-2 text-right font-mono text-orange-900 bg-orange-100 border-l">
-                        {salesSummary.byCompany.reduce((s, c) => s + c.currentQuantity, 0).toLocaleString()}
-                      </td>
-                      <td className="px-2 py-2 text-right font-mono text-orange-900 bg-orange-100">
-                        {salesSummary.byCompany.reduce((s, c) => s + c.currentSales, 0).toLocaleString()}원
-                      </td>
-                      <td className="px-2 py-2 text-center text-[11px] text-gray-500 border-l">
-                        {salesSummary.byCompany.reduce((s, c) => s + c.currentPhotoCount, 0)}장
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+
+            {rows.length === 0 && !routesLoading && (
+              <div className="text-[11px] text-gray-500 border border-dashed rounded py-3 text-center">
+                이 거래처에 매핑된 제약사가 없습니다.{" "}
+                <a href="/submission-routes" className="text-blue-600 underline">통계제출처 관리</a> 에서 등록하거나,
+                아래 「자동 분류」 행으로 사진을 올리세요.
               </div>
             )}
-            {salesSummary.currentErrorCount > 0 && (
+
+            {rows.map((row) => (
+              <RowCard
+                key={row.key}
+                row={row}
+                isAuto={false}
+                clientName={selectedClient?.clientName ?? ""}
+                items={batchItems.filter((it) => it.rowKey === row.key)}
+                isSubmitted={isSubmitted}
+                batchRunning={batchRunning}
+                onAdd={(files) => addFilesToRow(row, files)}
+                onRemoveItem={removeBatchItem}
+                onClearRow={() => clearRow(row.key)}
+              />
+            ))}
+
+            {/* 자동 분류 특수 행 */}
+            <RowCard
+              key={AUTO_ROW_KEY}
+              row={{ key: AUTO_ROW_KEY, companyName: "", submissionEntity: "", prevSubmitted: false, noMapping: false }}
+              isAuto
+              clientName={selectedClient?.clientName ?? ""}
+              items={batchItems.filter((it) => it.rowKey === AUTO_ROW_KEY)}
+              isSubmitted={isSubmitted}
+              batchRunning={batchRunning}
+              onAdd={(files) => addFilesToRow({ key: AUTO_ROW_KEY }, files)}
+              onRemoveItem={removeBatchItem}
+              onClearRow={() => clearRow(AUTO_ROW_KEY)}
+            />
+
+            {/* 하단 버튼 */}
+            <div className="flex items-center gap-2 pt-1">
+              <Button
+                variant="outline"
+                onClick={() => setPrevLoaded(true)}
+                disabled={!salesSummary || prevCombinationCount === 0 || prevLoaded}
+                className="text-sm inline-flex items-center gap-1.5"
+              >
+                <History className="w-4 h-4" />
+                {prevLoaded
+                  ? `전월 조합 불러옴 (${prevCombinationCount})`
+                  : prevCombinationCount > 0
+                    ? `전월 조합 불러오기 (${prevCombinationCount})`
+                    : "전월 조합 없음"}
+              </Button>
+              <Button
+                onClick={runBatch}
+                disabled={batchRunning || totalPending === 0 || !selectedClientId || isSubmitted}
+                className="flex-1 bg-orange-600 hover:bg-orange-700"
+              >
+                {batchRunning
+                  ? `업로드 중... (${totalQueued}/${batchItems.length})`
+                  : isSubmitted ? "제출완료된 거래처×월입니다"
+                  : totalPending === 0 ? "사진을 먼저 붙이세요"
+                  : `업로드하기 (${totalPending}장)`}
+              </Button>
+            </div>
+
+            {totalQueued > 0 && (
+              <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-800 space-y-1">
+                <div className="font-semibold flex items-center gap-1">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  {totalQueued}장 업로드 완료 · 서버에서 백그라운드 처리 중
+                </div>
+                <div className="text-blue-700">
+                  사진은 이미 서버에 저장됐어요. 페이지 닫거나 다른 작업 하셔도 됩니다.
+                  Gemini 분석 + DB + 시트 저장은 약 30~60초/사진 소요.
+                </div>
+                <div className="text-[11px] text-blue-600 pt-1">
+                  결과는 <a href="/biz/stats-review" className="underline font-semibold">AI 처방통계 검수</a> 에서 확인.
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 제약사별 매출표 (3개월) — 접이식 */}
+        {selectedClientId && (
+          <div className="border border-gray-200 rounded overflow-hidden">
+            <button
+              onClick={() => setShowSalesTable((v) => !v)}
+              className="w-full flex items-center gap-2 px-3 py-2 bg-gray-50 text-left"
+            >
+              {showSalesTable ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
+              <span className="text-xs font-semibold text-gray-700">
+                제약사별 매출 (당월·전월·전전월{salesSummary ? ` · ${salesSummary.byCompany.length}개사` : ""})
+              </span>
+              {summaryLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400 ml-1" />}
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => { e.stopPropagation(); refreshSalesSummary(); }}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); refreshSalesSummary(); } }}
+                className="ml-auto text-[11px] text-gray-500 hover:text-gray-800 inline-flex items-center gap-1"
+              >
+                <RefreshCw className={`w-3 h-3 ${summaryLoading ? "animate-spin" : ""}`} /> 새로고침
+              </span>
+            </button>
+
+            {showSalesTable && salesSummary && (
+              salesSummary.byCompany.length === 0 ? (
+                <div className="px-3 py-4 text-[11px] text-gray-500 text-center">
+                  거래가능 제약사도 매출 실적도 없음.{" "}
+                  <a href="/submission-routes" className="text-blue-600 underline">통계제출처 관리</a> 에서 제약사 등록.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-50 text-gray-500">
+                      <tr>
+                        <th className="text-left px-3 py-1.5" rowSpan={2}>제약사</th>
+                        <th className="text-center px-3 py-1 border-l" colSpan={2}>
+                          {salesSummary.prevPrevYear}.{String(salesSummary.prevPrevMonth).padStart(2, "0")}
+                        </th>
+                        <th className="text-center px-3 py-1 border-l" colSpan={2}>
+                          {salesSummary.prevYear}.{String(salesSummary.prevMonth).padStart(2, "0")}
+                        </th>
+                        <th className="text-center px-3 py-1 border-l bg-orange-50 text-orange-700 font-semibold" colSpan={2}>
+                          {salesSummary.year}.{String(salesSummary.month).padStart(2, "0")} (당월)
+                        </th>
+                        <th className="text-center px-2 py-1.5 w-14 border-l" rowSpan={2}>사진</th>
+                      </tr>
+                      <tr>
+                        <th className="text-right px-2 py-1 w-20 border-l font-normal text-[10px]">수량</th>
+                        <th className="text-right px-2 py-1 w-24 font-normal text-[10px]">금액</th>
+                        <th className="text-right px-2 py-1 w-20 border-l font-normal text-[10px]">수량</th>
+                        <th className="text-right px-2 py-1 w-24 font-normal text-[10px]">금액</th>
+                        <th className="text-right px-2 py-1 w-20 border-l bg-orange-50 font-normal text-[10px] text-orange-700">수량</th>
+                        <th className="text-right px-2 py-1 w-24 bg-orange-50 font-normal text-[10px] text-orange-700">금액</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {salesSummary.byCompany.map((c) => (
+                        <tr key={c.companyName} className={`border-t ${c.isAllowed ? "" : "bg-amber-50"}`}>
+                          <td className="px-3 py-1.5">
+                            <span className="text-gray-800">{c.companyName}</span>
+                            {!c.isAllowed && c.companyName !== "(미분류)" && (
+                              <span className="ml-1.5 text-[10px] text-amber-700 font-semibold">⚠ 거래 외</span>
+                            )}
+                          </td>
+                          <td className="px-2 py-1.5 text-right font-mono text-gray-500 border-l">
+                            {c.prevPrevQuantity > 0 ? c.prevPrevQuantity.toLocaleString() : "-"}
+                          </td>
+                          <td className="px-2 py-1.5 text-right font-mono text-gray-500">
+                            {c.prevPrevSales > 0 ? c.prevPrevSales.toLocaleString() : "-"}
+                          </td>
+                          <td className="px-2 py-1.5 text-right font-mono text-gray-500 border-l">
+                            {c.prevQuantity > 0 ? c.prevQuantity.toLocaleString() : "-"}
+                          </td>
+                          <td className="px-2 py-1.5 text-right font-mono text-gray-500">
+                            {c.prevSales > 0 ? c.prevSales.toLocaleString() : "-"}
+                          </td>
+                          <td className="px-2 py-1.5 text-right font-mono font-bold bg-orange-50 text-orange-900 border-l">
+                            {c.currentQuantity > 0 ? c.currentQuantity.toLocaleString() : "-"}
+                          </td>
+                          <td className="px-2 py-1.5 text-right font-mono font-bold bg-orange-50 text-orange-900">
+                            {c.currentSales > 0 ? c.currentSales.toLocaleString() : "-"}
+                          </td>
+                          <td className="px-2 py-1.5 text-center text-[11px] text-gray-500 border-l">
+                            {c.currentPhotoCount > 0 ? `${c.currentPhotoCount}장` : "-"}
+                          </td>
+                        </tr>
+                      ))}
+                      <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
+                        <td className="px-3 py-2 text-gray-700">합계</td>
+                        <td className="px-2 py-2 text-right font-mono text-gray-600 border-l">
+                          {salesSummary.byCompany.reduce((s, c) => s + c.prevPrevQuantity, 0).toLocaleString()}
+                        </td>
+                        <td className="px-2 py-2 text-right font-mono text-gray-600">
+                          {salesSummary.byCompany.reduce((s, c) => s + c.prevPrevSales, 0).toLocaleString()}원
+                        </td>
+                        <td className="px-2 py-2 text-right font-mono text-gray-600 border-l">
+                          {salesSummary.byCompany.reduce((s, c) => s + c.prevQuantity, 0).toLocaleString()}
+                        </td>
+                        <td className="px-2 py-2 text-right font-mono text-gray-600">
+                          {salesSummary.byCompany.reduce((s, c) => s + c.prevSales, 0).toLocaleString()}원
+                        </td>
+                        <td className="px-2 py-2 text-right font-mono text-orange-900 bg-orange-100 border-l">
+                          {salesSummary.byCompany.reduce((s, c) => s + c.currentQuantity, 0).toLocaleString()}
+                        </td>
+                        <td className="px-2 py-2 text-right font-mono text-orange-900 bg-orange-100">
+                          {salesSummary.byCompany.reduce((s, c) => s + c.currentSales, 0).toLocaleString()}원
+                        </td>
+                        <td className="px-2 py-2 text-center text-[11px] text-gray-500 border-l">
+                          {salesSummary.byCompany.reduce((s, c) => s + c.currentPhotoCount, 0)}장
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              )
+            )}
+            {showSalesTable && salesSummary && salesSummary.currentErrorCount > 0 && (
               <div className="px-3 py-1.5 bg-red-50 border-t border-red-200 text-[11px] text-red-700">
                 ⚠ 당월에 처리 실패한 사진 {salesSummary.currentErrorCount}장.{" "}
                 <a href="/biz/stats-review" className="underline font-semibold">검수 메뉴</a>에서 확인 + 재업로드.
               </div>
             )}
-          </div>
-        )}
-        {selectedClientId && !salesSummary && summaryLoading && (
-          <div className="text-center py-4 text-xs text-gray-400 inline-flex items-center gap-2">
-            <Loader2 className="w-4 h-4 animate-spin" /> 매출 실적 조회 중...
-          </div>
-        )}
-
-        {/* 사진 업로드 영역 */}
-        <label
-          className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-gray-300 rounded-md py-10 cursor-pointer hover:bg-gray-50 transition-colors"
-          onDragOver={(e) => e.preventDefault()}
-          onDragEnter={(e) => e.preventDefault()}
-          onDrop={(e) => {
-            e.preventDefault();
-            addBatchFiles(e.dataTransfer.files);
-          }}
-        >
-          <Upload className="w-8 h-8 text-gray-400" />
-          <span className="text-sm text-gray-600">
-            사진을 클릭해서 선택하거나 드래그하세요 (한 장 또는 여러 장)
-          </span>
-          <span className="text-[11px] text-gray-400">
-            선택된 거래처/월 기준으로 일괄 분석 → 자동 저장. 검수는 별도 메뉴에서.
-          </span>
-          <input ref={batchInputRef} type="file" accept="image/*" multiple className="hidden"
-            onChange={(e) => { addBatchFiles(e.target.files); e.target.value = ""; }} />
-        </label>
-
-        {/* 선택된 사진 리스트 */}
-        {batchItems.length > 0 && (
-          <div className="border rounded">
-            <div className="flex items-center gap-2 px-3 py-2 border-b bg-gray-50">
-              <span className="text-xs font-semibold text-gray-700">
-                선택된 사진 {batchItems.length}장
-              </span>
-              <span className="text-[10px] text-gray-500 ml-2">
-                완료 {batchItems.filter(it => it.status === "queued").length} · 실패 {batchItems.filter(it => it.status === "error").length} · 대기 {batchItems.filter(it => it.status === "pending").length} · 처리중 {batchItems.filter(it => it.status === "sending").length}
-              </span>
-              <Button variant="outline" size="sm" onClick={clearBatch} disabled={batchRunning}
-                className="ml-auto text-xs">전체 초기화</Button>
-            </div>
-            <div className="max-h-60 overflow-y-auto divide-y">
-              {batchItems.map((it) => (
-                <div key={it.id} className="px-3 py-2 flex items-center gap-2 text-xs">
-                  <span className="flex-1 truncate text-gray-800">
-                    {it.file.name}
-                    <span className="ml-2 text-[10px] text-gray-400">{(it.file.size / 1024).toFixed(0)}KB</span>
-                  </span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                    it.status === "pending" ? "bg-gray-100 text-gray-600" :
-                    it.status === "sending" ? "bg-blue-100 text-blue-700" :
-                    it.status === "queued"  ? "bg-green-100 text-green-700" :
-                    "bg-red-100 text-red-700"
-                  }`}>
-                    {it.status === "pending" ? "대기" :
-                     it.status === "sending" ? "전송중" :
-                     it.status === "queued"  ? "전송완료 (백그라운드 처리)" :
-                     "전송 실패"}
-                  </span>
-                  {it.errorMsg && (
-                    <span className="text-[10px] text-red-600 max-w-[200px] truncate" title={it.errorMsg}>
-                      {it.errorMsg}
-                    </span>
-                  )}
-                  {!batchRunning && it.status !== "sending" && (
-                    <button onClick={() => removeBatchItem(it.id)} className="text-gray-400 hover:text-red-500">
-                      <Trash2 className="w-3.5 h-3.5"/>
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <Button onClick={runBatch}
-          disabled={batchRunning || batchItems.length === 0 || !selectedClientId || submissionStatus?.submitted}
-          className="w-full bg-orange-600 hover:bg-orange-700">
-          {batchRunning
-            ? `전송 중... (${batchItems.filter(it => it.status === "queued" || it.status === "error").length}/${batchItems.length})`
-            : submissionStatus?.submitted ? "제출완료된 거래처×월입니다"
-            : batchItems.length === 0 ? "사진을 먼저 선택하세요"
-            : `${batchItems.length}장 전송 (서버에서 자동 분석·저장)`}
-        </Button>
-
-        {batchItems.filter(it => it.status === "queued").length > 0 && (
-          <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-800 space-y-1">
-            <div className="font-semibold flex items-center gap-1">
-              <Sparkles className="w-3.5 h-3.5"/>
-              {batchItems.filter(it => it.status === "queued").length}장 전송 완료 · 서버에서 백그라운드 처리 중
-            </div>
-            <div className="text-blue-700">
-              사진은 이미 서버에 저장됐어요. 페이지 닫거나 다른 작업 하셔도 됩니다.
-              Gemini 분석 + DB + 시트 저장은 약 30~60초/사진 소요.
-            </div>
-            <div className="text-[11px] text-blue-600 pt-1">
-              결과는 <a href="/biz/stats-review" className="underline font-semibold">AI 처방통계 검수</a> 에서
-              확인. 처리 실패한 사진은 "실패" 배지 + 사유 표시됩니다.
-            </div>
           </div>
         )}
       </div>
