@@ -7,6 +7,7 @@ import { regularizeBboxes } from "../bbox-regularize";
 import { readWithClova } from "./clova-ocr";
 import { dualRead, type DualReadInfo, type DualReadStats } from "../dual-read";
 import { companyNameKey } from "../company-name";
+import { preprocessImage } from "../image-preprocess";
 
 // stats/page.tsx 가 자체 재정의해서 쓰는 JSON 응답 형식. import 의존성 없음 — 응답 형식만 호환.
 // 핵심 필드: drugs[].{insuranceCode, companyName, productName, quantity (Field), unitPrice,
@@ -76,6 +77,17 @@ export interface FusionResultJson {
   companiesInPhoto: string[];
   // 클로바 이중 판독 통계 — CLOVA 미설정/실패면 null (Gemini 단독 동작).
   dualReadStats: DualReadStats | null;
+  // 서버단 자동 전처리 결과 — 회전/원근 보정 후 OCR 에 전달했는지.
+  // 좌표(bbox)는 보정본 기준이므로, applied=true 면 프런트는 원본 대신 imageBase64 를 표시해야 함.
+  // 회전/워프 없으면 imageBase64 는 생략(응답 크기 절약).
+  preprocessed: {
+    applied: boolean;
+    rotated: 0 | 90 | 270;
+    warped: boolean;
+    ms: number;
+    imageBase64?: string;
+    mimeType?: string;
+  };
   // 새 /stats/photo 페이지가 시트 append 시 카테고리/효능/처방횟수 원본 보존하려고 사용.
   // 기존 /stats 페이지는 이 필드 무시 (5컬럼만 보고 무관).
   rawDrugs: RxDrugRow[];
@@ -148,9 +160,15 @@ export async function extractStatsLikeFusion(
   mimeType: string,
   userId: string,
 ): Promise<FusionResultJson> {
-  // 1) Gemini + 클로바 OCR 을 병렬로 시작 (둘 다 이미지만 필요 — 지연 최소화).
-  const clovaPromise = readWithClova(base64, mimeType); // 실패해도 null (throw 안 함)
-  const { data: rx, debug } = await extractRxStatsFromImage(base64, mimeType);
+  // 0) 서버단 자동 전처리 — 기울어짐/회전/EXIF 보정을 OCR 호출 "직전"에 적용.
+  //    이후 모든 좌표(bbox·클로바 픽셀)는 보정된 이미지 기준이 된다.
+  const pre = await preprocessImage(base64, mimeType);
+  const procBase64 = pre.base64;
+  const procMime = pre.mimeType;
+
+  // 1) Gemini + 클로바 OCR 을 병렬로 시작 (둘 다 보정본만 필요 — 지연 최소화).
+  const clovaPromise = readWithClova(procBase64, procMime); // 실패해도 null (throw 안 함)
+  const { data: rx, debug } = await extractRxStatsFromImage(procBase64, procMime);
   const clova = await clovaPromise;
 
   // 2) 보험코드 9자리 일괄 조회 + 제품명 prefix 폴백 조회 (코드 매칭 실패 행 backfill).
@@ -335,6 +353,14 @@ export async function extractStatsLikeFusion(
     totalSumCheck,
     companiesInPhoto,
     dualReadStats,
+    preprocessed: {
+      applied: pre.applied,
+      rotated: pre.rotated,
+      warped: pre.warped,
+      ms: pre.ms,
+      // 보정이 일어났을 때만 보정본 이미지를 실어 프런트가 원본 대신 표시하게 함.
+      ...(pre.applied ? { imageBase64: pre.base64, mimeType: pre.mimeType } : {}),
+    },
     rawDrugs: rx.drugs,
     geminiMeta: {
       pharma: rx.pharma,

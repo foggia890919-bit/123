@@ -25,6 +25,8 @@ import { appendRxStats } from "@/lib/google/google-sheets-rx-append";
 import { fetchRateEntries } from "@/lib/rate-utils";
 import { computeRowQuality, checkTotalSum } from "@/lib/rx-quality-checks";
 import { companyNameKey } from "@/lib/company-name";
+import { preprocessImage } from "@/lib/image-preprocess";
+import { persistDataUri, BUCKETS } from "@/lib/storage";
 
 export interface ProcessRxPhotoArgs {
   reportId: string;
@@ -46,9 +48,16 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
   const baseOcr = (existing?.ocrData ?? {}) as Record<string, unknown>;
 
   try {
-    // Gemini + 클로바 OCR 병렬 시작 (둘 다 이미지만 필요).
-    const clovaPromise = readWithClova(base64, mimeType); // 실패해도 null
-    const { data: rx } = await extractRxStatsFromImage(base64, mimeType);
+    // 0) 서버단 자동 전처리 — 기울어짐/회전/EXIF 보정을 OCR 호출 "직전"에 적용.
+    //    이후 좌표(bbox·클로바 픽셀)는 보정본 기준이 되므로, 보정이 일어나면 아래에서
+    //    저장 사진 자체를 보정본으로 교체해 검수 화면 좌표와 일치시킨다.
+    const pre = await preprocessImage(base64, mimeType);
+    const procBase64 = pre.base64;
+    const procMime = pre.mimeType;
+
+    // Gemini + 클로바 OCR 병렬 시작 (둘 다 보정본만 필요).
+    const clovaPromise = readWithClova(procBase64, procMime); // 실패해도 null
+    const { data: rx } = await extractRxStatsFromImage(procBase64, procMime);
     const clova = await clovaPromise;
     if (rx.drugs.length === 0) {
       await prisma.prescriptionReport.update({
@@ -244,6 +253,24 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
         ? { declared: declaredCompany, dominant: dominantCompany }
         : null;
 
+    // 전처리로 이미지가 바뀌었으면 저장 사진 자체를 보정본으로 교체 —
+    // 검수 화면이 imageKey/imageData 로 사진을 보여주므로, 좌표(bbox) 일치를 위해 보정본을 저장한다.
+    // 원본은 최초 업로드 시 저장된 키가 스토리지에 그대로 남아 보존됨(별도 원본 필드는 스키마에 없음).
+    let correctedImageKey: string | null = null;
+    let correctedImageData: string | null = null;
+    let correctedImageStored = false;
+    if (pre.applied) {
+      try {
+        const correctedUri = `data:${procMime};base64,${procBase64}`;
+        const persisted = await persistDataUri(BUCKETS.prescriptionImage, userId, correctedUri);
+        correctedImageKey = persisted.fileKey;
+        correctedImageData = persisted.fileData;
+        correctedImageStored = true;
+      } catch (persistErr) {
+        console.error("[processRxPhoto preprocess persist]", reportId, String(persistErr).slice(0, 200));
+      }
+    }
+
     let sheetUrl: string | null = null;
     let sheetBatchId: string | null = null;
     let sheetWarning: string | null = null;
@@ -276,6 +303,8 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
         status: "PENDING_REVIEW",
         companyName: finalCompanyName,
         totalFee,
+        // 보정본 저장 성공 시에만 이미지 교체 (검수 화면 좌표 일치용).
+        ...(correctedImageStored ? { imageKey: correctedImageKey, imageData: correctedImageData } : {}),
         ocrData: {
           source: "gemini-direct-photo-auto",
           vendor: "unknown",
@@ -293,6 +322,14 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
           totalSumCheck,
           companiesInPhoto,
           dualReadStats,
+          // 서버단 자동 전처리 적용 내역 — 회전/원근 보정 여부·소요시간. 저장 사진은 보정본으로 교체됨.
+          preprocess: {
+            applied: pre.applied,
+            rotated: pre.rotated,
+            warped: pre.warped,
+            ms: pre.ms,
+            imageReplaced: correctedImageStored,
+          },
           geminiMeta: {
             pharma: rx.pharma,
             period: rx.period,
