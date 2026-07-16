@@ -136,6 +136,7 @@ export default function SubmissionRoutesPage() {
         me={me}
         userName={session.user?.name || session.user?.email || ""}
         clients={clients}
+        routes={routes}
         companies={companies}
         filterReqs={filterReqs}
         refresh={refresh}
@@ -267,29 +268,30 @@ function DealerDropdown({
    → ③ 제출법인 선택 → ④ 매핑 등록
    ───────────────────────────────────────────────────────────── */
 function Workbench({
-  me, userName, clients, companies, filterReqs, refresh,
+  me, userName, clients, routes, companies, filterReqs, refresh,
 }: {
   me: MeInfo | null;
   userName: string;
   clients: UserClient[];
+  routes: SubmissionRoute[];
   companies: Company[];
   filterReqs: FilterReq[];
   refresh: () => Promise<void>;
 }) {
+  type SelClient = { id?: string; clientName: string; bizNumber: string };
   // ── ① 거래처 ──
   const [clientQuery, setClientQuery] = useState("");
-  const [selectedClient, setSelectedClient] = useState<UserClient | null>(null);
+  const [selectedClient, setSelectedClient] = useState<SelClient | null>(null);
   const [clientMenuOpen, setClientMenuOpen] = useState(false);
-  const [showClientReg, setShowClientReg] = useState(false);
+  const [showBizInput, setShowBizInput] = useState(false);
   const [newBiz, setNewBiz] = useState("");
-  const [newAddr, setNewAddr] = useState("");
   const [clientRegError, setClientRegError] = useState("");
   const [clientRegistering, setClientRegistering] = useState(false);
   const clientRef = useRef<HTMLDivElement>(null);
 
-  // ── ② 제약사 ──
+  // ── ② 제약사 (칩 다중선택) ──
   const [companyQuery, setCompanyQuery] = useState("");
-  const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
+  const [selectedCompanies, setSelectedCompanies] = useState<string[]>([]);
   const [companyMenuOpen, setCompanyMenuOpen] = useState(false);
   const [filterRequesting, setFilterRequesting] = useState(false);
   const [filterMsg, setFilterMsg] = useState("");
@@ -313,38 +315,64 @@ function Workbench({
     return () => document.removeEventListener("mousedown", h);
   }, [clientMenuOpen, companyMenuOpen]);
 
+  // 자동완성 소스 = 내 UserClient ∪ 내 SubmissionRoute distinct clientName (중복 제거).
+  // SubmissionRoute 에만 있는 거래처(UserClient 미등록/타 owner)도 후보로 잡히도록 union.
+  const clientCandidates = useMemo(() => {
+    const byKey = new Map<string, SelClient>();
+    for (const c of clients) {
+      const k = companyNameKey(c.clientName);
+      if (!byKey.has(k)) byKey.set(k, { id: c.id, clientName: c.clientName, bizNumber: c.bizNumber });
+    }
+    for (const r of routes) {
+      const k = companyNameKey(r.clientName);
+      if (!byKey.has(k)) byKey.set(k, { clientName: r.clientName, bizNumber: "" });
+    }
+    return Array.from(byKey.values()).sort((a, b) => a.clientName.localeCompare(b.clientName, "ko"));
+  }, [clients, routes]);
+
   const clientMatches = useMemo(() => {
     const q = clientQuery.trim().toLowerCase();
-    const list = q ? clients.filter((c) => c.clientName.toLowerCase().includes(q) || c.bizNumber.includes(q.replace(/\D/g, ""))) : clients;
+    const qDigits = clientQuery.replace(/\D/g, "");
+    const list = q
+      ? clientCandidates.filter((c) => c.clientName.toLowerCase().includes(q) || (qDigits.length > 0 && c.bizNumber.includes(qDigits)))
+      : clientCandidates;
     return list.slice(0, 20);
-  }, [clients, clientQuery]);
+  }, [clientCandidates, clientQuery]);
   const exactClientMatch = useMemo(
-    () => clients.find((c) => c.clientName.trim() === clientQuery.trim()),
-    [clients, clientQuery],
+    () => clientCandidates.find((c) => c.clientName.trim() === clientQuery.trim()),
+    [clientCandidates, clientQuery],
   );
 
   const companyMatches = useMemo(() => {
     const q = companyQuery.trim().toLowerCase();
     const sorted = companies.slice().sort((a, b) => normalizeCompanyName(a.name).localeCompare(normalizeCompanyName(b.name), "ko"));
-    return (q ? sorted.filter((c) => c.name.toLowerCase().includes(q)) : sorted).slice(0, 30);
-  }, [companies, companyQuery]);
+    return (q ? sorted.filter((c) => c.name.toLowerCase().includes(q)) : sorted)
+      .filter((c) => !selectedCompanies.includes(c.name))
+      .slice(0, 30);
+  }, [companies, companyQuery, selectedCompanies]);
 
-  // 선택 거래처×제약사 필터링 기록 존재 여부
-  const selectedHasFilter = useMemo(() => {
-    if (!selectedClient || !selectedCompany) return false;
-    const biz = selectedClient.bizNumber.replace(/\D/g, "");
-    const key = companyNameKey(selectedCompany);
-    return filterReqs.some((r) => r.bizNumber.replace(/\D/g, "") === biz && companyNameKey(r.companyName) === key);
-  }, [selectedClient, selectedCompany, filterReqs]);
+  // 선택 거래처 × 제약사 필터링 기록 존재 여부 — clientName 기준 매칭
+  // (즉석 등록 거래처는 bizNumber 가 없을 수 있어 clientName 으로 매칭해야 안전)
+  const hasFilter = useCallback((company: string) => {
+    if (!selectedClient) return false;
+    const ck = companyNameKey(selectedClient.clientName);
+    const key = companyNameKey(company);
+    return filterReqs.some((r) => companyNameKey(r.clientName) === ck && companyNameKey(r.companyName) === key);
+  }, [selectedClient, filterReqs]);
 
-  function pickClient(c: UserClient) {
+  const companiesNeedingFilter = useMemo(
+    () => selectedCompanies.filter((c) => !hasFilter(c)),
+    [selectedCompanies, hasFilter],
+  );
+
+  function pickClient(c: SelClient) {
     setSelectedClient(c);
     setClientQuery(c.clientName);
     setClientMenuOpen(false);
-    setShowClientReg(false);
+    setShowBizInput(false);
     setClientRegError("");
-    // 거래처 바뀌면 제약사 선택 초기화
-    setSelectedCompany(null);
+    // 거래처 바뀌면 제약사 칩 초기화
+    setSelectedCompanies([]);
     setCompanyQuery("");
     setFilterMsg("");
   }
@@ -359,30 +387,35 @@ function Workbench({
     try {
       const res = await fetch("/api/user-clients", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientName: nm, bizNumber: digits, address: newAddr.trim() || null, dealerType: null }),
+        body: JSON.stringify({ clientName: nm, bizNumber: digits, dealerType: null }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setClientRegError(data.error || "등록 실패"); return; }
       await refresh();
-      setSelectedClient({ id: data.id, clientName: data.clientName ?? nm, bizNumber: data.bizNumber ?? digits });
-      setClientQuery(data.clientName ?? nm);
-      setShowClientReg(false);
-      setNewBiz(""); setNewAddr("");
+      pickClient({ id: data.id, clientName: data.clientName ?? nm, bizNumber: data.bizNumber ?? digits });
+      setNewBiz("");
     } finally {
       setClientRegistering(false);
     }
   }
 
-  function pickCompany(name: string) {
-    setSelectedCompany(name);
-    setCompanyQuery(name);
-    setCompanyMenuOpen(false);
+  function addCompany(name: string) {
+    setSelectedCompanies((prev) => (prev.includes(name) ? prev : [...prev, name]));
+    setCompanyQuery("");
     setFilterMsg("");
   }
+  function removeCompany(name: string) {
+    setSelectedCompanies((prev) => prev.filter((c) => c !== name));
+  }
 
+  // 필터링 기록 없는 칩들만 일괄 요청
   async function requestFilter() {
-    if (!selectedClient || !selectedCompany) return;
+    if (!selectedClient || companiesNeedingFilter.length === 0) return;
     setFilterMsg("");
+    if (!selectedClient.bizNumber.replace(/\D/g, "")) {
+      setFilterMsg("이 거래처는 사업자번호가 없어 필터링 요청을 보낼 수 없어요. 거래처관리에서 사업자번호를 보완해주세요.");
+      return;
+    }
     setFilterRequesting(true);
     try {
       const res = await fetch("/api/filter-request", {
@@ -392,11 +425,11 @@ function Workbench({
           userName,
           clientName: selectedClient.clientName,
           bizNumber: selectedClient.bizNumber,
-          companies: [selectedCompany],
+          companies: companiesNeedingFilter,
         }),
       });
       if (!res.ok) { setFilterMsg((await res.json().catch(() => ({}))).error || "필터링 요청 실패"); return; }
-      setFilterMsg("필터링 요청을 보냈어요. 회신 후 거래 가능 여부가 확정됩니다.");
+      setFilterMsg(`${companiesNeedingFilter.length}개 제약사 필터링을 요청했어요. 회신 후 거래 가능 여부가 확정됩니다.`);
       await refresh();
     } finally {
       setFilterRequesting(false);
@@ -405,30 +438,48 @@ function Workbench({
 
   const entityName = useParent ? (me?.parent?.name || me?.parent?.email || "") : (entityDealer?.clientName || "");
   const parentUserId = useParent ? (me?.parent?.id ?? null) : (entityDealer?.userId ?? null);
-  const canMap = !!selectedClient && !!selectedCompany && !!entityName.trim();
+  const canMap = !!selectedClient && selectedCompanies.length > 0 && !!entityName.trim();
 
   async function submitMapping() {
     setMapError(""); setMapDone("");
     if (!selectedClient) { setMapError("거래처를 선택해주세요."); return; }
-    if (!selectedCompany) { setMapError("제약사를 선택해주세요."); return; }
+    if (selectedCompanies.length === 0) { setMapError("제약사를 1개 이상 선택해주세요."); return; }
     if (!entityName.trim()) { setMapError("제출법인을 선택해주세요."); return; }
     setMapping(true);
     try {
-      const res = await fetch("/api/submission-routes", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          clientName: selectedClient.clientName.trim(),
-          companyName: normalizeCompanyName(selectedCompany),
-          submissionEntity: normalizeCompanyName(entityName),
-          parentUserId,
-          requestType: "신규",
+      const entity = normalizeCompanyName(entityName);
+      const results = await Promise.all(
+        selectedCompanies.map(async (companyName) => {
+          try {
+            const r = await fetch("/api/submission-routes", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                clientName: selectedClient.clientName.trim(),
+                companyName: normalizeCompanyName(companyName),
+                submissionEntity: entity,
+                parentUserId,
+                requestType: "신규",
+              }),
+            });
+            if (r.ok) return { ok: true, companyName, error: null as string | null };
+            const b = await r.json().catch(() => ({}));
+            return { ok: false, companyName, error: b?.error || `HTTP ${r.status}` };
+          } catch (err) {
+            return { ok: false, companyName, error: String(err).slice(0, 100) };
+          }
         }),
-      });
-      if (!res.ok) { setMapError((await res.json().catch(() => ({}))).error || "매핑 등록 실패"); return; }
-      setMapDone(`'${selectedClient.clientName} → ${normalizeCompanyName(selectedCompany)} → ${normalizeCompanyName(entityName)}' 매핑을 등록했어요.`);
-      // 제약사·법인만 초기화 (같은 거래처로 연속 등록 편의)
-      setSelectedCompany(null); setCompanyQuery("");
-      setEntityDealer(null); setUseParent(false); setFilterMsg("");
+      );
+      const ok = results.filter((r) => r.ok).length;
+      const failures = results.filter((r) => !r.ok);
+      if (failures.length > 0) {
+        setMapError(`${ok}건 등록, ${failures.length}건 실패 → ${failures.map((f) => `${f.companyName}: ${f.error}`).join(" / ")}`);
+      }
+      if (ok > 0) {
+        setMapDone(`'${selectedClient.clientName} → ${entity}' 로 ${ok}개 제약사 매핑을 등록했어요.`);
+        // 제약사 칩·법인만 초기화 (같은 거래처로 연속 등록 편의)
+        setSelectedCompanies([]); setCompanyQuery("");
+        setEntityDealer(null); setUseParent(false); setFilterMsg("");
+      }
       await refresh();
     } finally {
       setMapping(false);
@@ -436,7 +487,7 @@ function Workbench({
   }
 
   const stepDone = (n: number) =>
-    (n === 1 && selectedClient) || (n === 2 && selectedCompany) || (n === 3 && entityName.trim());
+    (n === 1 && selectedClient) || (n === 2 && selectedCompanies.length > 0) || (n === 3 && entityName.trim());
 
   return (
     <section className="bg-white border border-gray-200 rounded-lg p-5 space-y-5">
@@ -449,95 +500,101 @@ function Workbench({
       <div className="space-y-1.5">
         <StepLabel n={1} done={!!stepDone(1)} icon={Stethoscope} text="거래처(병원)" />
         <div className="relative" ref={clientRef}>
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Input
-                value={clientQuery}
-                onChange={(e) => { setClientQuery(e.target.value); setSelectedClient(null); setClientMenuOpen(true); setShowClientReg(false); }}
-                onFocus={() => setClientMenuOpen(true)}
-                placeholder="거래처명 입력 (자동완성)"
-                className={selectedClient ? "border-blue-400 pr-9" : ""}
-              />
-              {selectedClient && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-blue-500" />}
-            </div>
-            {!selectedClient && clientQuery.trim() && !exactClientMatch && !showClientReg && (
-              <Button type="button" variant="outline" onClick={() => setShowClientReg(true)}>
-                <Plus className="w-4 h-4 mr-1" />등록하기
-              </Button>
-            )}
+          <div className="relative">
+            <Input
+              value={clientQuery}
+              onChange={(e) => { setClientQuery(e.target.value); setSelectedClient(null); setClientMenuOpen(true); setShowBizInput(false); }}
+              onFocus={() => setClientMenuOpen(true)}
+              placeholder="거래처명 입력 (자동완성)"
+              className={selectedClient ? "border-blue-400 pr-9" : ""}
+            />
+            {selectedClient && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-blue-500" />}
           </div>
-          {clientMenuOpen && !selectedClient && clientMatches.length > 0 && (
+          {clientMenuOpen && !selectedClient && (clientMatches.length > 0 || (clientQuery.trim() && !exactClientMatch)) && (
             <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto">
               {clientMatches.map((c) => (
-                <button key={c.id} type="button" onClick={() => pickClient(c)}
+                <button key={c.id ?? c.clientName} type="button" onClick={() => pickClient(c)}
                   className="w-full text-left px-3 py-2.5 text-xs hover:bg-gray-50 border-b border-gray-50 last:border-0">
                   <p className="font-medium text-gray-800">{c.clientName}</p>
-                  <p className="text-gray-400 font-mono">{c.bizNumber}</p>
+                  <p className="text-gray-400 font-mono">{c.bizNumber && !c.bizNumber.startsWith("temp-") ? c.bizNumber : <span className="text-gray-300">사업자번호 미입력</span>}</p>
                 </button>
               ))}
+              {clientQuery.trim() && !exactClientMatch && (
+                <button type="button" onClick={() => { setShowBizInput(true); setClientMenuOpen(false); }}
+                  className="w-full text-left px-3 py-2.5 text-xs hover:bg-blue-50 bg-blue-50/40 border-t border-blue-100 flex items-center gap-1.5 text-blue-700 font-medium">
+                  <Plus className="w-3.5 h-3.5 shrink-0" />&quot;{clientQuery.trim()}&quot; 이름으로 등록
+                </button>
+              )}
             </div>
           )}
         </div>
-        {showClientReg && (
+        {showBizInput && (
           <div className="p-3 bg-blue-50 border border-blue-200 rounded-md space-y-2">
             <p className="text-xs text-blue-800 font-medium">신규 거래처 등록: <span className="font-semibold">{clientQuery.trim()}</span></p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <Input placeholder="사업자등록번호 *" value={newBiz} onChange={(e) => setNewBiz(formatBizNumber(e.target.value))} maxLength={12} />
-              <Input placeholder="주소 (선택)" value={newAddr} onChange={(e) => setNewAddr(e.target.value)} />
+            <div className="flex gap-2">
+              <Input placeholder="사업자등록번호 * (필터링에 필요)" value={newBiz} onChange={(e) => setNewBiz(formatBizNumber(e.target.value))} maxLength={12} className="flex-1" />
+              <Button type="button" size="sm" onClick={registerNewClient} disabled={clientRegistering}>
+                {clientRegistering ? <Loader2 className="w-4 h-4 animate-spin" /> : "등록"}
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => { setShowBizInput(false); setClientRegError(""); setNewBiz(""); }}>취소</Button>
             </div>
             {clientRegError && <p className="text-xs text-red-600">{clientRegError}</p>}
-            <div className="flex gap-2 justify-end">
-              <Button type="button" variant="outline" size="sm" onClick={() => { setShowClientReg(false); setClientRegError(""); }}>취소</Button>
-              <Button type="button" size="sm" onClick={registerNewClient} disabled={clientRegistering}>
-                {clientRegistering ? <Loader2 className="w-4 h-4 animate-spin" /> : "등록 후 선택"}
-              </Button>
-            </div>
+            <p className="text-[11px] text-blue-600">주소 등 상세는 나중에 거래처관리에서 보완할 수 있어요.</p>
           </div>
         )}
       </div>
 
-      {/* ② 제약사 */}
+      {/* ② 제약사 (칩 다중선택) */}
       <div className={`space-y-1.5 ${!selectedClient ? "opacity-50 pointer-events-none" : ""}`}>
-        <StepLabel n={2} done={!!stepDone(2)} icon={Pill} text="제약사" />
+        <StepLabel n={2} done={!!stepDone(2)} icon={Pill} text="제약사 (복수 선택)" />
         <div className="relative" ref={companyRef}>
           <div className="relative">
             <Input
               value={companyQuery}
-              onChange={(e) => { setCompanyQuery(e.target.value); setSelectedCompany(null); setCompanyMenuOpen(true); }}
+              onChange={(e) => { setCompanyQuery(e.target.value); setCompanyMenuOpen(true); }}
               onFocus={() => setCompanyMenuOpen(true)}
-              placeholder="제약사명 입력 (자동완성)"
-              className={selectedCompany ? "border-blue-400 pr-9" : ""}
+              placeholder="제약사명 입력 → 자동완성에서 선택 (여러 개 추가 가능)"
             />
-            {selectedCompany && <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-blue-500" />}
           </div>
-          {companyMenuOpen && !selectedCompany && companyMatches.length > 0 && (
+          {companyMenuOpen && companyMatches.length > 0 && (
             <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto">
               {companyMatches.map((c) => (
-                <button key={c.name} type="button" onClick={() => pickCompany(c.name)}
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-b border-gray-50 last:border-0 text-gray-800">
-                  {c.name}
+                <button key={c.name} type="button" onClick={() => addCompany(c.name)}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-b border-gray-50 last:border-0 text-gray-800 flex items-center gap-1.5">
+                  <Plus className="w-3.5 h-3.5 text-gray-400 shrink-0" />{c.name}
                 </button>
               ))}
             </div>
           )}
         </div>
-        {selectedCompany && (
-          selectedHasFilter ? (
-            <p className="text-xs text-emerald-700 flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" />이 거래처에 필터링 기록이 있어 바로 매핑할 수 있어요.</p>
-          ) : (
-            <div className="flex items-center justify-between gap-2 p-2.5 bg-amber-50 border border-amber-200 rounded-md">
-              <p className="text-xs text-amber-800 flex items-center gap-1"><AlertCircle className="w-3.5 h-3.5 shrink-0" />필터링 기록이 없어요. 먼저 필터링을 요청하세요.</p>
-              <Button type="button" size="sm" variant="outline" onClick={requestFilter} disabled={filterRequesting}>
-                {filterRequesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Filter className="w-3.5 h-3.5 mr-1" />필터링 요청</>}
-              </Button>
-            </div>
-          )
+        {selectedCompanies.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 pt-0.5">
+            {selectedCompanies.map((n) => {
+              const ok = hasFilter(n);
+              return (
+                <span key={n} className={`inline-flex items-center gap-1 text-xs border px-2 py-1 rounded-full ${ok ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}>
+                  {ok ? <CheckCircle2 className="w-3 h-3 shrink-0" /> : <AlertCircle className="w-3 h-3 shrink-0" />}
+                  {n}
+                  {!ok && <span className="text-[10px] font-semibold">필터링 필요</span>}
+                  <button type="button" onClick={() => removeCompany(n)} className="hover:text-red-500 ml-0.5">×</button>
+                </span>
+              );
+            })}
+          </div>
+        )}
+        {companiesNeedingFilter.length > 0 && (
+          <div className="flex items-center justify-between gap-2 p-2.5 bg-amber-50 border border-amber-200 rounded-md">
+            <p className="text-xs text-amber-800 flex items-center gap-1"><AlertCircle className="w-3.5 h-3.5 shrink-0" />필터링 기록이 없는 제약사 {companiesNeedingFilter.length}개가 있어요.</p>
+            <Button type="button" size="sm" variant="outline" onClick={requestFilter} disabled={filterRequesting}>
+              {filterRequesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Filter className="w-3.5 h-3.5 mr-1" />선택 제약사 필터링 요청</>}
+            </Button>
+          </div>
         )}
         {filterMsg && <p className="text-xs text-emerald-700">{filterMsg}</p>}
       </div>
 
       {/* ③ 제출법인 */}
-      <div className={`space-y-1.5 ${!selectedCompany ? "opacity-50 pointer-events-none" : ""}`}>
+      <div className={`space-y-1.5 ${selectedCompanies.length === 0 ? "opacity-50 pointer-events-none" : ""}`}>
         <StepLabel n={3} done={!!stepDone(3)} icon={Building2} text="제출법인" />
         {me?.parent && (
           <label className="flex items-center gap-2 text-sm p-2.5 bg-blue-50 border border-blue-200 rounded-md cursor-pointer">
@@ -605,27 +662,27 @@ function StatusList({
   const [editForm, setEditForm] = useState(EMPTY_EDIT);
   const [editError, setEditError] = useState("");
   const [editSubmitting, setEditSubmitting] = useState(false);
+  const [search, setSearch] = useState("");
 
-  const grouped = useMemo(() => {
-    const entityMap = new Map<string, Map<string, SubmissionRoute[]>>();
-    for (const r of routes) {
-      if (!entityMap.has(r.submissionEntity)) entityMap.set(r.submissionEntity, new Map());
-      const cm = entityMap.get(r.submissionEntity)!;
-      if (!cm.has(r.clientName)) cm.set(r.clientName, []);
-      cm.get(r.clientName)!.push(r);
-    }
-    return Array.from(entityMap.entries())
-      .map(([entity, cm]) => ({
-        entity,
-        clients: Array.from(cm.entries())
-          .map(([clientName, rs]) => ({
-            clientName,
-            routes: rs.slice().sort((a, b) => normalizeCompanyName(a.companyName).localeCompare(normalizeCompanyName(b.companyName), "ko")),
-          }))
-          .sort((a, b) => a.clientName.localeCompare(b.clientName, "ko")),
-      }))
-      .sort((a, b) => normalizeCompanyName(a.entity).localeCompare(normalizeCompanyName(b.entity), "ko"));
-  }, [routes]);
+  // 통합 검색 — 병원명·제출법인·제약사 어디에 걸려도 매칭 (공백 제거 + 소문자 관대 비교)
+  const filteredRoutes = useMemo(() => {
+    const q = search.trim().replace(/\s+/g, "").toLowerCase();
+    if (!q) return routes;
+    const hit = (s: string) => s.replace(/\s+/g, "").toLowerCase().includes(q);
+    return routes.filter((r) => hit(r.clientName) || hit(r.submissionEntity) || hit(r.companyName));
+  }, [routes, search]);
+  const matchCount = filteredRoutes.length;
+
+  // 평면 정렬: 제출처 → 거래처 → 제약사 가나다순 (normalizeCompanyName 기준)
+  const sortedRows = useMemo(() => {
+    return filteredRoutes.slice().sort((a, b) => {
+      const e = normalizeCompanyName(a.submissionEntity).localeCompare(normalizeCompanyName(b.submissionEntity), "ko");
+      if (e !== 0) return e;
+      const c = a.clientName.localeCompare(b.clientName, "ko");
+      if (c !== 0) return c;
+      return normalizeCompanyName(a.companyName).localeCompare(normalizeCompanyName(b.companyName), "ko");
+    });
+  }, [filteredRoutes]);
 
   function startEdit(r: SubmissionRoute) {
     if (r.ownerId !== me?.id && role !== "ADMIN") { alert("본인이 등록한 제출처만 수정할 수 있어요."); return; }
@@ -673,10 +730,27 @@ function StatusList({
 
   return (
     <section className="bg-white border border-gray-200 rounded-lg p-5 space-y-4">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <ClipboardList className="w-5 h-5 text-gray-500" />
         <h2 className="text-base font-semibold text-gray-800">세팅된 매핑 현황</h2>
+        <div className="relative ml-auto w-full sm:w-72">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="병원·제출법인·제약사 통합검색"
+            className="pl-8 pr-8 h-9"
+          />
+          {search && (
+            <button type="button" onClick={() => setSearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 text-gray-400 hover:text-gray-600">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
       </div>
+      {search.trim() && !loading && (
+        <p className="text-xs text-gray-500">검색 결과 {matchCount}건</p>
+      )}
 
       {editingId && (
         <form onSubmit={submitEdit} className="grid grid-cols-1 md:grid-cols-2 gap-2 p-3 bg-amber-50 border border-amber-200 rounded-md">
@@ -698,57 +772,53 @@ function StatusList({
 
       {loading ? (
         <p className="text-sm text-gray-400">불러오는 중...</p>
-      ) : grouped.length === 0 ? (
-        <p className="text-sm text-gray-500">등록된 매핑이 없어요. 위 작업대에서 거래처·제약사·제출법인을 선택해 등록하세요.</p>
+      ) : sortedRows.length === 0 ? (
+        <p className="text-sm text-gray-500">
+          {search.trim() ? "검색 결과가 없어요." : "등록된 매핑이 없어요. 위 작업대에서 거래처·제약사·제출법인을 선택해 등록하세요."}
+        </p>
       ) : (
-        <div className="space-y-4">
-          {grouped.map((g) => (
-            <div key={g.entity} className="border border-gray-200 rounded-md overflow-hidden">
-              <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 flex items-center gap-1.5">
-                <Building2 className="w-4 h-4 text-blue-600 shrink-0" />
-                <span className="text-sm font-semibold text-gray-800">{g.entity}</span>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="text-xs text-gray-500 border-b border-gray-100">
-                    <tr>
-                      <th className="text-left px-3 py-2 font-medium">거래처</th>
-                      <th className="text-left px-3 py-2 font-medium">제약사</th>
-                      <th className="text-left px-3 py-2 font-medium">이메일</th>
-                      <th className="text-left px-3 py-2 font-medium">구분</th>
-                      <th className="text-right px-3 py-2 font-medium"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {g.clients.map((c) =>
-                      c.routes.map((r, idx) => {
-                        const canEdit = r.ownerId === me?.id || role === "ADMIN";
-                        return (
-                          <tr key={r.id} className="border-t border-gray-50 hover:bg-gray-50/60">
-                            <td className="px-3 py-2 text-gray-700 align-top">{idx === 0 ? c.clientName : <span className="text-transparent select-none">·</span>}</td>
-                            <td className="px-3 py-2 text-gray-800">{r.companyName}</td>
-                            <td className="px-3 py-2 text-gray-500">{r.submissionEmail || "—"}</td>
-                            <td className="px-3 py-2">
-                              <span className={`text-[10px] px-1.5 py-0.5 rounded ${r.requestType === "이관" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"}`}>{r.requestType}</span>
-                              {r.ownerId !== me?.id && <span className="ml-1 text-[10px] text-gray-400">(공용)</span>}
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              {canEdit ? (
-                                <div className="inline-flex gap-1">
-                                  <button onClick={() => startEdit(r)} className="p-1 text-gray-400 hover:text-blue-600"><Pencil className="w-4 h-4" /></button>
-                                  <button onClick={() => deleteRoute(r)} className="p-1 text-gray-400 hover:text-red-600"><Trash2 className="w-4 h-4" /></button>
-                                </div>
-                              ) : <span className="text-[10px] text-gray-400">조회만</span>}
-                            </td>
-                          </tr>
-                        );
-                      }),
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ))}
+        <div className="overflow-x-auto border border-gray-200 rounded-md">
+          <table className="w-full text-sm">
+            <thead className="text-xs text-gray-500 bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th className="text-left px-3 py-2 font-medium">제출처</th>
+                <th className="text-left px-3 py-2 font-medium">거래처</th>
+                <th className="text-left px-3 py-2 font-medium">제약사</th>
+                <th className="text-left px-3 py-2 font-medium">이메일</th>
+                <th className="text-left px-3 py-2 font-medium">구분</th>
+                <th className="text-right px-3 py-2 font-medium"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedRows.map((r) => {
+                const canEdit = r.ownerId === me?.id || role === "ADMIN";
+                return (
+                  <tr key={r.id} className="border-t border-gray-50 hover:bg-gray-50/60">
+                    <td className="px-3 py-2 text-gray-700">
+                      <span className="inline-flex items-center gap-1">
+                        <Building2 className="w-3.5 h-3.5 text-blue-500 shrink-0" />{r.submissionEntity}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-gray-700">{r.clientName}</td>
+                    <td className="px-3 py-2 text-gray-800">{r.companyName}</td>
+                    <td className="px-3 py-2 text-gray-500">{r.submissionEmail || "—"}</td>
+                    <td className="px-3 py-2">
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${r.requestType === "이관" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"}`}>{r.requestType}</span>
+                      {r.ownerId !== me?.id && <span className="ml-1 text-[10px] text-gray-400">(공용)</span>}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {canEdit ? (
+                        <div className="inline-flex gap-1">
+                          <button onClick={() => startEdit(r)} className="p-1 text-gray-400 hover:text-blue-600"><Pencil className="w-4 h-4" /></button>
+                          <button onClick={() => deleteRoute(r)} className="p-1 text-gray-400 hover:text-red-600"><Trash2 className="w-4 h-4" /></button>
+                        </div>
+                      ) : <span className="text-[10px] text-gray-400">조회만</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
       <p className="text-[11px] text-gray-400">
