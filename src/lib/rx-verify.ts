@@ -13,6 +13,17 @@
 
 export type RxRowStatus = "verified" | "mismatch" | "unreadable";
 
+// 이중 판독(Gemini + 클로바 OCR) 교차검증 결과. dual-read.ts 가 채워 넣는다.
+//   agree         — 클로바 숫자와 일치 (신뢰 상승)
+//   clova-adopted — Gemini 값이 검산 실패, 클로바 값으로 교체해 통과
+//   gemini-kept   — 불일치했으나 Gemini 값 유지 (검산 통과 또는 양쪽 실패)
+//   gemini-only   — 클로바에서 행을 못 찾아 Gemini 단독 결과 유지
+export type RxDualReadTag = "agree" | "clova-adopted" | "gemini-kept" | "gemini-only";
+export interface RxDualRead {
+  tag: RxDualReadTag;
+  detail: string;
+}
+
 export interface RxCheck {
   // 검산에 필요한 값이 모두 있어 실제로 검사를 수행했는가.
   applicable: boolean;
@@ -28,6 +39,7 @@ export interface RxRowVerification {
   checkB: RxCheck;               // 마스터 약가 검산
   unreadableCells: string[];     // 못 읽은 셀 키: "quantity" | "unitPrice" | "totalPrice" | "productName"
   masterPriceChecked: boolean;   // 검산 B 실시 여부 (false = 약가대조 미실시 / 해당없음)
+  dualRead?: RxDualRead | null;  // 클로바 이중 판독 교차검증 결과 (미실시/폴백이면 없음/gemini-only)
 }
 
 // 검산에 넣는 한 행. 숫자 셀은 판독 불가면 null (추정값 금지).

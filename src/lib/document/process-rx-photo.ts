@@ -19,6 +19,8 @@ import {
 import { runSelfValidateBatch, type SelfValidateMeta } from "@/lib/ai/gemini-self-validate";
 import { verifyRxRow } from "@/lib/rx-verify";
 import { regularizeBboxes } from "@/lib/bbox-regularize";
+import { readWithClova } from "@/lib/ai/clova-ocr";
+import { dualRead, type DualReadInfo, type DualReadStats } from "@/lib/dual-read";
 import { appendRxStats } from "@/lib/google/google-sheets-rx-append";
 import { fetchRateEntries } from "@/lib/rate-utils";
 import { computeRowQuality, checkTotalSum } from "@/lib/rx-quality-checks";
@@ -47,9 +49,10 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
   const baseOcr = (existing?.ocrData ?? {}) as Record<string, unknown>;
 
   try {
+    // Gemini + 클로바 OCR 병렬 시작 (둘 다 이미지만 필요).
+    const clovaPromise = readWithClova(base64, mimeType); // 실패해도 null
     const { data: rx } = await extractRxStatsFromImage(base64, mimeType);
-    // 행별 bbox/qtyBbox 격자 스냅 — 촘촘한 표에서 좌표가 옆 행을 물는 흔들림 보정.
-    rx.drugs = regularizeBboxes(rx.drugs);
+    const clova = await clovaPromise;
     if (rx.drugs.length === 0) {
       await prisma.prescriptionReport.update({
         where: { id: reportId },
@@ -71,6 +74,24 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
       fetchMasterByCodes(codes),
       fetchMasterByNamePrefixes(names),
     ]);
+
+    // 클로바 이중 판독 — 보험코드 앵커로 행 매칭 → 숫자 교차검증/채택 + 좌표 교체.
+    let dualReadStats: DualReadStats | null = null;
+    let dualInfos: DualReadInfo[] = [];
+    let lockedIndices: Set<number> | undefined;
+    if (clova) {
+      const masterUnitPriceByCode = new Map(
+        Array.from(masterByCode.entries()).map(([code, m]) => [code, m.price] as [string, number | null]),
+      );
+      const dr = dualRead(rx.drugs, clova, masterUnitPriceByCode);
+      rx.drugs = dr.drugs;
+      dualInfos = dr.infos;
+      lockedIndices = dr.lockedIndices;
+      dualReadStats = dr.stats;
+    }
+    // 행별 bbox/qtyBbox 격자 스냅 — 클로바 좌표 없는 행만 보정 (locked 행은 실측 유지).
+    rx.drugs = regularizeBboxes(rx.drugs, lockedIndices);
+
     const rateEntries = await fetchRateEntries(userId);
     const additionalByCompany = new Map(
       rateEntries.map((r) => [normCompany(r.companyName), r.additionalRate]),
@@ -123,6 +144,8 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
         productName: d.name,
         masterUnitPrice: match.unitPrice,
       });
+      // 클로바 이중 판독 교차검증 결과 병합.
+      verify.dualRead = dualInfos[idx] ?? null;
 
       // reviewReason 우선순위: 판독불가 > 검산불일치 > 코드-이름 불일치 > 자가검증(뒤에서 덮어씀)
       const initReviewReason: string | null =
@@ -257,6 +280,7 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
           manualCheckCount,
           totalSumCheck,
           companiesInPhoto,
+          dualReadStats,
           geminiMeta: {
             pharma: rx.pharma,
             period: rx.period,

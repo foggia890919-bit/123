@@ -56,7 +56,12 @@ function isValidBox(b: Bbox4 | null | undefined): b is Bbox4 {
   );
 }
 
-export function regularizeBboxes<T extends RegularizableRow>(rows: T[]): T[] {
+// lockedIndices: 이미 신뢰할 좌표(예: 클로바 실측)로 채워진 행. 격자 적합에는 참여(좋은 앵커)
+//   하지만 출력에서 스냅으로 덮어쓰지 않고 원본 좌표를 그대로 보존한다.
+export function regularizeBboxes<T extends RegularizableRow>(
+  rows: T[],
+  lockedIndices?: Set<number>,
+): T[] {
   const n = rows.length;
 
   // 유효 행 bbox 수집 (원본 배열 인덱스 유지 — 중간에 무효 행이 있어도 격자 슬롯은 그대로).
@@ -100,6 +105,9 @@ export function regularizeBboxes<T extends RegularizableRow>(rows: T[]): T[] {
   const qtyInset = QTY_INSET_FRAC * medH;
 
   return rows.map((row, i) => {
+    // 클로바 실측 좌표로 고정된 행은 스냅하지 않고 그대로 반환.
+    if (lockedIndices?.has(i)) return row;
+
     const b = row.bbox;
     const pred = predCenter(i);
 

@@ -4,6 +4,8 @@ import { fetchRateEntries } from "../rate-utils";
 import { computeRowQuality, checkTotalSum, type RowQualityChecks, type QualityCheck } from "../rx-quality-checks";
 import { verifyRxRow, type RxRowStatus, type RxRowVerification } from "../rx-verify";
 import { regularizeBboxes } from "../bbox-regularize";
+import { readWithClova } from "./clova-ocr";
+import { dualRead, type DualReadInfo, type DualReadStats } from "../dual-read";
 
 // stats/page.tsx 가 자체 재정의해서 쓰는 JSON 응답 형식. import 의존성 없음 — 응답 형식만 호환.
 // 핵심 필드: drugs[].{insuranceCode, companyName, productName, quantity (Field), unitPrice,
@@ -71,6 +73,8 @@ export interface FusionResultJson {
   totalSumCheck: QualityCheck;
   // 사진 안에 등장한 모든 제약사 (행별 companyName 의 set). N제약사 사진 진단용.
   companiesInPhoto: string[];
+  // 클로바 이중 판독 통계 — CLOVA 미설정/실패면 null (Gemini 단독 동작).
+  dualReadStats: DualReadStats | null;
   // 새 /stats/photo 페이지가 시트 append 시 카테고리/효능/처방횟수 원본 보존하려고 사용.
   // 기존 /stats 페이지는 이 필드 무시 (5컬럼만 보고 무관).
   rawDrugs: RxDrugRow[];
@@ -147,11 +151,10 @@ export async function extractStatsLikeFusion(
   mimeType: string,
   userId: string,
 ): Promise<FusionResultJson> {
-  // 1) Gemini 한 번 호출 — 사진 전체 표 추출.
+  // 1) Gemini + 클로바 OCR 을 병렬로 시작 (둘 다 이미지만 필요 — 지연 최소화).
+  const clovaPromise = readWithClova(base64, mimeType); // 실패해도 null (throw 안 함)
   const { data: rx, debug } = await extractRxStatsFromImage(base64, mimeType);
-
-  // 1-1) 행별 bbox/qtyBbox 격자 스냅 — 촘촘한 표에서 좌표가 옆 행을 물는 흔들림 보정.
-  rx.drugs = regularizeBboxes(rx.drugs);
+  const clova = await clovaPromise;
 
   // 2) 보험코드 9자리 일괄 조회 + 제품명 prefix 폴백 조회 (코드 매칭 실패 행 backfill).
   const codes = rx.drugs
@@ -162,6 +165,25 @@ export async function extractStatsLikeFusion(
     fetchMasterByCodes(codes),
     fetchMasterByNamePrefixes(names),
   ]);
+
+  // 2-1) 클로바 이중 판독 — 보험코드 앵커로 행 매칭 → 숫자 교차검증/채택 + 좌표 교체.
+  //   CLOVA 좌표가 있는 행은 lockedIndices 로 잠가 bbox-regularize 가 덮지 않게 한다.
+  let dualReadStats: DualReadStats | null = null;
+  let dualInfos: DualReadInfo[] = [];
+  let lockedIndices: Set<number> | undefined;
+  if (clova) {
+    const masterUnitPriceByCode = new Map(
+      Array.from(masterByCode.entries()).map(([code, m]) => [code, m.price] as [string, number | null]),
+    );
+    const dr = dualRead(rx.drugs, clova, masterUnitPriceByCode);
+    rx.drugs = dr.drugs; // 값·좌표 보정 반영
+    dualInfos = dr.infos;
+    lockedIndices = dr.lockedIndices;
+    dualReadStats = dr.stats;
+  }
+
+  // 2-2) 행별 bbox/qtyBbox 격자 스냅 — 클로바 좌표 없는 행만 보정 (locked 행은 실측 유지).
+  rx.drugs = regularizeBboxes(rx.drugs, lockedIndices);
 
   // 3) 사용자별 추가 수수료 (개인 → 부모법인 폴백) 한 번에 로드.
   const rateEntries = await fetchRateEntries(userId);
@@ -204,6 +226,8 @@ export async function extractStatsLikeFusion(
       productName: d.name,
       masterUnitPrice: match.unitPrice,
     });
+    // 클로바 이중 판독 결과를 검산에 병합 (교차검증 근거/채택 사유를 검수 UI 에 노출).
+    verify.dualRead = dualInfos[i] ?? null;
 
     // 0~100 가중 평균 — 마스터(50) + prefix(15) + 단가(20) + 매출(15)
     const { checks, score } = computeRowQuality({
@@ -313,6 +337,7 @@ export async function extractStatsLikeFusion(
     partialExtraction,
     totalSumCheck,
     companiesInPhoto,
+    dualReadStats,
     rawDrugs: rx.drugs,
     geminiMeta: {
       pharma: rx.pharma,
