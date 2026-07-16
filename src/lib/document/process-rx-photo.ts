@@ -17,6 +17,7 @@ import {
   type ValidationResult,
 } from "@/lib/medication-master-match";
 import { runSelfValidateBatch, type SelfValidateMeta } from "@/lib/ai/gemini-self-validate";
+import { verifyRxRow } from "@/lib/rx-verify";
 import { appendRxStats } from "@/lib/google/google-sheets-rx-append";
 import { fetchRateEntries } from "@/lib/rate-utils";
 import { computeRowQuality, checkTotalSum } from "@/lib/rx-quality-checks";
@@ -109,8 +110,23 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
           ? { geminiCompanyName: geminiCompany, masterCompanyName: masterCompany }
           : null;
 
+      // 이중 검산(산술 A + 마스터약가 B) → 3단계 상태 (verified / mismatch / unreadable).
+      // Gemini 원본 값(판독 불가면 null)을 넣어 unreadable 을 정확히 잡는다.
+      const verify = verifyRxRow({
+        quantity: d.quantity,
+        unitPrice: d.unitPrice,
+        totalPrice: d.totalPrice,
+        insuranceCode: d.code,
+        productName: d.name,
+        masterUnitPrice: match.unitPrice,
+      });
+
+      // reviewReason 우선순위: 판독불가 > 검산불일치 > 코드-이름 불일치 > 자가검증(뒤에서 덮어씀)
       const initReviewReason: string | null =
-        match.nameCodeMismatch && !match.nameAutoReplaced ? "nameCodeMismatch" : null;
+        verify.status === "unreadable" ? "unreadable"
+        : verify.status === "mismatch" ? "verifyMismatch"
+        : match.nameCodeMismatch && !match.nameAutoReplaced ? "nameCodeMismatch"
+        : null;
 
       return {
         insuranceCode: match.insuranceCode,
@@ -127,6 +143,8 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
         finalConfidence: score.overall,
         bboxYPercent: null,
         bbox: d.bbox,
+        rowStatus: verify.status,
+        verify,
         mismatch: match.nameCodeMismatch
           ? { kind: "code-name-mismatch" as const, ...match.nameCodeMismatch }
           : null,
@@ -152,7 +170,10 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
       );
       selfValidateMeta = batchResult.meta;
       for (const [idx, v] of batchResult.validations) {
-        finalDrugs[idx].reviewReason = "selfValidateMismatch";
+        // 이중 검산이 이미 unreadable/mismatch 로 잡은 행은 그 사유를 유지 (자가검증이 덮지 않음).
+        if (finalDrugs[idx].rowStatus === "verified") {
+          finalDrugs[idx].reviewReason = "selfValidateMismatch";
+        }
         finalDrugs[idx].validation = v;
       }
     } catch (selfErr) {

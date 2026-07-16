@@ -205,16 +205,30 @@ export default function ImagePanel({
               <img ref={imageElRef} src={imageUrl} alt="처방전"
                 style={{ width: "100%", display: "block" }}
                 className="rounded" draggable={false} />
-              {focusedIdx != null && manualDrugs[focusedIdx]?.bboxYPercent != null && (
-                <div
-                  className="absolute left-0 right-0 pointer-events-none border-y-2 border-yellow-400 bg-yellow-300/20 transition-all"
-                  style={{
-                    top: `${manualDrugs[focusedIdx]!.bboxYPercent}%`,
-                    height: "32px",
-                    transform: "translateY(-50%)",
-                  }}
-                />
-              )}
+              {/* 실좌표 bbox 하이라이트 — 포커스된 행의 사진 내 실제 위치를 상태색 박스로.
+                  verified=초록 / mismatch=빨강 / unreadable=주황. 옛 방식(균등 간격 바) 제거됨.
+                  실좌표 없는 행(직접 추가/옛 데이터)은 표시 안 함. */}
+              {focusedIdx != null && (() => {
+                const fd = manualDrugs[focusedIdx];
+                const b = fd?.bbox;
+                if (!b || !b.some((v) => v > 0)) return null;
+                const st = fd?.rowStatus;
+                const color = st === "mismatch" ? "#dc2626" : st === "unreadable" ? "#d97706" : "#16a34a";
+                return (
+                  <div
+                    className="absolute pointer-events-none rounded-sm transition-all"
+                    style={{
+                      left: `${b[0] * 100}%`,
+                      top: `${b[1] * 100}%`,
+                      width: `${(b[2] - b[0]) * 100}%`,
+                      height: `${(b[3] - b[1]) * 100}%`,
+                      border: `2px solid ${color}`,
+                      backgroundColor: `${color}26`,
+                      boxShadow: "0 0 0 2px rgba(255,255,255,0.45)",
+                    }}
+                  />
+                );
+              })()}
               {showDebug && editOcr && (
                 <svg className="absolute inset-0 pointer-events-none"
                   viewBox="0 0 100 100" preserveAspectRatio="none"

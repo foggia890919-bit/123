@@ -5,6 +5,8 @@ import { CheckCircle, AlertTriangle, ExternalLink, Trash2, ChevronRight, ArrowLe
 import { useRef } from "react";
 import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
+import { rowStatusLabel } from "@/lib/rx-verify";
+import type { RxRowStatus, RxRowVerification } from "@/lib/rx-verify";
 
 // AI 처방통계 사진 검수 페이지. 관리자/BIZ 가 사용자들의 업로드를 거래처×월 단위로
 // 그룹지어 검수, 사진 삭제, 제출완료 마킹.
@@ -90,6 +92,9 @@ interface ReportRow {
         revenueMatch?: { applicable?: boolean; matched?: boolean; detail?: string };
       };
       bbox?: [number, number, number, number];
+      // 이중검산 + 3단계 상태 (신규 업로드부터. 옛 데이터엔 없음 → optional).
+      rowStatus?: RxRowStatus;
+      verify?: RxRowVerification;
     }>;
     avgConfidence?: number;
     sheetUrl?: string;
@@ -154,6 +159,17 @@ function companyColor(name: string): string {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
   return palette[Math.abs(h) % palette.length];
+}
+
+// 이중검산에서 못 읽은 셀 키 → 한글. (verify.unreadableCells 표시용)
+function unreadableCellKo(key: string): string {
+  switch (key) {
+    case "quantity": return "수량";
+    case "unitPrice": return "단가";
+    case "totalPrice": return "금액";
+    case "productName": return "약품명";
+    default: return key;
+  }
 }
 
 export default function StatsReviewPage() {
@@ -433,6 +449,21 @@ export default function StatsReviewPage() {
     }, 0);
   }, [detail]);
 
+  // 이중검산 3단계 상태 집계 — 상단 요약/범례용. 옛 데이터(rowStatus 없음)는 legacy 로 분리.
+  const rowStatusSummary = useMemo(() => {
+    const s = { verified: 0, mismatch: 0, unreadable: 0, legacy: 0 };
+    if (!detail) return s;
+    for (const r of detail.reports) {
+      for (const d of r.ocrData?.finalDrugs ?? []) {
+        if (d.rowStatus === "verified") s.verified++;
+        else if (d.rowStatus === "mismatch") s.mismatch++;
+        else if (d.rowStatus === "unreadable") s.unreadable++;
+        else s.legacy++;
+      }
+    }
+    return s;
+  }, [detail]);
+
   // ── 상세 화면 ──
   if (selected && detail) {
     return (
@@ -487,6 +518,25 @@ export default function StatsReviewPage() {
             value={`${detail.metrics.selfValidateMismatchCount ?? 0}건`}
             color={(detail.metrics.selfValidateMismatchCount ?? 0) > 0 ? "amber" : "gray"} />
         </div>
+
+        {/* 이중검산 3단계 상태 요약 + 색상 범례 — 신규 업로드(rowStatus 있는 행)가 있을 때만 노출 */}
+        {(rowStatusSummary.verified + rowStatusSummary.mismatch + rowStatusSummary.unreadable) > 0 && (
+          <div className="flex items-center gap-2 flex-wrap text-[11px] bg-white border border-gray-200 rounded p-2">
+            <span className="font-semibold text-gray-600">이중검산 결과</span>
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-emerald-300 bg-emerald-50 text-emerald-800">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" /> 검증완료 {rowStatusSummary.verified}건
+            </span>
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-red-300 bg-red-50 text-red-800">
+              <span className="w-2 h-2 rounded-full bg-red-500" /> 검산 불일치 {rowStatusSummary.mismatch}건
+            </span>
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-800">
+              <span className="w-2 h-2 rounded-full bg-amber-500" /> 판독 불가 {rowStatusSummary.unreadable}건
+            </span>
+            {rowStatusSummary.legacy > 0 && (
+              <span className="text-gray-400">· 옛 데이터 {rowStatusSummary.legacy}건 (기존 색상 유지)</span>
+            )}
+          </div>
+        )}
 
         {/* 중복 의심 알림 — 사진 hash 는 다른데 약품 데이터가 70%+ 일치 */}
         {(detail.duplicateCount ?? 0) > 0 && (
@@ -783,6 +833,9 @@ interface EditableDrugRow {
     suggestion: { productName?: string; insuranceCode?: string; unitPrice?: number };
   } | null;
   bbox: [number, number, number, number];        // 사진 highlight overlay 좌표
+  // 이중검산 3단계 상태 (신규 업로드부터). 옛 데이터는 undefined → 기존 색상 로직 사용.
+  rowStatus?: RxRowStatus;
+  verify?: RxRowVerification;
 }
 
 function ReviewPhotoCard({
@@ -861,6 +914,9 @@ function ReviewPhotoCard({
             }
           : null,
         bbox,
+        // 신규 이중검산 필드 — 옛 데이터는 undefined 로 남아 하위호환(기존 색상) 처리됨.
+        rowStatus: d.rowStatus,
+        verify: d.verify,
       };
     })
   );
@@ -1304,7 +1360,12 @@ function ReviewPhotoCard({
                     옛 데이터엔 bbox 없어서 [0,0,0,0] → 안 그림. 새 업로드부터 작동. */}
                 {focusedIdx !== null && rows[focusedIdx]?.bbox && rows[focusedIdx].bbox.some((v) => v > 0) && (
                   <div
-                    className="absolute border-2 border-yellow-400 bg-yellow-300/20 pointer-events-none transition-all duration-150"
+                    className={`absolute border-2 pointer-events-none transition-all duration-150 ${
+                      rows[focusedIdx].rowStatus === "mismatch" ? "border-red-500 bg-red-400/20"
+                      : rows[focusedIdx].rowStatus === "unreadable" ? "border-amber-500 bg-amber-400/20"
+                      : rows[focusedIdx].rowStatus === "verified" ? "border-emerald-500 bg-emerald-400/20"
+                      : "border-yellow-400 bg-yellow-300/20"
+                    }`}
                     style={{
                       left: `${rows[focusedIdx].bbox[0] * 100}%`,
                       top: `${rows[focusedIdx].bbox[1] * 100}%`,
@@ -1360,17 +1421,50 @@ function ReviewPhotoCard({
                 //   단가 0 (마스터 미매칭)                       → yellow
                 const qualityBad = d.priceCheckBad || d.revenueCheckBad || d.prefixCheckBad;
                 const isSelfValidateMismatch = d.reviewReason === "selfValidateMismatch";
-                const rowClass = (d.hasMismatch || d.companyNameMismatch != null)
-                  ? "bg-red-50"
-                  : focusedIdx === i
-                  ? "bg-orange-50"
-                  : isSelfValidateMismatch
-                  ? "bg-amber-50 border-l-2 border-amber-400"
-                  : qualityBad
-                  ? "bg-yellow-50"
-                  : d.unitPrice === 0
-                  ? "bg-yellow-50"
-                  : "";
+                // 신규 이중검산 3단계 상태. rowStatus 없으면(옛 데이터) 기존 색상 로직으로 폴백.
+                const rs = d.rowStatus;
+                const hasRowStatus = rs === "verified" || rs === "mismatch" || rs === "unreadable";
+                let rowClass: string;
+                if (hasRowStatus) {
+                  // focused 최우선 → 겹치면 기존 focus 강조 유지.
+                  rowClass = focusedIdx === i
+                    ? "bg-orange-50 border-l-2 border-orange-400"
+                    : rs === "mismatch"
+                    ? "bg-red-50 border-l-2 border-red-500"
+                    : rs === "unreadable"
+                    ? "bg-amber-50 border-l-2 border-amber-500"
+                    : "border-l-2 border-emerald-400";   // verified — 옅은 초록 좌보더, 배경 없음
+                } else {
+                  // 옛 데이터 하위호환 — 기존 색상 로직 그대로.
+                  rowClass = (d.hasMismatch || d.companyNameMismatch != null)
+                    ? "bg-red-50"
+                    : focusedIdx === i
+                    ? "bg-orange-50"
+                    : isSelfValidateMismatch
+                    ? "bg-amber-50 border-l-2 border-amber-400"
+                    : qualityBad
+                    ? "bg-yellow-50"
+                    : d.unitPrice === 0
+                    ? "bg-yellow-50"
+                    : "";
+                }
+                // 상태 배지 (제품명 왼쪽) — mismatch/unreadable 은 눈에 띄게, verified+약가미대조는 회색 부가.
+                let statusBadge: { text: string; cls: string; title: string } | null = null;
+                if (rs === "mismatch") {
+                  const dt = [
+                    d.verify?.checkA.applicable && !d.verify.checkA.pass ? `검산A: ${d.verify.checkA.detail}` : null,
+                    d.verify?.checkB.applicable && !d.verify.checkB.pass ? `검산B: ${d.verify.checkB.detail}` : null,
+                  ].filter(Boolean).join("\n");
+                  statusBadge = { text: rowStatusLabel(rs), cls: "text-red-800 bg-red-100 border border-red-300", title: dt || rowStatusLabel(rs) };
+                } else if (rs === "unreadable") {
+                  const cells = (d.verify?.unreadableCells ?? []).map(unreadableCellKo).join(", ");
+                  statusBadge = { text: rowStatusLabel(rs), cls: "text-amber-900 bg-amber-100 border border-amber-300", title: cells ? `판독 불가 셀: ${cells}` : rowStatusLabel(rs) };
+                } else if (rs === "verified" && d.verify && !d.verify.masterPriceChecked) {
+                  statusBadge = { text: "약가대조 미실시", cls: "text-gray-600 bg-gray-100 border border-gray-300", title: "보험코드 미판독 또는 마스터 약가 없음 — 산술검산만 통과" };
+                }
+                // 판독 불가 셀 개별 입력칸 강조용.
+                const unreadableSet = new Set(d.verify?.unreadableCells ?? []);
+                const cellUnreadableCls = (key: string) => unreadableSet.has(key) ? " bg-amber-100 border-amber-400" : "";
                 const tooltipParts: string[] = [];
                 if (d.finalConfidence > 0) tooltipParts.push(`점수 ${d.finalConfidence}/100`);
                 if (d.prefixCheckBad) tooltipParts.push("약품명 prefix 불일치");
@@ -1384,7 +1478,8 @@ function ReviewPhotoCard({
                 const matchesReviewFilter = !reviewOnly || isSelfValidateMismatch;
                 const hiddenByFilter = !(matchesPriceFilter && matchesReviewFilter);
                 return (
-                  <tr key={i} className={`border-t ${rowClass} ${hiddenByFilter ? "hidden" : ""}`}>
+                  <tr key={i} onClick={() => setFocusedIdx(i)}
+                    className={`border-t ${rowClass} ${hiddenByFilter ? "hidden" : ""}`}>
                     <td className="px-1 py-0">
                       <div className="flex items-center gap-1">
                         <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${scoreDotClass(d.finalConfidence)}`}
@@ -1440,12 +1535,19 @@ function ReviewPhotoCard({
                                 onChange={(e) => updateRow(i, { productName: e.target.value, nameAutoReplaced: false })}
                                 onFocus={() => setFocusedIdx(i)}
                                 onKeyDown={(e) => handleKeyDown(e, i, "productName")}
-                                title={titleIfAdmin(autoReplaceTooltip ?? reviewTooltip)}
-                                className={`w-full px-1 py-0.5 border rounded text-[11px] ${
+                                title={titleIfAdmin(autoReplaceTooltip ?? reviewTooltip ?? statusBadge?.title)}
+                                className={`w-full px-1 py-0.5 border rounded text-[11px]${statusBadge ? " pl-16" : ""} ${
                                   showAiBadge ? "pr-7 bg-blue-50 border-blue-300"
                                   : showReviewBadge ? "pr-12 bg-amber-50 border-amber-400"
                                   : ""
-                                }`}/>
+                                }${cellUnreadableCls("productName")}`}/>
+                              {/* 이중검산 상태 배지 — 좌측(제품명 앞). 우측 AI/검증대상 배지와 안 겹침. */}
+                              {statusBadge && (
+                                <span title={titleIfAdmin(statusBadge.title)}
+                                  className={`absolute left-0.5 top-1/2 -translate-y-1/2 text-[8px] font-bold px-1 py-0.5 rounded pointer-events-none whitespace-nowrap ${statusBadge.cls}`}>
+                                  {statusBadge.text}
+                                </span>
+                              )}
                               {showAiBadge && (
                                 <span className="absolute right-0.5 top-1/2 -translate-y-1/2 text-[8px] font-bold text-blue-700 bg-blue-100 px-1 py-0.5 rounded pointer-events-none">AI</span>
                               )}
@@ -1463,7 +1565,7 @@ function ReviewPhotoCard({
                         onChange={(e) => updateRow(i, { quantity: e.target.value })}
                         onFocus={() => setFocusedIdx(i)}
                         onKeyDown={(e) => handleKeyDown(e, i, "quantity")}
-                        className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
+                        className={`w-full px-1 py-0.5 border rounded text-[11px] text-right${cellUnreadableCls("quantity")}`}/>
                     </td>
                     <td className="px-1 py-0">
                       <div className="flex items-center gap-1">
@@ -1492,7 +1594,7 @@ function ReviewPhotoCard({
                           onChange={(e) => updateRow(i, { unitPrice: Number(e.target.value) })}
                           onFocus={() => setFocusedIdx(i)}
                           onKeyDown={(e) => handleKeyDown(e, i, "unitPrice")}
-                          className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
+                          className={`w-full px-1 py-0.5 border rounded text-[11px] text-right${cellUnreadableCls("unitPrice")}`}/>
                       </div>
                     </td>
                     <td className="px-1 py-0">
@@ -1501,7 +1603,7 @@ function ReviewPhotoCard({
                         onChange={(e) => updateRow(i, { totalPrice: Number(e.target.value), totalPriceManual: true })}
                         onFocus={() => setFocusedIdx(i)}
                         onKeyDown={(e) => handleKeyDown(e, i, "totalPrice")}
-                        className="w-full px-1 py-0.5 border rounded text-[11px] text-right"/>
+                        className={`w-full px-1 py-0.5 border rounded text-[11px] text-right${cellUnreadableCls("totalPrice")}`}/>
                     </td>
                     <td className="px-1 py-0.5 text-center">
                       <button onClick={() => removeRow(i)} className="text-gray-300 hover:text-red-500" title="행 삭제">

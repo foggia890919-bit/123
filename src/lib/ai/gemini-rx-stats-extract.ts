@@ -7,10 +7,14 @@ export interface RxDrugRow {
   // 한 사진에 여러 제약사 약품이 섞인 경우 (실제로 흔함) 행별로 분리 가능.
   // 표에 컬럼 없으면 "" — 마스터 매칭이 채워줌.
   companyName: string;
-  quantity: number;      // 총사용량. 소수 허용 (시럽 등)
+  // 숫자 셀 규칙:
+  //   - 컬럼이 아예 없음 → 0 (해당없음)
+  //   - 컬럼은 있으나 흐림/반사/잘림으로 "판독 불가" → null  (추정값 절대 금지)
+  // null 이 하나라도 있는 행은 검수에서 "판독 불가(unreadable)" 로 분류됨.
+  quantity: number | null;      // 총사용량. 소수 허용 (시럽 등)
   prescriptions: number; // 처방횟수
-  unitPrice: number;     // 단가. 모르면 0
-  totalPrice: number;    // 총금액. 모르면 0
+  unitPrice: number | null;     // 단가. 없는 컬럼이면 0, 못 읽으면 null
+  totalPrice: number | null;    // 총금액. 없는 컬럼이면 0, 못 읽으면 null
   category: string;      // 자유 형식 분류 "만성질환/고혈압" 등
   efficacy: string;      // 짧은 효능 한 줄
   // bbox: 사진 내 행 위치 [x1, y1, x2, y2] 비율 (0~1).
@@ -57,10 +61,10 @@ const DRUG_ITEM_SCHEMA = {
       type: Type.STRING,
       description: "이 약품 행의 제약사명. 표에 제약사 컬럼이 있으면 그 값을 그대로 (예: '한미약품', '대원제약'). 컬럼 없으면 빈 문자열.",
     },
-    quantity: { type: Type.NUMBER, description: "총사용량 컬럼 값. 소수 허용." },
+    quantity: { type: Type.NUMBER, nullable: true, description: "총사용량 컬럼 값. 소수 허용. 컬럼 없으면 0, 값이 있으나 판독 불가면 null (추정 금지)." },
     prescriptions: { type: Type.INTEGER, description: "처방횟수 컬럼 값." },
-    unitPrice: { type: Type.NUMBER, description: "단가(원). 콤마 제거한 순수 숫자. 모르면 0." },
-    totalPrice: { type: Type.NUMBER, description: "총금액(원). 콤마 제거한 순수 숫자. 모르면 0." },
+    unitPrice: { type: Type.NUMBER, nullable: true, description: "단가(원). 콤마 제거한 순수 숫자. 컬럼 없으면 0, 값이 있으나 판독 불가면 null (추정 금지)." },
+    totalPrice: { type: Type.NUMBER, nullable: true, description: "총금액(원). 콤마 제거한 순수 숫자. 컬럼 없으면 0, 값이 있으나 판독 불가면 null (추정 금지)." },
     category: {
       type: Type.STRING,
       description: "약품을 자유 형식으로 분류. 예: '만성질환/고혈압', '만성질환/고지혈증', '근골격/통풍', '소화기/PPI'. enum 강요 안 함.",
@@ -117,7 +121,11 @@ function buildPrompt(): string {
     "3-1) **각 약품 행마다 companyName 필드에 그 행의 제약사명을 적는다.** 표에 제약사 컬럼이 있으면 그 값 그대로. 컬럼 없거나 빈 셀이면 빈 문자열. 한 사진에 여러 제약사가 섞이는 경우(EMR 처방통계에서 흔함) 각 행이 자신의 제약사를 갖도록.",
     "4) 각 약품에 대해 medicine 지식 기반으로 category(자유 형식, 예: '만성질환/고혈압')와 efficacy(짧은 효능)를 부여.",
     "5) 잘 모르는 약품은 category='기타', efficacy='' 로. 추측 환각 금지.",
-    "6) 모든 숫자는 콤마 제거한 순수 숫자. 단가/금액 없으면 0.",
+    "6) 모든 숫자는 콤마 제거한 순수 숫자.",
+    "6-1) **판독 불가 셀은 추측하지 말고 null 을 내라.** 셀 규칙을 엄격히 구분:",
+    "     · 표에 그 컬럼이 아예 없다 (예: 단가/금액 열이 없는 EMR) → 0.",
+    "     · 컬럼은 있는데 흐림·반사·잘림·손가림으로 숫자를 확신할 수 없다 → null. 절대 비슷한 값으로 채우지 말 것.",
+    "     · 이 규칙은 quantity(수량)·unitPrice(단가)·totalPrice(금액) 에 적용. 확실히 읽은 값만 숫자로.",
     "7) period 는 반드시 YYYY-MM 형식 (예: '2026-04'). 사진에 '2026년 4월' 로 보여도 변환.",
     "8) **각 약품 행의 사진 내 위치 bbox**: [x1, y1, x2, y2] 비율 (0~1). 사진 좌상단이 (0,0), 우하단이 (1,1). 그 약품 행 전체(왼쪽 보험코드부터 오른쪽 금액 끝까지)를 감싸는 사각형. 못 잡으면 [0,0,0,0].",
     "",
@@ -146,6 +154,20 @@ function toNum(v: unknown): number {
 function toInt(v: unknown): number {
   const n = toNum(v);
   return Math.max(0, Math.floor(n));
+}
+
+// 숫자 셀 파싱 — Gemini 가 판독 불가로 null 을 낸 셀은 null 을 그대로 보존한다 (추정값 금지).
+// null/undefined → null.  빈 문자열 / 숫자 없는 문자열 → null.  그 외 → 숫자.
+function toNumOrNull(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string") {
+    const cleaned = v.replace(/[^\d.-]/g, "");
+    if (cleaned === "" || cleaned === "-" || cleaned === ".") return null;
+    const n = parseFloat(cleaned);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
 }
 
 // "2026-04" / "2026.04" / "2026년 4월" / "Apr 2026" 등을 YYYY-MM 으로 정규화.
@@ -191,10 +213,10 @@ function normalizeDrug(d: Record<string, unknown>): RxDrugRow {
     name: String(d.name ?? "").trim(),
     code: String(d.code ?? "").replace(/\D/g, ""),
     companyName: String(d.companyName ?? "").trim(),
-    quantity: toNum(d.quantity),
+    quantity: toNumOrNull(d.quantity),
     prescriptions: toInt(d.prescriptions),
-    unitPrice: toNum(d.unitPrice),
-    totalPrice: toNum(d.totalPrice),
+    unitPrice: toNumOrNull(d.unitPrice),
+    totalPrice: toNumOrNull(d.totalPrice),
     category: String(d.category ?? "").trim(),
     efficacy: String(d.efficacy ?? "").trim(),
     bbox,

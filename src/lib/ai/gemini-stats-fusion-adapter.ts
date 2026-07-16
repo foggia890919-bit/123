@@ -2,6 +2,7 @@ import { extractRxStatsFromImage, type RxExtractResult, type RxDrugRow } from ".
 import { fetchMasterByCodes, fetchMasterByNamePrefixes, matchMedication, type MergedDrug } from "../medication-master-match";
 import { fetchRateEntries } from "../rate-utils";
 import { computeRowQuality, checkTotalSum, type RowQualityChecks, type QualityCheck } from "../rx-quality-checks";
+import { verifyRxRow, type RxRowStatus, type RxRowVerification } from "../rx-verify";
 
 // stats/page.tsx 가 자체 재정의해서 쓰는 JSON 응답 형식. import 의존성 없음 — 응답 형식만 호환.
 // 핵심 필드: drugs[].{insuranceCode, companyName, productName, quantity (Field), unitPrice,
@@ -39,6 +40,9 @@ interface FusionDrug {
   nameAutoReplaced: boolean;
   // Gemini bbox [x1, y1, x2, y2] 비율 0~1 — 검수 페이지에서 표 행 ↔ 사진 위치 매칭용
   bbox: [number, number, number, number];
+  // 이중 검산(산술 A + 마스터약가 B) 3단계 상태 — 검수 UI 색상/클릭 하이라이트용.
+  rowStatus: RxRowStatus;
+  verify: RxRowVerification;
 }
 
 export interface FusionResultJson {
@@ -184,6 +188,17 @@ export async function extractStatsLikeFusion(
     const hasQty = (d.quantity ?? 0) > 0;
     const finalUnitPrice = match.unitPrice ?? (d.unitPrice || null);
 
+    // 이중 검산 — 검산 A(단가×수량=금액) + 검산 B(마스터 공식약가 대조/역산). 3단계 상태 산출.
+    // Gemini 원본 값(판독 불가면 null)을 그대로 넣어 unreadable 을 정확히 잡는다.
+    const verify = verifyRxRow({
+      quantity: d.quantity,
+      unitPrice: d.unitPrice,
+      totalPrice: d.totalPrice,
+      insuranceCode: d.code,
+      productName: d.name,
+      masterUnitPrice: match.unitPrice,
+    });
+
     // 0~100 가중 평균 — 마스터(50) + prefix(15) + 단가(20) + 매출(15)
     const { checks, score } = computeRowQuality({
       matchedMedicationId: match.matchedMedicationId,
@@ -245,6 +260,8 @@ export async function extractStatsLikeFusion(
       originalProductName: match.originalProductName,
       nameAutoReplaced: match.nameAutoReplaced,
       bbox: d.bbox,
+      rowStatus: verify.status,
+      verify,
     };
   });
 

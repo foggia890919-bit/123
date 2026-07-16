@@ -1,5 +1,8 @@
 // Types shared across stats components
 
+import type { RxRowStatus, RxRowVerification } from "@/lib/rx-verify";
+export type { RxRowStatus, RxRowVerification } from "@/lib/rx-verify";
+
 export interface OcrField { value: string; confidence: number }
 export interface DrugDebug {
   anchorXPct: number;
@@ -20,6 +23,11 @@ export interface FusionDrug {
   finalConfidence: number;
   manualCheck: boolean;
   bboxYPercent: number | null;
+  // Gemini 실좌표 bbox [x1,y1,x2,y2] (0~1). 사진 위 실위치 하이라이트용. 옛 데이터는 없을 수 있음.
+  bbox?: [number, number, number, number];
+  // 이중 검산 3단계 상태 (verified/mismatch/unreadable) + 상세.
+  rowStatus?: RxRowStatus;
+  verify?: RxRowVerification;
   debug: DrugDebug | null;
   mismatch?: {
     kind: "code-name-mismatch";
@@ -148,7 +156,12 @@ export interface ManualDrug {
   commissionRate: number | null;
   additionalRate: number | null;
   matchedMedicationId: string | null;
-  bboxYPercent: number | null;   // 이미지 내 행 Y 위치 (%) — 셀 포커스 시 이미지 자동 추적용
+  bboxYPercent: number | null;   // 이미지 내 행 Y 위치 (%) — 옛 방식(폴백)
+  // 실좌표 bbox — 사진 위 실위치 하이라이트 + 자동 스크롤용. 행 이동/재정렬해도 이 행에 붙어 다님.
+  bbox?: [number, number, number, number] | null;
+  // OCR 시점 3단계 검산 상태 스냅샷 — 행 색상/배지용. 사용자가 직접 추가한 행은 null/없음.
+  rowStatus?: RxRowStatus | null;
+  verify?: RxRowVerification | null;
 }
 export interface UserClient {
   id: string; clientName: string; bizNumber: string; approved: boolean;
@@ -165,5 +178,5 @@ export interface AutocompleteOption {
 }
 
 export function emptyManualDrug(): ManualDrug {
-  return { insuranceCode: "", companyName: "", productName: "", quantity: "", unitPrice: null, commissionRate: null, additionalRate: null, matchedMedicationId: null, bboxYPercent: null };
+  return { insuranceCode: "", companyName: "", productName: "", quantity: "", unitPrice: null, commissionRate: null, additionalRate: null, matchedMedicationId: null, bboxYPercent: null, bbox: null, rowStatus: null, verify: null };
 }

@@ -124,15 +124,21 @@ export default function ManualDrugsPanel({
 
   function handleManualFocus(idx: number) {
     setFocusedIdx(idx);
-    const yPercent = manualDrugs[idx]?.bboxYPercent ?? null;
+    const row = manualDrugs[idx];
     const scrollEl = imageScrollRef.current;
     const imgEl = imageElRef.current;
     if (!scrollEl || !imgEl) return;
     const imgRect = imgEl.getBoundingClientRect();
     const scrollRect = scrollEl.getBoundingClientRect();
     const imgTopInScroll = imgRect.top - scrollRect.top + scrollEl.scrollTop;
-    if (yPercent != null) {
-      const targetY = imgTopInScroll + (imgEl.clientHeight * yPercent) / 100;
+    const bbox = row?.bbox;
+    if (bbox && bbox.some((v) => v > 0)) {
+      // 실좌표 bbox 세로 중심으로 스크롤 (정확한 위치)
+      const centerYFrac = (bbox[1] + bbox[3]) / 2;
+      const targetY = imgTopInScroll + imgEl.clientHeight * centerYFrac;
+      scrollEl.scrollTo({ top: Math.max(0, targetY - scrollEl.clientHeight / 2), behavior: "smooth" });
+    } else if (row?.bboxYPercent != null) {
+      const targetY = imgTopInScroll + (imgEl.clientHeight * row.bboxYPercent) / 100;
       scrollEl.scrollTo({ top: Math.max(0, targetY - scrollEl.clientHeight / 2), behavior: "smooth" });
     } else if (manualDrugs.length) {
       const targetY = imgTopInScroll + (idx / manualDrugs.length) * imgEl.clientHeight;
@@ -231,11 +237,40 @@ export default function ManualDrugsPanel({
   })();
   const totalFee = filledManualDrugs.reduce((sum, d) => sum + rowCommission(d), 0);
 
+  // 사진 이중 검산 3단계 상태 집계 (OCR 로 채워진 행만 rowStatus 를 가짐)
+  const statusCounts = manualDrugs.reduce(
+    (acc, d) => {
+      if (d.rowStatus === "verified") acc.verified++;
+      else if (d.rowStatus === "mismatch") acc.mismatch++;
+      else if (d.rowStatus === "unreadable") acc.unreadable++;
+      return acc;
+    },
+    { verified: 0, mismatch: 0, unreadable: 0 },
+  );
+
+  // 못 읽은 셀 키 → 한글 라벨
+  const unreadableCellKo: Record<string, string> = {
+    quantity: "수량", unitPrice: "단가", totalPrice: "금액", productName: "약품명",
+  };
+
   return (
     <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col max-h-[80vh]">
       <div className="border-b border-gray-100 px-3 h-[44px] flex items-center gap-2 overflow-x-auto">
         <span className="text-xs font-semibold text-gray-700">② 최종 수정</span>
         <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{filledManualDrugs.length}건</span>
+        {(statusCounts.verified + statusCounts.mismatch + statusCounts.unreadable) > 0 && (
+          <span className="flex items-center gap-1" title="사진 이중 검산 결과 — 초록: 검증완료 / 빨강: 검산 불일치 / 주황: 판독 불가. 행을 클릭하면 사진의 해당 위치가 강조됩니다.">
+            {statusCounts.verified > 0 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-300 bg-emerald-50 text-emerald-700 font-medium">검증 {statusCounts.verified}</span>
+            )}
+            {statusCounts.mismatch > 0 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border border-red-300 bg-red-50 text-red-700 font-semibold">불일치 {statusCounts.mismatch}</span>
+            )}
+            {statusCounts.unreadable > 0 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-700 font-semibold">판독불가 {statusCounts.unreadable}</span>
+            )}
+          </span>
+        )}
         {isClientUnnapproved && (
           <span className="text-xs bg-yellow-100 text-yellow-700 border border-yellow-300 px-1.5 py-0.5 rounded font-semibold">정산서 미반영</span>
         )}
@@ -335,8 +370,33 @@ export default function ManualDrugsPanel({
             ) : manualDrugs.map((d, i) => {
               const aiPair = editOcr?.drugs[i];
               const lowConf = aiPair?.manualCheck;
+              // 이중 검산 3단계 상태 — 행에 붙은 스냅샷 우선(재정렬해도 유지), 없으면 OCR 페어.
+              const st = d.rowStatus ?? aiPair?.rowStatus ?? null;
+              const v = d.verify ?? aiPair?.verify ?? null;
+              const unreadableSet = new Set(v?.unreadableCells ?? []);
+              const statusBg = st === "mismatch" ? "bg-red-50" : st === "unreadable" ? "bg-amber-50" : "";
+              const statusBorder = st === "mismatch" ? "border-l-2 border-l-red-400"
+                : st === "unreadable" ? "border-l-2 border-l-amber-400"
+                : st === "verified" ? "border-l-2 border-l-emerald-400" : "";
+              const rowFallbackBg = !st && lowConf ? "bg-red-50/50" : "";
+              const dotColor = st === "mismatch" ? "bg-red-500"
+                : st === "unreadable" ? "bg-amber-500"
+                : st === "verified" ? "bg-emerald-500" : "";
+              const failDetails = [
+                v?.checkA?.applicable && v?.checkA?.pass === false ? v?.checkA?.detail : "",
+                v?.checkB?.applicable && v?.checkB?.pass === false ? v?.checkB?.detail : "",
+              ].filter(Boolean).join(" / ");
+              const rowTitle = st === "mismatch"
+                ? `검산 불일치 — ${failDetails}`
+                : st === "unreadable"
+                ? `판독 불가 셀: ${(v?.unreadableCells ?? []).map((c) => unreadableCellKo[c] ?? c).join(", ")} — 추정 없이 비워둠. 사진 확인 후 직접 입력하세요.`
+                : st === "verified"
+                ? (v && v.masterPriceChecked ? "검증완료 (산술 + 마스터 약가 대조 통과)" : "검증완료 (산술 통과 · 약가대조 미실시)")
+                : "";
               return (
-                <tr key={i} className={`border-b border-gray-100 h-9 ${focusedIdx === i ? "bg-yellow-50" : lowConf ? "bg-red-50/50" : ""}`}>
+                <tr key={i}
+                  title={rowTitle || undefined}
+                  className={`border-b border-gray-100 h-9 ${statusBorder} ${focusedIdx === i ? "bg-yellow-50" : (statusBg || rowFallbackBg)}`}>
                   <td className="px-1 align-middle text-center">
                     <select value={i}
                       onChange={(e) => moveManualRow(i, parseInt(e.target.value, 10))}
@@ -367,7 +427,9 @@ export default function ManualDrugsPanel({
                       className="w-full h-7 border border-gray-300 rounded px-1.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
                   </td>
                   <td className="px-1 align-middle">
-                    <div className="relative">
+                    <div className="flex items-center gap-1">
+                      {st && <span className={`shrink-0 w-2 h-2 rounded-full ${dotColor}`} title={rowTitle || undefined} />}
+                      <div className="relative flex-1">
                       <input value={d.productName}
                         ref={(el) => { manualInputRefs.current[`${i}:productName`] = el; }}
                         onFocus={() => { handleManualFocus(i); setAutocompleteIdx(i); }}
@@ -378,8 +440,8 @@ export default function ManualDrugsPanel({
                         }}
                         onKeyDown={(e) => handleManualKey(e, i, "productName")}
                         onChange={(e) => { updateManualField(i, "productName", e.target.value); setAutocompleteIdx(i); }}
-                        placeholder="제품명"
-                        className="w-full h-7 border border-gray-300 rounded px-1.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                        placeholder={unreadableSet.has("productName") ? "판독불가 — 직접 입력" : "제품명"}
+                        className={`w-full h-7 border rounded px-1.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400 ${unreadableSet.has("productName") ? "border-amber-400 bg-amber-50 placeholder-amber-500" : "border-gray-300"}`} />
                       {autocompleteIdx === i && autocompleteOptions.length > 0 && (
                         <div data-ac-dropdown className="absolute z-40 left-0 right-0 top-full mt-0.5 bg-white border border-gray-300 rounded shadow-lg max-h-56 overflow-y-auto">
                           {autocompleteOptions.map((opt, j) => (
@@ -394,6 +456,7 @@ export default function ManualDrugsPanel({
                           ))}
                         </div>
                       )}
+                      </div>
                     </div>
                   </td>
                   <td className="px-1 align-middle">
@@ -402,8 +465,8 @@ export default function ManualDrugsPanel({
                       onFocus={() => handleManualFocus(i)}
                       onKeyDown={(e) => handleManualKey(e, i, "quantity")}
                       onChange={(e) => updateManualField(i, "quantity", e.target.value)}
-                      placeholder="0"
-                      className="w-full h-7 border border-gray-300 rounded px-1.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                      placeholder={unreadableSet.has("quantity") ? "판독불가" : "0"}
+                      className={`w-full h-7 border rounded px-1.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400 ${unreadableSet.has("quantity") ? "border-amber-400 bg-amber-50 placeholder-amber-500" : "border-gray-300"}`} />
                   </td>
                   <td className="px-1 align-middle text-center">
                     <button onClick={() => removeManualRow(i)}

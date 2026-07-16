@@ -216,6 +216,9 @@ export default function StatsPage() {
           additionalRate: d.additionalRate,
           matchedMedicationId: d.matchedMedicationId,
           bboxYPercent: d.bboxYPercent,
+          bbox: d.bbox ?? null,
+          rowStatus: d.rowStatus ?? null,
+          verify: d.verify ?? null,
         }));
         setManualDrugs(paired.length ? paired : [emptyManualDrug()]);
       } else if (manualInitMode === "lastMonth" && lastMonth?.drugs.length) {
