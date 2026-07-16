@@ -18,6 +18,7 @@ import {
 } from "@/lib/medication-master-match";
 import { runSelfValidateBatch, type SelfValidateMeta } from "@/lib/ai/gemini-self-validate";
 import { verifyRxRow } from "@/lib/rx-verify";
+import { regularizeBboxes } from "@/lib/bbox-regularize";
 import { appendRxStats } from "@/lib/google/google-sheets-rx-append";
 import { fetchRateEntries } from "@/lib/rate-utils";
 import { computeRowQuality, checkTotalSum } from "@/lib/rx-quality-checks";
@@ -47,6 +48,8 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
 
   try {
     const { data: rx } = await extractRxStatsFromImage(base64, mimeType);
+    // 행별 bbox/qtyBbox 격자 스냅 — 촘촘한 표에서 좌표가 옆 행을 물는 흔들림 보정.
+    rx.drugs = regularizeBboxes(rx.drugs);
     if (rx.drugs.length === 0) {
       await prisma.prescriptionReport.update({
         where: { id: reportId },

@@ -3,6 +3,7 @@ import { fetchMasterByCodes, fetchMasterByNamePrefixes, matchMedication, type Me
 import { fetchRateEntries } from "../rate-utils";
 import { computeRowQuality, checkTotalSum, type RowQualityChecks, type QualityCheck } from "../rx-quality-checks";
 import { verifyRxRow, type RxRowStatus, type RxRowVerification } from "../rx-verify";
+import { regularizeBboxes } from "../bbox-regularize";
 
 // stats/page.tsx 가 자체 재정의해서 쓰는 JSON 응답 형식. import 의존성 없음 — 응답 형식만 호환.
 // 핵심 필드: drugs[].{insuranceCode, companyName, productName, quantity (Field), unitPrice,
@@ -148,6 +149,9 @@ export async function extractStatsLikeFusion(
 ): Promise<FusionResultJson> {
   // 1) Gemini 한 번 호출 — 사진 전체 표 추출.
   const { data: rx, debug } = await extractRxStatsFromImage(base64, mimeType);
+
+  // 1-1) 행별 bbox/qtyBbox 격자 스냅 — 촘촘한 표에서 좌표가 옆 행을 물는 흔들림 보정.
+  rx.drugs = regularizeBboxes(rx.drugs);
 
   // 2) 보험코드 9자리 일괄 조회 + 제품명 prefix 폴백 조회 (코드 매칭 실패 행 backfill).
   const codes = rx.drugs
