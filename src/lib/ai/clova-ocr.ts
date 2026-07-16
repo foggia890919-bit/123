@@ -113,7 +113,12 @@ function readImageSize(buf: Buffer): { w: number; h: number } | null {
 }
 
 // 실패 시 안전 폴백: 절대 throw 하지 않고 null.
-export async function readWithClova(base64: string, mimeType: string): Promise<ClovaOcrResult | null> {
+// timeoutMs: 요청 취소 타임아웃(기본 25초). 회전 프로브처럼 여러 번 짧게 호출할 때 낮춰 쓴다.
+export async function readWithClova(
+  base64: string,
+  mimeType: string,
+  timeoutMs = 25_000,
+): Promise<ClovaOcrResult | null> {
   const url = process.env.CLOVA_OCR_INVOKE_URL;
   const secret = process.env.CLOVA_OCR_SECRET_KEY;
   if (!url || !secret) return null;
@@ -121,7 +126,7 @@ export async function readWithClova(base64: string, mimeType: string): Promise<C
 
   const t0 = Date.now();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 25_000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       method: "POST",

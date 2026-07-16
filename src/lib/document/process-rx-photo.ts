@@ -329,6 +329,7 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
             warped: pre.warped,
             ms: pre.ms,
             imageReplaced: correctedImageStored,
+            ...(pre.probe ? { probe: pre.probe } : {}),
           },
           geminiMeta: {
             pharma: rx.pharma,

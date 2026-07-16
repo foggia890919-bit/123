@@ -7,7 +7,7 @@ import { regularizeBboxes } from "../bbox-regularize";
 import { readWithClova } from "./clova-ocr";
 import { dualRead, type DualReadInfo, type DualReadStats } from "../dual-read";
 import { companyNameKey } from "../company-name";
-import { preprocessImage } from "../image-preprocess";
+import { preprocessImage, type RotationProbe } from "../image-preprocess";
 
 // stats/page.tsx 가 자체 재정의해서 쓰는 JSON 응답 형식. import 의존성 없음 — 응답 형식만 호환.
 // 핵심 필드: drugs[].{insuranceCode, companyName, productName, quantity (Field), unitPrice,
@@ -87,6 +87,8 @@ export interface FusionResultJson {
     ms: number;
     imageBase64?: string;
     mimeType?: string;
+    // 눕힌 사진의 90/270 판정에 쓴 클로바 프로브 결과(선택 각도·양쪽 점수). 정방향이면 생략.
+    probe?: RotationProbe;
   };
   // 새 /stats/photo 페이지가 시트 append 시 카테고리/효능/처방횟수 원본 보존하려고 사용.
   // 기존 /stats 페이지는 이 필드 무시 (5컬럼만 보고 무관).
@@ -358,6 +360,7 @@ export async function extractStatsLikeFusion(
       rotated: pre.rotated,
       warped: pre.warped,
       ms: pre.ms,
+      ...(pre.probe ? { probe: pre.probe } : {}),
       // 보정이 일어났을 때만 보정본 이미지를 실어 프런트가 원본 대신 표시하게 함.
       ...(pre.applied ? { imageBase64: pre.base64, mimeType: pre.mimeType } : {}),
     },
