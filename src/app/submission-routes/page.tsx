@@ -25,6 +25,7 @@ interface SubmissionRoute {
   requestType: string;
   memo: string | null;
   active: boolean;
+  parentUserId: string | null;
 }
 interface ParentInfo { id: string; name: string | null; email: string }
 interface MeInfo { id: string; role: string; parent: ParentInfo | null }
@@ -152,13 +153,17 @@ export default function SubmissionRoutesPage() {
 /* ─────────────────────────────────────────────────────────────
    상위법인(회원) 검색 드롭다운 — /api/dealers/search 재사용
    ───────────────────────────────────────────────────────────── */
+type EntitySel = { kind: "member"; dealer: DealerResult } | { kind: "free"; name: string };
+
 function DealerDropdown({
-  selected, onSelect, onClear, placeholder, emptyAction,
+  selected, onSelectMember, onSelectFree, onClear, placeholder, allowFree = false, emptyAction,
 }: {
-  selected: DealerResult | null;
-  onSelect: (d: DealerResult) => void;
+  selected: EntitySel | null;
+  onSelectMember: (d: DealerResult) => void;
+  onSelectFree?: (name: string) => void;
   onClear: () => void;
   placeholder: string;
+  allowFree?: boolean;
   emptyAction?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -187,16 +192,27 @@ function DealerDropdown({
     return () => document.removeEventListener("mousedown", h);
   }, [open]);
 
+  const exactMatch = results.some((d) => d.clientName.trim() === query.trim());
+  const showFreeItem = allowFree && !!onSelectFree && !!query.trim() && !exactMatch;
+
   return (
     <div className="relative" ref={ref}>
       <button type="button" onClick={() => setOpen((v) => !v)}
         className="w-full h-10 px-3 border border-gray-300 rounded-md bg-white hover:bg-gray-50 text-left text-sm flex items-center justify-between gap-2">
         {selected ? (
-          <span className="flex items-center gap-2 flex-1 min-w-0">
-            <CheckCircle2 className="w-4 h-4 text-blue-500 shrink-0" />
-            <span className="font-medium text-gray-800 truncate">{selected.clientName}</span>
-            <span className="text-gray-400 font-mono text-xs shrink-0">{selected.bizNumber}</span>
-          </span>
+          selected.kind === "member" ? (
+            <span className="flex items-center gap-2 flex-1 min-w-0">
+              <CheckCircle2 className="w-4 h-4 text-blue-500 shrink-0" />
+              <span className="font-medium text-gray-800 truncate">{selected.dealer.clientName}</span>
+              <span className="text-gray-400 font-mono text-xs shrink-0">{selected.dealer.bizNumber}</span>
+            </span>
+          ) : (
+            <span className="flex items-center gap-2 flex-1 min-w-0">
+              <CheckCircle2 className="w-4 h-4 text-blue-500 shrink-0" />
+              <span className="font-medium text-gray-800 truncate">{selected.name}</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 shrink-0">직접입력</span>
+            </span>
+          )
         ) : (
           <span className="text-gray-400 flex items-center gap-1.5"><Search className="w-3.5 h-3.5" />{placeholder}</span>
         )}
@@ -222,39 +238,48 @@ function DealerDropdown({
             </div>
           </div>
           <div className="max-h-56 overflow-y-auto">
-            {results.length === 0 ? (
-              query.trim() && !searching ? (
-                <div className="py-4 px-3 text-center bg-red-50 border-t border-red-100 space-y-2">
-                  <AlertCircle className="w-5 h-5 text-red-500 mx-auto" />
-                  <p className="text-xs font-semibold text-red-700">등록되지 않은 법인입니다</p>
-                  {emptyAction}
-                </div>
+            {results.map((d) => {
+              const cat = d.category;
+              const badge = cat === "ADMIN"
+                ? { label: "관리자", color: "bg-purple-100 text-purple-700 border border-purple-300" }
+                : cat === "DOCTOR" ? { label: "병원", color: "bg-rose-100 text-rose-700" }
+                : cat === "PHARMACIST" ? { label: "약국", color: "bg-emerald-100 text-emerald-700" }
+                : d.isBusinessApproved ? { label: "사업자 인증", color: "bg-blue-100 text-blue-700" }
+                : { label: "일반회원", color: "bg-gray-100 text-gray-600" };
+              return (
+                <button key={`${d.clientName}-${d.bizNumber}-${d.userId ?? ""}`} type="button"
+                  onClick={() => { onSelectMember(d); setOpen(false); setQuery(""); }}
+                  className="w-full text-left px-3 py-2.5 text-xs hover:bg-gray-50 border-b border-gray-50 last:border-0">
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0 ${badge.color}`}>{badge.label}</span>
+                    <p className="font-medium text-gray-800 truncate">{d.clientName}</p>
+                  </div>
+                  <p className="text-gray-400 font-mono">{d.bizNumber}</p>
+                </button>
+              );
+            })}
+            {showFreeItem && (
+              <button type="button" onClick={() => { onSelectFree!(query.trim()); setOpen(false); setQuery(""); }}
+                className="w-full text-left px-3 py-2.5 text-xs hover:bg-blue-50 bg-blue-50/40 border-t border-blue-100 flex items-center gap-1.5 text-blue-700 font-medium">
+                <Plus className="w-3.5 h-3.5 shrink-0" />&quot;{query.trim()}&quot; 제출법인으로 직접 등록
+              </button>
+            )}
+            {results.length === 0 && !showFreeItem && (
+              searching ? (
+                <div className="py-5 px-3 text-center"><p className="text-xs text-gray-400">검색 중...</p></div>
+              ) : query.trim() ? (
+                emptyAction ? (
+                  <div className="py-4 px-3 text-center bg-red-50 border-t border-red-100 space-y-2">
+                    <AlertCircle className="w-5 h-5 text-red-500 mx-auto" />
+                    <p className="text-xs font-semibold text-red-700">등록되지 않은 법인입니다</p>
+                    {emptyAction}
+                  </div>
+                ) : (
+                  <div className="py-5 px-3 text-center"><p className="text-xs text-gray-400">검색 결과가 없어요</p></div>
+                )
               ) : (
-                <div className="py-5 px-3 text-center">
-                  <p className="text-xs text-gray-400">{query.trim() ? "검색 중..." : "법인명·아이디·사업자번호를 입력하세요"}</p>
-                </div>
+                <div className="py-5 px-3 text-center"><p className="text-xs text-gray-400">법인명·아이디·사업자번호를 입력하세요</p></div>
               )
-            ) : (
-              results.map((d) => {
-                const cat = d.category;
-                const badge = cat === "ADMIN"
-                  ? { label: "관리자", color: "bg-purple-100 text-purple-700 border border-purple-300" }
-                  : cat === "DOCTOR" ? { label: "병원", color: "bg-rose-100 text-rose-700" }
-                  : cat === "PHARMACIST" ? { label: "약국", color: "bg-emerald-100 text-emerald-700" }
-                  : d.isBusinessApproved ? { label: "사업자 인증", color: "bg-blue-100 text-blue-700" }
-                  : { label: "일반회원", color: "bg-gray-100 text-gray-600" };
-                return (
-                  <button key={`${d.clientName}-${d.bizNumber}-${d.userId ?? ""}`} type="button"
-                    onClick={() => { onSelect(d); setOpen(false); setQuery(""); }}
-                    className="w-full text-left px-3 py-2.5 text-xs hover:bg-gray-50 border-b border-gray-50 last:border-0">
-                    <div className="flex items-center gap-1.5 mb-0.5">
-                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0 ${badge.color}`}>{badge.label}</span>
-                      <p className="font-medium text-gray-800 truncate">{d.clientName}</p>
-                    </div>
-                    <p className="text-gray-400 font-mono">{d.bizNumber}</p>
-                  </button>
-                );
-              })
             )}
           </div>
         </div>
@@ -303,7 +328,7 @@ function Workbench({
   const companyRef = useRef<HTMLDivElement>(null);
 
   // ── ③ 제출법인 ──
-  const [entityDealer, setEntityDealer] = useState<DealerResult | null>(null);
+  const [entity, setEntity] = useState<EntitySel | null>(null);
   const [useParent, setUseParent] = useState(false);
 
   // ── ④ 매핑 ──
@@ -355,13 +380,26 @@ function Workbench({
     return clientCandidates.find((c) => c.clientName.replace(/\s+/g, "").toLowerCase() === q);
   }, [clientCandidates, clientQuery]);
 
+  // 제약사 후보 — 표시만 normalizeCompanyName((주)/주식회사 제거), companyNameKey 로 dedupe.
+  // 저장값(value)은 원본 유지(POST 가 다시 normalize, filter-request 는 원본명으로 매칭).
+  const companyOptions = useMemo(() => {
+    const byKey = new Map<string, { value: string; label: string; key: string }>();
+    for (const c of companies) {
+      const key = companyNameKey(c.name);
+      if (!key || byKey.has(key)) continue;
+      byKey.set(key, { value: c.name, label: normalizeCompanyName(c.name) || c.name, key });
+    }
+    return Array.from(byKey.values()).sort((a, b) => a.label.localeCompare(b.label, "ko"));
+  }, [companies]);
+
   const companyMatches = useMemo(() => {
-    const q = companyQuery.trim().toLowerCase();
-    const sorted = companies.slice().sort((a, b) => normalizeCompanyName(a.name).localeCompare(normalizeCompanyName(b.name), "ko"));
-    return (q ? sorted.filter((c) => c.name.toLowerCase().includes(q)) : sorted)
-      .filter((c) => !selectedCompanies.includes(c.name))
+    const q = companyQuery.trim().replace(/\s+/g, "").toLowerCase();
+    const selKeys = new Set(selectedCompanies.map((c) => companyNameKey(c)));
+    return companyOptions
+      .filter((o) => !selKeys.has(o.key) &&
+        (!q || o.label.replace(/\s+/g, "").toLowerCase().includes(q) || o.value.replace(/\s+/g, "").toLowerCase().includes(q)))
       .slice(0, 30);
-  }, [companies, companyQuery, selectedCompanies]);
+  }, [companyOptions, companyQuery, selectedCompanies]);
 
   // 선택 거래처 × 제약사 필터링 기록 존재 여부 — clientName 기준 매칭
   // (즉석 등록 거래처는 bizNumber 가 없을 수 있어 clientName 으로 매칭해야 안전)
@@ -489,8 +527,15 @@ function Workbench({
     }
   }
 
-  const entityName = useParent ? (me?.parent?.name || me?.parent?.email || "") : (entityDealer?.clientName || "");
-  const parentUserId = useParent ? (me?.parent?.id ?? null) : (entityDealer?.userId ?? null);
+  const entityName = useParent
+    ? (me?.parent?.name || me?.parent?.email || "")
+    : entity?.kind === "member" ? entity.dealer.clientName
+    : entity?.kind === "free" ? entity.name
+    : "";
+  const parentUserId = useParent
+    ? (me?.parent?.id ?? null)
+    : entity?.kind === "member" ? (entity.dealer.userId ?? null)
+    : null; // 자유입력(free) → parentUserId null
   const canMap = !!selectedClient && selectedCompanies.length > 0 && !!entityName.trim();
 
   async function submitMapping() {
@@ -500,7 +545,7 @@ function Workbench({
     if (!entityName.trim()) { setMapError("제출법인을 선택해주세요."); return; }
     setMapping(true);
     try {
-      const entity = normalizeCompanyName(entityName);
+      const entityNorm = normalizeCompanyName(entityName);
       const results = await Promise.all(
         selectedCompanies.map(async (companyName) => {
           try {
@@ -509,7 +554,7 @@ function Workbench({
               body: JSON.stringify({
                 clientName: selectedClient.clientName.trim(),
                 companyName: normalizeCompanyName(companyName),
-                submissionEntity: entity,
+                submissionEntity: entityNorm,
                 parentUserId,
                 requestType: "신규",
               }),
@@ -528,10 +573,10 @@ function Workbench({
         setMapError(`${ok}건 등록, ${failures.length}건 실패 → ${failures.map((f) => `${f.companyName}: ${f.error}`).join(" / ")}`);
       }
       if (ok > 0) {
-        setMapDone(`'${selectedClient.clientName} → ${entity}' 로 ${ok}개 제약사 매핑을 등록했어요.`);
+        setMapDone(`'${selectedClient.clientName} → ${entityNorm}' 로 ${ok}개 제약사 매핑을 등록했어요.`);
         // 제약사 칩·법인만 초기화 (같은 거래처로 연속 등록 편의)
         setSelectedCompanies([]); setCompanyQuery("");
-        setEntityDealer(null); setUseParent(false); setFilterMsg("");
+        setEntity(null); setUseParent(false); setFilterMsg("");
       }
       await refresh();
     } finally {
@@ -631,9 +676,9 @@ function Workbench({
           {companyMenuOpen && companyMatches.length > 0 && (
             <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto">
               {companyMatches.map((c) => (
-                <button key={c.name} type="button" onClick={() => addCompany(c.name)}
+                <button key={c.key} type="button" onClick={() => addCompany(c.value)}
                   className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-b border-gray-50 last:border-0 text-gray-800 flex items-center gap-1.5">
-                  <Plus className="w-3.5 h-3.5 text-gray-400 shrink-0" />{c.name}
+                  <Plus className="w-3.5 h-3.5 text-gray-400 shrink-0" />{c.label}
                 </button>
               ))}
             </div>
@@ -646,7 +691,7 @@ function Workbench({
               return (
                 <span key={n} className={`inline-flex items-center gap-1 text-xs border px-2 py-1 rounded-full ${ok ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}>
                   {ok ? <CheckCircle2 className="w-3 h-3 shrink-0" /> : <AlertCircle className="w-3 h-3 shrink-0" />}
-                  {n}
+                  {normalizeCompanyName(n) || n}
                   {!ok && <span className="text-[10px] font-semibold">필터링 필요</span>}
                   <button type="button" onClick={() => removeCompany(n)} className="hover:text-red-500 ml-0.5">×</button>
                 </span>
@@ -670,7 +715,7 @@ function Workbench({
         <StepLabel n={3} done={!!stepDone(3)} icon={Building2} text="제출법인" />
         {me?.parent && (
           <label className="flex items-center gap-2 text-sm p-2.5 bg-blue-50 border border-blue-200 rounded-md cursor-pointer">
-            <input type="radio" checked={useParent} onChange={() => { setUseParent(true); setEntityDealer(null); }} className="w-4 h-4 text-blue-600" />
+            <input type="radio" checked={useParent} onChange={() => { setUseParent(true); setEntity(null); }} className="w-4 h-4 text-blue-600" />
             <UserCheck className="w-4 h-4 text-blue-600 shrink-0" />
             <span className="text-blue-900 font-medium truncate">{me.parent.name || me.parent.email}</span>
             <span className="text-[11px] text-blue-600 ml-auto shrink-0">연결된 법인</span>
@@ -680,18 +725,16 @@ function Workbench({
           {me?.parent && <input type="radio" checked={!useParent} onChange={() => setUseParent(false)} className="w-4 h-4 text-blue-600 shrink-0" />}
           <div className="flex-1">
             <DealerDropdown
-              selected={entityDealer}
-              onSelect={(d) => { setEntityDealer(d); setUseParent(false); }}
-              onClear={() => setEntityDealer(null)}
-              placeholder={me?.parent ? "다른 법인 직접 검색" : "제출법인 검색"}
-              emptyAction={
-                <p className="text-[11px] text-red-600">
-                  아래 <span className="font-semibold">상위법인 연결 관리</span>에서 연결 요청을 보내면 목록에 나타납니다.
-                </p>
-              }
+              selected={entity}
+              onSelectMember={(d) => { setEntity({ kind: "member", dealer: d }); setUseParent(false); }}
+              onSelectFree={(name) => { setEntity({ kind: "free", name }); setUseParent(false); }}
+              onClear={() => setEntity(null)}
+              allowFree
+              placeholder={me?.parent ? "다른 법인 검색 또는 직접 입력" : "제출법인 검색 또는 직접 입력"}
             />
           </div>
         </label>
+        <p className="text-[11px] text-gray-400">회원으로 등록되지 않은 제출처는 검색창에 이름을 입력해 &quot;직접 등록&quot;할 수 있어요.</p>
       </div>
 
       {/* ④ 매핑 등록 */}
@@ -798,10 +841,16 @@ function StatusList({
     for (const r of routes) s.add(r.clientName);
     return Array.from(s).sort((a, b) => a.localeCompare(b, "ko"));
   }, [clients, routes]);
-  const companyOptions = useMemo(
-    () => companies.map((c) => c.name).sort((a, b) => normalizeCompanyName(a).localeCompare(normalizeCompanyName(b), "ko")),
-    [companies],
-  );
+  // 제약사 후보 — 표시명 normalizeCompanyName, companyNameKey 로 dedupe
+  const companyOptions = useMemo(() => {
+    const byKey = new Map<string, string>();
+    for (const c of companies) {
+      const key = companyNameKey(c.name);
+      if (!key || byKey.has(key)) continue;
+      byKey.set(key, normalizeCompanyName(c.name) || c.name);
+    }
+    return Array.from(byKey.values()).sort((a, b) => a.localeCompare(b, "ko"));
+  }, [companies]);
 
   // 평면 정렬: 제출처 → 거래처 → 제약사 가나다순 (normalizeCompanyName 기준)
   const sortedRows = useMemo(() => {
@@ -938,12 +987,13 @@ function StatusList({
                 return (
                   <tr key={r.id} className="border-t border-gray-50 hover:bg-gray-50/60">
                     <td className="px-3 py-2 text-gray-700">
-                      <span className="inline-flex items-center gap-1">
-                        <Building2 className="w-3.5 h-3.5 text-blue-500 shrink-0" />{r.submissionEntity}
+                      <span className="inline-flex items-center gap-1 flex-wrap">
+                        <Building2 className="w-3.5 h-3.5 text-blue-500 shrink-0" />{normalizeCompanyName(r.submissionEntity) || r.submissionEntity}
+                        {!r.parentUserId && <span className="text-[10px] px-1 py-0.5 rounded bg-gray-100 text-gray-500">직접입력</span>}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-gray-700">{r.clientName}</td>
-                    <td className="px-3 py-2 text-gray-800">{r.companyName}</td>
+                    <td className="px-3 py-2 text-gray-800">{normalizeCompanyName(r.companyName) || r.companyName}</td>
                     <td className="px-3 py-2 text-gray-500">{r.submissionEmail || "—"}</td>
                     <td className="px-3 py-2">
                       <span className={`text-[10px] px-1.5 py-0.5 rounded ${r.requestType === "이관" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"}`}>{r.requestType}</span>
@@ -1078,7 +1128,7 @@ function CorpLinkPanel({
               ) : (
                 <div className="flex flex-col sm:flex-row gap-2">
                   <div className="flex-1">
-                    <DealerDropdown selected={selectedDealer} onSelect={setSelectedDealer} onClear={() => setSelectedDealer(null)} placeholder="상위법인 회원 검색" />
+                    <DealerDropdown selected={selectedDealer ? { kind: "member", dealer: selectedDealer } : null} onSelectMember={setSelectedDealer} onClear={() => setSelectedDealer(null)} placeholder="상위법인 회원 검색" />
                   </div>
                   <Button onClick={submitLink} disabled={submitting || !selectedDealer}>
                     {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Mail className="w-4 h-4 mr-1" />연결 요청</>}

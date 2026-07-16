@@ -19,6 +19,7 @@ interface RouteRow {
   clientName: string;
   companyName: string;
   parentUserName: string | null;
+  directInput?: boolean;
   cells: Record<string, Cell>;
 }
 interface StatusData {
@@ -71,6 +72,7 @@ export default function SubmissionStatusPage() {
       string,
       {
         entity: string;
+        directInput: boolean;
         clients: Map<string, RouteRow[]>;
         monthTotals: Record<string, { done: number; total: number }>;
       }
@@ -80,6 +82,7 @@ export default function SubmissionStatusPage() {
       if (!e) {
         e = {
           entity: r.submissionEntity,
+          directInput: !!r.directInput,
           clients: new Map(),
           monthTotals: Object.fromEntries(months.map((m) => [m, { done: 0, total: 0 }])),
         };
@@ -96,6 +99,7 @@ export default function SubmissionStatusPage() {
     return Array.from(entityMap.values())
       .map((e) => ({
         entity: e.entity,
+        directInput: e.directInput,
         monthTotals: e.monthTotals,
         clients: Array.from(e.clients.entries())
           .map(([clientName, routes]) => ({
@@ -214,7 +218,8 @@ export default function SubmissionStatusPage() {
             <section key={g.entity} className="bg-white border border-gray-200 rounded-lg overflow-hidden">
               <div className="px-4 py-3 bg-gray-50 border-b border-gray-100 flex items-center gap-2 flex-wrap">
                 <Building2 className="w-4 h-4 text-blue-600 shrink-0" />
-                <h2 className="text-sm font-semibold text-gray-800">{g.entity}</h2>
+                <h2 className="text-sm font-semibold text-gray-800">{normalizeCompanyName(g.entity) || g.entity}</h2>
+                {g.directInput && <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">직접입력</span>}
                 <div className="flex items-center gap-1.5 ml-auto">
                   {months.map((m) => {
                     const t = g.monthTotals[m];
@@ -249,7 +254,7 @@ export default function SubmissionStatusPage() {
                           <td className="px-4 py-2 text-gray-700 align-top">
                             {idx === 0 ? c.clientName : <span className="text-transparent select-none">·</span>}
                           </td>
-                          <td className="px-4 py-2 text-gray-800">{r.companyName}</td>
+                          <td className="px-4 py-2 text-gray-800">{normalizeCompanyName(r.companyName) || r.companyName}</td>
                           {months.map((m) => {
                             const cell = r.cells[m];
                             return (

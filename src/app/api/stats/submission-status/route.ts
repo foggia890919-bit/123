@@ -61,6 +61,7 @@ export async function GET(_req: NextRequest) {
       clientName: true,
       companyName: true,
       submissionEntity: true,
+      parentUserId: true,
       parentUser: { select: { id: true, name: true, email: true } },
     },
   });
@@ -136,6 +137,7 @@ export async function GET(_req: NextRequest) {
       clientName: r.clientName,
       companyName: r.companyName,
       parentUserName: r.parentUser?.name || r.parentUser?.email || null,
+      directInput: !r.parentUserId, // 자유입력(회원 미연결) 제출법인
       cells,
     };
   });

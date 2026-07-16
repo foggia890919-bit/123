@@ -197,6 +197,9 @@ export default function StatsPhotoPage() {
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [clients, setClients] = useState<UserClient[]>([]);
   const [selectedClientId, setSelectedClientId] = useState<string>("");
+  // SubmissionRoute 에만 있는 거래처명(UserClient 명부 미등록) — 드롭다운 union 용
+  const [routeClientNames, setRouteClientNames] = useState<string[]>([]);
+  const [resolvingClient, setResolvingClient] = useState(false);
   // 본인 대표 사업자 (마이페이지 "사업자 정보" 카드와 같은 row) — 거래처 드롭다운에서 제외용
   const [myBizClientId, setMyBizClientId] = useState<string | null>(null);
 
@@ -261,6 +264,14 @@ export default function StatsPhotoPage() {
       .then((r) => r.json())
       .then((data) => Array.isArray(data) ? setClients(data) : setClients([]))
       .catch(() => setClients([]));
+    // SubmissionRoute distinct clientName — UserClient 명부에 없는 거래처도 드롭다운에 노출
+    fetch("/api/submission-routes")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: { clientName: string }[]) => {
+        const names = Array.from(new Set((Array.isArray(data) ? data : []).map((d) => (d.clientName || "").trim()).filter(Boolean)));
+        setRouteClientNames(names);
+      })
+      .catch(() => setRouteClientNames([]));
     fetch("/api/mypage")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { if (d?.bizClient?.id) setMyBizClientId(d.bizClient.id); })
@@ -348,6 +359,45 @@ export default function StatsPhotoPage() {
   }, [batchRunning]);
 
   const selectedClient = clients.find((c) => c.id === selectedClientId);
+
+  // 드롭다운 union: UserClient(명부) + SubmissionRoute 에만 있는 고아 거래처명.
+  // 고아 = 어떤 UserClient(대표사업자 제외) 와도 companyNameKey 가 다른 clientName.
+  const orphanClientNames = useMemo(() => {
+    const clientKeys = new Set(clients.filter((c) => c.id !== myBizClientId).map((c) => companyNameKey(c.clientName)));
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const n of routeClientNames) {
+      const k = companyNameKey(n);
+      if (!k || clientKeys.has(k) || seen.has(k)) continue;
+      seen.add(k);
+      out.push(n);
+    }
+    return out.sort((a, b) => a.localeCompare(b, "ko"));
+  }, [clients, routeClientNames, myBizClientId]);
+
+  // 거래처 선택 — 고아(route:) 선택 시 UserClient 로 승격(find-or-create) 후 그 id 사용.
+  async function handleClientSelect(value: string) {
+    if (!value) { setSelectedClientId(""); return; }
+    if (!value.startsWith("route:")) { setSelectedClientId(value); return; }
+    const clientName = value.slice("route:".length);
+    setResolvingClient(true);
+    try {
+      const res = await fetch("/api/user-clients/resolve", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientName }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.id) {
+        setClients((prev) => prev.some((c) => c.id === data.id) ? prev : [...prev, data as UserClient]);
+        setSelectedClientId(data.id);
+        setRouteClientNames((prev) => prev.filter((n) => companyNameKey(n) !== companyNameKey(clientName)));
+      } else {
+        setError(data.error || "거래처 준비 실패");
+      }
+    } finally {
+      setResolvingClient(false);
+    }
+  }
 
   // ── 행 목록 구성 ─────────────────────────────────────────────────────────
   // 기본: 매핑 제약사 행 (가나다순). "전월 조합 불러오기" 누르면 전월 제출 제약사 강조·상단
@@ -530,17 +580,23 @@ export default function StatsPhotoPage() {
             <label className="text-xs font-medium text-gray-500">병원 (거래처)</label>
             <select
               value={selectedClientId}
-              onChange={(e) => setSelectedClientId(e.target.value)}
-              className="mt-1 w-full border rounded px-3 py-2 text-sm bg-white"
+              onChange={(e) => handleClientSelect(e.target.value)}
+              disabled={resolvingClient}
+              className="mt-1 w-full border rounded px-3 py-2 text-sm bg-white disabled:opacity-60"
             >
-              <option value="">— 거래처 선택 —</option>
+              <option value="">{resolvingClient ? "거래처 준비 중…" : "— 거래처 선택 —"}</option>
               {clients.filter((c) => c.id !== myBizClientId).map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.clientName}{!c.approved ? " (승인전)" : ""}
                 </option>
               ))}
+              {orphanClientNames.map((n) => (
+                <option key={`route:${n}`} value={`route:${n}`}>
+                  {n} (매핑)
+                </option>
+              ))}
             </select>
-            {clients.length === 0 && (
+            {clients.length === 0 && orphanClientNames.length === 0 && (
               <p className="mt-1 text-[11px] text-amber-600">
                 등록된 거래처가 없습니다.{" "}
                 <a href="/mypage/clients" className="underline">거래처 관리</a>

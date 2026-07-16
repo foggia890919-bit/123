@@ -1,9 +1,28 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse, canManageSubmissionRoutes } from "@/lib/auth-guard";
-import { normalizeCompanyName } from "@/lib/company-name";
+import { normalizeCompanyName, companyNameKey } from "@/lib/company-name";
 import { getViewableUserIds } from "@/lib/hierarchy";
 import { syncSubmissionRoutesSheet } from "@/lib/google/sheets-submission-routes";
+
+// 매핑의 거래처(clientName)가 해당 ownerId 의 UserClient(dealerType null) 명부에 없으면 자동 생성.
+// clientName 만, bizNumber 는 임시 placeholder(유니크 충돌 회피). 실패해도 매핑 등록엔 영향 없음.
+async function ensureUserClient(ownerId: string, clientName: string): Promise<void> {
+  try {
+    const key = companyNameKey(clientName);
+    if (!key) return;
+    const existing = await prisma.userClient.findMany({
+      where: { userId: ownerId, dealerType: null },
+      select: { clientName: true },
+    });
+    if (existing.some((u) => companyNameKey(u.clientName) === key)) return;
+    await prisma.userClient.create({
+      data: { userId: ownerId, clientName, bizNumber: `temp-${crypto.randomUUID().slice(0, 8)}`, dealerType: null },
+    });
+  } catch (e) {
+    console.error("[submission-routes ensureUserClient]", e instanceof Error ? e.message : String(e));
+  }
+}
 
 // 본인 hierarchy + ADMIN 소유 row (글로벌 master) 의 ownerId 집합.
 // ADMIN 호출 시에는 null 반환 (필터 없음 = 전체 조회).
@@ -65,6 +84,7 @@ export async function POST(req: NextRequest) {
       create: { ownerId: user.id, clientName, companyName, submissionEntity, parentUserId, submissionEmail: submissionEmail || null, requestType: rt, memo: memo || null },
       update: { submissionEntity, parentUserId, submissionEmail: submissionEmail || null, requestType: rt, memo: memo || null, active: true },
     });
+    await ensureUserClient(user.id, clientName); // 거래처 명부 자동 치유
     after(() => syncSubmissionRoutesSheet());
     return NextResponse.json(row, { status: 201 });
   } catch (e) {
@@ -110,6 +130,7 @@ export async function PATCH(req: NextRequest) {
         updatedAt: new Date(),
       },
     });
+    if (nextClientName) await ensureUserClient(existing.ownerId, nextClientName); // clientName 변경 시 명부 치유
     after(() => syncSubmissionRoutesSheet());
     return NextResponse.json(row);
   } catch (e) {

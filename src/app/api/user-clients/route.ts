@@ -1,8 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSession, isNextResponse } from "@/lib/auth-guard";
 import { BUCKETS, persistDataUri } from "@/lib/storage";
 import { normalizeCompanyName } from "@/lib/company-name";
+import { syncSubmissionRoutesSheet } from "@/lib/google/sheets-submission-routes";
 
 // GET /api/user-clients → 본인 거래처
 // GET /api/user-clients?all=true → 관리자 전용, 모든 담당자의 거래처
@@ -384,6 +385,7 @@ export async function POST(req: NextRequest) {
         bizFileName: true, approved: true, createdAt: true, dealerType: true,
       },
     });
+    after(() => syncSubmissionRoutesSheet());
     return NextResponse.json(row);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -455,6 +457,7 @@ export async function PATCH(req: NextRequest) {
 
   try {
     const row = await prisma.userClient.update({ where: { id }, data });
+    after(() => syncSubmissionRoutesSheet());
     return NextResponse.json(row);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -476,5 +479,6 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
   }
   await prisma.userClient.delete({ where: { id } });
+  after(() => syncSubmissionRoutesSheet());
   return NextResponse.json({ success: true });
 }
