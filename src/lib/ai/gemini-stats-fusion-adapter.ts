@@ -6,6 +6,7 @@ import { verifyRxRow, type RxRowStatus, type RxRowVerification } from "../rx-ver
 import { regularizeBboxes } from "../bbox-regularize";
 import { readWithClova } from "./clova-ocr";
 import { dualRead, type DualReadInfo, type DualReadStats } from "../dual-read";
+import { companyNameKey } from "../company-name";
 
 // stats/page.tsx 가 자체 재정의해서 쓰는 JSON 응답 형식. import 의존성 없음 — 응답 형식만 호환.
 // 핵심 필드: drugs[].{insuranceCode, companyName, productName, quantity (Field), unitPrice,
@@ -87,10 +88,6 @@ export interface FusionResultJson {
     durationMs: number;
     model: string;
   };
-}
-
-function normCompany(s: string): string {
-  return s.replace(/\(주\)|\(유\)|주식회사|㈜|\s+/g, "").toLowerCase();
 }
 
 // Y 좌표가 없어서 인덱스 비례로 fallback (10~90% 균등). 기존 OCR 의 fallbackY 와 동일 공식.
@@ -188,7 +185,7 @@ export async function extractStatsLikeFusion(
   // 3) 사용자별 추가 수수료 (개인 → 부모법인 폴백) 한 번에 로드.
   const rateEntries = await fetchRateEntries(userId);
   const additionalByCompany = new Map(
-    rateEntries.map((r) => [normCompany(r.companyName), r.additionalRate]),
+    rateEntries.map((r) => [companyNameKey(r.companyName), r.additionalRate]),
   );
 
   // 4) 행별 마스터 매칭 + Field 형식 매핑.
@@ -244,7 +241,7 @@ export async function extractStatsLikeFusion(
       finalUnitPrice,
     });
 
-    const additionalRate = additionalByCompany.get(normCompany(match.companyName)) ?? null;
+    const additionalRate = additionalByCompany.get(companyNameKey(match.companyName)) ?? null;
 
     // companyName mismatch: Gemini 가 추출한 값과 마스터 매칭값이 둘 다 있는데 다른 경우.
     // 검수에서 사람이 결정 — 자동 선택 X.
@@ -252,7 +249,7 @@ export async function extractStatsLikeFusion(
     const masterCompany = (match.companyName || "").trim();
     const companyNameMismatch =
       geminiCompany && masterCompany &&
-      normCompany(geminiCompany) !== normCompany(masterCompany)
+      companyNameKey(geminiCompany) !== companyNameKey(masterCompany)
         ? { geminiCompanyName: geminiCompany, masterCompanyName: masterCompany }
         : null;
 

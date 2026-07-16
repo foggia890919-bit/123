@@ -24,10 +24,7 @@ import { dualRead, type DualReadInfo, type DualReadStats } from "@/lib/dual-read
 import { appendRxStats } from "@/lib/google/google-sheets-rx-append";
 import { fetchRateEntries } from "@/lib/rate-utils";
 import { computeRowQuality, checkTotalSum } from "@/lib/rx-quality-checks";
-
-function normCompany(s: string): string {
-  return s.replace(/\(주\)|\(유\)|주식회사|㈜|\s+/g, "").toLowerCase();
-}
+import { companyNameKey } from "@/lib/company-name";
 
 export interface ProcessRxPhotoArgs {
   reportId: string;
@@ -94,7 +91,7 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
 
     const rateEntries = await fetchRateEntries(userId);
     const additionalByCompany = new Map(
-      rateEntries.map((r) => [normCompany(r.companyName), r.additionalRate]),
+      rateEntries.map((r) => [companyNameKey(r.companyName), r.additionalRate]),
     );
 
     const matchResults: MatchResult[] = [];
@@ -109,7 +106,7 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
       };
       const match = matchMedication(merged, masterByCode, masterByName);
       matchResults[idx] = match;
-      const additionalRate = additionalByCompany.get(normCompany(match.companyName)) ?? null;
+      const additionalRate = additionalByCompany.get(companyNameKey(match.companyName)) ?? null;
       const codeOk = match.matchedMedicationId !== null && d.code.replace(/\D/g, "").length === 9;
       const finalUnitPrice = match.unitPrice ?? (d.unitPrice || null);
 
@@ -130,7 +127,7 @@ export async function processRxPhoto(args: ProcessRxPhotoArgs): Promise<void> {
       const masterCompany = (match.companyName || "").trim();
       const companyNameMismatch =
         geminiCompany && masterCompany &&
-        normCompany(geminiCompany) !== normCompany(masterCompany)
+        companyNameKey(geminiCompany) !== companyNameKey(masterCompany)
           ? { geminiCompanyName: geminiCompany, masterCompanyName: masterCompany }
           : null;
 

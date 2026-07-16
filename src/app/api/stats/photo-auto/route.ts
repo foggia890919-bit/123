@@ -18,10 +18,6 @@ import { processRxPhoto } from "@/lib/document/process-rx-photo";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-function normCompany(s: string): string {
-  return s.replace(/\(주\)|\(유\)|주식회사|㈜|\s+/g, "").toLowerCase();
-}
-
 export async function POST(req: NextRequest) {
   const user = await requireSession();
   if (isNextResponse(user)) return user;
