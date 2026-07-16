@@ -67,23 +67,46 @@ export interface NonInsuredTarget {
   productName: string;
 }
 
-export async function loadNonInsuredTargets(): Promise<NonInsuredTarget[]> {
-  const limit = Math.max(1, Number(process.env.NONINSURED_LIMIT ?? 2000));
-  const pool = getPool();
+// loadNonInsuredTargets 결과: 이번에 검색할 대상 + 이번 순환 슬라이스의 마지막 id.
+// 배치 처리를 마친 뒤 nextCursor 를 saveNameCrawlCursor() 로 저장하면 다음 실행이
+// 그 다음 id 부터 이어간다 (풀 끝에 도달하면 처음으로 되감김).
+export interface NonInsuredBatch {
+  targets: NonInsuredTarget[];
+  nextCursor: string | null;
+}
 
-  const { rows } = await pool.query<NonInsuredTarget>(
-    `SELECT id AS "medicationId", "productName"
-     FROM "Medication"
-     WHERE ("insuranceCode" IS NULL OR "insuranceCode" = '')
-       AND ("isSettlement" = true OR source = 'EXCEL' OR "paymentType" = '비급여')
-     ORDER BY "createdAt" DESC
-     LIMIT ${limit}`
+const NAME_CRAWL_CURSOR_KEY = "nameCrawlCursor";
+
+// SystemSetting 단건 조회 (없으면 null).
+export async function getSystemSetting(key: string): Promise<string | null> {
+  const { rows } = await getPool().query<{ value: string }>(
+    `SELECT "value" FROM "SystemSetting" WHERE "key" = $1`,
+    [key]
   );
+  return rows[0]?.value ?? null;
+}
 
+// 비급여 순환 커서 저장 — 마지막으로 처리한 Medication.id.
+export async function saveNameCrawlCursor(lastId: string): Promise<void> {
+  await getPool().query(
+    `INSERT INTO "SystemSetting" ("key", "value", "updatedAt")
+     VALUES ($1, $2, NOW())
+     ON CONFLICT ("key") DO UPDATE SET "value" = $2, "updatedAt" = NOW()`,
+    [NAME_CRAWL_CURSOR_KEY, lastId]
+  );
+}
+
+// 비급여 대상 선정:
+//   우선순위 1) noninsured-extra.txt 수동 목록 — 매 실행 항상 포함.
+//   우선순위 2) 순환 커서 — insuranceCode 없는 Medication 전체를 id 순으로 훑는다.
+//               마지막 처리 id(nameCrawlCursor) 다음부터 N개(NONINSURED_PER_RUN, 기본 500).
+//               id 정렬 끝에 도달하면 처음(id 오름차순 맨 앞)부터 부족분을 채워 되감는다.
+export async function loadNonInsuredTargets(): Promise<NonInsuredBatch> {
+  const perRun = Math.max(1, Number(process.env.NONINSURED_PER_RUN ?? 500));
+  const pool = getPool();
   const byId = new Map<string, NonInsuredTarget>();
-  for (const r of rows) byId.set(r.medicationId, r);
 
-  // 선택: noninsured-extra.txt 에 적힌 제품명을 추가 대상으로 편입.
+  // --- 우선순위 1: noninsured-extra.txt 수동 목록 ---
   // 한 줄에 하나, 빈 줄/# 주석 무시. DB에서 이름으로 찾아 medicationId 확보.
   try {
     const extraPath = resolve(process.cwd(), "noninsured-extra.txt");
@@ -114,7 +137,45 @@ export async function loadNonInsuredTargets(): Promise<NonInsuredTarget[]> {
     console.warn(`[noninsured] extra 파일 처리 실패: ${(err as Error).message}`);
   }
 
-  return Array.from(byId.values());
+  // --- 우선순위 2: 순환 커서 ---
+  const cursor = (await getSystemSetting(NAME_CRAWL_CURSOR_KEY)) ?? "";
+  let nextCursor: string | null = null;
+
+  // 커서 다음 id 부터 N개 (id 는 cuid2 문자열 — 사전식 정렬로 전체를 안정적으로 순회).
+  const { rows: tail } = await pool.query<NonInsuredTarget>(
+    `SELECT id AS "medicationId", "productName"
+     FROM "Medication"
+     WHERE ("insuranceCode" IS NULL OR "insuranceCode" = '')
+       AND id > $1
+     ORDER BY id ASC
+     LIMIT $2`,
+    [cursor, perRun]
+  );
+  const rotation: NonInsuredTarget[] = [...tail];
+  if (tail.length > 0) nextCursor = tail[tail.length - 1].medicationId;
+
+  // wraparound: 부족분을 맨 앞부터 채운다. 커서가 비어있으면(첫 실행) 이미 전체를
+  // 앞에서부터 훑는 중이므로 되감을 필요 없음.
+  if (tail.length < perRun && cursor !== "") {
+    const remaining = perRun - tail.length;
+    const { rows: head } = await pool.query<NonInsuredTarget>(
+      `SELECT id AS "medicationId", "productName"
+       FROM "Medication"
+       WHERE ("insuranceCode" IS NULL OR "insuranceCode" = '')
+         AND id <= $1
+       ORDER BY id ASC
+       LIMIT $2`,
+      [cursor, remaining]
+    );
+    rotation.push(...head);
+    if (head.length > 0) nextCursor = head[head.length - 1].medicationId;
+  }
+
+  for (const r of rotation) {
+    if (!byId.has(r.medicationId)) byId.set(r.medicationId, r);
+  }
+
+  return { targets: Array.from(byId.values()), nextCursor };
 }
 
 export interface SnapshotInsert {

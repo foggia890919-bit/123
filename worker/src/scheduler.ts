@@ -6,6 +6,7 @@ import {
   ensureSite,
   loadExcelMedicationCodes,
   loadNonInsuredTargets,
+  saveNameCrawlCursor,
   saveSnapshots,
   startJob,
   finishJob,
@@ -251,7 +252,8 @@ async function runNameBatch(
     return { nameWritten: 0, nameFailed: 0 };
   }
 
-  let targets = await loadNonInsuredTargets();
+  const { targets: allTargets, nextCursor } = await loadNonInsuredTargets();
+  let targets = allTargets;
   if (opts.limit && opts.limit > 0) targets = targets.slice(0, opts.limit);
   if (targets.length === 0) {
     console.log("[scheduler] 비급여 이름배치: 대상 없음 — 건너뜀");
@@ -318,6 +320,15 @@ async function runNameBatch(
     nameFailed += st.failed;
   }
   console.log(`[scheduler] 비급여 이름배치 완료 — done: ${nameWritten}, failed: ${nameFailed}`);
+
+  // 순환 커서 전진 — 성공/실패 무관, 이번 슬라이스를 처리했으니 다음 실행은 그 다음 id 부터.
+  // (수동 목록/limit 여부와 무관하게 순환 슬라이스 기준으로 갱신.)
+  if (nextCursor) {
+    await saveNameCrawlCursor(nextCursor).catch(err =>
+      console.warn(`[scheduler] nameCrawlCursor 저장 실패: ${(err as Error).message}`)
+    );
+  }
+
   return { nameWritten, nameFailed };
 }
 

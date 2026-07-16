@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { hasDb, getPool } from "./db.ts";
+import { normalizeProductKey, normalizeCompanyKey } from "./normalize.ts";
 
 // ykpharm-order(Supabase) 재고 내보내기 — Supabase REST(PostgREST) 방식.
 // KMD InventorySnapshot 의 도매 재고 합계를 ykpharm-order 의 public.products.stock
@@ -86,7 +87,9 @@ function normalizeUrl(u: string): string {
   return u.replace(/\/+$/, "");
 }
 
-export async function exportStockToYkOrder(): Promise<{ matched: number; total: number } | null> {
+export async function exportStockToYkOrder(): Promise<
+  { matched: number; total: number; nonInsured: { matched: number; total: number } | null } | null
+> {
   const cfg = resolveConfig();
   if (!cfg) {
     console.log(
@@ -166,5 +169,173 @@ export async function exportStockToYkOrder(): Promise<{ matched: number; total: 
     console.warn(`[ykorder] 일부 PATCH 실패 (첫 오류): ${firstError}`);
   }
   console.log(`[ykorder] 재고 내보내기 — 스냅샷 ${rows.length} 코드 중 ${matched} 개 반영`);
-  return { matched, total: rows.length };
+
+  // 3) 비급여(NC:) 재고 + 도매 매입가 반영 — best-effort. 실패해도 급여 결과에 영향 없음.
+  let nonInsured: { matched: number; total: number } | null = null;
+  try {
+    nonInsured = await exportNonInsuredToYkOrder(cfg);
+  } catch (e) {
+    console.warn(`[ykorder] 비급여 내보내기 실패: ${(e as Error).message}`);
+  }
+
+  return { matched, total: rows.length, nonInsured };
+}
+
+interface NcAggregate {
+  medicationId: string;
+  stock: number | null;
+  costPrice: number | null;
+}
+
+interface YkProduct {
+  id: string;
+  name: string;
+  maker: string | null;
+}
+
+// 비급여 재고·매입가 반영:
+//   KMD NC:{medicationId} 스냅샷(24h, ibjp/family)을 medicationId 별로 집계
+//     — stock: 사이트 합계(null-safe), costPrice: 사이트 중 최저 매입가(non-null 최소).
+//   Medication 에서 productName/companyName 조회 → 정규화 키(이름키|제약사키) 생성.
+//   ykpharm-order products(coverage=비급여) 를 Range 페이지네이션으로 수집,
+//   (이름키|제약사키) 완전일치 & 유일할 때만 PATCH {stock, cost_price}.
+//     - cost_price 는 최저 매입가가 있을 때만 포함(null 로 덮지 않음).
+//     - 복수 product 가 같은 키를 가지면 동명 충돌로 스킵(카운트 로그).
+async function exportNonInsuredToYkOrder(cfg: YkConfig): Promise<{ matched: number; total: number }> {
+  // 1) KMD DB: NC: 스냅샷 집계.
+  const { rows: aggRows } = await getPool().query<NcAggregate>(
+    `SELECT SUBSTRING("insuranceCode" FROM 4) AS "medicationId",
+            SUM("stock")::int          AS stock,
+            MIN("unitPrice")::float8    AS "costPrice"
+     FROM "InventorySnapshot"
+     WHERE "siteKey" IN ('ibjp','family')
+       AND "insuranceCode" LIKE 'NC:%'
+       AND "scrapedAt" >= NOW() - INTERVAL '24 hours'
+     GROUP BY "insuranceCode"`
+  );
+  const aggs = aggRows.filter(a => !!a.medicationId);
+  if (aggs.length === 0) {
+    console.log("[ykorder] 비급여 — NC 스냅샷 0 품목, 건너뜀");
+    return { matched: 0, total: 0 };
+  }
+
+  // 2) Medication: productName / companyName 조회.
+  const medIds = aggs.map(a => a.medicationId);
+  const { rows: meds } = await getPool().query<{ id: string; productName: string; companyName: string | null }>(
+    `SELECT id, "productName", "companyName" FROM "Medication" WHERE id = ANY($1::text[])`,
+    [medIds]
+  );
+  const medById = new Map(meds.map(m => [m.id, m]));
+
+  // 3) ykpharm-order products(coverage=비급여) 수집 — Range 헤더 페이지네이션.
+  const products = await fetchNonInsuredProducts(cfg);
+
+  // (이름키|제약사키) → product id 목록. 복수면 동명 충돌 → 매칭에서 스킵.
+  const productsByKey = new Map<string, string[]>();
+  for (const p of products) {
+    const key = `${normalizeProductKey(p.name)}|${normalizeCompanyKey(p.maker ?? "")}`;
+    if (key === "|") continue;
+    const list = productsByKey.get(key);
+    if (list) list.push(String(p.id));
+    else productsByKey.set(key, [String(p.id)]);
+  }
+
+  // 4) 매칭 → PATCH 작업 목록.
+  interface PatchTask { id: string; body: Record<string, number> }
+  const tasks: PatchTask[] = [];
+  let ambiguous = 0;
+  for (const a of aggs) {
+    const med = medById.get(a.medicationId);
+    if (!med) continue;
+    const key = `${normalizeProductKey(med.productName)}|${normalizeCompanyKey(med.companyName ?? "")}`;
+    if (key === "|") continue;
+    const ids = productsByKey.get(key);
+    if (!ids || ids.length === 0) continue;
+    if (ids.length > 1) { ambiguous++; continue; }
+
+    const body: Record<string, number> = {};
+    if (a.stock !== null) body.stock = a.stock;            // stock NOT NULL — 숫자일 때만.
+    if (a.costPrice !== null) body.cost_price = a.costPrice; // 최저 매입가 있을 때만(null 로 안 덮음).
+    if (Object.keys(body).length === 0) continue;
+    tasks.push({ id: ids[0], body });
+  }
+
+  // 5) Supabase REST PATCH — 급여 흐름과 동일한 청크/동시성/로그 스타일.
+  const restBase = `${cfg.url}/rest/v1/products`;
+  const headers: Record<string, string> = {
+    apikey: cfg.key,
+    Authorization: `Bearer ${cfg.key}`,
+    "Content-Type": "application/json",
+    Prefer: "return=representation",
+  };
+
+  let matched = 0;
+  let firstError: string | null = null;
+  const CHUNK = 500;
+  const CONCURRENCY = 12;
+  for (let i = 0; i < tasks.length; i += CHUNK) {
+    const slice = tasks.slice(i, i + CHUNK);
+    let idx = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, slice.length) }, async () => {
+        while (idx < slice.length) {
+          const t = slice[idx++];
+          const url = `${restBase}?id=eq.${encodeURIComponent(t.id)}&select=id`;
+          try {
+            const res = await fetch(url, {
+              method: "PATCH",
+              headers,
+              body: JSON.stringify(t.body),
+            });
+            if (!res.ok) {
+              const bodyText = await res.text();
+              if (!firstError) firstError = `HTTP ${res.status}: ${bodyText.slice(0, 160)}`;
+              continue;
+            }
+            const updated = (await res.json()) as unknown;
+            if (Array.isArray(updated)) matched += updated.length;
+          } catch (e) {
+            if (!firstError) firstError = (e as Error).message;
+          }
+        }
+      })
+    );
+  }
+
+  if (firstError) {
+    console.warn(`[ykorder] 비급여 일부 PATCH 실패 (첫 오류): ${firstError}`);
+  }
+  if (ambiguous > 0) {
+    console.log(`[ykorder] 비급여 — 동명 충돌로 스킵한 품목 ${ambiguous}개`);
+  }
+  console.log(`[ykorder] 비급여 — NC 스냅샷 ${aggs.length} 품목 중 ${matched} 개 매칭·반영`);
+  return { matched, total: aggs.length };
+}
+
+// products(coverage=비급여)를 Range 헤더로 페이지네이션 수집.
+async function fetchNonInsuredProducts(cfg: YkConfig): Promise<YkProduct[]> {
+  const PAGE = 1000;
+  const base = `${cfg.url}/rest/v1/products?select=id,name,maker&coverage=eq.${encodeURIComponent("비급여")}`;
+  const out: YkProduct[] = [];
+  let offset = 0;
+  for (;;) {
+    const res = await fetch(base, {
+      headers: {
+        apikey: cfg.key,
+        Authorization: `Bearer ${cfg.key}`,
+        "Range-Unit": "items",
+        Range: `${offset}-${offset + PAGE - 1}`,
+      },
+    });
+    if (!res.ok) {
+      const bodyText = await res.text();
+      throw new Error(`products 조회 실패 HTTP ${res.status}: ${bodyText.slice(0, 160)}`);
+    }
+    const batch = (await res.json()) as YkProduct[];
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    out.push(...batch);
+    if (batch.length < PAGE) break;
+    offset += PAGE;
+  }
+  return out;
 }
