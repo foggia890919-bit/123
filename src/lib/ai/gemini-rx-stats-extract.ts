@@ -139,6 +139,7 @@ function buildPrompt(): string {
     "7) period 는 반드시 YYYY-MM 형식 (예: '2026-04'). 사진에 '2026년 4월' 로 보여도 변환.",
     "8) **각 약품 행의 사진 내 위치 bbox**: [x1, y1, x2, y2] 비율 (0~1). 사진 좌상단이 (0,0), 우하단이 (1,1). 그 약품 행 전체(왼쪽 보험코드부터 오른쪽 금액 끝까지)를 감싸는 사각형. 못 잡으면 [0,0,0,0].",
     "8-1) **각 약품 행의 qtyBbox**: 그 행의 '수량(총사용량)' 숫자가 사진에서 차지하는 최소 영역 [x1, y1, x2, y2] 비율 (0~1). 행 전체가 아니라 그 수량 숫자 셀만 딱 감싸는 작은 사각형. 실무자가 실제로 입력하는 값이 수량뿐이라, 사진이 기울어도 이 좌표가 수량 칸을 정확히 가리키게 하는 것이 핵심. 수량을 판독 못 했거나(quantity=null) 위치를 못 잡으면 qtyBbox=null.",
+    "8-2) bbox·qtyBbox 좌표 숫자는 소수점 3자리로 반올림 (예: 0.734). 더 긴 자릿수 금지 — 응답 길이 절약.",
     "",
     "응답은 지정된 JSON 스키마만. 자유 텍스트 금지.",
   ].join("\n");
@@ -253,7 +254,7 @@ export async function extractRxStatsFromImage(
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
   const t0 = Date.now();
-  const response = await ai.models.generateContent({
+  const callGemini = (thinkingBudget: number) => ai.models.generateContent({
     model,
     // OCR 사전 처리 없이 사진 원본을 멀티모달 vision 에 그대로 전달.
     contents: [{
@@ -272,14 +273,26 @@ export async function extractRxStatsFromImage(
       maxOutputTokens: 32768,
       // thinking 토큰이 maxOutputTokens 를 잠식해서 실제 응답이 잘리던 문제 방어.
       // 사진→표 추출은 단계 추론이 도움되지만 무한대(-1) 면 thinking 만 하고 output 못 내는 케이스.
-      thinkingConfig: { thinkingBudget: 8192, includeThoughts: false },
+      thinkingConfig: { thinkingBudget, includeThoughts: false },
     },
   });
 
-  const raw = response.text ?? "";
-  const parsed = parseJsonLoose(raw) as Record<string, unknown> | null;
+  let response = await callGemini(8192);
+  let raw = response.text ?? "";
+  let parsed = parseJsonLoose(raw) as Record<string, unknown> | null;
   if (!parsed || typeof parsed !== "object") {
-    throw new Error(`Gemini 빈/잘못된 응답: ${raw.slice(0, 200)}`);
+    // 행이 많은 사진에서 응답 JSON 이 잘리는 케이스 — thinking 예산을 줄여
+    // 출력 여유를 확보해 1회 재시도. (thinking 토큰이 maxOutputTokens 를 잠식)
+    const reason1 = response.candidates?.[0]?.finishReason ?? "unknown";
+    response = await callGemini(2048);
+    raw = response.text ?? "";
+    parsed = parseJsonLoose(raw) as Record<string, unknown> | null;
+    if (!parsed || typeof parsed !== "object") {
+      const reason2 = response.candidates?.[0]?.finishReason ?? "unknown";
+      throw new Error(
+        `Gemini 빈/잘못된 응답 (finish: ${reason1}→재시도 ${reason2}, 길이 ${raw.length}자): ${raw.slice(0, 200)}`,
+      );
+    }
   }
 
   const summary = (parsed.summary ?? {}) as Record<string, unknown>;
