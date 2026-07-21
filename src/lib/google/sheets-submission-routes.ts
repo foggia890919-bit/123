@@ -159,6 +159,8 @@ async function doSync(): Promise<void> {
     ? fixedId.trim()
     : await findOrCreateSpreadsheet(process.env.GOOGLE_SHEETS_SUBMISSION_ROUTES_NAME || "통계제출처 매핑");
   console.log("[submission-routes-sheet] spreadsheet:", "https://docs.google.com/spreadsheets/d/" + id);
+  // 403(권한 없음) 트러블슈팅용 — 시트에 편집자로 공유해야 할 서비스계정 주소를 로그에 남긴다.
+  console.log("[submission-routes-sheet] service-account:", process.env.GOOGLE_DRIVE_CLIENT_EMAIL || "(미설정)");
 
   await ensureTabs(id, tabs.map((t) => t.name));
   for (const t of tabs) {
