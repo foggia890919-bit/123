@@ -152,8 +152,12 @@ async function doSync(): Promise<void> {
     { name: TAB_ENTITIES, headers: HEADERS_ENTITIES, rows: entityRows },
   ];
 
-  const name = process.env.GOOGLE_SHEETS_SUBMISSION_ROUTES_NAME || "통계제출처 매핑";
-  const id = await findOrCreateSpreadsheet(name);
+  // 통합 시트 ID 가 지정되면 그 시트를 직접 사용 (사장님 지정: 「와이케이 CSO영업 데이터」).
+  // 미지정 시에만 이름으로 찾거나 생성 (서비스계정은 저장용량 0이라 생성은 실패할 수 있음).
+  const fixedId = process.env.GOOGLE_SHEETS_SUBMISSION_ROUTES_ID;
+  const id = fixedId && fixedId.trim()
+    ? fixedId.trim()
+    : await findOrCreateSpreadsheet(process.env.GOOGLE_SHEETS_SUBMISSION_ROUTES_NAME || "통계제출처 매핑");
   console.log("[submission-routes-sheet] spreadsheet:", "https://docs.google.com/spreadsheets/d/" + id);
 
   await ensureTabs(id, tabs.map((t) => t.name));
