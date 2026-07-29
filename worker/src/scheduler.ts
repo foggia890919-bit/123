@@ -15,6 +15,7 @@ import {
   type SnapshotInsert,
 } from "./db.ts";
 import { exportStockToYkOrder } from "./export-ykorder.ts";
+import { exportOffersToYkOrder } from "./export-offers.ts";
 
 // 진행 상황 저장 청크 크기 — 너무 자주 저장하면 DB 쓰기 증가, 너무 드물면 워커 죽었을 때 손실 큼.
 const PROGRESS_CHUNK = Math.max(50, Number(process.env.SCHEDULED_PROGRESS_CHUNK ?? 200));
@@ -215,6 +216,15 @@ export async function runScheduledJob(
     await exportStockToYkOrder();
   } catch (err) {
     console.error("[scheduler] ykorder 재고 내보내기 실패:", (err as Error).message);
+  }
+
+  // ---------------- 도도매(자동수집) offers 내보내기 ----------------
+  // 사이트별 최근 24시간 스냅샷을 ykpharm-order wholesaler_offers 로 전체 교체.
+  // 실패해도 배치 결과에는 영향 없음 (best-effort).
+  try {
+    await exportOffersToYkOrder();
+  } catch (err) {
+    console.error("[scheduler] 도도매 offers 내보내기 실패:", (err as Error).message);
   }
 
   // Best-effort prune of stale rows

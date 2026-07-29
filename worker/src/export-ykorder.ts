@@ -31,7 +31,7 @@ import { normalizeProductKey, normalizeCompanyKey } from "./normalize.ts";
 const DEFAULT_URL = "https://sixujzpkxamkfjasexbj.supabase.co";
 const DEFAULT_ENV_PATH = "C:\\temp\\ykpharm-order\\.env.local";
 
-interface YkConfig {
+export interface YkConfig {
   url: string;
   key: string;
 }
@@ -68,7 +68,7 @@ function parseEnvFile(path: string): Record<string, string> {
 //   2) YKORDER_ENV_PATH(기본 C:\temp\ykpharm-order\.env.local)의
 //      SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
 //   url 은 어느 경로든 없으면 DEFAULT_URL 로 폴백. key 를 끝내 못 찾으면 null(→ no-op).
-function resolveConfig(): YkConfig | null {
+export function resolveConfig(): YkConfig | null {
   const envUrl = process.env.YKORDER_SUPABASE_URL;
   const envKey = process.env.YKORDER_SERVICE_KEY;
   if (envKey) {

@@ -14,6 +14,7 @@ import { runMasterSync, isMasterSyncRunning } from "./master-sync.ts";
 import { isEpharmsSyncRunning, runEpharmsSync, forceResetSync } from "./epharms/sync.ts";
 import { isProductSyncRunning, syncProductMaster } from "./epharms/products.ts";
 import { exportStockToYkOrder } from "./export-ykorder.ts";
+import { exportOffersToYkOrder } from "./export-offers.ts";
 
 // 시작 시 .env 중복 키 검증 — dotenv는 첫 값을 적용하므로 같은 키가 여러 번 적혀있으면 의도와 다른 값이 적용될 수 있음.
 function checkEnvDuplicates() {
@@ -351,6 +352,24 @@ app.post("/export-ykorder", async (_req, res) => {
     const result = await exportStockToYkOrder();
     if (!result) {
       res.status(503).json({ error: "YKORDER_DATABASE_URL (또는 DATABASE_URL) not configured" });
+      return;
+    }
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// 도도매(자동수집) offers 내보내기 수동 트리거 — wholesaler_offers 전체 교체.
+//   POST /export-offers            → 실제 delete+insert
+//   POST /export-offers?dryRun=1   → 변환 건수만 계산(쓰기 없음)
+// 동기 실행으로 결과를 그대로 반환. 인증은 기존 Bearer 미들웨어.
+app.post("/export-offers", async (req, res) => {
+  try {
+    const dryRun = req.query.dryRun === "1" || req.query.dryRun === "true";
+    const result = await exportOffersToYkOrder({ dryRun });
+    if (!result) {
+      res.status(503).json({ error: "YKORDER 설정 또는 DATABASE_URL 없음" });
       return;
     }
     res.json({ ok: true, ...result });
