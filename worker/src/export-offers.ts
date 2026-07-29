@@ -247,18 +247,25 @@ async function buildOffersForSite(
         ? Math.max(1, Math.round(unit / basePrice))
         : null;
     const qtyText = parsePackCount(r.spec) ?? parsePackCount(r.name);
-    const packQty = qtyPrice ?? qtyText ?? 1;
+    // 계산용 포장수량: 약가 대비 비율(자기일관 → 할인율이 비정상적으로 커지지 않음) 우선,
+    // 약가가 없으면 규격 텍스트, 그것도 없으면 1.
+    // (크롤 단가가 실제로 어느 포장의 가격인지 원본에 없어, 텍스트를 그대로 쓰면
+    //  단가가 낱개가일 때 60배 나눠 98% 같은 허위 할인이 나온다. 그래서 비율을 신뢰.)
+    const mathQty = qtyPrice ?? qtyText ?? 1;
 
-    // 표준코드: 텍스트 포장수량 → 가격추정 포장수량 순으로 SKU 매칭(유일할 때만).
-    const stdCode = pickStdCode(skus, [qtyText, qtyPrice]);
+    // 표준코드 후보: 규격 텍스트와 가격비율 포장수량이 "일치"할 때만 신뢰(또는 한쪽만 있을 때).
+    // 불일치(포장 라벨 vs 가격단위 모순)면 비워 오매칭 방지 — 발주자 지침: 틀린 표준코드보다 빈값.
+    let stdQtys: (number | null)[];
+    if (qtyText != null && qtyPrice != null) stdQtys = qtyText === qtyPrice ? [qtyText] : [];
+    else stdQtys = [qtyText ?? qtyPrice];
+    const stdCode = pickStdCode(skus, stdQtys);
     if (stdCode) insuredStdFilled++;
 
-    // 낱개 기준 매입가 + 할인율.
+    // 낱개 기준 매입가 + 할인율 (supply_price 는 항상 낱개 단가).
+    let supply = unit != null ? Math.round(unit / mathQty) : 0;
     let discount = 0;
-    let supply = unit != null ? Math.round(unit) : 0;
-    if (basePrice && basePrice > 0 && unit != null && packQty > 0) {
-      const perUnit = unit / packQty;
-      supply = Math.round(perUnit);
+    if (basePrice && basePrice > 0 && unit != null) {
+      const perUnit = unit / mathQty;
       discount = round1((1 - perUnit / basePrice) * 100);
       if (discount < 0) discount = 0;
       if (discount > 100) discount = 100;
