@@ -16,6 +16,10 @@ import {
 } from "./db.ts";
 import { exportStockToYkOrder } from "./export-ykorder.ts";
 import { exportOffersToYkOrder } from "./export-offers.ts";
+import { getSharedExporter, type YkIncrementalExporter } from "./incremental-export.ts";
+
+// 준실시간 증분 플러시 주기(ms). 배치 진행 중 그 사이 수집된 코드만 ykorder 에 반영.
+const INCR_FLUSH_MS = Math.max(3_000, Number(process.env.INCR_FLUSH_MS ?? 10_000));
 
 // 진행 상황 저장 청크 크기 — 너무 자주 저장하면 DB 쓰기 증가, 너무 드물면 워커 죽었을 때 손실 큼.
 const PROGRESS_CHUNK = Math.max(50, Number(process.env.SCHEDULED_PROGRESS_CHUNK ?? 200));
@@ -82,6 +86,29 @@ export async function runScheduledJob(
     return { totalCodes: 0, sitesRun: [], written: 0, failed: 0 };
   }
 
+  // ---------------- 준실시간 증분 반영기 (요구3) ----------------
+  // 배치 진행 중 10초마다 그 사이 새로 수집된 코드만 ykorder 에 반영. best-effort.
+  let incr: YkIncrementalExporter | null = null;
+  try {
+    incr = await getSharedExporter();
+    if (incr) {
+      await incr.refreshMaps(); // 배치 시작 시 최신 제품 마스터로 맞춤
+      incr.startPeriodicFlush(INCR_FLUSH_MS);
+    }
+  } catch (err) {
+    console.warn(`[scheduler] 증분 반영기 초기화 실패(무시): ${(err as Error).message}`);
+    incr = null;
+  }
+  const finishIncr = async () => {
+    if (!incr) return;
+    incr.stopPeriodicFlush();
+    try {
+      await incr.flush(); // 마지막 dirty 잔여분 반영
+    } catch (err) {
+      console.warn(`[scheduler] 증분 최종 플러시 실패(무시): ${(err as Error).message}`);
+    }
+  };
+
   // namesOnly: 코드 배치 전체를 건너뛰고 비급여 이름 배치만 실행.
   if (opts.namesOnly) {
     console.log("[scheduler] namesOnly — 코드 배치 생략, 비급여 이름 배치만 실행");
@@ -91,7 +118,8 @@ export async function runScheduledJob(
         console.error(`[scheduler] ensureSite failed for ${site.key}:`, (err as Error).message)
       );
     }
-    const { nameWritten, nameFailed } = await runNameBatch(deps, opts, sitesWithCreds);
+    const { nameWritten, nameFailed } = await runNameBatch(deps, opts, sitesWithCreds, incr);
+    await finishIncr();
     return {
       totalCodes: 0,
       sitesRun: sitesWithCreds.map(s => s.key),
@@ -163,6 +191,7 @@ export async function runScheduledJob(
                   stats.failed++;
                   continue;
                 }
+                incr?.markInsured(insuranceCode); // 준실시간 반영 대상으로 표시
                 stats.done++;
               } else {
                 console.info(`[scheduler] EMPTY ${site.key}/${insuranceCode}: 도매상에 등록 없음`);
@@ -207,7 +236,10 @@ export async function runScheduledJob(
 
   // ---------------- 비급여 이름 배치 ----------------
   // 코드 배치가 끝난 뒤, 보험코드 없는 약을 제품명으로 검색해 의사 키 NC:{medicationId} 로 저장.
-  const { nameWritten, nameFailed } = await runNameBatch(deps, opts, sitesWithCreds);
+  const { nameWritten, nameFailed } = await runNameBatch(deps, opts, sitesWithCreds, incr);
+
+  // 증분 반영 종료 — 주기 플러시 정지 + 마지막 잔여분 반영. 이후 전체 교체가 정합성 보정.
+  await finishIncr();
 
   // ---------------- ykpharm-order 재고 내보내기 ----------------
   // 크롤링이 끝난 재고 합계를 ykpharm-order(Supabase) products.stock 으로 push.
@@ -248,7 +280,8 @@ export async function runScheduledJob(
 async function runNameBatch(
   deps: RunJobDeps,
   opts: RunOptions,
-  sitesWithCreds: WholesaleAdapter[]
+  sitesWithCreds: WholesaleAdapter[],
+  incr: YkIncrementalExporter | null
 ): Promise<{ nameWritten: number; nameFailed: number }> {
   if (opts.skipNames || !deps.scrapeOneByName) {
     return { nameWritten: 0, nameFailed: 0 };
@@ -308,6 +341,7 @@ async function runNameBatch(
               };
               try {
                 await saveSnapshots([insert]);
+                incr?.markNc(t.medicationId); // 준실시간 반영 대상으로 표시
                 st.done++;
               } catch (err) {
                 console.error(`[scheduler] db write failed for ${site.key}/${t.productName}:`, (err as Error).message);

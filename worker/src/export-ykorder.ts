@@ -87,6 +87,55 @@ function normalizeUrl(u: string): string {
   return u.replace(/\/+$/, "");
 }
 
+// code 단위 PATCH 로 products.stock 만 갱신 — 급여 재고 반영 공용 헬퍼.
+//   존재하지 않는 code 는 0행 매칭 → 조용히 무시(INSERT 안 함). stock 컬럼만 건드림.
+//   전체 배치(exportStockToYkOrder)와 증분/온디맨드 반영(incremental-export)이 함께 쓴다.
+export async function patchProductStock(
+  cfg: YkConfig,
+  rows: { code: string; stock: number }[]
+): Promise<{ matched: number; firstError: string | null }> {
+  const restBase = `${cfg.url}/rest/v1/products`;
+  const headers: Record<string, string> = {
+    apikey: cfg.key,
+    Authorization: `Bearer ${cfg.key}`,
+    "Content-Type": "application/json",
+    Prefer: "return=representation",
+  };
+  let matched = 0;
+  let firstError: string | null = null;
+  const CHUNK = 500;
+  const CONCURRENCY = 12;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const slice = rows.slice(i, i + CHUNK);
+    let idx = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, slice.length) }, async () => {
+        while (idx < slice.length) {
+          const r = slice[idx++];
+          const url = `${restBase}?code=eq.${encodeURIComponent(r.code)}&select=code`;
+          try {
+            const res = await fetch(url, {
+              method: "PATCH",
+              headers,
+              body: JSON.stringify({ stock: r.stock }),
+            });
+            if (!res.ok) {
+              const body = await res.text();
+              if (!firstError) firstError = `HTTP ${res.status}: ${body.slice(0, 160)}`;
+              continue;
+            }
+            const updated = (await res.json()) as unknown;
+            if (Array.isArray(updated)) matched += updated.length;
+          } catch (e) {
+            if (!firstError) firstError = (e as Error).message;
+          }
+        }
+      })
+    );
+  }
+  return { matched, firstError };
+}
+
 export async function exportStockToYkOrder(): Promise<
   { matched: number; total: number; nonInsured: { matched: number; total: number } | null } | null
 > {
@@ -119,51 +168,8 @@ export async function exportStockToYkOrder(): Promise<
     (r): r is { code: string; stock: number } => !!r.code && r.stock !== null
   );
 
-  // 2) Supabase REST: code 단위 PATCH 로 stock 만 갱신.
-  //    500개 청크로 나눠 진행, 청크 안에서는 동시성 제한으로 병렬 처리.
-  const restBase = `${cfg.url}/rest/v1/products`;
-  const headers: Record<string, string> = {
-    apikey: cfg.key,
-    Authorization: `Bearer ${cfg.key}`,
-    "Content-Type": "application/json",
-    // 갱신된 행만 되돌려받아(select=code) 반영 건수를 센다.
-    Prefer: "return=representation",
-  };
-
-  let matched = 0;
-  let firstError: string | null = null;
-  const CHUNK = 500;
-  const CONCURRENCY = 12;
-
-  for (let i = 0; i < usable.length; i += CHUNK) {
-    const slice = usable.slice(i, i + CHUNK);
-    let idx = 0;
-    await Promise.all(
-      Array.from({ length: Math.min(CONCURRENCY, slice.length) }, async () => {
-        while (idx < slice.length) {
-          const r = slice[idx++];
-          const url = `${restBase}?code=eq.${encodeURIComponent(r.code)}&select=code`;
-          try {
-            const res = await fetch(url, {
-              method: "PATCH",
-              headers,
-              body: JSON.stringify({ stock: r.stock }),
-            });
-            if (!res.ok) {
-              // 응답 본문은 PostgREST 에러 JSON(키 미포함)이라 로그에 안전.
-              const body = await res.text();
-              if (!firstError) firstError = `HTTP ${res.status}: ${body.slice(0, 160)}`;
-              continue;
-            }
-            const updated = (await res.json()) as unknown;
-            if (Array.isArray(updated)) matched += updated.length;
-          } catch (e) {
-            if (!firstError) firstError = (e as Error).message;
-          }
-        }
-      })
-    );
-  }
+  // 2) Supabase REST: code 단위 PATCH 로 stock 만 갱신 (patchProductStock 공용 헬퍼).
+  const { matched, firstError } = await patchProductStock(cfg, usable);
 
   if (firstError) {
     console.warn(`[ykorder] 일부 PATCH 실패 (첫 오류): ${firstError}`);

@@ -7,6 +7,7 @@ import { ALL_ADAPTERS } from "../../src/scrapers/adapters/index.ts";
 import type { Credentials, InventoryItem, WholesaleAdapter } from "../../src/scrapers/core/types.ts";
 import { startScheduler, triggerJobNow, isJobRunning } from "./scheduler.ts";
 import { startRefreshPoller } from "./refresh-poller.ts";
+import { startOndemandPool } from "./ondemand-pool.ts";
 import { hasDb } from "./db.ts";
 import { startEpharmsScheduler } from "./epharms/cron.ts";
 import cron from "node-cron";
@@ -488,6 +489,11 @@ const server = app.listen(PORT, () => {
   // 실시간 재고 조회 대기줄 폴러 — KMD API 가 만든 RefreshRequest 를 집어 크롤.
   if (hasDb()) {
     startRefreshPoller({ scrapeOne, getCreds });
+  }
+
+  // 검색 온디맨드 재조회 봇 풀 — ykorder 큐(stock_refresh_requests)를 상시 폴링.
+  if (hasDb()) {
+    startOndemandPool({ scrapeOne, getCreds });
   }
 
   // 공공데이터 마스터 주간 동기화 — 기본: 일요일 02:00 KST

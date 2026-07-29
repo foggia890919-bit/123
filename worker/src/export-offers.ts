@@ -33,12 +33,12 @@ import { normalizeProductKey, normalizeCompanyKey } from "./normalize.ts";
 // 키는 어떤 로그에도 출력하지 않는다.
 
 // wholesalers 이메일 → 하드코딩 폴백 id (2026-07-29 발주자 제공).
-const SITE_WHOLESALERS: Record<string, { email: string; fallbackId: string }> = {
+export const SITE_WHOLESALERS: Record<string, { email: string; fallbackId: string }> = {
   ibjp: { email: "auto-ibjp@ykpharm.local", fallbackId: "c868a636-6943-45af-8727-a8dd7519d3b5" },
   family: { email: "auto-family@ykpharm.local", fallbackId: "e6e8148d-a604-4b3d-9e2f-72bb85a60d27" },
 };
 
-interface OfferRow {
+export interface OfferRow {
   wholesaler_id: string;
   insurance_code: string;
   std_code: string;
@@ -51,7 +51,7 @@ interface OfferRow {
   uploaded_at: string;
 }
 
-interface YkProductLite {
+export interface YkProductLite {
   id: string;
   code: string | null;
   name: string;
@@ -62,10 +62,18 @@ interface YkProductLite {
   spec: string | null;
 }
 
-interface YkSku {
+export interface YkSku {
   std_code: string | null;
   pack_qty: number | null;
   sort_order: number | null;
+}
+
+// products/product_skus 로부터 만든 매칭 맵 묶음 — 전체·증분·온디맨드 반영이 공유한다.
+export interface YkMaps {
+  codeToProduct: Map<string, YkProductLite>;
+  productById: Map<string, YkProductLite>;
+  productsByNameKey: Map<string, string[]>;
+  skusByProduct: Map<string, YkSku[]>;
 }
 
 interface SiteResult {
@@ -84,7 +92,7 @@ interface SiteResult {
   error?: string;
 }
 
-function headers(cfg: YkConfig, extra: Record<string, string> = {}): Record<string, string> {
+export function headers(cfg: YkConfig, extra: Record<string, string> = {}): Record<string, string> {
   return {
     apikey: cfg.key,
     Authorization: `Bearer ${cfg.key}`,
@@ -97,11 +105,65 @@ function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }
 
+// 급여 스냅샷 한 행 → OfferRow. 요구1(2026-07-29 발주자 확정):
+//   급여 supply_price = 보험약가(products.base_price, 낱개), discount_rate = 0.
+//   (할인 개념 없음 — 할인은 별도 포인트 적립이라 매입가와 무관.)
+//   약가가 없거나 0인 급여 품목만 기존 방식(사이트 단가 ÷ 포장수량 낱개 정규화)으로 폴백.
+//   표준코드(std_code) 판별에는 여전히 사이트 단가·규격 기반 포장수량 추정을 쓴다.
+export function buildInsuredRow(
+  r: { code: string; name: string | null; spec: string | null; stock: number | null; unitPrice: number | null },
+  prod: YkProductLite | undefined,
+  skus: YkSku[],
+  wholesalerId: string,
+  nowIso: string
+): { row: OfferRow; stdFilled: boolean } {
+  const basePrice = prod?.base_price ?? null;
+  const unit = r.unitPrice; // 사이트 포장 단가
+
+  // 포장수량(표준코드 판별용): 약가 대비 비율(주 신호) + 규격/제품명 텍스트(보조).
+  const qtyPrice =
+    basePrice && basePrice > 0 && unit != null && unit > 0
+      ? Math.max(1, Math.round(unit / basePrice))
+      : null;
+  const qtyText = parsePackCount(r.spec) ?? parsePackCount(r.name);
+  const mathQty = qtyPrice ?? qtyText ?? 1;
+
+  // 표준코드 후보: 규격 텍스트와 가격비율 포장수량이 일치할 때만 신뢰(또는 한쪽만 있을 때).
+  let stdQtys: (number | null)[];
+  if (qtyText != null && qtyPrice != null) stdQtys = qtyText === qtyPrice ? [qtyText] : [];
+  else stdQtys = [qtyText ?? qtyPrice];
+  const stdCode = pickStdCode(skus, stdQtys);
+
+  // 요구1: 급여 가격은 전부 보험약가(낱개). 약가 없으면 낱개 정규화 폴백. 할인율 항상 0.
+  let supply: number;
+  if (basePrice && basePrice > 0) {
+    supply = Math.round(basePrice);
+  } else {
+    supply = unit != null ? Math.round(unit / mathQty) : 0;
+  }
+
+  return {
+    row: {
+      wholesaler_id: wholesalerId,
+      insurance_code: r.code,
+      std_code: stdCode,
+      name: r.name ?? prod?.name ?? "",
+      spec: r.spec ?? "",
+      stock_qty: r.stock != null ? Math.round(r.stock) : 0,
+      discount_rate: 0,
+      supply_price: supply,
+      source: "api",
+      uploaded_at: nowIso,
+    },
+    stdFilled: !!stdCode,
+  };
+}
+
 // 규격/제품명 텍스트에서 "포장 낱개 수량" 파싱. 낱개를 세는 단위(정/T/캡슐/C/포/P/EA/관/매/앰플/바이알)
 // 뒤의 숫자만 인정하고, 용량 단위(g/mg/ml/mcg/kg/L/IU/%)는 무시한다.
 // 마지막(가장 오른쪽) 매칭을 채택 — 제품명 끝에 포장이 오기 때문("몬테라정 10/28T" → 28).
 const COUNT_UNIT = "(?:T|C|P|EA|정|캡슐|캅셀|포|매|관|앰플|바이알|VIAL|AMP|팩|PAC|병)";
-function parsePackCount(text: string | null | undefined): number | null {
+export function parsePackCount(text: string | null | undefined): number | null {
   if (!text) return null;
   const re = new RegExp(`(\\d{1,4})\\s*${COUNT_UNIT}\\b`, "gi");
   let m: RegExpExecArray | null;
@@ -116,7 +178,7 @@ function parsePackCount(text: string | null | undefined): number | null {
 // SKU 목록에서 포장수량 후보들(우선순위 순)로 표준코드를 고른다.
 // 어떤 후보에서 정확히 1개 SKU 가 매칭되면 그 표준코드, 복수 매칭(동일 포장수량 다중 표준코드)이면
 // 비움(안전). 후보 모두 실패하면 비움.
-function pickStdCode(skus: YkSku[], qtyCandidates: (number | null)[]): string {
+export function pickStdCode(skus: YkSku[], qtyCandidates: (number | null)[]): string {
   if (!skus || skus.length === 0) return "";
   for (const q of qtyCandidates) {
     if (q == null) continue;
@@ -181,7 +243,33 @@ async function fetchSkusByProduct(cfg: YkConfig): Promise<Map<string, YkSku[]>> 
   return map;
 }
 
-async function lookupWholesalerId(cfg: YkConfig, email: string, fallbackId: string): Promise<string> {
+// products + product_skus 를 1회 수집해 매칭 맵 묶음을 만든다 (급여 코드맵 / 비급여 이름키 / SKU맵).
+export async function loadYkMaps(cfg: YkConfig): Promise<YkMaps> {
+  const products = await fetchAllProducts(cfg);
+  const skusByProduct = await fetchSkusByProduct(cfg);
+  const codeToProduct = new Map<string, YkProductLite>();
+  const productById = new Map<string, YkProductLite>();
+  const productsByNameKey = new Map<string, string[]>();
+  for (const p of products) {
+    productById.set(String(p.id), p);
+    if (p.code) {
+      if (!codeToProduct.has(p.code)) codeToProduct.set(p.code, p);
+    }
+    if (p.coverage === "비급여") {
+      const key = `${normalizeProductKey(p.name)}|${normalizeCompanyKey(p.maker ?? "")}`;
+      if (key === "|") continue;
+      const list = productsByNameKey.get(key);
+      if (list) list.push(String(p.id));
+      else productsByNameKey.set(key, [String(p.id)]);
+    }
+  }
+  console.log(
+    `[offers] products ${products.length}개 · SKU맵 ${skusByProduct.size} 제품 로드 (코드맵 ${codeToProduct.size}, 비급여 이름키 ${productsByNameKey.size})`
+  );
+  return { codeToProduct, productById, productsByNameKey, skusByProduct };
+}
+
+export async function lookupWholesalerId(cfg: YkConfig, email: string, fallbackId: string): Promise<string> {
   try {
     const url = `${cfg.url}/rest/v1/wholesalers?select=id&email=eq.${encodeURIComponent(email)}`;
     const res = await fetch(url, { headers: headers(cfg) });
@@ -237,52 +325,10 @@ async function buildOffersForSite(
   for (const r of insured) {
     if (!r.code) continue;
     const prod = codeToProduct.get(r.code);
-    const basePrice = prod?.base_price ?? null;
-    const unit = r.unitPrice; // 포장 단가
     const skus = prod ? skusByProduct.get(String(prod.id)) ?? [] : [];
-
-    // 포장수량: 약가 대비 비율(주 신호) + 규격/제품명 텍스트(보조). 낱개 단위(정/T/캡슐...)만 인정.
-    const qtyPrice =
-      basePrice && basePrice > 0 && unit != null && unit > 0
-        ? Math.max(1, Math.round(unit / basePrice))
-        : null;
-    const qtyText = parsePackCount(r.spec) ?? parsePackCount(r.name);
-    // 계산용 포장수량: 약가 대비 비율(자기일관 → 할인율이 비정상적으로 커지지 않음) 우선,
-    // 약가가 없으면 규격 텍스트, 그것도 없으면 1.
-    // (크롤 단가가 실제로 어느 포장의 가격인지 원본에 없어, 텍스트를 그대로 쓰면
-    //  단가가 낱개가일 때 60배 나눠 98% 같은 허위 할인이 나온다. 그래서 비율을 신뢰.)
-    const mathQty = qtyPrice ?? qtyText ?? 1;
-
-    // 표준코드 후보: 규격 텍스트와 가격비율 포장수량이 "일치"할 때만 신뢰(또는 한쪽만 있을 때).
-    // 불일치(포장 라벨 vs 가격단위 모순)면 비워 오매칭 방지 — 발주자 지침: 틀린 표준코드보다 빈값.
-    let stdQtys: (number | null)[];
-    if (qtyText != null && qtyPrice != null) stdQtys = qtyText === qtyPrice ? [qtyText] : [];
-    else stdQtys = [qtyText ?? qtyPrice];
-    const stdCode = pickStdCode(skus, stdQtys);
-    if (stdCode) insuredStdFilled++;
-
-    // 낱개 기준 매입가 + 할인율 (supply_price 는 항상 낱개 단가).
-    let supply = unit != null ? Math.round(unit / mathQty) : 0;
-    let discount = 0;
-    if (basePrice && basePrice > 0 && unit != null) {
-      const perUnit = unit / mathQty;
-      discount = round1((1 - perUnit / basePrice) * 100);
-      if (discount < 0) discount = 0;
-      if (discount > 100) discount = 100;
-    }
-
-    rows.push({
-      wholesaler_id: wholesalerId,
-      insurance_code: r.code,
-      std_code: stdCode,
-      name: r.name ?? prod?.name ?? "",
-      spec: r.spec ?? "",
-      stock_qty: r.stock != null ? Math.round(r.stock) : 0,
-      discount_rate: discount,
-      supply_price: supply,
-      source: "api",
-      uploaded_at: nowIso,
-    });
+    const { row, stdFilled } = buildInsuredRow(r, prod, skus, wholesalerId, nowIso);
+    if (stdFilled) insuredStdFilled++;
+    rows.push(row);
   }
 
   // ---- 비급여(NC:): medicationId 별 스냅샷 → Medication 이름/제약사 → products 매칭 ----
@@ -363,7 +409,40 @@ async function deleteOffers(cfg: YkConfig, wholesalerId: string): Promise<number
   return Array.isArray(deleted) ? deleted.length : 0;
 }
 
-async function insertOffers(cfg: YkConfig, rows: OfferRow[]): Promise<{ inserted: number; firstError: string | null }> {
+// 특정 (도매상, 보험코드 집합) 의 기존 offers 만 삭제 — 증분/온디맨드 반영용.
+// wholesaler_offers 에 (wholesaler_id, insurance_code) 고유 제약이 없어 delete 후 insert 로 교체한다.
+// 코드 목록이 크면 URL 길이 제한이 있어 200개 단위로 나눠 삭제한다.
+export async function deleteOffersByCodes(
+  cfg: YkConfig,
+  wholesalerId: string,
+  codes: string[]
+): Promise<number> {
+  const uniq = [...new Set(codes.filter(Boolean))];
+  if (uniq.length === 0) return 0;
+  let deleted = 0;
+  const CHUNK = 200;
+  for (let i = 0; i < uniq.length; i += CHUNK) {
+    const slice = uniq.slice(i, i + CHUNK);
+    const inList = slice.map(c => `"${encodeURIComponent(c)}"`).join(",");
+    const url =
+      `${cfg.url}/rest/v1/wholesaler_offers` +
+      `?wholesaler_id=eq.${encodeURIComponent(wholesalerId)}` +
+      `&insurance_code=in.(${inList})&select=id`;
+    const res = await fetch(url, {
+      method: "DELETE",
+      headers: headers(cfg, { Prefer: "return=representation" }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`offers 부분 delete 실패 HTTP ${res.status}: ${body.slice(0, 160)}`);
+    }
+    const arr = (await res.json()) as unknown;
+    if (Array.isArray(arr)) deleted += arr.length;
+  }
+  return deleted;
+}
+
+export async function insertOffers(cfg: YkConfig, rows: OfferRow[]): Promise<{ inserted: number; firstError: string | null }> {
   const restBase = `${cfg.url}/rest/v1/wholesaler_offers`;
   const CHUNK = 500;
   let inserted = 0;
@@ -405,27 +484,7 @@ export async function exportOffersToYkOrder(
   const nowIso = new Date().toISOString();
 
   // products + product_skus 를 1회만 수집해 급여/비급여 공용으로 쓴다.
-  const products = await fetchAllProducts(cfg);
-  const skusByProduct = await fetchSkusByProduct(cfg);
-  const codeToProduct = new Map<string, YkProductLite>();
-  const productById = new Map<string, YkProductLite>();
-  const productsByNameKey = new Map<string, string[]>();
-  for (const p of products) {
-    productById.set(String(p.id), p);
-    if (p.code) {
-      if (!codeToProduct.has(p.code)) codeToProduct.set(p.code, p);
-    }
-    if (p.coverage === "비급여") {
-      const key = `${normalizeProductKey(p.name)}|${normalizeCompanyKey(p.maker ?? "")}`;
-      if (key === "|") continue;
-      const list = productsByNameKey.get(key);
-      if (list) list.push(String(p.id));
-      else productsByNameKey.set(key, [String(p.id)]);
-    }
-  }
-  console.log(
-    `[offers] products ${products.length}개 · SKU맵 ${skusByProduct.size} 제품 로드 (코드맵 ${codeToProduct.size}, 비급여 이름키 ${productsByNameKey.size})`
-  );
+  const { codeToProduct, productById, productsByNameKey, skusByProduct } = await loadYkMaps(cfg);
 
   const results: SiteResult[] = [];
   for (const [siteKey, wh] of Object.entries(SITE_WHOLESALERS)) {
