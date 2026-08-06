@@ -279,6 +279,49 @@ export async function ensureTab(c: SheetCreds, name: string, headers: string[]):
 }
 
 /**
+ * 1행 헤더 셀에 메모(노트) 달기 — 사장님이 헤더에 마우스 올리면 설명이 뜬다.
+ * notes[i] 가 빈 문자열이면 그 컬럼은 건너뜀. idempotent (매번 덮어씀).
+ */
+export async function setHeaderNotes(
+  c: SheetCreds,
+  tabName: string,
+  notes: string[],
+): Promise<void> {
+  const token = await getToken(c);
+  const idMap = await getSheetIdMap(c);
+  const sheetId = idMap.get(tabName);
+  if (sheetId == null) throw new Error(`setHeaderNotes: 탭 없음 ${tabName}`);
+  const requests = notes
+    .map((note, i) => ({ note, i }))
+    .filter((x) => x.note)
+    .map((x) => ({
+      updateCells: {
+        range: {
+          sheetId,
+          startRowIndex: 0,
+          endRowIndex: 1,
+          startColumnIndex: x.i,
+          endColumnIndex: x.i + 1,
+        },
+        rows: [{ values: [{ note: x.note }] }],
+        fields: "note",
+      },
+    }));
+  if (requests.length === 0) return;
+  await withRetry("setHeaderNotes", async () => {
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}:batchUpdate`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ requests }),
+      },
+    );
+    if (!res.ok) throw new Error(`setHeaderNotes ${res.status}: ${await res.text()}`);
+  });
+}
+
+/**
  * 「상태」 칼럼이 취소/반품/환불 키워드 포함하면 행 전체 빨간 글씨.
  * 같은 패턴의 기존 룰이 있으면 모두 제거 후 새로 추가 (idempotent + repair).
  */

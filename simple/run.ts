@@ -31,6 +31,13 @@ import {
   getSheetIdMap,
   type SheetCreds,
 } from "./sheets";
+import {
+  OPTMAP_TAB,
+  ensureOptionMapTab,
+  mergeOptionMapEntries,
+  type OptMapEntry,
+} from "./optmap";
+import { updateProductSummary, type MissingCostProduct } from "./productsummary";
 
 // ─────────────────── 여기명품 사입관리 시트 (별도 스프레드시트)
 // 사장님이 매번 사입 정보 수동 입력. AD = 상품주문번호, AB = 도매가+배송비+박스비 통합 (총비용)
@@ -459,16 +466,8 @@ async function loadOptionMapping(): Promise<Map<string, OptionMapRule>> {
   const map = new Map<string, OptionMapRule>();
   if (!SHEET_CREDS) return map;
   try {
-    await ensureTab(SHEET_CREDS, "⭐옵션매핑", [
-      "원본상품번호",
-      "채널상품번호",
-      "옵션관리번호",
-      "라벨",
-      "원가(개당)",
-      "물류비(건당)",
-      "유형(메인/추가)",
-    ]);
-    const rows = await readRange(SHEET_CREDS, "⭐옵션매핑!A2:G10000");
+    await ensureOptionMapTab(SHEET_CREDS);
+    const rows = await readRange(SHEET_CREDS, `${OPTMAP_TAB}!A2:H10000`);
     for (const r of rows) {
       const originNo = String(r[0] ?? "").trim();
       const chNo = String(r[1] ?? "").trim();
@@ -670,6 +669,8 @@ const RAW_HEADERS = [
 const RAW_LAST_COL = String.fromCharCode(64 + RAW_HEADERS.length); // 19 → "S"
 const SUMMARY_HEADERS = ["보고일", "키워드", "출고수량", "수량", "건수", "매출", "수수료"];
 
+// 「상품별집계」는 productsummary.ts 로 분리 — run.ts(매일)와 CLI(과거 월) 양쪽에서 쓴다.
+
 interface Row {
   paymentDate: string;
   store: string;
@@ -844,6 +845,46 @@ function buildKakaoMessages(dateStr: string, live: Row[], canceled: Row[]): stri
   return messages;
 }
 
+/**
+ * 세팅 안내 알림 — 신규로 추가된 상품 줄 + 원가가 비어 이익이 안 잡히는 상품 top5.
+ * 사장님이 바로 누를 수 있게 「⭐옵션매핑」 탭 링크(gid)를 붙인다.
+ * 알릴 게 없으면 null (조용히 넘어감).
+ */
+async function buildSetupAlert(
+  c: SheetCreds,
+  newProducts: { channelProductNo: string; label: string }[],
+  missing: MissingCostProduct[],
+): Promise<string | null> {
+  if (newProducts.length === 0 && missing.length === 0) return null;
+
+  let link = "";
+  try {
+    const gid = (await getSheetIdMap(c)).get(OPTMAP_TAB);
+    if (gid != null) {
+      link = `https://docs.google.com/spreadsheets/d/${c.sheetId}/edit#gid=${gid}`;
+    }
+  } catch { /* 링크 없어도 알림은 보낸다 */ }
+
+  const lines: string[] = ["<b>🛠 상품 세팅 안내</b>"];
+  if (newProducts.length > 0) {
+    lines.push("", `🆕 새 상품 ${newProducts.length}개를 「${OPTMAP_TAB}」에 추가했습니다.`);
+    for (const p of newProducts.slice(0, 5)) lines.push(`   • ${p.label}`);
+    if (newProducts.length > 5) lines.push(`   외 ${newProducts.length - 5}개`);
+  }
+  if (missing.length > 0) {
+    lines.push("", `⚠️ 원가가 비어 이익이 안 잡히는 상품 ${missing.length}개`);
+    lines.push("   (매출 큰 순)");
+    for (const m of missing.slice(0, 5)) {
+      lines.push(`   • ${m.productName} — ${won(m.sales)}`);
+    }
+    if (missing.length > 5) lines.push(`   외 ${missing.length - 5}개`);
+    lines.push("", "→ 「원가(개당)」 칸에 숫자만 넣으면 다음 보고부터 이익이 잡힙니다.");
+    lines.push("   상품 대표 줄(옵션관리번호 빈 줄)에 넣으면 그 상품 전체에 적용됩니다.");
+  }
+  if (link) lines.push("", `📄 ${link}`);
+  return lines.join("\n");
+}
+
 async function processDay(
   range: { fromIso: string; toIso: string; dateStr: string },
   rules: Rule[],
@@ -897,14 +938,26 @@ async function processDay(
         //  2) `${channelProductNo}` — 상품 전체 매핑 (옵션관리번호 없거나 미입력 시)
         //  3) 코드 옵션매핑 패턴 (fallback)
         const optKey = optionManageCode ? `${channelProductNo}|${optionManageCode}` : "";
-        const productRule = (optKey && productRules.get(optKey)) || productRules.get(channelProductNo);
+        const optionRule = optKey ? productRules.get(optKey) : undefined;
+        // 「옵션관리번호 빈 줄」 = 그 상품의 대표 줄 (기존 시트 관례)
+        const productLevelRule = productRules.get(channelProductNo);
+        // 라벨·유형은 옵션 줄 우선, 없으면 상품 대표 줄
+        const productRule = optionRule ?? productLevelRule;
+        // 원가는 "수동 입력 우선":
+        //   옵션 줄에 숫자가 있으면 그게 최우선 → 없으면 상품 대표 줄의 기본원가로 자동 승계.
+        //   승계된 기본원가는 개당 기준이라 아래에서 병수(totalUnits)만큼 자동 배수된다.
+        //   ⇒ 사장님은 상품 대표 줄에 숫자 하나만 넣으면 그 상품 전 옵션이 커버되고,
+        //     예외 옵션만 그 줄에 직접 적어 덮어쓰면 된다.
+        const manualUnitCost = (optionRule?.costPerUnit ?? 0) > 0
+          ? (optionRule?.costPerUnit ?? 0)
+          : (productLevelRule?.costPerUnit ?? 0);
 
         // 자동 합산 — 옵션관리번호 매칭 실패 또는 원가 비어있을 때, 같은 채널상품번호의 단품 행 참조
         // 옵션명 매칭 우선순위: ⭐옵션매핑 D열 라벨 → 상품목록 시트 (fallback)
         let computedCost = -1;
         let computedLogistics = -1;
         let aggDebug = "";
-        if ((!productRule || productRule.costPerUnit === 0) && channelProductNo) {
+        if (manualUnitCost === 0 && channelProductNo) {
           // 콜론 키 제거 — "사이즈: S" → "S", "압박스타킹: 종아리형" → "종아리형"
           // 네이버 주문 옵션은 "키: 값 / 키: 값" 형식, ⭐옵션매핑 label 은 "값 / 값" 형식이라 정규화 필요
           const stripKey = (s: string): string => {
@@ -964,8 +1017,11 @@ async function processDay(
           // 여기명품: N열+Q열 라벨로 묶음 (사입관리 AD 매칭). 없으면(시차) 상품명 임시.
           keyword = yeogiInfo?.label || keyword || po.productName.slice(0, 24);
         }
-        let costPerUnit = productRule?.costPerUnit ?? matched?.costPerUnit ?? 0;
-        let logisticsPerOrder = productRule?.logisticsPerOrder ?? matched?.logisticsPerOrder ?? 0;
+        let costPerUnit = manualUnitCost || matched?.costPerUnit || 0;
+        // 물류비도 옵션 줄 우선 → 상품 대표 줄 승계
+        let logisticsPerOrder = (optionRule?.logisticsPerOrder ?? 0) > 0
+          ? (optionRule?.logisticsPerOrder ?? 0)
+          : (productLevelRule?.logisticsPerOrder ?? matched?.logisticsPerOrder ?? 0);
         // 비타앤오리진: 명시 원가/물류가 없을 때 품종 기본값 적용 (물류비는 주문당 1회)
         if (store.name === VITA_STORE) {
           if (costPerUnit === 0 && keyword) costPerUnit = VITA_COST_BY_KEYWORD[keyword] ?? 0;
@@ -1193,6 +1249,43 @@ async function processDay(
       );
     } catch (err) {
       console.error("시트 「일일집계」 쓰기 실패:", err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // ── 「⭐옵션매핑」 자동 행 추가 + 「상품별집계」 갱신 + 세팅 알림 ──
+  // 매출 보고 본체와 분리해 감싼다 — 여기서 터져도 아침 보고는 그대로 나가야 한다.
+  if (sheetCreds && !DRY_RUN) {
+    try {
+      // 주문에 등장한 상품을 옵션매핑에 자동 등록 (기존 입력값은 절대 안 건드림)
+      const seen = new Map<string, OptMapEntry>();
+      for (const r of allRows) {
+        if (!r.channelProductNo) continue;
+        const key = `${r.channelProductNo}|${r.optionManageCode}`;
+        if (!seen.has(key)) {
+          seen.set(key, {
+            originProductNo: "",
+            channelProductNo: r.channelProductNo,
+            optionManageCode: r.optionManageCode,
+            label: r.productName.slice(0, 40),
+          });
+        }
+      }
+      const merged = seen.size > 0
+        ? await mergeOptionMapEntries(sheetCreds, [...seen.values()])
+        : { addedRows: 0, newProducts: [] as { channelProductNo: string; label: string }[] };
+      if (merged.addedRows > 0) {
+        console.log(`✅ 「${OPTMAP_TAB}」 새 줄 ${merged.addedRows}개 자동 추가`);
+      }
+
+      const missing = await updateProductSummary(sheetCreds, range.dateStr.slice(0, 7));
+
+      if (options.sendTelegram) {
+        const alert = await buildSetupAlert(sheetCreds, merged.newProducts, missing);
+        if (alert) await sendTelegram(alert);
+      }
+    } catch (err) {
+      console.error("상품별집계/옵션매핑 갱신 실패(매출 보고에는 영향 없음):",
+        err instanceof Error ? err.message : String(err));
     }
   }
 
