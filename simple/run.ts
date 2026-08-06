@@ -29,9 +29,6 @@ import {
   loadCredsFromEnv,
   upsertRows,
   getSheetIdMap,
-  getMonthlyCreds,
-  currentYearMonthKST,
-  getOrCreateMonthlyFolder,
   type SheetCreds,
 } from "./sheets";
 
@@ -94,29 +91,12 @@ async function loadRecentCostByOption(): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   if (!SHEET_CREDS) return out;
   try {
-    // 이번 달 + 지난 달 월 파일에서 원가이력 읽기 (월초 원가 끊김 방지)
-
+    // 원가이력 읽기 — 메인 시트 한 곳에 전월분까지 누적돼 있음 (credsForMonth 주석 참조)
     const rows: string[][] = [];
-
-    const now = new Date(Date.now() + 9 * 3600 * 1000);
-
-    const prev = new Date(now.getUTCFullYear(), now.getUTCMonth() - 1, 1);
-
-    const prevYM = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, "0")}`;
-
-    // 지난달(월별 파일) + 이번달(옛 작업시트) — credsForMonth가 알아서 라우팅.
-
-    for (const ym of [prevYM, currentYearMonthKST()]) {
-
-      try {
-
-        const c = await credsForMonth(ym);
-
-        if (c) rows.push(...(await readRange(c, "주문원본!A2:R100000")));
-
-      } catch { /* 해당 월 데이터 없으면 skip */ }
-
-    }
+    try {
+      const c = await credsForMonth(currentYearMonthKST());
+      if (c) rows.push(...(await readRange(c, `주문원본!A2:${RAW_LAST_COL}100000`)));
+    } catch { /* 데이터 없으면 skip */ }
     const latest = new Map<string, { date: string; unit: number }>();
     for (const r of rows) {
       if (String(r[1] ?? "").trim() !== YEOGI_STORE) continue;
@@ -152,26 +132,31 @@ const SHEET_CREDS: SheetCreds | null = loadCredsFromEnv();
 
 
 
-// ── 월별 작업 파일 (매출보고_YYYY-MM). 봇 전용 폴더를 자동 생성/조회해 그 안에 적재 ──
-// drive.file 최소권한 OAuth: 봇이 직접 만든 폴더/파일만 접근 (사용자 나머지 드라이브엔 못 댐).
+/**
+ * DRY_RUN=1 — 실 API 는 그대로 호출하되 텔레그램·카카오 발송과 시트 쓰기를 모두 건너뜀.
+ * 응답 필드(배송비 등) 확인·회귀 점검용. 읽기(시트 매핑 로드)는 정상 수행.
+ */
+const DRY_RUN = process.env.DRY_RUN === "1";
 
-const FOLDER_NAME = process.env.DRIVE_FOLDER_NAME || "매출보고_월별";
-
-// 봇 전용 폴더 id (없으면 생성). SHEET_CREDS 없으면 null.
-async function getFolderId(): Promise<string | null> {
-  if (!SHEET_CREDS) return null;
-  return await getOrCreateMonthlyFolder(SHEET_CREDS, FOLDER_NAME);
+/** KST 기준 현재 연-월 (YYYY-MM). */
+function currentYearMonthKST(): string {
+  const kst = new Date(Date.now() + KST_OFFSET);
+  return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
-// 처리하는 "그 달" 데이터가 어느 시트로 갈지 결정.
-//   - 현재월(실시간) → 옛 작업시트(주문원본/일일집계 라이브 + 기존 수식). 월 마감 후 아카이브.
-//   - 그 외 월(과거/백필) → 폴더 안 월별 파일 매출보고_YYYY-MM.
-async function credsForMonth(yearMonth: string): Promise<SheetCreds | null> {
-  if (!SHEET_CREDS) return null;
-  if (yearMonth === currentYearMonthKST()) return SHEET_CREDS;
-  const folderId = await getFolderId();
-  if (!folderId) return SHEET_CREDS;
-  return await getMonthlyCreds(SHEET_CREDS, folderId, yearMonth);
+/**
+ * 처리하는 "그 달" 데이터가 어느 스프레드시트로 갈지 결정 — 현재는 항상 메인 시트 하나.
+ *
+ * 이력: 2026-07-08 커밋(71d6828)이 Lightsail 서버 선배포본에서 run.ts 만 동기화하면서
+ * 월별 파일 라우팅(getMonthlyCreds/getOrCreateMonthlyFolder)을 import 했는데, 짝이 되는
+ * sheets.ts 구현이 어느 브랜치에도 커밋된 적이 없어 그 시점부터 run.ts 가 import 에러로
+ * 아예 기동 불가 상태였음. 원본이 있던 Lightsail 은 2026-08-06 삭제되어 복구 불가.
+ * 실제 운영 데이터도 전부 메인 시트 한 곳에 쌓여 있었으므로(월 분리 미발동),
+ * 라우팅을 메인 시트 고정으로 정리해 기동을 복구함. 월별 파일 분리가 다시 필요하면
+ * drive.file 스코프 추가 + sheets.ts 구현부터 새로 해야 함.
+ */
+async function credsForMonth(_yearMonth: string): Promise<SheetCreds | null> {
+  return SHEET_CREDS;
 }
 
 // 시트 「옵션매핑」 탭 없을 때 사용할 코드 기본값
@@ -555,6 +540,10 @@ function isCanceled(status: string): boolean {
 const won = (n: number) => n.toLocaleString("ko-KR") + "원";
 
 async function sendTelegram(text: string, maxAttempts = 3): Promise<void> {
+  if (DRY_RUN) {
+    console.log("[DRY_RUN] 텔레그램 미발송 — 본문:\n" + text.replace(/<[^>]+>/g, ""));
+    return;
+  }
   if (!TG_TOKEN || !TG_CHAT) {
     console.error("TELEGRAM 환경변수 누락");
     return;
@@ -636,6 +625,10 @@ async function getKakaoAccessToken(): Promise<string | null> {
 }
 
 async function sendKakao(text: string, accessToken: string, maxAttempts = 3): Promise<void> {
+  if (DRY_RUN) {
+    console.log("[DRY_RUN] 카카오 미발송 — 본문:\n" + text);
+    return;
+  }
   const body = new URLSearchParams();
   body.set("template_object", JSON.stringify({
     object_type: "text",
@@ -665,12 +658,16 @@ async function sendKakao(text: string, accessToken: string, maxAttempts = 3): Pr
 }
 
 // ─────────────────── 메인
+// ⚠️ 기존 컬럼 순서(0~17)는 절대 변경 금지 — 시트 누적 데이터·수식과 호환. 새 컬럼은 뒤에만 추가.
 const RAW_HEADERS = [
   "결제일", "스토어", "주문번호", "상품주문번호", "상품번호",
   "상품명", "옵션", "키워드", "수량", "출고수량",
   "매출", "수수료", "정산예정", "상태", "구매자",
   "원가", "물류비", "이익",
+  "수취배송비",
 ];
+/** RAW_HEADERS 마지막 컬럼 문자 (A=1 기준). 읽기 범위 계산용. */
+const RAW_LAST_COL = String.fromCharCode(64 + RAW_HEADERS.length); // 19 → "S"
 const SUMMARY_HEADERS = ["보고일", "키워드", "출고수량", "수량", "건수", "매출", "수수료"];
 
 interface Row {
@@ -693,7 +690,9 @@ interface Row {
   buyer: string;
   cost: number;
   logistics: number;
+  deliveryFee: number;
   profit: number;
+  costMissing: boolean; // 원가 미설정 — 이익을 0 으로 계산하지 않고 "설정 필요" 로 표시
   isCanceled: boolean;
 }
 
@@ -859,6 +858,7 @@ async function processDay(
   const errors: string[] = [];
   const vitaLogiSeen = new Set<string>(); // 비타앤오리진 자동 물류비: 주문당 1회만 부과
   const deliveryFeeSeen = new Set<string>(); // 배송비: 배송(주문)당 1회만 매출/이익 반영
+  const logisticsCharged = new Map<string, number>(); // 물류비: 주문(=출고 1회)당 누계 부과액
 
   for (let si = 0; si < STORES.length; si++) {
     if (si > 0) await sleep(3000);
@@ -1008,11 +1008,22 @@ async function processDay(
               ? computedCost * po.quantity // 자동 합산: 완성 원가 × 주문 수량 (extractBottles X)
               : costPerUnit * totalUnits;
         // 여기명품은 사입가(또는 추정가)에 물류비 포함이므로 별도 물류비 0
-        const logistics = yeogiConfirmed || yeogiEstimate != null
+        const logisticsCandidate = yeogiConfirmed || yeogiEstimate != null
           ? 0
           : computedLogistics >= 0
             ? computedLogistics
             : logisticsPerOrder;
+        // 물류비는 "실제 나가는 출고비용" — 묶음배송(같은 주문번호)이면 실제 출고는 1회.
+        // 한 주문에 여러 상품이 섞이면 후보 물류비 중 최댓값을 주문 전체에 1회만 부과한다
+        // (큰 박스 기준). 이미 부과한 금액과의 차액만 이번 행에 실어 주문 합계가 최댓값이 되게 함.
+        const oidForLogi = o.order?.orderId ?? po.orderId ?? "";
+        let logistics = logisticsCandidate;
+        if (oidForLogi) {
+          const already = logisticsCharged.get(oidForLogi) ?? 0;
+          const target = Math.max(already, logisticsCandidate);
+          logistics = target - already;
+          logisticsCharged.set(oidForLogi, target);
+        }
         // 배송비: 배송(주문)당 1회, 취소 아니면. 멤버십 무료여도 네이버가 부담 → 셀러는 받으므로 매출·이익에 반영.
         const oidForFee = o.order?.orderId ?? po.orderId ?? "";
         let deliveryFee = 0;
@@ -1020,6 +1031,10 @@ async function processDay(
           deliveryFee = feeByOrder.get(oidForFee) ?? 0;
           deliveryFeeSeen.add(oidForFee);
         }
+        // 원가 미설정 판정 — 조용히 0 으로 계산하면 이익이 부풀려져 오판을 부르므로,
+        // 원가를 확정할 근거가 하나도 없으면 이익을 내지 않고 "설정 필요" 로 표시한다.
+        // (여기명품은 사입관리 시트/최근단가 추정이 원가 근거이므로 제외)
+        const costMissing = cost <= 0 && !yeogiConfirmed && yeogiEstimate == null;
         const profit = settlement - cost - logistics + deliveryFee;
         if (store.name === "와이케이팜") {
           console.log(`[WK상세] "${String(po.productName).slice(0, 18)}" 매출=${po.totalPaymentAmount} 배송=${deliveryFee} 물류=${logistics} 원가=${cost}`);
@@ -1044,7 +1059,9 @@ async function processDay(
           buyer: o.order?.ordererName ?? "",
           cost,
           logistics,
+          deliveryFee,
           profit,
+          costMissing,
           isCanceled: isCanceled(po.productOrderStatus ?? ""),
         });
       }
@@ -1060,7 +1077,9 @@ async function processDay(
 
   const sheetCreds = await credsForMonth(range.dateStr.slice(0, 7));
 
-  if (sheetCreds && allRows.length > 0) {
+  if (DRY_RUN) {
+    console.log(`[DRY_RUN] 시트 쓰기 생략 — 주문원본 ${allRows.length}행 대상`);
+  } else if (sheetCreds && allRows.length > 0) {
 
     try {
 
@@ -1075,9 +1094,10 @@ async function processDay(
         r.paymentDate, r.store, r.orderId, r.productOrderId, r.channelProductNo,
         r.productName, r.optionName, r.keyword, r.quantity, r.bottles,
         r.salesAmount, r.commission, r.isCanceled ? "" : r.settlement, r.status, r.buyer,
-        r.isCanceled ? "" : r.cost,
+        r.isCanceled ? "" : r.costMissing ? "설정 필요" : r.cost,
         r.isCanceled ? "" : r.logistics,
-        r.isCanceled ? "" : r.profit,
+        r.isCanceled ? "" : r.costMissing ? "설정 필요" : r.profit,
+        r.isCanceled ? "" : r.deliveryFee,
       ]);
       // 상품주문번호(D열, idx 3) 기준 upsert. 이미 있으면 갱신, 중복 자동 정리.
       const result = await upsertRows(
@@ -1100,7 +1120,7 @@ async function processDay(
   }
 
   // 여기명품 네이버 주문 자동 기록 (사입관리장 VLOOKUP용 새 탭). 어제 보고분만, 상품주문번호 기준 upsert.
-  if (options.sendTelegram && SHEET_CREDS) {
+  if (options.sendTelegram && SHEET_CREDS && !DRY_RUN) {
     const targetRows = allRows.filter((r) => r.store === YEOGI_STORE);
     if (targetRows.length > 0) {
       try {
@@ -1155,7 +1175,7 @@ async function processDay(
   const summaryCanceled = Array.from(byKeywordCanceled.values()).sort((a, b) => b.sales - a.sales);
 
   // 집계 시트도 입력 — (보고일+키워드) 기준 upsert. 월별 파일(sheetCreds)에 적재.
-  if (sheetCreds && summary.length > 0) {
+  if (sheetCreds && summary.length > 0 && !DRY_RUN) {
     try {
       await ensureTab(sheetCreds, "일일집계", SUMMARY_HEADERS);
       const sumRows = summary.map((r) => [
