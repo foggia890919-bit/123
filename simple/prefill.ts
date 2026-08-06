@@ -15,6 +15,18 @@
  * 상품/옵션 조회 엔드포인트는 catalog.ts 에서 이미 검증된 것을 그대로 쓴다:
  *   POST /v1/products/search                          (페이지네이션, size 50)
  *   GET  /v2/products/origin-products/{originProductNo} (optionCombinations / supplementProducts)
+ *
+ * ── 폴백: 「주문원본」 기반 ──────────────────────────────────────────────
+ * 이 PC(또는 이 실행 환경)에 API 키가 연결된 스토어만 커머스API 로 훑을 수 있다.
+ * 키가 없는 스토어(예: 와이케이팜·비타앤오리진)의 상품은 카탈로그 조회 자체가 불가능하지만,
+ * 「주문원본」에는 이미 그 스토어의 주문이 쌓여 있다 → 거기서 상품을 뽑아 대표 줄을 만든다.
+ *
+ * ⚠️ 폴백은 **상품 대표 줄(옵션관리번호 빈 줄)만** 만든다. 이유:
+ *    「주문원본」에는 옵션관리번호 컬럼이 없다(옵션 "이름"만 있다). 옵션명을 옵션관리번호
+ *    칸에 넣으면 run.ts 의 `${채널상품번호}|${옵션관리번호}` 매칭에 영원히 걸리지 않는
+ *    죽은 줄이 된다 — 사장님이 원가를 넣어도 아무 일도 안 일어나는 최악의 줄.
+ *    대표 줄은 그 상품의 모든 옵션에 개당 원가로 자동 적용되므로(병수만큼 자동 배수),
+ *    사장님은 상품당 숫자 하나만 넣으면 된다.
  */
 
 import "dotenv/config";
@@ -127,24 +139,65 @@ async function fetchOptions(
   }
 }
 
+/**
+ * 「주문원본」에 쌓인 주문에서 (스토어, 채널상품번호, 상품명) 목록을 뽑는다.
+ * RAW_HEADERS 컬럼 순서(run.ts 와 동일, 절대 변경 금지):
+ *   A결제일 B스토어 C주문번호 D상품주문번호 E채널상품번호 F상품명 G옵션 …
+ * 같은 상품이 여러 번 나오면 **가장 최근 결제일의 상품명**을 라벨로 쓴다(상품명 변경 반영).
+ */
+interface RawProduct {
+  store: string;
+  channelProductNo: string;
+  productName: string;
+  date: string;
+  orderCount: number;
+}
+
+async function readRawOrderProducts(): Promise<Map<string, RawProduct>> {
+  const byChannel = new Map<string, RawProduct>();
+  const rows = await readRange(SHEET_CREDS!, "주문원본!A2:G100000");
+  for (const r of rows) {
+    const date = String(r[0] ?? "").trim();
+    const store = String(r[1] ?? "").trim();
+    const chNo = String(r[4] ?? "").trim();
+    const productName = String(r[5] ?? "").trim();
+    if (!chNo) continue;
+    const prev = byChannel.get(chNo);
+    if (!prev) {
+      byChannel.set(chNo, { store, channelProductNo: chNo, productName, date, orderCount: 1 });
+      continue;
+    }
+    prev.orderCount += 1;
+    // 더 최근 주문의 상품명/스토어로 갱신
+    if (date > prev.date) {
+      prev.date = date;
+      if (productName) prev.productName = productName;
+      if (store) prev.store = store;
+    } else if (!prev.productName && productName) {
+      prev.productName = productName;
+    }
+  }
+  return byChannel;
+}
+
 async function main() {
   if (!SHEET_CREDS) throw new Error("시트 자격증명 없음 (GOOGLE_* 환경변수 확인)");
-  if (STORES.length === 0) {
-    console.log("등록된 스토어 없음 — 할 일 없음. (NAVER_STORES_JSON)");
-    return;
-  }
-  console.log(`프리필 시작 — 스토어 ${STORES.length}개${DRY_RUN ? " [DRY_RUN]" : ""}${ALL ? " [전체 카탈로그]" : " [판매이력 있는 상품만]"}`);
+  console.log(
+    `프리필 시작 — API 연결 스토어 ${STORES.length}개` +
+      `${DRY_RUN ? " [DRY_RUN]" : ""}${ALL ? " [전체 카탈로그]" : " [판매이력 있는 상품만]"}`,
+  );
+
+  // 「주문원본」 1회 읽기 — (a) 판매이력 필터 (b) API 미연결 스토어 폴백, 양쪽에 쓴다.
+  const rawProducts = await readRawOrderProducts();
+  console.log(`「주문원본」에서 판매이력 있는 상품 ${rawProducts.size}개 확인`);
 
   // 판매이력 있는 채널상품번호 (기본 필터)
-  let soldChannels: Set<string> | null = null;
-  if (!ALL) {
-    const raw = await readRange(SHEET_CREDS, "주문원본!E2:E100000");
-    soldChannels = new Set(raw.map((r) => String(r[0] ?? "").trim()).filter(Boolean));
-    console.log(`판매이력 있는 상품 ${soldChannels.size}개 — 이 상품들만 프리필`);
-  }
+  const soldChannels: Set<string> | null = ALL ? null : new Set(rawProducts.keys());
 
   const entries: OptMapEntry[] = [];
   const errors: string[] = [];
+  /** 커머스API 로 실제 커버한 채널상품번호 — 폴백에서 중복 생성하지 않기 위해. */
+  const apiCovered = new Set<string>();
 
   for (const store of STORES) {
     try {
@@ -159,6 +212,7 @@ async function main() {
         const name = String(ch?.name ?? "").trim();
         if (!chNo) continue;
         if (soldChannels && !soldChannels.has(chNo)) continue; // 판매이력 없는 상품 skip
+        apiCovered.add(chNo);
 
         // 대표 줄 — 사장님이 숫자 하나만 넣으면 그 상품 전체가 커버되는 자리
         entries.push({
@@ -191,6 +245,24 @@ async function main() {
       console.error(`[${store.name}] 실패: ${msg}`);
       errors.push(`${store.name}: ${msg}`);
     }
+  }
+
+  // ── 폴백: API 로 못 훑은 상품을 「주문원본」에서 보충 ───────────────────
+  // (API 미연결 스토어 상품 + API 연결 스토어인데 검색 결과에 안 잡힌 상품 둘 다 커버)
+  const fallbackByStore = new Map<string, number>();
+  for (const p of rawProducts.values()) {
+    if (apiCovered.has(p.channelProductNo)) continue;
+    entries.push({
+      originProductNo: "", // 주문원본에는 원본상품번호가 없다 — 비워둔다(매칭에 쓰이지 않음)
+      channelProductNo: p.channelProductNo,
+      optionManageCode: "", // 대표 줄만 (파일 상단 주석 참조)
+      label: (p.productName || p.channelProductNo).slice(0, 40),
+    });
+    fallbackByStore.set(p.store || "(스토어없음)", (fallbackByStore.get(p.store || "(스토어없음)") ?? 0) + 1);
+  }
+  if (fallbackByStore.size > 0) {
+    const summary = [...fallbackByStore.entries()].map(([s, n]) => `${s} ${n}개`).join(", ");
+    console.log(`[폴백] 「주문원본」에서 대표 줄 후보 보충: ${summary}`);
   }
 
   console.log(`\n수집한 후보 줄 ${entries.length}개`);
