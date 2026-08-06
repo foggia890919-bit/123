@@ -174,6 +174,14 @@ async function main() {
     rotateIfNeeded();
     openLog();
 
+    // tsx CLI 는 실제 서버를 손자 프로세스로 띄운다. 감시자의 직속 자식만 죽고 손자가
+    // 살아남는 경우(포트 점유 유지) 재기동하면 EADDRINUSE 로 즉사해 크래시 루프가 된다.
+    // 이미 정상 응답하는 인스턴스가 있으면 감시자는 물러난다.
+    if (await alreadyRunning(port)) {
+      log(`다른 인스턴스가 :${port} 에서 정상 동작 중 — 감시자 종료`);
+      break;
+    }
+
     log(`worker 기동 (시도 ${attempt}, 포트 ${port})`);
     const startedAt = Date.now();
     const result = await runChild();
