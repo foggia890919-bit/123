@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/server.ts",
+    "supervise": "node scripts/supervise.mjs",
     "dev": "tsx watch src/server.ts"
   },
   "dependencies": {
