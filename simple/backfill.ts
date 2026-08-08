@@ -20,6 +20,18 @@
 
 import "dotenv/config";
 import { loadCredsFromEnv, readRange, writeRange } from "./sheets";
+import {
+  loadItems, loadCompRules, parseComposition, costOfComposition, compKey,
+} from "./itemdict";
+
+/**
+ * RECOST=1 이면 「원가」(P열)도 「품목사전 × 구성해석」으로 다시 계산한다.
+ * 과거 행은 옵션 줄 단가로 계산돼 있어, 복합 옵션(피쿠알2병+아르베키나1병)에서
+ * 한 품목만 세는 등 과소계상이 섞여 있다. 새 엔진과 정합성을 맞추려면 필요.
+ * 여기명품은 원가가 「여기명품 사입관리」(실매입가)에서 오므로 건드리지 않는다.
+ */
+const RECOST = process.env.RECOST === "1";
+const YEOGI = "여기명품";
 
 const DRY_RUN = process.env.DRY_RUN === "1";
 const SETUP_NEEDED = "설정 필요";
@@ -35,7 +47,12 @@ const won = (n: number) => n.toLocaleString("ko-KR");
 async function main() {
   // A2:S — 0결제일 2주문번호 10매출 11수수료 12정산예정 13상태 15원가 16물류비 17이익 18배송비
   const rows = await readRange(c!, "주문원본!A2:S100000");
-  console.log(`주문원본 ${rows.length}행 읽음${DRY_RUN ? " [DRY_RUN]" : ""}`);
+  console.log(`주문원본 ${rows.length}행 읽음${DRY_RUN ? " [DRY_RUN]" : ""}${RECOST ? " [RECOST]" : ""}`);
+
+  const items = RECOST ? await loadItems(c!) : [];
+  const compRules = RECOST ? await loadCompRules(c!, items) : new Map();
+  if (RECOST) console.log(`품목사전 ${items.length}개 로드`);
+  let recosted = 0, recostMissing = 0, costDelta = 0;
 
   // 1) 주문번호별 물류비 최댓값
   const maxLogiByOrder = new Map<string, number>();
@@ -61,8 +78,8 @@ async function main() {
     const costRaw = String(r[15] ?? "").trim();
 
     // 취소건·정산 미확정·원가 미설정 행은 그대로 둔다
-    if (isCanceled(status) || settlementRaw === "" || costRaw === SETUP_NEEDED) {
-      out.push([r[16] ?? "", r[17] ?? "", r[18] ?? ""]);
+    if (isCanceled(status) || settlementRaw === "") {
+      out.push([r[15] ?? "", r[16] ?? "", r[17] ?? "", r[18] ?? ""]);
       skipped += 1;
       continue;
     }
@@ -71,7 +88,42 @@ async function main() {
     const sales = num(r[10]);
     const commission = num(r[11]);
     const settlement = num(settlementRaw);
-    const cost = num(costRaw);
+    const origCost = num(costRaw); // 배송비 판정은 반드시 «원래» 원가로 해야 한다 (아래 정합성 대조)
+    let cost = origCost;
+    let costCell: string | number = costRaw === SETUP_NEEDED ? SETUP_NEEDED : cost;
+
+    // 원가 재계산 (RECOST=1)
+    if (RECOST && String(r[1] ?? "").trim() !== YEOGI) {
+      const productName = String(r[5] ?? "");
+      const optionText = String(r[6] ?? "").trim();
+      const qty = num(r[8]) || 1;
+      const rule = compRules.get(compKey(productName, optionText));
+      const parts = rule?.manual ?? parseComposition(productName, optionText, items);
+      if (!parts) {
+        // 구성을 못 읽으면 원가를 확정할 수 없다. 예전 로직이 넣어둔 숫자를 그대로 두면
+        // 「그럴듯하지만 틀린 원가」가 남아 이익을 왜곡하므로 「설정 필요」로 되돌린다.
+        // 무엇을 정의해야 하는지는 「구성해석」 탭에 그대로 뜬다.
+        costCell = SETUP_NEEDED;
+        recostMissing += 1;
+      } else {
+        const { cost: cc, missing } = costOfComposition(parts, items);
+        if (missing) {
+          costCell = SETUP_NEEDED;
+          recostMissing += 1;
+        } else {
+          const nc = cc * qty;
+          if (nc !== cost) { costDelta += nc - cost; recosted += 1; }
+          cost = nc;
+          costCell = nc;
+        }
+      }
+    }
+    // 원가를 확정 못 했으면 이익도 낼 수 없다
+    if (costCell === SETUP_NEEDED) {
+      out.push([SETUP_NEEDED, r[16] ?? "", SETUP_NEEDED, r[18] ?? ""]);
+      skipped += 1;
+      continue;
+    }
 
     // 배송비 복원.
     // 후보값: 매출 = 상품가 + 배송비, 수수료 = 상품가 − 정산예정 이므로
@@ -82,14 +134,16 @@ async function main() {
     // 저장된 이익이 「배송비 포함」식과 맞으면 그 행은 배송비를 갖고 있는 것이고,
     // 「배송비 없음」식과 맞으면 없는 것이다. 둘 다 아니면 알 수 없으므로 손대지 않는다.
     const feeCandidate = Math.max(0, sales - commission - settlement);
-    const baseProfit = settlement - cost - oldLogi;
+    const baseProfit = settlement - origCost - oldLogi;
     let fee: number;
     if (oldProfit === baseProfit + feeCandidate) {
       fee = feeCandidate;            // 배송비가 반영된 행
     } else if (oldProfit === baseProfit) {
       fee = 0;                       // 배송비 개념 이전 행
+    } else if (String(r[18] ?? "").trim() !== "") {
+      fee = num(r[18]);              // 이미 배송비 칸이 채워져 있으면(2차 실행) 그 값을 신뢰
     } else {
-      out.push([r[16] ?? "", r[17] ?? "", r[18] ?? ""]); // 판정 불가 — 원본 보존
+      out.push([r[15] ?? "", r[16] ?? "", r[17] ?? "", r[18] ?? ""]); // 판정 불가 — 원본 보존
       unknown += 1;
       continue;
     }
@@ -111,7 +165,7 @@ async function main() {
     if (newProfit !== oldProfit) { changedProfit += 1; profitDelta += newProfit - oldProfit; }
     if (String(r[18] ?? "").trim() === "") filledFee += 1;
 
-    out.push([newLogi, newProfit, fee]);
+    out.push([costCell, newLogi, newProfit, fee]);
   }
 
   console.log(`\n재계산 결과`);
@@ -122,6 +176,10 @@ async function main() {
   console.log(`  판정 불가로 보존 : ${unknown} (저장된 이익이 어느 계산식과도 안 맞음)`);
   console.log(`  이익 합계 변화   : ${profitDelta >= 0 ? "+" : ""}${won(profitDelta)}원`);
   console.log(`  묶음배송으로 정정된 주문: ${bundleOrders.size}건`);
+  if (RECOST) {
+    console.log(`  원가 재계산된 행 : ${recosted} (합계 ${costDelta >= 0 ? "+" : ""}${won(costDelta)}원)`);
+    console.log(`  원가 확정 불가   : ${recostMissing} (품목사전 원가 비어있음 → 「설정 필요」)`);
+  }
 
   if (DRY_RUN) {
     console.log("\n[DRY_RUN] 시트 미기록. 상위 5행 미리보기 (물류비, 이익, 배송비):");
@@ -129,12 +187,12 @@ async function main() {
     return;
   }
 
-  // 3) Q:S 한 번에 쓰기 (연속 칼럼) — 500행씩 나눠서
+  // 3) P:S 한 번에 쓰기 (원가·물류비·이익·배송비, 연속 칼럼) — 500행씩 나눠서
   const CHUNK = 500;
   for (let i = 0; i < out.length; i += CHUNK) {
     const slice = out.slice(i, i + CHUNK);
     const from = i + 2; // 헤더 1행 다음부터
-    await writeRange(c!, `주문원본!Q${from}:S${from + slice.length - 1}`, slice);
+    await writeRange(c!, `주문원본!P${from}:S${from + slice.length - 1}`, slice);
     console.log(`  기록 ${Math.min(i + CHUNK, out.length)}/${out.length}`);
   }
   console.log("\n✅ 백필 완료");

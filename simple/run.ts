@@ -38,6 +38,11 @@ import {
   type OptMapEntry,
 } from "./optmap";
 import { updateProductSummary, type MissingCostProduct } from "./productsummary";
+import {
+  loadItems, loadCompRules, parseComposition, costOfComposition, compKey,
+  syncCompTab, COMP_TAB, NEEDS_COMP,
+  type Item, type CompRule,
+} from "./itemdict";
 
 // ─────────────────── 여기명품 사입관리 시트 (별도 스프레드시트)
 // 사장님이 매번 사입 정보 수동 입력. AD = 상품주문번호, AB = 도매가+배송비+박스비 통합 (총비용)
@@ -854,15 +859,19 @@ async function buildSetupAlert(
   c: SheetCreds,
   newProducts: { channelProductNo: string; label: string }[],
   missing: MissingCostProduct[],
+  needComp: { productName: string; optionText: string; count: number }[] = [],
 ): Promise<string | null> {
-  if (newProducts.length === 0 && missing.length === 0) return null;
+  if (newProducts.length === 0 && missing.length === 0 && needComp.length === 0) return null;
 
   let link = "";
+  let compLink = "";
   try {
-    const gid = (await getSheetIdMap(c)).get(OPTMAP_TAB);
-    if (gid != null) {
-      link = `https://docs.google.com/spreadsheets/d/${c.sheetId}/edit#gid=${gid}`;
-    }
+    const idMap = await getSheetIdMap(c);
+    const base = `https://docs.google.com/spreadsheets/d/${c.sheetId}/edit#gid=`;
+    const gid = idMap.get(OPTMAP_TAB);
+    if (gid != null) link = base + gid;
+    const cgid = idMap.get(COMP_TAB);
+    if (cgid != null) compLink = base + cgid;
   } catch { /* 링크 없어도 알림은 보낸다 */ }
 
   const lines: string[] = ["<b>🛠 상품 세팅 안내</b>"];
@@ -878,10 +887,19 @@ async function buildSetupAlert(
       lines.push(`   • ${m.productName} — ${won(m.sales)}`);
     }
     if (missing.length > 5) lines.push(`   외 ${missing.length - 5}개`);
-    lines.push("", "→ 「원가(개당)」 칸에 숫자만 넣으면 다음 보고부터 이익이 잡힙니다.");
-    lines.push("   상품 대표 줄(옵션관리번호 빈 줄)에 넣으면 그 상품 전체에 적용됩니다.");
+    lines.push("", "→ 「품목사전」의 「개당원가」 칸에 숫자만 넣으면 다음 보고부터 이익이 잡힙니다.");
+    lines.push("   품목 하나만 고치면 그 품목이 들어간 모든 상품에 반영됩니다.");
   }
-  if (link) lines.push("", `📄 ${link}`);
+  if (needComp.length > 0) {
+    lines.push("", `❓ 구성을 못 읽은 옵션 ${needComp.length}개`);
+    for (const n of needComp.slice(0, 5)) {
+      lines.push(`   • ${n.optionText.slice(0, 42) || n.productName.slice(0, 42)} (${n.count}건)`);
+    }
+    if (needComp.length > 5) lines.push(`   외 ${needComp.length - 5}개`);
+    lines.push("", `→ 「${COMP_TAB}」 탭 「수동구성」 칸에 <code>피쿠알2+블렌딩1</code> 형식으로 적어주세요.`);
+    if (compLink) lines.push(`   📄 ${compLink}`);
+  }
+  if (link) lines.push("", `📄 「⭐옵션매핑」 ${link}`);
   return lines.join("\n");
 }
 
@@ -900,6 +918,20 @@ async function processDay(
   const vitaLogiSeen = new Set<string>(); // 비타앤오리진 자동 물류비: 주문당 1회만 부과
   const deliveryFeeSeen = new Set<string>(); // 배송비: 배송(주문)당 1회만 매출/이익 반영
   const logisticsCharged = new Map<string, number>(); // 물류비: 주문(=출고 1회)당 누계 부과액
+
+  // 품목사전 + 구성해석 (원가 엔진). 실패해도 매출 수집은 계속되게 감싼다.
+  let items: Item[] = [];
+  let compRules = new Map<string, CompRule>();
+  if (SHEET_CREDS) {
+    try {
+      items = await loadItems(SHEET_CREDS);
+      compRules = await loadCompRules(SHEET_CREDS, items);
+      console.log(`품목사전 ${items.length}개 / 구성해석 수동지정 ${[...compRules.values()].filter((r) => r.manual).length}개`);
+    } catch (err) {
+      console.warn("품목사전/구성해석 로드 실패(구버전 원가 로직으로 진행):",
+        err instanceof Error ? err.message : String(err));
+    }
+  }
 
   for (let si = 0; si < STORES.length; si++) {
     if (si > 0) await sleep(3000);
@@ -1056,13 +1088,30 @@ async function processDay(
           const unit = recentCostByOption.get(`${channelProductNo}|${po.productOption ?? ""}`);
           if (unit && unit > 0) yeogiEstimate = unit * po.quantity;
         }
+        // 「품목사전 × 구성해석」 — 옵션 텍스트를 «품목 × 병수» 로 분해해 원가를 낸다.
+        // 원가가 바뀌면 「품목사전」 한 칸만 고치면 되므로 옵션 줄을 전부 손볼 필요가 없다.
+        // 사장님이 「구성해석」 D열에 직접 적은 구성이 있으면 그게 최우선.
+        let compCost = -1;
+        let compMissing = false;
+        if (store.name !== YEOGI_STORE && items.length > 0) {
+          const rule = compRules.get(compKey(po.productName, po.productOption ?? ""));
+          const parts = rule?.manual ?? parseComposition(po.productName, po.productOption ?? "", items);
+          if (parts) {
+            const { cost: cc, missing } = costOfComposition(parts, items);
+            if (!missing) compCost = cc;
+            else compMissing = true;
+          }
+        }
+
         const cost = yeogiConfirmed
           ? yeogiWholesale
           : yeogiEstimate != null
             ? yeogiEstimate
-            : computedCost >= 0
-              ? computedCost * po.quantity // 자동 합산: 완성 원가 × 주문 수량 (extractBottles X)
-              : costPerUnit * totalUnits;
+            : compCost >= 0
+              ? compCost * po.quantity   // 구성 원가 × 주문 수량 (병수는 구성에 이미 반영됨)
+              : computedCost >= 0
+                ? computedCost * po.quantity // (구버전) 자동 합산
+                : costPerUnit * totalUnits;  // (구버전) 옵션/상품 줄 단가 × 병수
         // 여기명품은 사입가(또는 추정가)에 물류비 포함이므로 별도 물류비 0
         const logisticsCandidate = yeogiConfirmed || yeogiEstimate != null
           ? 0
@@ -1090,7 +1139,7 @@ async function processDay(
         // 원가 미설정 판정 — 조용히 0 으로 계산하면 이익이 부풀려져 오판을 부르므로,
         // 원가를 확정할 근거가 하나도 없으면 이익을 내지 않고 "설정 필요" 로 표시한다.
         // (여기명품은 사입관리 시트/최근단가 추정이 원가 근거이므로 제외)
-        const costMissing = cost <= 0 && !yeogiConfirmed && yeogiEstimate == null;
+        const costMissing = (cost <= 0 || compMissing) && !yeogiConfirmed && yeogiEstimate == null;
         const profit = settlement - cost - logistics + deliveryFee;
         if (store.name === "와이케이팜") {
           console.log(`[WK상세] "${String(po.productName).slice(0, 18)}" 매출=${po.totalPaymentAmount} 배송=${deliveryFee} 물류=${logistics} 원가=${cost}`);
@@ -1277,10 +1326,28 @@ async function processDay(
         console.log(`✅ 「${OPTMAP_TAB}」 새 줄 ${merged.addedRows}개 자동 추가`);
       }
 
+      // 「구성해석」 갱신 — 오늘 등장한 (상품명, 옵션) 조합을 올리고 자동해석 결과를 채운다.
+      // 여기명품은 원가가 사입관리 시트에서 오므로 구성 해석 대상이 아니다.
+      let needComp: { productName: string; optionText: string; count: number }[] = [];
+      if (items.length > 0) {
+        const seenOpts = new Map<string, { productName: string; optionText: string; count: number }>();
+        for (const r of allRows) {
+          if (r.store === YEOGI_STORE) continue;
+          const k = compKey(r.productName, r.optionName);
+          const cur = seenOpts.get(k) ?? { productName: r.productName, optionText: r.optionName, count: 0 };
+          cur.count += 1;
+          seenOpts.set(k, cur);
+        }
+        if (seenOpts.size > 0) {
+          const res = await syncCompTab(sheetCreds, [...seenOpts.values()], items, compRules);
+          needComp = res.needManual;
+        }
+      }
+
       const missing = await updateProductSummary(sheetCreds, range.dateStr.slice(0, 7));
 
       if (options.sendTelegram) {
-        const alert = await buildSetupAlert(sheetCreds, merged.newProducts, missing);
+        const alert = await buildSetupAlert(sheetCreds, merged.newProducts, missing, needComp);
         if (alert) await sendTelegram(alert);
       }
     } catch (err) {
