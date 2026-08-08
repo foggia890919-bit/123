@@ -63,16 +63,17 @@ async function main() {
 
   // ── 2. 주문원본에서 등장 옵션 수집 ──
   const raw = await readRange(c!, "주문원본!A2:S100000");
-  const seenMap = new Map<string, { productName: string; optionText: string; count: number }>();
+  const seenMap = new Map<string, { channelProductNo: string; productName: string; optionText: string; count: number }>();
   for (const r of raw) {
     const productName = String(r[5] ?? "");
     const optionText = String(r[6] ?? "").trim();
-    if (!productName) continue;
+    const channelProductNo = String(r[4] ?? "").trim();
+    if (!productName || !channelProductNo) continue;
     // 여기명품은 원가가 「여기명품 사입관리」 시트(실매입가)에서 오므로 구성 해석 대상이 아니다.
     // 여기까지 끌어오면 명품 잡화 수백 종이 "구성 정의 필요"로 쌓여 진짜 볼 것이 묻힌다.
     if (String(r[1] ?? "").trim() === "여기명품") continue;
-    const k = compKey(productName, optionText);
-    const cur = seenMap.get(k) ?? { productName, optionText, count: 0 };
+    const k = compKey(channelProductNo, optionText);
+    const cur = seenMap.get(k) ?? { channelProductNo, productName, optionText, count: 0 };
     cur.count += 1;
     seenMap.set(k, cur);
   }

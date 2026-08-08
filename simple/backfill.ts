@@ -97,7 +97,7 @@ async function main() {
       const productName = String(r[5] ?? "");
       const optionText = String(r[6] ?? "").trim();
       const qty = num(r[8]) || 1;
-      const rule = compRules.get(compKey(productName, optionText));
+      const rule = compRules.get(compKey(String(r[4] ?? "").trim(), optionText));
       const parts = rule?.manual ?? parseComposition(productName, optionText, items);
       if (!parts) {
         // 구성을 못 읽으면 원가를 확정할 수 없다. 예전 로직이 넣어둔 숫자를 그대로 두면

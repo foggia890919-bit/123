@@ -279,6 +279,104 @@ export async function ensureTab(c: SheetCreds, name: string, headers: string[]):
 }
 
 /**
+ * 지정 열의 값이 `marker` 와 같으면 그 행 전체를 노란 배경으로 (검수용 눈에 띄게).
+ * 같은 패턴의 기존 룰은 지우고 다시 만든다 (idempotent).
+ */
+export async function applyHighlightRule(
+  c: SheetCreds,
+  tabName: string,
+  colIndex: number, // 0-based
+  totalCols: number,
+  marker: string,
+): Promise<void> {
+  const token = await getToken(c);
+  const idMap = await getSheetIdMap(c);
+  const sheetId = idMap.get(tabName);
+  if (sheetId == null) throw new Error(`applyHighlightRule: 탭 없음 ${tabName}`);
+  const colA1 = String.fromCharCode(65 + colIndex);
+  const formula = `=$${colA1}2="${marker}"`;
+  const range = { sheetId, startRowIndex: 1, startColumnIndex: 0, endColumnIndex: totalCols };
+  await withRetry("applyHighlightRule", async () => {
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}:batchUpdate`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requests: [{
+            addConditionalFormatRule: {
+              index: 0,
+              rule: {
+                ranges: [range],
+                booleanRule: {
+                  condition: { type: "CUSTOM_FORMULA", values: [{ userEnteredValue: formula }] },
+                  format: { backgroundColor: { red: 1, green: 0.95, blue: 0.7 } },
+                },
+              },
+            },
+          }],
+        }),
+      },
+    );
+    if (!res.ok) throw new Error(`applyHighlightRule ${res.status}: ${await res.text()}`);
+  });
+}
+
+/**
+ * 특정 열에 「다른 탭의 범위에서 하나 고르기」 드롭다운(데이터 유효성) 설정.
+ * 소스 범위를 넉넉히 잡아두면 소스 탭에 행이 추가돼도 드롭다운에 자동 반영된다.
+ *
+ * @param colIndex     0-based, 드롭다운을 걸 열
+ * @param sourceTab    소스 탭 이름
+ * @param sourceColA1  소스 열 문자 (예: "A")
+ */
+export async function setOneOfRangeValidation(
+  c: SheetCreds,
+  tabName: string,
+  colIndex: number,
+  sourceTab: string,
+  sourceColA1: string,
+  sourceMaxRow = 1000,
+  targetMaxRow = 20000,
+): Promise<void> {
+  const token = await getToken(c);
+  const idMap = await getSheetIdMap(c);
+  const sheetId = idMap.get(tabName);
+  if (sheetId == null) throw new Error(`setOneOfRangeValidation: 탭 없음 ${tabName}`);
+  await withRetry("setOneOfRangeValidation", async () => {
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}:batchUpdate`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requests: [{
+            setDataValidation: {
+              range: {
+                sheetId,
+                startRowIndex: 1, // 헤더 제외
+                endRowIndex: targetMaxRow,
+                startColumnIndex: colIndex,
+                endColumnIndex: colIndex + 1,
+              },
+              rule: {
+                condition: {
+                  type: "ONE_OF_RANGE",
+                  values: [{ userEnteredValue: `=${sourceTab}!$${sourceColA1}$2:$${sourceColA1}$${sourceMaxRow}` }],
+                },
+                showCustomUi: true,
+                strict: false, // 오타로 막히지 않게 (경고만)
+              },
+            },
+          }],
+        }),
+      },
+    );
+    if (!res.ok) throw new Error(`setOneOfRangeValidation ${res.status}: ${await res.text()}`);
+  });
+}
+
+/**
  * 1행 헤더 셀에 메모(노트) 달기 — 사장님이 헤더에 마우스 올리면 설명이 뜬다.
  * notes[i] 가 빈 문자열이면 그 컬럼은 건너뜀. idempotent (매번 덮어씀).
  */

@@ -29,19 +29,22 @@ import {
   loadCredsFromEnv,
   upsertRows,
   getSheetIdMap,
+  applyHighlightRule,
   type SheetCreds,
 } from "./sheets";
 import {
   OPTMAP_TAB,
+  OPTMAP_HEADERS,
   ensureOptionMapTab,
   mergeOptionMapEntries,
+  refreshOptMapAudit,
   type OptMapEntry,
 } from "./optmap";
 import { updateProductSummary, type MissingCostProduct } from "./productsummary";
 import {
   loadItems, loadCompRules, parseComposition, costOfComposition, compKey,
   syncCompTab, COMP_TAB, NEEDS_COMP,
-  type Item, type CompRule,
+  type Item, type CompRule, type SeenOption,
 } from "./itemdict";
 
 // ─────────────────── 여기명품 사입관리 시트 (별도 스프레드시트)
@@ -454,6 +457,7 @@ interface OptionMapRule {
   costPerUnit: number;
   logisticsPerOrder: number;
   type: "메인" | "추가" | ""; // 빈 칸 = 미지정
+  itemPick: string;           // I열 품목 드롭다운 선택값 ("" = 미선택)
 }
 
 /**
@@ -481,6 +485,7 @@ async function loadOptionMapping(): Promise<Map<string, OptionMapRule>> {
       if (!chNo) continue; // 채널상품번호 필수
       const cost = Number(String(r[4] ?? "").replace(/,/g, "")) || 0;
       const logi = Number(String(r[5] ?? "").replace(/,/g, "")) || 0;
+      const itemPick = String(r[8] ?? "").trim(); // I열 품목 드롭다운
       const typeStr = String(r[6] ?? "").trim();
       const type: OptionMapRule["type"] =
         typeStr === "메인" || typeStr.toLowerCase() === "main" ? "메인"
@@ -495,6 +500,7 @@ async function loadOptionMapping(): Promise<Map<string, OptionMapRule>> {
         costPerUnit: cost,
         logisticsPerOrder: logi,
         type,
+        itemPick,
       });
     }
     if (map.size > 0) console.log(`⭐옵션매핑 ${map.size}개 로드`);
@@ -859,7 +865,7 @@ async function buildSetupAlert(
   c: SheetCreds,
   newProducts: { channelProductNo: string; label: string }[],
   missing: MissingCostProduct[],
-  needComp: { productName: string; optionText: string; count: number }[] = [],
+  needComp: SeenOption[] = [],
 ): Promise<string | null> {
   if (newProducts.length === 0 && missing.length === 0 && needComp.length === 0) return null;
 
@@ -1094,8 +1100,13 @@ async function processDay(
         let compCost = -1;
         let compMissing = false;
         if (store.name !== YEOGI_STORE && items.length > 0) {
-          const rule = compRules.get(compKey(po.productName, po.productOption ?? ""));
-          const parts = rule?.manual ?? parseComposition(po.productName, po.productOption ?? "", items);
+          const rule = compRules.get(compKey(channelProductNo, po.productOption ?? ""));
+          // 우선순위: 구성해석 수동(복합 표현 가능) → 옵션 줄 품목 드롭다운 → 자동 해석
+          const pick = optionRule?.itemPick || productLevelRule?.itemPick || "";
+          const parts = rule?.manual
+            ?? (pick
+              ? [{ item: pick, qty: extractBottles(po.productOption ?? po.productName) }]
+              : parseComposition(po.productName, po.productOption ?? "", items));
           if (parts) {
             const { cost: cc, missing } = costOfComposition(parts, items);
             if (!missing) compCost = cc;
@@ -1326,15 +1337,61 @@ async function processDay(
         console.log(`✅ 「${OPTMAP_TAB}」 새 줄 ${merged.addedRows}개 자동 추가`);
       }
 
+      // 검수 열 갱신 — 사장님이 눈으로 훑으며 잘못 매핑된 줄만 드롭다운으로 고치는 용도
+      if (items.length > 0) {
+        try {
+          // 상품번호 → 스토어 (여기명품은 사입관리에서 원가가 오므로 검수 대상이 아님)
+          const storeOf = new Map<string, string>();
+          for (const r of allRows) if (r.channelProductNo) storeOf.set(r.channelProductNo, r.store);
+
+          const audit = await refreshOptMapAudit(sheetCreds, (label, picked, chNo) => {
+            const bottles = extractBottles(label) || 1;
+            const st = storeOf.get(chNo);
+            // 판매 이력이 없는 줄(프리필만 된 상품)과 여기명품 줄은 노란 표시 대상에서 뺀다.
+            // 전부 노랗게 칠하면 정작 손봐야 할 줄이 묻힌다.
+            if (st === YEOGI_STORE) return { bottles, autoText: "", autoCost: "", source: "사입관리" };
+            if (!st) return { bottles, autoText: "", autoCost: "", source: "미판매" };
+            if (picked) {
+              const { cost, missing } = costOfComposition([{ item: picked, qty: bottles }], items);
+              return {
+                bottles,
+                autoText: `${picked}×${bottles}`,
+                autoCost: missing ? "" : cost,
+                source: missing ? "설정 필요" : "드롭다운",
+              };
+            }
+            const parts = label ? parseComposition("", label, items) : null;
+            if (!parts) return { bottles, autoText: "해석 실패", autoCost: "", source: "설정 필요" };
+            const { cost, missing } = costOfComposition(parts, items);
+            return {
+              bottles,
+              autoText: parts.map((p) => `${p.item}×${p.qty}`).join("+"),
+              autoCost: missing ? "" : cost,
+              source: missing ? "설정 필요" : "자동",
+            };
+          });
+          // 「출처」(P열)가 설정 필요면 그 줄 노란색
+          await applyHighlightRule(sheetCreds, OPTMAP_TAB, 15, OPTMAP_HEADERS.length, "설정 필요");
+          console.log(`✅ 「${OPTMAP_TAB}」 검수열 ${audit.rows}줄 갱신 (설정 필요 ${audit.flagged}줄)`);
+        } catch (err) {
+          console.warn("옵션매핑 검수열 갱신 실패(무시):", err instanceof Error ? err.message : String(err));
+        }
+      }
+
       // 「구성해석」 갱신 — 오늘 등장한 (상품명, 옵션) 조합을 올리고 자동해석 결과를 채운다.
       // 여기명품은 원가가 사입관리 시트에서 오므로 구성 해석 대상이 아니다.
-      let needComp: { productName: string; optionText: string; count: number }[] = [];
+      let needComp: SeenOption[] = [];
       if (items.length > 0) {
-        const seenOpts = new Map<string, { productName: string; optionText: string; count: number }>();
+        const seenOpts = new Map<string, SeenOption>();
         for (const r of allRows) {
-          if (r.store === YEOGI_STORE) continue;
-          const k = compKey(r.productName, r.optionName);
-          const cur = seenOpts.get(k) ?? { productName: r.productName, optionText: r.optionName, count: 0 };
+          if (r.store === YEOGI_STORE || !r.channelProductNo) continue;
+          const k = compKey(r.channelProductNo, r.optionName);
+          const cur = seenOpts.get(k) ?? {
+            channelProductNo: r.channelProductNo,
+            productName: r.productName,
+            optionText: r.optionName,
+            count: 0,
+          };
           cur.count += 1;
           seenOpts.set(k, cur);
         }
