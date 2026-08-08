@@ -44,6 +44,7 @@ import { updateProductSummary, type MissingCostProduct } from "./productsummary"
 import {
   loadItems, loadCompRules, parseComposition, costOfComposition, compKey,
   syncCompTab, COMP_TAB, NEEDS_COMP,
+  resolveLabelComposition, formatCompositionUi, bottlesOfLabel,
   type Item, type CompRule, type SeenOption,
 } from "./itemdict";
 
@@ -1345,27 +1346,29 @@ async function processDay(
           for (const r of allRows) if (r.channelProductNo) storeOf.set(r.channelProductNo, r.store);
 
           const audit = await refreshOptMapAudit(sheetCreds, (label, picked, chNo) => {
-            const bottles = extractBottles(label) || 1;
+            const bottles = bottlesOfLabel(label);
             const st = storeOf.get(chNo);
             // 판매 이력이 없는 줄(프리필만 된 상품)과 여기명품 줄은 노란 표시 대상에서 뺀다.
             // 전부 노랗게 칠하면 정작 손봐야 할 줄이 묻힌다.
             if (st === YEOGI_STORE) return { bottles, autoText: "", autoCost: "", source: "사입관리" };
             if (!st) return { bottles, autoText: "", autoCost: "", source: "미판매" };
+            // 표시값은 언제나 «병수까지 곱한 최종 원가» — 사장님이 암산하지 않도록.
             if (picked) {
-              const { cost, missing } = costOfComposition([{ item: picked, qty: bottles }], items);
+              const parts = [{ item: picked, qty: bottles }];
+              const { cost, missing } = costOfComposition(parts, items);
               return {
                 bottles,
-                autoText: `${picked}×${bottles}`,
+                autoText: formatCompositionUi(parts),
                 autoCost: missing ? "" : cost,
                 source: missing ? "설정 필요" : "드롭다운",
               };
             }
-            const parts = label ? parseComposition("", label, items) : null;
+            const parts = label ? resolveLabelComposition(label, items) : null;
             if (!parts) return { bottles, autoText: "해석 실패", autoCost: "", source: "설정 필요" };
             const { cost, missing } = costOfComposition(parts, items);
             return {
               bottles,
-              autoText: parts.map((p) => `${p.item}×${p.qty}`).join("+"),
+              autoText: formatCompositionUi(parts),
               autoCost: missing ? "" : cost,
               source: missing ? "설정 필요" : "자동",
             };
