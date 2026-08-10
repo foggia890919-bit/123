@@ -1679,14 +1679,18 @@ async function processDay(
       if (g.main.options.size >= 2) {
         const opts = Array.from(g.main.options.values()).sort((a, b) => b.sales - a.sales);
         for (const o of opts) {
-          l.push(`   ↳ ${o.optionName}: ${o.bottles}개·${o.orderIds.size}건 · ${won(o.sales)} · 이익 ${won(o.profit)}`);
+          // 옵션명은 그대로 한 줄, 숫자는 다음 줄에 한 줄로.
+          // 옵션명이 길어 자동 줄바꿈되면 숫자가 앞줄 꼬리에 붙어 읽기 어려웠다.
+          l.push(`   ↳ ${o.optionName}`);
+          l.push(`      ${o.bottles}개·${o.orderIds.size}건·${won(o.sales)}·이익 ${won(o.profit)}`);
         }
       }
       // 추가상품
       if (g.additional.size > 0) {
         const adds = Array.from(g.additional.values()).sort((a, b) => b.sales - a.sales);
         for (const a of adds) {
-          l.push(`   ↳ 추가: <b>${a.label}</b> ${a.bottles}개·${a.orderIds.size}건 · ${won(a.sales)} · 원가 ${won(a.cost)} · 이익 ${won(a.profit)}`);
+          l.push(`   ↳ 추가: <b>${a.label}</b>`);
+          l.push(`      ${a.bottles}개·${a.orderIds.size}건·${won(a.sales)}·원가 ${won(a.cost)}·이익 ${won(a.profit)}`);
         }
       }
     }
