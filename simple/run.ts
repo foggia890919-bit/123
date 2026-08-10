@@ -1158,15 +1158,32 @@ async function processDay(
         // 사장님이 「구성해석」 D열에 직접 적은 구성이 있으면 그게 최우선.
         let compCost = -1;
         let compMissing = false;
+        let compParts: { item: string; qty: number }[] | null = null;
         if (store.name !== YEOGI_STORE && items.length > 0) {
           const rule = compRules.get(compKey(channelProductNo, po.productOption ?? ""));
-          // 우선순위: 구성해석 수동(복합 표현 가능) → 옵션 줄 품목 드롭다운 → 자동 해석
-          const pick = optionRule?.itemPick || productLevelRule?.itemPick || "";
+          const optText = po.productOption ?? "";
+          // 우선순위:
+          //   1) 「구성해석」 수동 — 복합 구성까지 표현 가능. 사장님이 직접 정한 값이라 최우선
+          //   2) **그 옵션 줄** 드롭다운 — 그 옵션을 콕 집어 지정한 것이므로 자동해석보다 우선
+          //   3) 자동 해석
+          //   4) **상품 대표 줄** 드롭다운 — 자동해석이 실패했을 때만 쓰는 최후 수단
+          //
+          // ⚠️ 대표 줄 드롭다운을 2)처럼 쓰면 안 된다. 대표 줄은 «그 상품의 기본 품목» 일 뿐
+          //    어떤 옵션이 팔렸는지 모른다. 실제로 12422196847 의 대표 줄 드롭다운(피쿠알)이
+          //    「피쿠알2병+블렌딩1병」 복합 옵션에까지 적용돼 피쿠알×2 = 10,400 으로
+          //    과소 계산됐다(정답 15,600). 복합 옵션은 드롭다운 한 칸으로 표현할 수 없다.
+          const optionPick = optionRule?.itemPick ?? "";
+          const productPick = productLevelRule?.itemPick ?? "";
+          const pickParts = (name: string) =>
+            [{ item: name, qty: extractBottles(optText || po.productName) }];
+
           const parts = rule?.manual
-            ?? (pick
-              ? [{ item: pick, qty: extractBottles(po.productOption ?? po.productName) }]
-              : parseComposition(po.productName, po.productOption ?? "", items));
+            ?? (optionPick ? pickParts(optionPick) : null)
+            ?? parseComposition(po.productName, optText, items)
+            ?? (productPick ? pickParts(productPick) : null);
+
           if (parts) {
+            compParts = parts;
             const { cost: cc, missing } = costOfComposition(parts, items);
             if (!missing) compCost = cc;
             else compMissing = true;
@@ -1206,6 +1223,11 @@ async function processDay(
           deliveryFee = feeByOrder.get(oidForFee) ?? 0;
           deliveryFeeSeen.add(oidForFee);
         }
+        // 출고수량(병 수)은 구성 해석이 있으면 그걸 따른다.
+        // extractBottles 는 "피쿠알2병+블렌딩1병" 에서 첫 숫자만 잡아 2 로 세지만
+        // 실제로는 3병이 나간다. 구성이 풀렸으면 그 합계가 정확한 병 수다.
+        const compUnits = compParts ? compParts.reduce((s, p) => s + p.qty, 0) : 0;
+        const outUnits = compUnits > 0 ? po.quantity * compUnits : totalUnits;
         // 원가 미설정 판정 — 조용히 0 으로 계산하면 이익이 부풀려져 오판을 부르므로,
         // 원가를 확정할 근거가 하나도 없으면 이익을 내지 않고 "설정 필요" 로 표시한다.
         // (여기명품은 사입관리 시트/최근단가 추정이 원가 근거이므로 제외)
@@ -1226,7 +1248,7 @@ async function processDay(
           keyword,
           type: productRule?.type ?? "",
           quantity: po.quantity,
-          bottles: totalUnits,
+          bottles: outUnits,
           salesAmount: po.totalPaymentAmount + deliveryFee,
           commission,
           settlement,
