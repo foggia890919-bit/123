@@ -46,6 +46,7 @@ import {
   type OptMapEntry,
 } from "./optmap";
 import { updateProductSummary, type MissingCostProduct } from "./productsummary";
+import { updateVerifyTab, verifySummaryLine } from "./verify";
 import { loadSettings, DEFAULT_LOGISTICS_PER_SHIPMENT } from "./settings";
 import {
   loadItems, loadCompRules, parseComposition, costOfComposition, compKey,
@@ -990,6 +991,7 @@ async function processDay(
   const errors: string[] = [];
   const deliveryFeeSeen = new Set<string>(); // 배송비: 배송(주문)당 1회만 매출/이익 반영
   const logisticsCharged = new Map<string, number>(); // 물류비: 주문(=출고 1회)당 누계 부과액
+  let verifyLine = ""; // 「검산」 탭 결과 한 줄 — 아침 요약 메시지에 붙는다
 
   // 전역 설정 (출고 건당 물류비 등). 시트가 없거나 값이 이상하면 기본값으로 진행.
   const settings = SHEET_CREDS
@@ -1495,6 +1497,21 @@ async function processDay(
 
       const summary = await updateProductSummary(sheetCreds, range.dateStr.slice(0, 7));
 
+      // ── 「검산」 탭 — 최근 7일 주문을 줄 단위로 재검산 ──
+      // 원가·물류비·이익을 저장값과 다시 대조해 이익률 허수를 잡는다.
+      // 7일 롤링 루프의 «첫 날(어제)» 에서 한 번만 돌린다 — 어차피 7일 전체를 훑기 때문에
+      // 매 날짜마다 돌리면 같은 일을 7번 하게 된다.
+      if (options.sendTelegram) {
+        try {
+          const v = await updateVerifyTab(sheetCreds, range.dateStr, 7);
+          verifyLine = verifySummaryLine(v);
+          if (v.flagged > 0 && v.link) verifyLine += `\n   📄 ${v.link}`;
+        } catch (err) {
+          console.warn("검산 탭 갱신 실패(매출 보고에는 영향 없음):",
+            err instanceof Error ? err.message : String(err));
+        }
+      }
+
       if (options.sendTelegram) {
         // 시트에서 바로 찾을 수 있도록 행번호를 미리 뽑아둔다
         const optMapRowOf = new Map<string, number>();
@@ -1665,6 +1682,7 @@ async function processDay(
   if (canceled.length > 0) summaryLines.push(`❌ 취소 -${won(canceledSales)} (${canceled.length}건)`);
   summaryLines.push(`✅ <b>최종 ${won(liveSales)}</b> (${live.length}건) · 정산 ${won(liveSettlement)}`);
   summaryLines.push(`📦 원가 ${won(totalCost)} · 🚚 ${won(totalLogistics)} → 💎 <b>${profitText(totalProfit, liveSales)}</b>`);
+  if (verifyLine) summaryLines.push(verifyLine);
   summaryLines.push("");
   summaryLines.push(`<b>━ 사업자별 ━</b>`);
   for (const store of STORES) {
