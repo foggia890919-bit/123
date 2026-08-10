@@ -20,16 +20,20 @@
 
 import "dotenv/config";
 import { loadCredsFromEnv, readRange, writeRange } from "./sheets";
-import {
-  loadItems, loadCompRules, parseComposition, costOfComposition, compKey,
-} from "./itemdict";
+import { loadItems, loadCompRules } from "./itemdict";
 import { loadSettings } from "./settings";
+import { resolveCost, loadOptMapLite, type OptMapLite } from "./verify";
 
 /**
  * RECOST=1 이면 「원가」(P열)도 「품목사전 × 구성해석」으로 다시 계산한다.
  * 과거 행은 옵션 줄 단가로 계산돼 있어, 복합 옵션(피쿠알2병+아르베키나1병)에서
  * 한 품목만 세는 등 과소계상이 섞여 있다. 새 엔진과 정합성을 맞추려면 필요.
  * 여기명품은 원가가 「여기명품 사입관리」(실매입가)에서 오므로 건드리지 않는다.
+ *
+ * ⚠️ 원가 결정은 반드시 run.ts 와 «같은» 규칙(verify.resolveCost)을 쓴다.
+ *    예전에는 여기서 「구성해석 수동 → 자동해석」만 보고 **드롭다운을 안 봤다.**
+ *    그 상태로 돌렸으면 드롭다운으로만 원가가 잡히던 56행이 전부 「설정 필요」로
+ *    날아가서, 그 상품들의 이익이 통째로 사라질 뻔했다.
  */
 const RECOST = process.env.RECOST === "1";
 const YEOGI = "여기명품";
@@ -46,15 +50,17 @@ const isCanceled = (s: string) => /취소|반품|환불|cancel|refund|return/i.t
 const won = (n: number) => n.toLocaleString("ko-KR");
 
 async function main() {
-  // A2:S — 0결제일 2주문번호 10매출 11수수료 12정산예정 13상태 15원가 16물류비 17이익 18배송비
-  const rows = await readRange(c!, "주문원본!A2:S100000");
+  // A2:T — 0결제일 2주문번호 10매출 11수수료 12정산예정 13상태 15원가 16물류비 17이익 18배송비 19옵션관리번호
+  // (T열 옵션관리번호는 드롭다운을 «그 옵션 줄» 것으로 정확히 찾기 위해 반드시 읽어야 한다)
+  const rows = await readRange(c!, "주문원본!A2:T100000");
   console.log(`주문원본 ${rows.length}행 읽음${DRY_RUN ? " [DRY_RUN]" : ""}${RECOST ? " [RECOST]" : ""}`);
 
   const settings = await loadSettings(c!);
   if (RECOST) console.log(`출고 건당 물류비 ${settings.logisticsPerShipment.toLocaleString()}원 (설정 탭) 기준으로 재계산`);
   const items = RECOST ? await loadItems(c!) : [];
   const compRules = RECOST ? await loadCompRules(c!, items) : new Map();
-  if (RECOST) console.log(`품목사전 ${items.length}개 로드`);
+  const optMap: Map<string, OptMapLite> = RECOST ? await loadOptMapLite(c!) : new Map();
+  if (RECOST) console.log(`품목사전 ${items.length}개 / ⭐옵션매핑 드롭다운 ${optMap.size}줄 로드`);
   let recosted = 0, recostMissing = 0, costDelta = 0;
 
   // 1) 주문(=출고)당 물류비.
@@ -105,25 +111,23 @@ async function main() {
       const productName = String(r[5] ?? "");
       const optionText = String(r[6] ?? "").trim();
       const qty = num(r[8]) || 1;
-      const rule = compRules.get(compKey(String(r[4] ?? "").trim(), optionText));
-      const parts = rule?.manual ?? parseComposition(productName, optionText, items);
-      if (!parts) {
+      // run.ts 와 동일한 우선순위: 구성해석 수동 > 그 줄 드롭다운 > 자동해석
+      const res = resolveCost(
+        productName, optionText,
+        String(r[4] ?? "").trim(), String(r[19] ?? "").trim(),
+        items, compRules, optMap,
+      );
+      if (res.unitCost == null) {
         // 구성을 못 읽으면 원가를 확정할 수 없다. 예전 로직이 넣어둔 숫자를 그대로 두면
         // 「그럴듯하지만 틀린 원가」가 남아 이익을 왜곡하므로 「설정 필요」로 되돌린다.
         // 무엇을 정의해야 하는지는 「구성해석」 탭에 그대로 뜬다.
         costCell = SETUP_NEEDED;
         recostMissing += 1;
       } else {
-        const { cost: cc, missing } = costOfComposition(parts, items);
-        if (missing) {
-          costCell = SETUP_NEEDED;
-          recostMissing += 1;
-        } else {
-          const nc = cc * qty;
-          if (nc !== cost) { costDelta += nc - cost; recosted += 1; }
-          cost = nc;
-          costCell = nc;
-        }
+        const nc = res.unitCost * qty;
+        if (nc !== cost) { costDelta += nc - cost; recosted += 1; }
+        cost = nc;
+        costCell = nc;
       }
     }
     // 원가를 확정 못 했으면 이익도 낼 수 없다

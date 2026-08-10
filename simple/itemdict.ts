@@ -191,7 +191,18 @@ export function parseComposition(
   let parts: CompPart[];
   if (hasExplicit) {
     // 품목마다 숫자가 붙어 있으면 그대로 신뢰 (예: 피쿠알2병+아르베키나1병)
-    parts = found.map((f) => ({ item: f.item, qty: f.qty }));
+    //
+    // 단, **같은 품목이 여러 번 걸렸는데 그중 하나에만 수량이 명시**돼 있으면
+    // 나머지는 «같은 물건을 가리키는 다른 표현»(마케팅 접두어·별칭)이지 추가 수량이 아니다.
+    //   "올레샷! 레몬즙 특가!: 유기농 NFC착즙 레몬즙 1팩(14포)"
+    //     → 접두어 「레몬즙」 + 별칭 「NFC착즙 레몬즙」 + 이름 「레몬즙」 = 3개로 세어
+    //       원가가 3,400 이 아니라 10,200 으로 잡혔다 (171행이 이 상태였다).
+    // 수량이 명시된 품목은 «명시된 것만» 센다. 다른 품목의 암묵 1개는 그대로 둔다
+    // (예: "피쿠알2병+레몬즙" 은 피쿠알2 + 레몬즙1 이 맞다).
+    const explicitItems = new Set(found.filter((f) => f.explicit).map((f) => f.item));
+    parts = found
+      .filter((f) => f.explicit || !explicitItems.has(f.item))
+      .map((f) => ({ item: f.item, qty: f.qty }));
   } else if (distinct.size === 1) {
     // 품목 하나 + 뒤에 총 수량 (예: 피쿠알 250ml / 3병)
     parts = [{ item: [...distinct][0], qty: trailing ?? 1 }];
@@ -232,9 +243,19 @@ export const formatComposition = (parts: CompPart[]): string =>
 export const formatCompositionUi = (parts: CompPart[]): string =>
   parts.map((p) => `${p.item}×${p.qty}`).join("+");
 
-/** 라벨에서 병(개) 수 추출. "…기름, 3병" → 3, 없으면 1 */
+/**
+ * 라벨에서 병(개) 수 추출. "…기름, 3병" → 3, 없으면 1
+ *
+ * ⚠️ 「포」는 절대 단위 목록에 넣지 말 것 — 「3박스(42포)」·「1팩(14포)」에서 42·14 를
+ *    잡으면 원가가 14배가 된다. 「포」를 안 세면 앞의 「3박스」·「1팩」이 먼저 잡혀 정답이 된다.
+ * ⚠️ 괄호를 지우는 방식도 쓰면 안 된다 — 「수량: 24500원(3병)」처럼 **수량이 괄호 안에
+ *    들어 있는 옵션이 훨씬 많다**. 실제로 괄호를 지웠더니 아보카도오일 19개 조합이
+ *    ×3 → ×1 로 깎여 원가가 105만원 사라졌다.
+ * ⚠️ 「박스」는 「압박스타킹」 안에도 들어 있지만 숫자가 바로 앞에 와야 매칭되므로
+ *    (「압박스타킹」에는 숫자가 없다) 오탐이 나지 않는다. 실데이터 전 기간으로 확인함.
+ */
 export function bottlesOfLabel(label: string): number {
-  const m = String(label ?? "").match(/(\d+)\s*(?:병|개|입|set|세트|팩)/i);
+  const m = String(label ?? "").match(/(\d+)\s*(?:병|개|입|박스|set|세트|팩)/i);
   return m ? parseInt(m[1], 10) : 1;
 }
 

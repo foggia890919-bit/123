@@ -174,9 +174,9 @@ function explicitQtyToken(text: string): string | null {
 }
 
 /** 「⭐옵션매핑」에서 (상품번호|옵션관리번호) → 드롭다운 선택·유형 */
-interface OptMapLite { itemPick: string; type: string }
+export interface OptMapLite { itemPick: string; type: string }
 
-async function loadOptMapLite(c: SheetCreds): Promise<Map<string, OptMapLite>> {
+export async function loadOptMapLite(c: SheetCreds): Promise<Map<string, OptMapLite>> {
   const map = new Map<string, OptMapLite>();
   try {
     const rows = await readRange(c, `${OPTMAP_TAB}!A2:${colA1(OPTMAP_COL.itemPick)}20000`);
@@ -206,7 +206,7 @@ function windowOf(endDate: string, days: number): { from: string; to: string } {
   return { from: start.toISOString().slice(0, 10), to: endDate };
 }
 
-interface Resolved {
+export interface Resolved {
   text: string;       // 원가해석 표시 문자열
   source: string;     // 수동 / 드롭다운 / 자동 / 사입관리 / 미해석
   unitCost: number | null; // 옵션 1건당 원가 (수량 곱하기 전)
@@ -224,7 +224,7 @@ interface Resolved {
  *   우선순위: 「구성해석」 수동 > 그 줄 드롭다운(조합=×1, 단품=×명시병수) > 자동해석
  *   대표 줄 드롭다운은 «옵션 없이 팔린 줄»에만 쓴다 (상속 금지).
  */
-function resolveCost(
+export function resolveCost(
   productName: string,
   optText: string,
   channelNo: string,
