@@ -26,9 +26,14 @@ const isCanceled = (s: string) => /취소|반품|환불|cancel|refund|return/i.t
 
 export interface MissingCostProduct {
   channelProductNo: string;
+  optionManageCode?: string;
   productName: string;
+  store: string;
   sales: number;
 }
+
+/** 원가가 사입관리 시트에서 오는 스토어 — 「원가 미입력」이 아니라 「사입관리 확인 필요」로 구분한다. */
+const WHOLESALE_STORES = new Set(["여기명품"]);
 
 /**
  * @param yearMonth "YYYY-MM"
@@ -37,12 +42,13 @@ export interface MissingCostProduct {
 export async function updateProductSummary(
   c: SheetCreds,
   yearMonth: string,
-): Promise<MissingCostProduct[]> {
+): Promise<{ missing: MissingCostProduct[]; wholesaleUnmatched: MissingCostProduct[] }> {
   const rows = await readRange(c, `주문원본!A2:${RAW_LAST_COL}100000`);
   const num = (v: unknown) => Number(String(v ?? "").replace(/,/g, "")) || 0;
 
   interface Agg {
     productName: string;
+    store: string;
     orderIds: Set<string>;
     qty: number; sales: number; commission: number; delivery: number;
     cost: number; logistics: number; profit: number;
@@ -57,6 +63,7 @@ export async function updateProductSummary(
     if (!chNo) continue;
     const a = byProduct.get(chNo) ?? {
       productName: String(r[5] ?? "").slice(0, 40),
+      store: String(r[1] ?? "").trim(),
       orderIds: new Set<string>(),
       qty: 0, sales: 0, commission: 0, delivery: 0, cost: 0, logistics: 0, profit: 0,
       missing: false,
@@ -99,9 +106,23 @@ export async function updateProductSummary(
   }
   console.log(`✅ 「${PRODUCT_SUMMARY_TAB}」 ${yearMonth}: 상품 ${out.length}개 (원가 미설정 ${sorted.filter(([, a]) => a.missing).length}개)`);
 
-  return sorted
+
+  // 원가 출처가 다르므로 알림도 나눠서 돌려준다.
+  //   - 일반 스토어: 품목사전에 원가를 넣으면 해결 → 「원가 미입력」
+  //   - 여기명품  : 사입관리 시트 매칭이 안 된 것 → 「사입관리 확인 필요」
+  //     (품목사전 방식이 아니므로 원가 미입력으로 뜨면 사장님이 헛일을 하게 된다)
+  const all = sorted
     .filter(([, a]) => a.missing)
-    .map(([chNo, a]) => ({ channelProductNo: chNo, productName: a.productName, sales: a.sales }));
+    .map(([chNo, a]) => ({
+      channelProductNo: chNo,
+      productName: a.productName,
+      store: a.store,
+      sales: a.sales,
+    }));
+  return {
+    missing: all.filter((p) => !WHOLESALE_STORES.has(p.store)),
+    wholesaleUnmatched: all.filter((p) => WHOLESALE_STORES.has(p.store)),
+  };
 }
 
 /** 월 범위 전개 ("2026-06", "2026-08" → 06,07,08) */

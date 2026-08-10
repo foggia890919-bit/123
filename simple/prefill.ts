@@ -32,7 +32,9 @@
 import "dotenv/config";
 import bcrypt from "bcryptjs";
 import { loadCredsFromEnv, readRange } from "./sheets";
-import { mergeOptionMapEntries, OPTMAP_TAB, type OptMapEntry } from "./optmap";
+import {
+  mergeOptionMapEntries, OPTMAP_TAB, OPTMAP_EXCLUDED_STORES, type OptMapEntry,
+} from "./optmap";
 
 const NAVER_BASE = "https://api.commerce.naver.com/external";
 const DRY_RUN = process.env.DRY_RUN === "1";
@@ -200,6 +202,12 @@ async function main() {
   const apiCovered = new Set<string>();
 
   for (const store of STORES) {
+    // 여기명품 등은 사입가가 건건이 달라 품목사전 방식이 안 맞고, 원가는 사입관리 시트에서 온다.
+    // 프리필하면 안 팔리는 명품 잡화 수천 줄만 쌓여 검수 화면이 무의미해진다.
+    if (OPTMAP_EXCLUDED_STORES.has(store.name)) {
+      console.log(`[${store.name}] 옵션매핑 제외 대상 — 건너뜀 (원가는 사입관리 시트에서 옴)`);
+      continue;
+    }
     try {
       const token = await getToken(store.clientId, store.clientSecret);
       const products = await searchProducts(token, store.name);
@@ -216,6 +224,7 @@ async function main() {
 
         // 대표 줄 — 사장님이 숫자 하나만 넣으면 그 상품 전체가 커버되는 자리
         entries.push({
+          store: store.name,
           originProductNo: originNo,
           channelProductNo: chNo,
           optionManageCode: "",
@@ -229,6 +238,7 @@ async function main() {
             detailOk += 1;
             for (const o of opts) {
               entries.push({
+                store: store.name,
                 originProductNo: originNo,
                 channelProductNo: chNo,
                 optionManageCode: o.optionManageCode,

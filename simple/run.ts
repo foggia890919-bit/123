@@ -35,6 +35,10 @@ import {
 import {
   OPTMAP_TAB,
   OPTMAP_HEADERS,
+  OPTMAP_COL,
+  OPTMAP_EXCLUDED_STORES,
+  colOf,
+  colA1,
   ensureOptionMapTab,
   mergeOptionMapEntries,
   refreshOptMapAudit,
@@ -45,6 +49,7 @@ import {
   loadItems, loadCompRules, parseComposition, costOfComposition, compKey,
   syncCompTab, COMP_TAB, NEEDS_COMP,
   resolveLabelComposition, formatCompositionUi, bottlesOfLabel,
+  guessItemName, addPlaceholderItems,
   type Item, type CompRule, type SeenOption,
 } from "./itemdict";
 
@@ -477,17 +482,27 @@ async function loadOptionMapping(): Promise<Map<string, OptionMapRule>> {
   if (!SHEET_CREDS) return map;
   try {
     await ensureOptionMapTab(SHEET_CREDS);
-    const rows = await readRange(SHEET_CREDS, `${OPTMAP_TAB}!A2:H10000`);
+    const rows = await readRange(SHEET_CREDS, `${OPTMAP_TAB}!A2:${colA1(OPTMAP_COL.itemPick)}20000`);
+    // ⚠️ 열 인덱스를 숫자로 박지 말 것. 2026-08-09 에 A열(스토어)이 삽입되며 전부 밀렸다.
+    // 헤더 이름 기반(colOf)으로 읽으면 앞으로 열이 또 끼어도 안 깨진다.
+    const iOrigin = colOf(OPTMAP_COL.originNo);
+    const iCh = colOf(OPTMAP_COL.channelNo);
+    const iCode = colOf(OPTMAP_COL.optionCode);
+    const iLabel = colOf(OPTMAP_COL.label);
+    const iCost = colOf(OPTMAP_COL.cost);
+    const iLogi = colOf(OPTMAP_COL.logistics);
+    const iType = colOf(OPTMAP_COL.type);
+    const iPick = colOf(OPTMAP_COL.itemPick);
     for (const r of rows) {
-      const originNo = String(r[0] ?? "").trim();
-      const chNo = String(r[1] ?? "").trim();
-      const optCode = String(r[2] ?? "").trim();
-      const label = String(r[3] ?? "").trim();
+      const originNo = String(r[iOrigin] ?? "").trim();
+      const chNo = String(r[iCh] ?? "").trim();
+      const optCode = String(r[iCode] ?? "").trim();
+      const label = String(r[iLabel] ?? "").trim();
       if (!chNo) continue; // 채널상품번호 필수
-      const cost = Number(String(r[4] ?? "").replace(/,/g, "")) || 0;
-      const logi = Number(String(r[5] ?? "").replace(/,/g, "")) || 0;
-      const itemPick = String(r[8] ?? "").trim(); // I열 품목 드롭다운
-      const typeStr = String(r[6] ?? "").trim();
+      const cost = Number(String(r[iCost] ?? "").replace(/,/g, "")) || 0;
+      const logi = Number(String(r[iLogi] ?? "").replace(/,/g, "")) || 0;
+      const itemPick = String(r[iPick] ?? "").trim();
+      const typeStr = String(r[iType] ?? "").trim();
       const type: OptionMapRule["type"] =
         typeStr === "메인" || typeStr.toLowerCase() === "main" ? "메인"
           : typeStr === "추가" || typeStr.toLowerCase() === "additional" ? "추가"
@@ -867,8 +882,13 @@ async function buildSetupAlert(
   newProducts: { channelProductNo: string; label: string }[],
   missing: MissingCostProduct[],
   needComp: SeenOption[] = [],
+  addedItems: string[] = [],
+  optMapRowOf: Map<string, number> = new Map(),
+  compRowOf: Map<string, number> = new Map(),
+  wholesaleUnmatched: MissingCostProduct[] = [],
 ): Promise<string | null> {
-  if (newProducts.length === 0 && missing.length === 0 && needComp.length === 0) return null;
+  if (newProducts.length === 0 && missing.length === 0 && needComp.length === 0
+    && addedItems.length === 0 && wholesaleUnmatched.length === 0) return null;
 
   let link = "";
   let compLink = "";
@@ -887,11 +907,22 @@ async function buildSetupAlert(
     for (const p of newProducts.slice(0, 5)) lines.push(`   • ${p.label}`);
     if (newProducts.length > 5) lines.push(`   외 ${newProducts.length - 5}개`);
   }
+  if (addedItems.length > 0) {
+    lines.push("", `📥 「품목사전」에 ${addedItems.length}개 품목이 추가 대기 — <b>원가만 넣어주세요</b>`);
+    lines.push(`   ${addedItems.slice(0, 8).join(", ")}${addedItems.length > 8 ? ` 외 ${addedItems.length - 8}개` : ""}`);
+  }
   if (missing.length > 0) {
     lines.push("", `⚠️ 원가가 비어 이익이 안 잡히는 상품 ${missing.length}개`);
     lines.push("   (매출 큰 순)");
     for (const m of missing.slice(0, 5)) {
+      // 시트에서 바로 찾을 수 있게 옵션관리번호·행번호를 같이 준다
+      const row = optMapRowOf.get(m.channelProductNo);
+      const hint = [
+        m.optionManageCode ? `옵션관리번호 ${m.optionManageCode}` : `상품번호 ${m.channelProductNo}`,
+        row ? `옵션매핑 ${row}행` : "",
+      ].filter(Boolean).join(", ");
       lines.push(`   • ${m.productName} — ${won(m.sales)}`);
+      lines.push(`      (${hint})`);
     }
     if (missing.length > 5) lines.push(`   외 ${missing.length - 5}개`);
     lines.push("", "→ 「품목사전」의 「개당원가」 칸에 숫자만 넣으면 다음 보고부터 이익이 잡힙니다.");
@@ -900,11 +931,26 @@ async function buildSetupAlert(
   if (needComp.length > 0) {
     lines.push("", `❓ 구성을 못 읽은 옵션 ${needComp.length}개`);
     for (const n of needComp.slice(0, 5)) {
+      const row = compRowOf.get(compKey(n.channelProductNo, n.optionText));
+      const hint = [
+        n.optionManageCode ? `옵션관리번호 ${n.optionManageCode}` : `상품번호 ${n.channelProductNo}`,
+        row ? `구성해석 ${row}행` : "",
+      ].filter(Boolean).join(", ");
       lines.push(`   • ${n.optionText.slice(0, 42) || n.productName.slice(0, 42)} (${n.count}건)`);
+      lines.push(`      (${hint})`);
     }
     if (needComp.length > 5) lines.push(`   외 ${needComp.length - 5}개`);
     lines.push("", `→ 「${COMP_TAB}」 탭 「수동구성」 칸에 <code>피쿠알2+블렌딩1</code> 형식으로 적어주세요.`);
     if (compLink) lines.push(`   📄 ${compLink}`);
+  }
+  if (wholesaleUnmatched.length > 0) {
+    // 여기명품은 품목사전이 아니라 사입관리 실매입가로 원가가 오므로 안내 문구가 다르다
+    lines.push("", `🧾 사입관리 확인 필요 ${wholesaleUnmatched.length}개 (여기명품)`);
+    for (const w of wholesaleUnmatched.slice(0, 5)) {
+      lines.push(`   • ${w.productName} — ${won(w.sales)} (상품번호 ${w.channelProductNo})`);
+    }
+    if (wholesaleUnmatched.length > 5) lines.push(`   외 ${wholesaleUnmatched.length - 5}개`);
+    lines.push("", "→ 「여기명품 사입관리」 시트 AD열에 상품주문번호, AB열에 총비용을 넣어주세요.");
   }
   if (link) lines.push("", `📄 「⭐옵션매핑」 ${link}`);
   return lines.join("\n");
@@ -1321,9 +1367,11 @@ async function processDay(
       const seen = new Map<string, OptMapEntry>();
       for (const r of allRows) {
         if (!r.channelProductNo) continue;
+        if (OPTMAP_EXCLUDED_STORES.has(r.store)) continue; // 여기명품은 사입관리로 원가가 옴
         const key = `${r.channelProductNo}|${r.optionManageCode}`;
         if (!seen.has(key)) {
           seen.set(key, {
+            store: r.store,
             originProductNo: "",
             channelProductNo: r.channelProductNo,
             optionManageCode: r.optionManageCode,
@@ -1345,12 +1393,13 @@ async function processDay(
           const storeOf = new Map<string, string>();
           for (const r of allRows) if (r.channelProductNo) storeOf.set(r.channelProductNo, r.store);
 
-          const audit = await refreshOptMapAudit(sheetCreds, (label, picked, chNo) => {
+          const audit = await refreshOptMapAudit(sheetCreds, (ctx) => {
+            const { label, pickedItem: picked, channelProductNo: chNo } = ctx;
             const bottles = bottlesOfLabel(label);
-            const st = storeOf.get(chNo);
-            // 판매 이력이 없는 줄(프리필만 된 상품)과 여기명품 줄은 노란 표시 대상에서 뺀다.
+            const st = ctx.store || storeOf.get(chNo);
+            // 판매 이력이 없는 줄(프리필만 된 상품)과 사입관리 스토어 줄은 노란 표시에서 뺀다.
             // 전부 노랗게 칠하면 정작 손봐야 할 줄이 묻힌다.
-            if (st === YEOGI_STORE) return { bottles, autoText: "", autoCost: "", source: "사입관리" };
+            if (OPTMAP_EXCLUDED_STORES.has(st ?? "")) return { bottles, autoText: "", autoCost: "", source: "사입관리" };
             if (!st) return { bottles, autoText: "", autoCost: "", source: "미판매" };
             // 표시값은 언제나 «병수까지 곱한 최종 원가» — 사장님이 암산하지 않도록.
             if (picked) {
@@ -1384,13 +1433,15 @@ async function processDay(
       // 「구성해석」 갱신 — 오늘 등장한 (상품명, 옵션) 조합을 올리고 자동해석 결과를 채운다.
       // 여기명품은 원가가 사입관리 시트에서 오므로 구성 해석 대상이 아니다.
       let needComp: SeenOption[] = [];
+      let addedItems: string[] = [];
       if (items.length > 0) {
         const seenOpts = new Map<string, SeenOption>();
         for (const r of allRows) {
-          if (r.store === YEOGI_STORE || !r.channelProductNo) continue;
+          if (OPTMAP_EXCLUDED_STORES.has(r.store) || !r.channelProductNo) continue;
           const k = compKey(r.channelProductNo, r.optionName);
           const cur = seenOpts.get(k) ?? {
             channelProductNo: r.channelProductNo,
+            optionManageCode: r.optionManageCode,
             productName: r.productName,
             optionText: r.optionName,
             count: 0,
@@ -1401,13 +1452,43 @@ async function processDay(
         if (seenOpts.size > 0) {
           const res = await syncCompTab(sheetCreds, [...seenOpts.values()], items, compRules);
           needComp = res.needManual;
+
+          // 모르는 품목은 사장님이 줄을 만들게 하지 말고 시스템이 공란으로 등록해 둔다.
+          // (커큐민 시드 때처럼 — 사장님은 원가 숫자만 넣으면 됨)
+          const guesses = needComp
+            .map((n) => guessItemName(n.productName, n.optionText, items))
+            .filter((n): n is string => !!n);
+          addedItems = await addPlaceholderItems(sheetCreds, guesses, items);
+          if (addedItems.length > 0) {
+            console.log(`✅ 「품목사전」 신규 품목 ${addedItems.length}개 공란 등록: ${addedItems.join(", ")}`);
+          }
         }
       }
 
-      const missing = await updateProductSummary(sheetCreds, range.dateStr.slice(0, 7));
+      const summary = await updateProductSummary(sheetCreds, range.dateStr.slice(0, 7));
 
       if (options.sendTelegram) {
-        const alert = await buildSetupAlert(sheetCreds, merged.newProducts, missing, needComp);
+        // 시트에서 바로 찾을 수 있도록 행번호를 미리 뽑아둔다
+        const optMapRowOf = new Map<string, number>();
+        try {
+          const mrows = await readRange(sheetCreds, `${OPTMAP_TAB}!${colA1(OPTMAP_COL.channelNo)}2:${colA1(OPTMAP_COL.channelNo)}20000`);
+          mrows.forEach((r, i) => {
+            const ch = String(r[0] ?? "").trim();
+            if (ch && !optMapRowOf.has(ch)) optMapRowOf.set(ch, i + 2);
+          });
+        } catch { /* 행번호 없어도 알림은 보낸다 */ }
+        const compRowOf = new Map<string, number>();
+        try {
+          const crows = await readRange(sheetCreds, `${COMP_TAB}!A2:C20000`);
+          crows.forEach((r, i) => {
+            compRowOf.set(compKey(String(r[0] ?? ""), String(r[2] ?? "")), i + 2);
+          });
+        } catch { /* 무시 */ }
+
+        const alert = await buildSetupAlert(
+          sheetCreds, merged.newProducts, summary.missing, needComp,
+          addedItems, optMapRowOf, compRowOf, summary.wholesaleUnmatched,
+        );
         if (alert) await sendTelegram(alert);
       }
     } catch (err) {
