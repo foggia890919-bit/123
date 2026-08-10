@@ -23,6 +23,7 @@ import { loadCredsFromEnv, readRange, writeRange } from "./sheets";
 import {
   loadItems, loadCompRules, parseComposition, costOfComposition, compKey,
 } from "./itemdict";
+import { loadSettings } from "./settings";
 
 /**
  * RECOST=1 이면 「원가」(P열)도 「품목사전 × 구성해석」으로 다시 계산한다.
@@ -49,18 +50,25 @@ async function main() {
   const rows = await readRange(c!, "주문원본!A2:S100000");
   console.log(`주문원본 ${rows.length}행 읽음${DRY_RUN ? " [DRY_RUN]" : ""}${RECOST ? " [RECOST]" : ""}`);
 
+  const settings = await loadSettings(c!);
+  if (RECOST) console.log(`출고 건당 물류비 ${settings.logisticsPerShipment.toLocaleString()}원 (설정 탭) 기준으로 재계산`);
   const items = RECOST ? await loadItems(c!) : [];
   const compRules = RECOST ? await loadCompRules(c!, items) : new Map();
   if (RECOST) console.log(`품목사전 ${items.length}개 로드`);
   let recosted = 0, recostMissing = 0, costDelta = 0;
 
-  // 1) 주문번호별 물류비 최댓값
+  // 1) 주문(=출고)당 물류비.
+  //    RECOST 면 「설정」 탭의 «출고 건당 물류비» 로 전 기간을 통일한다(사장님 지시).
+  //    여기명품은 사입가에 물류비가 포함돼 있으므로 0.
+  //    RECOST 가 아니면 기존 값의 최댓값을 그대로 쓴다(묶음 1회 정리만 수행).
   const maxLogiByOrder = new Map<string, number>();
   for (const r of rows) {
     const oid = String(r[2] ?? "").trim();
     if (!oid || isCanceled(String(r[13] ?? ""))) continue;
-    const logi = num(r[16]);
+    const isYeogi = String(r[1] ?? "").trim() === YEOGI;
+    const logi = RECOST ? (isYeogi ? 0 : settings.logisticsPerShipment) : num(r[16]);
     if (logi > (maxLogiByOrder.get(oid) ?? 0)) maxLogiByOrder.set(oid, logi);
+    else if (!maxLogiByOrder.has(oid)) maxLogiByOrder.set(oid, logi);
   }
 
   // 2) 행별 재계산 — 주문의 첫 유효행에만 물류비를 싣는다

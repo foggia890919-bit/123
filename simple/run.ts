@@ -45,6 +45,7 @@ import {
   type OptMapEntry,
 } from "./optmap";
 import { updateProductSummary, type MissingCostProduct } from "./productsummary";
+import { loadSettings, DEFAULT_LOGISTICS_PER_SHIPMENT } from "./settings";
 import {
   loadItems, loadCompRules, parseComposition, costOfComposition, compKey,
   syncCompTab, COMP_TAB, NEEDS_COMP,
@@ -500,7 +501,9 @@ async function loadOptionMapping(): Promise<Map<string, OptionMapRule>> {
       const label = String(r[iLabel] ?? "").trim();
       if (!chNo) continue; // 채널상품번호 필수
       const cost = Number(String(r[iCost] ?? "").replace(/,/g, "")) || 0;
-      const logi = Number(String(r[iLogi] ?? "").replace(/,/g, "")) || 0;
+      // 물류비(F열)는 더 이상 읽지 않는다 — 「설정」 탭의 «출고 건당 물류비» 로 일괄 대체.
+      // 열은 과거 입력값 보존을 위해 남겨두되 계산에는 쓰지 않는다.
+      const logi = 0;
       const itemPick = String(r[iPick] ?? "").trim();
       const typeStr = String(r[iType] ?? "").trim();
       const type: OptionMapRule["type"] =
@@ -980,9 +983,14 @@ async function processDay(
   console.log(`\n[${range.dateStr}] ${options.sendTelegram ? '메인 보고' : '시트 동기화 only'}`);
   const allRows: Row[] = [];
   const errors: string[] = [];
-  const vitaLogiSeen = new Set<string>(); // 비타앤오리진 자동 물류비: 주문당 1회만 부과
   const deliveryFeeSeen = new Set<string>(); // 배송비: 배송(주문)당 1회만 매출/이익 반영
   const logisticsCharged = new Map<string, number>(); // 물류비: 주문(=출고 1회)당 누계 부과액
+
+  // 전역 설정 (출고 건당 물류비 등). 시트가 없거나 값이 이상하면 기본값으로 진행.
+  const settings = SHEET_CREDS
+    ? await loadSettings(SHEET_CREDS)
+    : { logisticsPerShipment: DEFAULT_LOGISTICS_PER_SHIPMENT };
+  console.log(`출고 건당 물류비 ${settings.logisticsPerShipment.toLocaleString()}원 (설정 탭)`);
 
   // 품목사전 + 구성해석 (원가 엔진). 실패해도 매출 수집은 계속되게 감싼다.
   let items: Item[] = [];
@@ -1115,20 +1123,12 @@ async function processDay(
           keyword = yeogiInfo?.label || keyword || po.productName.slice(0, 24);
         }
         let costPerUnit = manualUnitCost || matched?.costPerUnit || 0;
-        // 물류비도 옵션 줄 우선 → 상품 대표 줄 승계
-        let logisticsPerOrder = (optionRule?.logisticsPerOrder ?? 0) > 0
-          ? (optionRule?.logisticsPerOrder ?? 0)
-          : (productLevelRule?.logisticsPerOrder ?? matched?.logisticsPerOrder ?? 0);
-        // 비타앤오리진: 명시 원가/물류가 없을 때 품종 기본값 적용 (물류비는 주문당 1회)
-        if (store.name === VITA_STORE) {
-          if (costPerUnit === 0 && keyword) costPerUnit = VITA_COST_BY_KEYWORD[keyword] ?? 0;
-          if (logisticsPerOrder === 0) {
-            const oid = o.order?.orderId ?? po.orderId ?? "";
-            if (oid && !vitaLogiSeen.has(oid)) {
-              logisticsPerOrder = VITA_DEFAULT_LOGISTICS;
-              vitaLogiSeen.add(oid);
-            }
-          }
+        // 물류비는 상품별로 잡지 않고 「설정」 탭의 «출고 건당 물류비» 하나로 일괄 적용한다.
+        // (사장님 지시 — 보수적으로 잡되 한 곳에서만 관리)
+        const logisticsPerOrder = settings.logisticsPerShipment;
+        // 비타앤오리진: 명시 원가가 없을 때 품종 기본 원가 적용
+        if (store.name === VITA_STORE && costPerUnit === 0 && keyword) {
+          costPerUnit = VITA_COST_BY_KEYWORD[keyword] ?? 0;
         }
         const perUnitBottles = extractBottles(po.productOption ?? po.productName);
         const totalUnits = po.quantity * perUnitBottles;
@@ -1199,12 +1199,8 @@ async function processDay(
               : computedCost >= 0
                 ? computedCost * po.quantity // (구버전) 자동 합산
                 : costPerUnit * totalUnits;  // (구버전) 옵션/상품 줄 단가 × 병수
-        // 여기명품은 사입가(또는 추정가)에 물류비 포함이므로 별도 물류비 0
-        const logisticsCandidate = yeogiConfirmed || yeogiEstimate != null
-          ? 0
-          : computedLogistics >= 0
-            ? computedLogistics
-            : logisticsPerOrder;
+        // 여기명품은 사입가(또는 추정가)에 물류비가 이미 포함돼 있으므로 별도 물류비 0
+        const logisticsCandidate = yeogiConfirmed || yeogiEstimate != null ? 0 : logisticsPerOrder;
         // 물류비는 "실제 나가는 출고비용" — 묶음배송(같은 주문번호)이면 실제 출고는 1회.
         // 한 주문에 여러 상품이 섞이면 후보 물류비 중 최댓값을 주문 전체에 1회만 부과한다
         // (큰 박스 기준). 이미 부과한 금액과의 차액만 이번 행에 실어 주문 합계가 최댓값이 되게 함.
