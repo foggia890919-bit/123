@@ -565,6 +565,18 @@ function isCanceled(status: string): boolean {
 // ─────────────────── 텔레그램
 const won = (n: number) => n.toLocaleString("ko-KR") + "원";
 
+/**
+ * 이익 표기 — 「이익」 글자 없이 «금액 (이익률%)».
+ * 이익률 = 이익 ÷ 그 줄의 매출 × 100, 소수점 1자리.
+ * 원가 미설정이면 이익 자체가 확정되지 않은 것이므로 금액·%를 모두 공란으로 둔다
+ * (0원·0% 로 보이면 실제로 이익이 없는 것처럼 오해된다).
+ */
+function profitText(profit: number, sales: number, costMissing = false): string {
+  if (costMissing) return "설정 필요";
+  const pct = sales > 0 ? ` (${((profit / sales) * 100).toFixed(1)}%)` : "";
+  return `${won(profit)}${pct}`;
+}
+
 async function sendTelegram(text: string, maxAttempts = 3): Promise<void> {
   if (DRY_RUN) {
     console.log("[DRY_RUN] 텔레그램 미발송 — 본문:\n" + text.replace(/<[^>]+>/g, ""));
@@ -1523,6 +1535,7 @@ async function processDay(
     sales: number;
     cost: number;
     profit: number;
+    costMissing: boolean; // 한 줄이라도 원가 미설정이면 이익·이익률을 공란 처리
     orderIds: Set<string>;
   }
   interface ProductAgg {
@@ -1534,6 +1547,7 @@ async function processDay(
     cost: number;
     logistics: number;
     profit: number;
+    costMissing: boolean;
     orderIds: Set<string>;
     options: Map<string, OptionAgg>;
   }
@@ -1546,6 +1560,7 @@ async function processDay(
     label: r.keyword || `(미분류)${r.productName.slice(0, 15)}`,
     productName: r.productName,
     bottles: 0, sales: 0, cost: 0, logistics: 0, profit: 0,
+    costMissing: false,
     orderIds: new Set<string>(),
     options: new Map<string, OptionAgg>(),
   });
@@ -1557,6 +1572,7 @@ async function processDay(
         optionName: r.optionName || "(옵션 없음)",
         optionManageCode: r.optionManageCode,
         bottles: 0, sales: 0, cost: 0, profit: 0,
+        costMissing: false,
         orderIds: new Set<string>(),
       };
       agg.options.set(optKey, o);
@@ -1565,6 +1581,7 @@ async function processDay(
     o.sales += r.salesAmount;
     o.cost += r.cost;
     o.profit += r.profit;
+    if (r.costMissing) o.costMissing = true;
     o.orderIds.add(r.orderId);
   };
   const accumulateAgg = (agg: ProductAgg, r: Row) => {
@@ -1573,6 +1590,7 @@ async function processDay(
     agg.cost += r.cost;
     agg.logistics += r.logistics;
     agg.profit += r.profit;
+    if (r.costMissing) agg.costMissing = true;
     agg.orderIds.add(r.orderId);
     accumulateOption(agg, r);
   };
@@ -1630,7 +1648,7 @@ async function processDay(
   summaryLines.push(`💰 총매출 ${won(grossSales)} (${allRows.length}건)`);
   if (canceled.length > 0) summaryLines.push(`❌ 취소 -${won(canceledSales)} (${canceled.length}건)`);
   summaryLines.push(`✅ <b>최종 ${won(liveSales)}</b> (${live.length}건) · 정산 ${won(liveSettlement)}`);
-  summaryLines.push(`📦 원가 ${won(totalCost)} · 🚚 ${won(totalLogistics)} → 💎 <b>이익 ${won(totalProfit)}</b>`);
+  summaryLines.push(`📦 원가 ${won(totalCost)} · 🚚 ${won(totalLogistics)} → 💎 <b>${profitText(totalProfit, liveSales)}</b>`);
   summaryLines.push("");
   summaryLines.push(`<b>━ 사업자별 ━</b>`);
   for (const store of STORES) {
@@ -1638,7 +1656,7 @@ async function processDay(
     if (!data || (data.live.length === 0 && data.canceled.length === 0)) continue;
     const sLiveSales = data.live.reduce((s, r) => s + r.salesAmount, 0);
     const sProfit = data.live.reduce((s, r) => s + r.profit, 0);
-    summaryLines.push(`• ${store.name}: ${won(sLiveSales)} (${data.live.length}건) · 이익 ${won(sProfit)}`);
+    summaryLines.push(`• ${store.name}: ${won(sLiveSales)} (${data.live.length}건) · ${profitText(sProfit, sLiveSales)}`);
   }
   if (errors.length > 0) {
     summaryLines.push("");
@@ -1667,14 +1685,14 @@ async function processDay(
     if (sCancel.length > 0) l.push(`❌ 취소 -${won(sCancelSales)} (${sCancel.length}건)`);
     l.push(`✅ 최종매출 ${won(sLiveSales)} (${sLive.length}건) · 출고 ${sBottles}개 · 배송 ${sShipments}건`);
     l.push(`💳 수수료 ${won(sCommission)} / 💵 정산 ${won(sSettlement)}`);
-    l.push(`📦 원가 ${won(sCost)} · 🚚 ${won(sLogistics)} → 💎 <b>이익 ${won(sProfit)}</b>`);
+    l.push(`📦 원가 ${won(sCost)} · 🚚 ${won(sLogistics)} → 💎 <b>${profitText(sProfit, sLiveSales)}</b>`);
     l.push("");
 
     const sMains = groupByMain(sLive);
     const sorted = Array.from(sMains.values()).sort((a, b) => b.main.sales - a.main.sales);
     for (const g of sorted) {
       l.push(`<b>• ${g.main.label}</b> <code>${g.main.productKey}</code>`);
-      l.push(`   ${g.main.bottles}개·${g.main.orderIds.size}건 · ${won(g.main.sales)} · 원가 ${won(g.main.cost)} · <b>이익 ${won(g.main.profit)}</b>`);
+      l.push(`   ${g.main.bottles}개·${g.main.orderIds.size}건 · ${won(g.main.sales)} · 원가 ${won(g.main.cost)} · <b>${profitText(g.main.profit, g.main.sales, g.main.costMissing)}</b>`);
       // 옵션이 2개 이상이면 옵션별 sub-line (옵션 1개면 본 라인과 중복이라 생략)
       if (g.main.options.size >= 2) {
         const opts = Array.from(g.main.options.values()).sort((a, b) => b.sales - a.sales);
@@ -1682,7 +1700,7 @@ async function processDay(
           // 옵션명은 그대로 한 줄, 숫자는 다음 줄에 한 줄로.
           // 옵션명이 길어 자동 줄바꿈되면 숫자가 앞줄 꼬리에 붙어 읽기 어려웠다.
           l.push(`   ↳ ${o.optionName}`);
-          l.push(`      ${o.bottles}개·${o.orderIds.size}건·${won(o.sales)}·이익 ${won(o.profit)}`);
+          l.push(`      ${o.bottles}개·${o.orderIds.size}건·${won(o.sales)}·${profitText(o.profit, o.sales, o.costMissing)}`);
         }
       }
       // 추가상품
@@ -1690,7 +1708,7 @@ async function processDay(
         const adds = Array.from(g.additional.values()).sort((a, b) => b.sales - a.sales);
         for (const a of adds) {
           l.push(`   ↳ 추가: <b>${a.label}</b>`);
-          l.push(`      ${a.bottles}개·${a.orderIds.size}건·${won(a.sales)}·원가 ${won(a.cost)}·이익 ${won(a.profit)}`);
+          l.push(`      ${a.bottles}개·${a.orderIds.size}건·${won(a.sales)}·원가 ${won(a.cost)}·${profitText(a.profit, a.sales, a.costMissing)}`);
         }
       }
     }
