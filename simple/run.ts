@@ -161,6 +161,14 @@ const SHEET_CREDS: SheetCreds | null = loadCredsFromEnv();
  */
 const DRY_RUN = process.env.DRY_RUN === "1";
 
+/**
+ * NO_NOTIFY=1 — 시트는 정상 갱신하되 **텔레그램·카카오만 안 보낸다.**
+ * 검증하려고 run.ts 를 돌리면 사장님께 보고가 실제로 발송돼 혼선이 생긴다
+ * (실제로 22:19 에 검증용 실행분이 발송돼 사장님이 오보로 오인했다).
+ * 재계산·검수열 갱신 목적의 실행은 반드시 이 모드로.
+ */
+const NO_NOTIFY = process.env.NO_NOTIFY === "1";
+
 /** KST 기준 현재 연-월 (YYYY-MM). */
 function currentYearMonthKST(): string {
   const kst = new Date(Date.now() + KST_OFFSET);
@@ -577,8 +585,8 @@ function profitText(profit: number, sales: number, costMissing = false): string 
 }
 
 async function sendTelegram(text: string, maxAttempts = 3): Promise<void> {
-  if (DRY_RUN) {
-    console.log("[DRY_RUN] 텔레그램 미발송 — 본문:\n" + text.replace(/<[^>]+>/g, ""));
+  if (DRY_RUN || NO_NOTIFY) {
+    console.log(`[${DRY_RUN ? "DRY_RUN" : "NO_NOTIFY"}] 텔레그램 미발송 — 본문:\n` + text.replace(/<[^>]+>/g, ""));
     return;
   }
   if (!TG_TOKEN || !TG_CHAT) {
@@ -662,8 +670,8 @@ async function getKakaoAccessToken(): Promise<string | null> {
 }
 
 async function sendKakao(text: string, accessToken: string, maxAttempts = 3): Promise<void> {
-  if (DRY_RUN) {
-    console.log("[DRY_RUN] 카카오 미발송 — 본문:\n" + text);
+  if (DRY_RUN || NO_NOTIFY) {
+    console.log(`[${DRY_RUN ? "DRY_RUN" : "NO_NOTIFY"}] 카카오 미발송`);
     return;
   }
   const body = new URLSearchParams();
@@ -702,6 +710,7 @@ const RAW_HEADERS = [
   "매출", "수수료", "정산예정", "상태", "구매자",
   "원가", "물류비", "이익",
   "수취배송비",
+  "옵션관리번호", // 어느 옵션 줄로 팔렸는지 — 검수 플래그·검산에 필요
 ];
 /** RAW_HEADERS 마지막 컬럼 문자 (A=1 기준). 읽기 범위 계산용. */
 const RAW_LAST_COL = String.fromCharCode(64 + RAW_HEADERS.length); // 19 → "S"
@@ -1106,17 +1115,36 @@ async function processDay(
           //    「피쿠알2병+블렌딩1병」 복합 옵션에까지 적용돼 피쿠알×2 = 10,400 으로
           //    과소 계산됐다(정답 15,600). 복합 옵션은 드롭다운 한 칸으로 표현할 수 없다.
           const optionPick = optionRule?.itemPick ?? "";
-          const productPick = productLevelRule?.itemPick ?? "";
-          // 드롭다운 = literal. 고른 품목의 원가를 **그대로** 쓴다 (수량 항상 1).
-          // 1+1·교차 조합 같은 경우의 수는 품목사전에 각각 등록해 두고 고르는 방식이므로
-          // 여기서 병수를 곱하면 이중 계산이 된다(실제로 ×2 사고가 났었다).
-          // 조건부 곱셈·조합 감지 같은 부가 로직은 전부 걷어냈다 — 단순함이 안전하다.
-          const pickParts = (name: string) => [{ item: name, qty: 1 }];
+          // ⚠️ 대표 줄 드롭다운은 **옵션 줄에 상속하지 않는다.**
+          // 대표 줄 선택은 "옵션 없이 팔린 본품 판매행"에만 쓴다.
+          // 상속을 허용했더니 대표 줄의 「피쿠알」(개당 5,200)이 「3병」 옵션에까지 literal 로
+          // 적용돼 원가가 1/3 로 깎이고 이익률이 45~72% 로 부풀었다(2건 연속 사고).
+          const productPick = optionManageCode ? "" : (productLevelRule?.itemPick ?? "");
+          // 드롭다운 수량 규칙 — 두 사고를 모두 막는 유일한 조합:
+          //   · 품목명에 「+」가 있으면(조합) 그 자체가 옵션 전체 → ×1
+          //     (안 그러면 「무릎형+무릎형」 19,420 이 1+1 병수 2 를 곱해 38,840 이 된다)
+          //   · 단품이면 옵션의 **명시 병수**(3병·6병)만큼 곱한다
+          //     (안 그러면 「3병」 옵션에 피쿠알 5,200 만 잡혀 원가가 1/3 로 깎인다)
+          // 병수는 bottlesOfLabel 을 쓴다 — 「N병/N개」 같은 명시 표기만 세고
+          // 「1+1」·「A+B」는 세지 않으므로 조합과 겹쳐 이중 곱이 날 일이 없다.
+          const pickParts = (name: string) => [{
+            item: name,
+            qty: name.includes("+") ? 1 : bottlesOfLabel(optText || po.productName),
+          }];
+
+          // 우선순위: 구성해석 수동 → 그 줄에 직접 선택된 드롭다운(literal) → 자동해석 → 설정 필요.
+          // 자동해석까지 실패하면 대표 줄로 폴백하지 않는다 — 그 폴백이 2+1 사고와 3병 사고의
+          // 공통 원인이었다. 모르면 「설정 필요」로 남기는 편이 안전하다.
+          const auto = parseComposition(po.productName, optText, items);
+          // 드롭다운은 품목 «하나» 만 담을 수 있다. 옵션이 여러 품목으로 구성돼 있으면
+          // (예: 피쿠알2병+블렌딩1병) 드롭다운으로는 표현이 안 되므로 자동해석이 맞다.
+          // 이걸 안 걸러서 「피쿠알」 드롭다운이 2+1 특가에 적용돼 10,400(정답 15,600)이 됐다.
+          const autoIsComposite = !!auto && new Set(auto.map((p) => p.item)).size >= 2;
+          const usablePick = autoIsComposite ? "" : (optionPick || productPick);
 
           const parts = rule?.manual
-            ?? (optionPick ? pickParts(optionPick) : null)
-            ?? parseComposition(po.productName, optText, items)
-            ?? (productPick ? pickParts(productPick) : null);
+            ?? (usablePick ? pickParts(usablePick) : null)
+            ?? auto;
 
           if (parts) {
             compParts = parts;
@@ -1225,6 +1253,7 @@ async function processDay(
         r.isCanceled ? "" : r.logistics,
         r.isCanceled ? "" : r.costMissing ? "설정 필요" : r.profit,
         r.isCanceled ? "" : r.deliveryFee,
+        r.optionManageCode,
       ]);
       // 상품주문번호(D열, idx 3) 기준 upsert. 이미 있으면 갱신, 중복 자동 정리.
       const result = await upsertRows(
@@ -1358,6 +1387,28 @@ async function processDay(
           const storeOf = new Map<string, string>();
           for (const r of allRows) if (r.channelProductNo) storeOf.set(r.channelProductNo, r.store);
 
+          // ── 줄별 실판매 건수 ──
+          // 노란색/「설정 필요」는 **실제 판매가 있는데 원가가 안 잡힌 줄**에만 붙여야 한다.
+          // 대표 줄은 대부분 그룹핑용이라 직접 팔리는 일이 거의 없는데, 거기에 경고가 몰리면
+          // 허위 경보가 되어 정작 볼 줄이 묻히고 신뢰를 잃는다.
+          // 키 = `채널상품번호|옵션관리번호` (옵션 없이 팔린 건은 옵션관리번호가 빈 문자열).
+          const soldByKey = new Map<string, number>();
+          const bump = (ch: string, code: string) => {
+            const k = `${ch}|${code}`;
+            soldByKey.set(k, (soldByKey.get(k) ?? 0) + 1);
+          };
+          for (const r of allRows) if (r.channelProductNo) bump(r.channelProductNo, r.optionManageCode);
+          try {
+            // 누적분 — 주문원본 마지막 열(옵션관리번호)까지 읽어 과거 판매도 반영
+            const hist = await readRange(sheetCreds, `주문원본!A2:${RAW_LAST_COL}100000`);
+            const iCh = RAW_HEADERS.indexOf("상품번호");
+            const iCode = RAW_HEADERS.indexOf("옵션관리번호");
+            for (const h of hist) {
+              const ch = String(h[iCh] ?? "").trim();
+              if (ch) bump(ch, String(h[iCode] ?? "").trim());
+            }
+          } catch { /* 누적 못 읽어도 오늘 주문만으로 판정 */ }
+
           const audit = await refreshOptMapAudit(sheetCreds, (ctx) => {
             const { pickedItem: picked, channelProductNo: chNo } = ctx;
             // 자동 해석 대상 텍스트 — 옵션 줄은 옵션명, 대표 줄은 상품명
@@ -1366,30 +1417,35 @@ async function processDay(
               : ctx.productName;
             const bottles = bottlesOfLabel(label);
             const st = ctx.store || storeOf.get(chNo);
-            // 판매 이력이 없는 줄(프리필만 된 상품)과 사입관리 스토어 줄은 노란 표시에서 뺀다.
-            // 전부 노랗게 칠하면 정작 손봐야 할 줄이 묻힌다.
+            // 이 줄로 «직접» 팔린 건수. 0 이면 경고 대상이 아니다 (중립 표기).
+            // 대표 줄은 대부분 그룹핑용이라 직접 팔리는 일이 거의 없는데 거기에 경고가 몰리면
+            // 허위 경보가 되어 정작 볼 줄이 묻히고 신뢰를 잃는다.
+            const sold = soldByKey.get(`${chNo}|${ctx.optionManageCode}`) ?? 0;
+            /** 원가를 못 잡았을 때의 출처 — 실판매가 있을 때만 경고로 올린다. */
+            const unresolved = () =>
+              sold > 0 ? "설정 필요" : (ctx.optionManageCode ? "미판매" : "그룹 줄");
+
             if (OPTMAP_EXCLUDED_STORES.has(st ?? "")) return { bottles, autoText: "", autoCost: "", source: "사입관리" };
             if (!st) return { bottles, autoText: "", autoCost: "", source: "미판매" };
-            // 표시값은 언제나 «병수까지 곱한 최종 원가» — 사장님이 암산하지 않도록.
             if (picked) {
-              // 드롭다운 = literal. 품목사전 가격 그대로 (곱셈 없음)
-              const parts = [{ item: picked, qty: 1 }];
+              // 계산 엔진과 같은 규칙: 조합이면 ×1, 단품이면 명시 병수만큼
+              const parts = [{ item: picked, qty: picked.includes("+") ? 1 : bottles }];
               const { cost, missing } = costOfComposition(parts, items);
               return {
                 bottles,
                 autoText: formatCompositionUi(parts),
                 autoCost: missing ? "" : cost,
-                source: missing ? "설정 필요" : "드롭다운",
+                source: missing ? unresolved() : "드롭다운",
               };
             }
             const parts = label ? resolveLabelComposition(label, items) : null;
-            if (!parts) return { bottles, autoText: "해석 실패", autoCost: "", source: "설정 필요" };
+            if (!parts) return { bottles, autoText: "해석 실패", autoCost: "", source: unresolved() };
             const { cost, missing } = costOfComposition(parts, items);
             return {
               bottles,
               autoText: formatCompositionUi(parts),
               autoCost: missing ? "" : cost,
-              source: missing ? "설정 필요" : "자동",
+              source: missing ? unresolved() : "자동",
             };
           });
           // 「출처」(P열)가 설정 필요면 그 줄 노란색
