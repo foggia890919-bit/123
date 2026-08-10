@@ -228,7 +228,8 @@ async function main() {
           originProductNo: originNo,
           channelProductNo: chNo,
           optionManageCode: "",
-          label: name.slice(0, 40),
+          productName: name,
+          optionName: "",
         });
 
         if (originNo) {
@@ -242,7 +243,8 @@ async function main() {
                 originProductNo: originNo,
                 channelProductNo: chNo,
                 optionManageCode: o.optionManageCode,
-                label: o.label || name.slice(0, 40),
+                productName: name,
+                optionName: o.label,
               });
             }
           }
@@ -263,10 +265,12 @@ async function main() {
   for (const p of rawProducts.values()) {
     if (apiCovered.has(p.channelProductNo)) continue;
     entries.push({
+      store: p.store,
       originProductNo: "", // 주문원본에는 원본상품번호가 없다 — 비워둔다(매칭에 쓰이지 않음)
       channelProductNo: p.channelProductNo,
       optionManageCode: "", // 대표 줄만 (파일 상단 주석 참조)
-      label: (p.productName || p.channelProductNo).slice(0, 40),
+      productName: p.productName || p.channelProductNo,
+      optionName: "",
     });
     fallbackByStore.set(p.store || "(스토어없음)", (fallbackByStore.get(p.store || "(스토어없음)") ?? 0) + 1);
   }

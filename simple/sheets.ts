@@ -240,6 +240,102 @@ export async function writeRange(
   });
 }
 
+async function batchUpdate(c: SheetCreds, label: string, requests: unknown[]): Promise<void> {
+  if (requests.length === 0) return;
+  const token = await getToken(c);
+  await withRetry(label, async () => {
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}:batchUpdate`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ requests }),
+      },
+    );
+    if (!res.ok) throw new Error(`${label} ${res.status}: ${await res.text()}`);
+  });
+}
+
+/** 헤더 행 고정 (스크롤해도 1행이 붙어 있게). */
+export async function setFrozenRows(c: SheetCreds, tabName: string, count: number): Promise<void> {
+  const sheetId = (await getSheetIdMap(c)).get(tabName);
+  if (sheetId == null) throw new Error(`setFrozenRows: 탭 없음 ${tabName}`);
+  await batchUpdate(c, "setFrozenRows", [{
+    updateSheetProperties: {
+      properties: { sheetId, gridProperties: { frozenRowCount: count } },
+      fields: "gridProperties.frozenRowCount",
+    },
+  }]);
+}
+
+/** 열 너비 일괄 지정. */
+export async function setColumnWidths(
+  c: SheetCreds,
+  tabName: string,
+  widths: { index: number; px: number }[],
+): Promise<void> {
+  const sheetId = (await getSheetIdMap(c)).get(tabName);
+  if (sheetId == null) throw new Error(`setColumnWidths: 탭 없음 ${tabName}`);
+  await batchUpdate(c, "setColumnWidths", widths.map((w) => ({
+    updateDimensionProperties: {
+      range: { sheetId, dimension: "COLUMNS", startIndex: w.index, endIndex: w.index + 1 },
+      properties: { pixelSize: w.px },
+      fields: "pixelSize",
+    },
+  })));
+}
+
+/**
+ * 커스텀 수식 조건부 서식 (행 전체).
+ * 같은 수식의 기존 룰은 지우고 다시 만든다 — 매 실행마다 룰이 쌓이는 것을 막는다.
+ */
+export async function applyRowFormatRule(
+  c: SheetCreds,
+  tabName: string,
+  formula: string,
+  totalCols: number,
+  format: Record<string, unknown>,
+): Promise<void> {
+  const token = await getToken(c);
+  const meta = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}?fields=sheets(properties(title,sheetId),conditionalFormats)`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!meta.ok) throw new Error(`applyRowFormatRule:meta ${meta.status}: ${await meta.text()}`);
+  const json = (await meta.json()) as {
+    sheets?: {
+      properties: { title: string; sheetId: number };
+      conditionalFormats?: { booleanRule?: { condition?: { values?: { userEnteredValue?: string }[] } } }[];
+    }[];
+  };
+  const sheet = json.sheets?.find((s) => s.properties.title === tabName);
+  if (!sheet) return;
+  const sheetId = sheet.properties.sheetId;
+
+  // 같은 수식의 기존 룰 제거 (뒤에서부터 지워야 인덱스가 안 밀린다)
+  const dupes: number[] = [];
+  (sheet.conditionalFormats ?? []).forEach((r, i) => {
+    if (r.booleanRule?.condition?.values?.[0]?.userEnteredValue === formula) dupes.push(i);
+  });
+  const requests: unknown[] = dupes
+    .sort((a, b) => b - a)
+    .map((index) => ({ deleteConditionalFormatRule: { sheetId, index } }));
+
+  requests.push({
+    addConditionalFormatRule: {
+      index: 0,
+      rule: {
+        ranges: [{ sheetId, startRowIndex: 1, startColumnIndex: 0, endColumnIndex: totalCols }],
+        booleanRule: {
+          condition: { type: "CUSTOM_FORMULA", values: [{ userEnteredValue: formula }] },
+          format,
+        },
+      },
+    },
+  });
+  await batchUpdate(c, "applyRowFormatRule", requests);
+}
+
 /** 지정 범위의 값을 지운다 (서식·유효성은 유지). 배열 수식 잔재 정리용. */
 export async function clearRange(c: SheetCreds, rangeA1: string): Promise<void> {
   await withRetry("clearRange", async () => {

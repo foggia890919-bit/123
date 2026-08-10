@@ -37,6 +37,7 @@ import {
   OPTMAP_HEADERS,
   OPTMAP_COL,
   OPTMAP_EXCLUDED_STORES,
+  PRODUCT_ROW_MARK,
   colOf,
   colA1,
   ensureOptionMapTab,
@@ -460,11 +461,9 @@ interface OptionMapRule {
   originProductNo: string;
   channelProductNo: string;
   optionManageCode: string;
-  label: string;
-  costPerUnit: number;
-  logisticsPerOrder: number;
+  label: string;              // 보고 표시용 (옵션명 우선, 대표 줄이면 상품명)
   type: "메인" | "추가" | ""; // 빈 칸 = 미지정
-  itemPick: string;           // I열 품목 드롭다운 선택값 ("" = 미선택)
+  itemPick: string;           // 품목 드롭다운 선택값 ("" = 미선택)
 }
 
 /**
@@ -489,21 +488,20 @@ async function loadOptionMapping(): Promise<Map<string, OptionMapRule>> {
     const iOrigin = colOf(OPTMAP_COL.originNo);
     const iCh = colOf(OPTMAP_COL.channelNo);
     const iCode = colOf(OPTMAP_COL.optionCode);
-    const iLabel = colOf(OPTMAP_COL.label);
-    const iCost = colOf(OPTMAP_COL.cost);
-    const iLogi = colOf(OPTMAP_COL.logistics);
+    const iProd = colOf(OPTMAP_COL.productName);
+    const iOpt = colOf(OPTMAP_COL.optionName);
     const iType = colOf(OPTMAP_COL.type);
     const iPick = colOf(OPTMAP_COL.itemPick);
     for (const r of rows) {
       const originNo = String(r[iOrigin] ?? "").trim();
       const chNo = String(r[iCh] ?? "").trim();
       const optCode = String(r[iCode] ?? "").trim();
-      const label = String(r[iLabel] ?? "").trim();
       if (!chNo) continue; // 채널상품번호 필수
-      const cost = Number(String(r[iCost] ?? "").replace(/,/g, "")) || 0;
-      // 물류비(F열)는 더 이상 읽지 않는다 — 「설정」 탭의 «출고 건당 물류비» 로 일괄 대체.
-      // 열은 과거 입력값 보존을 위해 남겨두되 계산에는 쓰지 않는다.
-      const logi = 0;
+      // 라벨(보고 표시용) = 옵션명 우선, 대표 줄이면 상품명
+      const optName = String(r[iOpt] ?? "").trim();
+      const prodName = String(r[iProd] ?? "").trim();
+      const label = (optName && optName !== PRODUCT_ROW_MARK ? optName : prodName);
+      // 원가·물류비 열은 삭제됨 — 원가는 품목사전+드롭다운, 물류비는 「설정」 전역값
       const itemPick = String(r[iPick] ?? "").trim();
       const typeStr = String(r[iType] ?? "").trim();
       const type: OptionMapRule["type"] =
@@ -516,8 +514,6 @@ async function loadOptionMapping(): Promise<Map<string, OptionMapRule>> {
         channelProductNo: chNo,
         optionManageCode: optCode,
         label: label || chNo,
-        costPerUnit: cost,
-        logisticsPerOrder: logi,
         type,
         itemPick,
       });
@@ -1048,71 +1044,8 @@ async function processDay(
         const productLevelRule = productRules.get(channelProductNo);
         // 라벨·유형은 옵션 줄 우선, 없으면 상품 대표 줄
         const productRule = optionRule ?? productLevelRule;
-        // 원가는 "수동 입력 우선":
-        //   옵션 줄에 숫자가 있으면 그게 최우선 → 없으면 상품 대표 줄의 기본원가로 자동 승계.
-        //   승계된 기본원가는 개당 기준이라 아래에서 병수(totalUnits)만큼 자동 배수된다.
-        //   ⇒ 사장님은 상품 대표 줄에 숫자 하나만 넣으면 그 상품 전 옵션이 커버되고,
-        //     예외 옵션만 그 줄에 직접 적어 덮어쓰면 된다.
-        const manualUnitCost = (optionRule?.costPerUnit ?? 0) > 0
-          ? (optionRule?.costPerUnit ?? 0)
-          : (productLevelRule?.costPerUnit ?? 0);
-
-        // 자동 합산 — 옵션관리번호 매칭 실패 또는 원가 비어있을 때, 같은 채널상품번호의 단품 행 참조
-        // 옵션명 매칭 우선순위: ⭐옵션매핑 D열 라벨 → 상품목록 시트 (fallback)
-        let computedCost = -1;
-        let computedLogistics = -1;
-        let aggDebug = "";
-        if (manualUnitCost === 0 && channelProductNo) {
-          // 콜론 키 제거 — "사이즈: S" → "S", "압박스타킹: 종아리형" → "종아리형"
-          // 네이버 주문 옵션은 "키: 값 / 키: 값" 형식, ⭐옵션매핑 label 은 "값 / 값" 형식이라 정규화 필요
-          const stripKey = (s: string): string => {
-            const c = s.indexOf(":");
-            return c >= 0 ? s.slice(c + 1).trim() : s.trim();
-          };
-          const orderOpt = po.productOption ?? "";
-          const orderParts = orderOpt.split("/").map((s) => s.trim());
-          const orderFirstPart = stripKey(orderParts[0] ?? "");
-          const orderSize = orderParts.length > 1 ? stripKey(orderParts[orderParts.length - 1]) : "";
-          // 1+1, 2+1 같은 단품 multiplier 인식
-          const plusMatch = orderFirstPart.match(/(\d+)\s*\+\s*(\d+)/);
-          const multiplier = plusMatch ? parseInt(plusMatch[1], 10) + parseInt(plusMatch[2], 10) : 1;
-          // 같은 채널상품번호의 단품 행들 (원가 있는 행만)
-          const sameChannel = [...productRules.values()].filter(
-            (r) => r.channelProductNo === channelProductNo && r.optionManageCode && r.costPerUnit > 0
-          );
-          let totalCost = 0;
-          let firstLogistics = 0;
-          let matchedCount = 0;
-          const matchedLabels: string[] = [];
-          for (const rule of sameChannel) {
-            // ⭐옵션매핑의 D열 라벨 우선, 없으면 상품목록 시트 lookup
-            const catName = rule.label || catalogOptNames?.get(rule.optionManageCode) || "";
-            if (!catName) continue;
-            const catParts = catName.split("/").map((s) => s.trim());
-            const catFirstPart = stripKey(catParts[0] ?? "");
-            const catSize = catParts.length > 1 ? stripKey(catParts[catParts.length - 1]) : "";
-            // 사이즈 같고 + 부위명이 주문 옵션명에 포함되면 매칭
-            if (catSize === orderSize && catFirstPart && orderFirstPart.includes(catFirstPart)) {
-              totalCost += rule.costPerUnit;
-              if (firstLogistics === 0) firstLogistics = rule.logisticsPerOrder;
-              matchedCount++;
-              matchedLabels.push(catName);
-            }
-          }
-          if (matchedCount > 0) {
-            // 1개 부위만 매칭 + 1+1 패턴 = 단품 × multiplier (예: 종아리 1+1 = 8040 × 2)
-            // 여러 부위 매칭 = 합산 그대로 (예: 종아리+무릎 = 8040 + 9710, ×2 X)
-            if (matchedCount === 1 && multiplier > 1) totalCost *= multiplier;
-            computedCost = totalCost;
-            computedLogistics = firstLogistics;
-            aggDebug = `[자동합산] ${po.productOrderId} "${orderOpt}" → ${matchedLabels.join("+")} × ${multiplier > 1 && matchedCount === 1 ? multiplier : 1} = ${totalCost}원`;
-          } else if (sameChannel.length > 0) {
-            // 자동 합산 후보는 있는데 매칭 실패 — 진단용
-            aggDebug = `[자동합산 실패] ${po.productOrderId} chNo=${channelProductNo} orderOpt="${orderOpt}" 후보=${sameChannel.length}개 [${sameChannel.slice(0, 3).map((r) => r.label || r.optionManageCode).join(", ")}…]`;
-          }
-        }
-        if (aggDebug) console.log(aggDebug);
-
+        // (구버전) 옵션매핑 단가·자동합산 경로는 제거됨.
+        // 원가는 「품목사전 × (구성해석 수동 → 드롭다운 literal → 자동해석)」 한 갈래로만 계산한다.
         const matched = productRule
           ? null
           : classify(po.productName, po.productOption ?? "", rules);
@@ -1122,9 +1055,9 @@ async function processDay(
           // 여기명품: N열+Q열 라벨로 묶음 (사입관리 AD 매칭). 없으면(시차) 상품명 임시.
           keyword = yeogiInfo?.label || keyword || po.productName.slice(0, 24);
         }
-        let costPerUnit = manualUnitCost || matched?.costPerUnit || 0;
+        // 코드 기본 원가(품목사전·드롭다운·구성해석이 모두 비었을 때의 마지막 fallback)
+        let costPerUnit = matched?.costPerUnit ?? 0;
         // 물류비는 상품별로 잡지 않고 「설정」 탭의 «출고 건당 물류비» 하나로 일괄 적용한다.
-        // (사장님 지시 — 보수적으로 잡되 한 곳에서만 관리)
         const logisticsPerOrder = settings.logisticsPerShipment;
         // 비타앤오리진: 명시 원가가 없을 때 품종 기본 원가 적용
         if (store.name === VITA_STORE && costPerUnit === 0 && keyword) {
@@ -1174,11 +1107,11 @@ async function processDay(
           //    과소 계산됐다(정답 15,600). 복합 옵션은 드롭다운 한 칸으로 표현할 수 없다.
           const optionPick = optionRule?.itemPick ?? "";
           const productPick = productLevelRule?.itemPick ?? "";
-          // 사장님이 고른 품목명 자체가 조합이면("스타킹(종아리형)+스타킹(종아리형)")
-          // 그 한 줄이 이미 옵션 전체(2개)를 뜻한다. 여기에 병수를 또 곱하면 이중 계산이다.
-          // 조합 이름이면 수량 1, 단품 이름이면 옵션의 병수를 곱한다.
-          const pickParts = (name: string) =>
-            [{ item: name, qty: name.includes("+") ? 1 : extractBottles(optText || po.productName) }];
+          // 드롭다운 = literal. 고른 품목의 원가를 **그대로** 쓴다 (수량 항상 1).
+          // 1+1·교차 조합 같은 경우의 수는 품목사전에 각각 등록해 두고 고르는 방식이므로
+          // 여기서 병수를 곱하면 이중 계산이 된다(실제로 ×2 사고가 났었다).
+          // 조건부 곱셈·조합 감지 같은 부가 로직은 전부 걷어냈다 — 단순함이 안전하다.
+          const pickParts = (name: string) => [{ item: name, qty: 1 }];
 
           const parts = rule?.manual
             ?? (optionPick ? pickParts(optionPick) : null)
@@ -1199,9 +1132,7 @@ async function processDay(
             ? yeogiEstimate
             : compCost >= 0
               ? compCost * po.quantity   // 구성 원가 × 주문 수량 (병수는 구성에 이미 반영됨)
-              : computedCost >= 0
-                ? computedCost * po.quantity // (구버전) 자동 합산
-                : costPerUnit * totalUnits;  // (구버전) 옵션/상품 줄 단가 × 병수
+              : costPerUnit * totalUnits; // 코드 기본값 fallback (품목사전에 아무것도 없을 때)
         // 여기명품은 사입가(또는 추정가)에 물류비가 이미 포함돼 있으므로 별도 물류비 0
         const logisticsCandidate = yeogiConfirmed || yeogiEstimate != null ? 0 : logisticsPerOrder;
         // 물류비는 "실제 나가는 출고비용" — 묶음배송(같은 주문번호)이면 실제 출고는 1회.
@@ -1408,7 +1339,8 @@ async function processDay(
             originProductNo: "",
             channelProductNo: r.channelProductNo,
             optionManageCode: r.optionManageCode,
-            label: r.productName.slice(0, 40),
+            productName: r.productName,
+            optionName: r.optionName,
           });
         }
       }
@@ -1427,7 +1359,11 @@ async function processDay(
           for (const r of allRows) if (r.channelProductNo) storeOf.set(r.channelProductNo, r.store);
 
           const audit = await refreshOptMapAudit(sheetCreds, (ctx) => {
-            const { label, pickedItem: picked, channelProductNo: chNo } = ctx;
+            const { pickedItem: picked, channelProductNo: chNo } = ctx;
+            // 자동 해석 대상 텍스트 — 옵션 줄은 옵션명, 대표 줄은 상품명
+            const label = ctx.optionName && ctx.optionName !== PRODUCT_ROW_MARK
+              ? ctx.optionName
+              : ctx.productName;
             const bottles = bottlesOfLabel(label);
             const st = ctx.store || storeOf.get(chNo);
             // 판매 이력이 없는 줄(프리필만 된 상품)과 사입관리 스토어 줄은 노란 표시에서 뺀다.
@@ -1436,8 +1372,8 @@ async function processDay(
             if (!st) return { bottles, autoText: "", autoCost: "", source: "미판매" };
             // 표시값은 언제나 «병수까지 곱한 최종 원가» — 사장님이 암산하지 않도록.
             if (picked) {
-              // 조합 품목명은 그 자체가 옵션 전체 → 병수를 곱하지 않는다 (이중 계산 방지)
-              const parts = [{ item: picked, qty: picked.includes("+") ? 1 : bottles }];
+              // 드롭다운 = literal. 품목사전 가격 그대로 (곱셈 없음)
+              const parts = [{ item: picked, qty: 1 }];
               const { cost, missing } = costOfComposition(parts, items);
               return {
                 bottles,

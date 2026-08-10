@@ -1,16 +1,20 @@
 /**
  * 「⭐옵션매핑」 탭 공용 모듈 — run.ts(주문 기반)와 prefill.ts(카탈로그 기반)가 같이 쓴다.
  *
- * 시트 규칙 (기존 관례 유지):
- *   - 「옵션관리번호」가 빈 줄 = 그 상품의 **대표 줄**. 여기 원가를 넣으면 그 상품 전 옵션에 적용된다.
- *   - 옵션관리번호가 있는 줄 = 그 옵션 전용. 대표 줄 값을 덮어쓴다(수동 우선).
+ * 원칙 (2026-08-09 확정):
+ *   - 원가는 「품목사전」 한 곳에서만 관리한다.
+ *   - 사장님은 옵션 줄마다 «어떤 품목인지» 드롭다운으로 고르기만 한다.
+ *   - **드롭다운을 고른 줄은 그 품목의 원가를 그대로(literal) 쓴다.** 병수·조합 곱셈 없음.
+ *     1+1, 종아리+무릎 교차 같은 경우의 수는 품목사전에 각각 등록해 두고 고른다.
+ *   - 드롭다운이 없는 줄만 시스템이 자동 해석(병수 곱셈 포함)한다.
+ *   우선순위: 「구성해석」 수동 > 드롭다운(literal) > 자동 해석
  *
- * 절대 규칙: **사장님이 입력한 값은 어떤 경우에도 덮어쓰지 않는다.**
- * 자동 채움은 (a) 아예 없는 줄을 새로 추가하거나, (b) 비어 있는 칸만 메꾼다.
+ * 절대 규칙: 사장님이 입력한 값(품목 선택·유형·메모)은 어떤 경우에도 덮어쓰지 않는다.
  */
 
 import {
-  ensureTab, readRange, appendRows, writeRange, clearRange, setHeaderNotes, setOneOfRangeValidation,
+  ensureTab, readRange, appendRows, writeRange, clearRange, setHeaderNotes,
+  setOneOfRangeValidation, applyRowFormatRule, setFrozenRows, setColumnWidths,
   type SheetCreds,
 } from "./sheets";
 
@@ -20,30 +24,30 @@ const ITEM_TAB_NAME = "품목사전";
 export const OPTMAP_TAB = "⭐옵션매핑";
 
 /**
- * ⚠️⚠️ 2026-08-09 열 구조 변경 — A열에 「스토어」 삽입. 기존 열이 한 칸씩 밀렸다.
- *      옛 열 순서로 읽는 코드(다른 머신의 미push 본 포함)는 **즉시 pull** 해야 한다.
- *      그렇지 않으면 원본상품번호를 스토어로 읽는 식으로 조용히 어긋난다.
+ * ⚠️ 열 구성이 여러 번 바뀌었다. 코드는 **반드시 colOf(이름) 로만** 접근할 것.
+ *    (인덱스를 숫자로 박으면 다음 변경 때 조용히 어긋난다)
  *
- * 재발 방지: 아래 이름 상수 + colOf() 로 **헤더 이름 기반**으로 읽는다.
- *           앞으로 열을 끼워도 코드는 그대로 동작한다.
+ * 2026-08-09 변경 이력:
+ *   - A열 「스토어」 삽입
+ *   - 「원가(개당)」·「물류비(건당)」 삭제 — 원가는 품목사전, 물류비는 「설정」 전역값으로 일원화
+ *   - 「라벨」을 「상품명」+「옵션명」 두 열로 분리 (상품명이 모든 줄에 채워져 눈으로 묶어 보이게)
  */
 export const OPTMAP_COL = {
   store: "스토어",
   originNo: "원본상품번호",
   channelNo: "채널상품번호",
   optionCode: "옵션관리번호",
-  label: "라벨",
-  cost: "원가(개당)",
-  logistics: "물류비(건당)",
+  productName: "상품명",
+  optionName: "옵션명",
   type: "유형(메인/추가)",
   memo: "메모",
   itemPick: "품목(선택)",
-  // ── 실시간 수식 (드롭다운을 고치면 즉시 반영) ──
+  // ── 실시간 수식 ──
   appliedCost: "적용원가",
   unitCost: "개당원가",
   alias: "별칭",
   source: "출처",
-  // ── 스크립트가 아침 보고 때 채우는 값 ──
+  // ── 스크립트가 아침 보고 때 채움 ──
   bottles: "병수",
   autoText: "자동해석",
   autoCost: "자동원가",
@@ -51,77 +55,76 @@ export const OPTMAP_COL = {
 } as const;
 
 export const OPTMAP_HEADERS: string[] = [
-  OPTMAP_COL.store,       // A — 신규
+  OPTMAP_COL.store,       // A
   OPTMAP_COL.originNo,    // B
   OPTMAP_COL.channelNo,   // C
   OPTMAP_COL.optionCode,  // D
-  OPTMAP_COL.label,       // E
-  OPTMAP_COL.cost,        // F  ★사장님
-  OPTMAP_COL.logistics,   // G  ★사장님
-  OPTMAP_COL.type,        // H
-  OPTMAP_COL.memo,        // I  ★사장님
-  OPTMAP_COL.itemPick,    // J  ★사장님(드롭다운)
-  // K~N 은 수식(실시간), O~R 은 스크립트(아침 보고 때). 각각 붙여두면 갱신이 단순해진다.
-  OPTMAP_COL.appliedCost, // K  수식 — 실제 적용되는 원가
-  OPTMAP_COL.unitCost,    // L  수식
-  OPTMAP_COL.alias,       // M  수식
-  OPTMAP_COL.source,      // N  수식
-  OPTMAP_COL.bottles,     // O  스크립트
-  OPTMAP_COL.autoText,    // P  스크립트
-  OPTMAP_COL.autoCost,    // Q  스크립트
-  OPTMAP_COL.autoSource,  // R  스크립트
+  OPTMAP_COL.productName, // E
+  OPTMAP_COL.optionName,  // F
+  OPTMAP_COL.type,        // G
+  OPTMAP_COL.memo,        // H
+  OPTMAP_COL.itemPick,    // I  ★사장님(드롭다운)
+  OPTMAP_COL.appliedCost, // J  수식
+  OPTMAP_COL.unitCost,    // K  수식
+  OPTMAP_COL.alias,       // L  수식
+  OPTMAP_COL.source,      // M  수식
+  OPTMAP_COL.bottles,     // N  스크립트
+  OPTMAP_COL.autoText,    // O  스크립트
+  OPTMAP_COL.autoCost,    // P  스크립트
+  OPTMAP_COL.autoSource,  // Q  스크립트
 ];
 
-/** 헤더 이름 → 0-based 인덱스. 열이 밀려도 이 함수만 통하면 안전하다. */
 export const colOf = (name: string): number => {
   const i = OPTMAP_HEADERS.indexOf(name);
   if (i < 0) throw new Error(`⭐옵션매핑 헤더 없음: ${name}`);
   return i;
 };
-/** 0-based 인덱스 → A1 열 문자 */
 export const colA1 = (name: string): string => String.fromCharCode(65 + colOf(name));
 
 /**
- * 검수 열 수식 — **행마다 쓰지 않고 2행에 ARRAYFORMULA 한 번만** 넣는다.
- * 행마다 넣으면 append 로 줄이 늘 때 수식이 안 따라와 빈칸이 생기고,
- * upsert 가 값을 덮어써 수식이 날아간다. ARRAYFORMULA 는 열 전체를 커버하고
- * 새 줄에도 자동 적용되며, 품목사전 원가를 고치면 **즉시** 다시 계산된다.
+ * 검수 열 수식 — 행마다 쓰지 않고 2행에 ARRAYFORMULA 한 번만 넣는다.
+ * (행마다 넣으면 줄이 늘 때 안 따라오고 upsert 가 덮어써 날아간다)
  */
 export const OPTMAP_ARRAY_FORMULAS: Record<string, string> = {
-  // L 개당원가 / M 별칭 — J(품목 선택)를 품목사전에서 조회
-  L2: `=ARRAYFORMULA(IF($J$2:$J="","",IFERROR(VLOOKUP($J$2:$J,${"품목사전"}!$A:$B,2,FALSE),"품목사전에 없음")))`,
-  M2: `=ARRAYFORMULA(IF($J$2:$J="","",IFERROR(VLOOKUP($J$2:$J,${"품목사전"}!$A:$C,3,FALSE),"")))`,
-  // K 적용원가 — **드롭다운을 고르는 즉시** 바뀌어야 하는 핵심 칸.
-  //   드롭다운 있음 → 개당원가 × 병수. 단 품목명에 "+" 가 있으면 그 자체가 조합이라 ×1 (이중 곱 방지)
-  //   드롭다운 없음 → 스크립트가 채운 자동원가(Q) 를 그대로 보여준다
-  K2: `=ARRAYFORMULA(IF($J$2:$J="",$Q$2:$Q,IF(ISNUMBER($L$2:$L),$L$2:$L*IF(REGEXMATCH($J$2:$J&"","\\+"),1,IF($O$2:$O="",1,$O$2:$O)),"")))`,
-  // N 출처 — 드롭다운이 있으면 즉시 「드롭다운」, 없으면 스크립트 판정값(R)
-  N2: `=ARRAYFORMULA(IF($J$2:$J="",$R$2:$R,"드롭다운"))`,
+  // K 개당원가 / L 별칭 — I(품목 선택)를 품목사전에서 조회
+  K2: `=ARRAYFORMULA(IF($I$2:$I="","",IFERROR(VLOOKUP($I$2:$I,${ITEM_TAB_NAME}!$A:$B,2,FALSE),"품목사전에 없음")))`,
+  L2: `=ARRAYFORMULA(IF($I$2:$I="","",IFERROR(VLOOKUP($I$2:$I,${ITEM_TAB_NAME}!$A:$C,3,FALSE),"")))`,
+  // J 적용원가 — 드롭다운을 고르면 **품목사전 원가 그대로**(곱셈 없음).
+  //   경우의 수(1+1, 교차 조합)는 품목사전에 각각 등록해 고르는 방식이라 여기서 곱하면 안 된다.
+  //   드롭다운이 없으면 스크립트가 채운 자동원가(P) 를 보여준다.
+  J2: `=ARRAYFORMULA(IF($I$2:$I="",$P$2:$P,$K$2:$K))`,
+  // M 출처 — 드롭다운이 있으면 즉시 「드롭다운」, 없으면 스크립트 판정값(Q)
+  M2: `=ARRAYFORMULA(IF($I$2:$I="",$Q$2:$Q,"드롭다운"))`,
 };
 
-/** 헤더 1행에 달릴 설명 노트 (사장님용). OPTMAP_HEADERS 와 순서가 1:1. */
+/** 헤더 1행 노트 (사장님용). OPTMAP_HEADERS 와 순서 1:1. */
 export const OPTMAP_NOTES = [
-  "이 상품이 어느 스토어 것인지. 자동으로 채워집니다 — 손대지 마세요.",
-  "네이버가 매기는 원본 상품번호. 자동으로 채워집니다 — 손대지 마세요.",
-  "네이버 채널 상품번호. 자동으로 채워집니다 — 손대지 마세요.",
-  "비어 있으면 = 이 상품의 대표 줄(상품 전체 기본값).\n값이 있으면 = 그 옵션 전용 줄.\n자동으로 채워집니다 — 손대지 마세요.",
-  "보고서에 표시될 이름. 비워두면 상품명이 쓰입니다. 바꿔도 됩니다.",
-  "★사장님 입력★ 1개당 매입원가(숫자만).\n대표 줄(옵션관리번호 빈 줄)에 넣으면 그 상품 모든 옵션에 자동 적용됩니다.\n특정 옵션만 다르면 그 옵션 줄에 따로 적으세요 — 그 줄이 우선합니다.\n비워두면 이익이 '설정 필요'로 표시됩니다.",
-  "⚠️ 사용 안 함 (전역 설정으로 대체)\n물류비는 이제 「설정」 탭의 «출고 건당 물류비» 한 칸으로 일괄 적용됩니다.\n이 열의 값은 계산에 쓰이지 않습니다. 과거 입력값 보존을 위해 열만 남겨둔 것입니다.",
+  "이 상품이 어느 스토어 것인지. 자동 — 손대지 마세요.",
+  "네이버 원본 상품번호. 자동 — 손대지 마세요.",
+  "네이버 채널 상품번호. 자동 — 손대지 마세요.",
+  "비어 있으면 = 이 상품의 대표 줄. 값이 있으면 = 그 옵션 전용 줄.\n자동 — 손대지 마세요.",
+  "상품명. 모든 줄에 채워져 있어 같은 상품끼리 눈으로 묶어 볼 수 있습니다. 자동.",
+  "옵션명. 대표 줄은 「(대표)」로 표시됩니다. 자동.",
   "메인 / 추가 중 하나. 비워둬도 됩니다.",
   "★사장님 메모★ 자유롭게 적으세요. 계산에 쓰이지 않습니다.",
-  "★사장님 선택★ 이 옵션이 실제로 어떤 품목인지 목록에서 고르세요.\n고르면 오른쪽에 개당원가·별칭·옵션원가가 바로 뜹니다.\n※ 여러 품목이 섞인 옵션(피쿠알2+블렌딩1)은 「구성해석」 탭에서 지정하세요.",
-  "🟢 실시간 — ★이 칸이 실제 적용되는 원가입니다★\n왼쪽에서 품목을 고르면 즉시 바뀝니다 (= 개당원가 × 병수).\n고른 품목 이름에 「+」가 있으면(조합) 그 자체가 옵션 전체라 병수를 곱하지 않습니다.\n품목을 안 골랐으면 시스템이 자동으로 읽은 원가가 표시됩니다.",
-  "🟢 실시간: 고른 품목의 개당원가 (품목사전에서 자동).\n품목사전 원가를 고치면 즉시 바뀝니다.",
-  "🟢 실시간: 그 품목의 별칭 (품목사전에서 자동).\n매핑이 맞는지 눈으로 확인하는 용도입니다.",
+  "★사장님 선택★ 이 옵션이 실제로 어떤 품목인지 목록에서 고르세요.\n고르면 오른쪽 「적용원가」에 품목사전 가격이 **그대로** 들어갑니다.\n1+1·교차 조합처럼 경우의 수가 있으면 품목사전에 그 조합을 등록하고 여기서 고르세요.",
+  "🟢 실시간 — ★실제 적용되는 원가★\n품목을 고르면 품목사전 가격이 그대로 즉시 반영됩니다 (곱셈 없음).\n안 골랐으면 시스템이 자동으로 읽은 원가가 표시됩니다.",
+  "🟢 실시간: 고른 품목의 품목사전 원가. 품목사전을 고치면 즉시 바뀝니다.",
+  "🟢 실시간: 그 품목의 별칭. 매핑이 맞는지 눈으로 확인하는 용도입니다.",
   "🟢 실시간: 무엇을 근거로 계산했는지.\n드롭다운 = 사장님이 고른 값 / 그 외는 시스템 자동 판정",
-  "🕗 아침 보고 때 갱신: 옵션 이름에서 읽은 병(개) 수. 비어 있으면 1개로 봅니다.",
+  "🕗 아침 보고 때 갱신: 옵션 이름에서 읽은 병(개) 수 (자동 해석용).",
   "🕗 아침 보고 때 갱신: 시스템이 스스로 읽은 구성. 예: 피쿠알×2+블렌딩×1",
-  "🕗 아침 보고 때 갱신: 위 「자동해석」대로 계산한 원가 (참고용).\n드롭다운을 고른 줄은 왼쪽 「적용원가」가 우선합니다.",
+  "🕗 아침 보고 때 갱신: 자동 해석 기준 원가 (참고용).",
   "🕗 아침 보고 때 갱신: 드롭다운이 없을 때의 자동 판정 출처 (참고용).",
 ];
 
-/** 탭 보장 + 헤더 + 노트 + 드롭다운 + 검수 수식. 부가 설정 실패는 삼킨다(본 계산과 무관). */
+/** 「⭐옵션매핑」에서 제외하는 스토어 (원가가 사입관리 실매입가로 들어오는 곳). */
+export const OPTMAP_EXCLUDED_STORES = new Set(["여기명품"]);
+
+/** 대표 줄 옵션명 표시값. */
+export const PRODUCT_ROW_MARK = "(대표)";
+
+/** 탭 보장 + 헤더/노트/드롭다운/수식/시각 정리. 부가 설정 실패는 삼킨다. */
 export async function ensureOptionMapTab(c: SheetCreds): Promise<void> {
   await ensureTab(c, OPTMAP_TAB, OPTMAP_HEADERS);
   try {
@@ -130,14 +133,12 @@ export async function ensureOptionMapTab(c: SheetCreds): Promise<void> {
     console.warn(`[${OPTMAP_TAB}] 헤더 노트 실패(무시): ${err instanceof Error ? err.message : err}`);
   }
   try {
-    // 품목사전 A열을 소스로 하는 드롭다운. 범위를 넉넉히(2~1000) 잡아 품목이 늘어도 자동 반영.
     await setOneOfRangeValidation(c, OPTMAP_TAB, colOf(OPTMAP_COL.itemPick), ITEM_TAB_NAME, "A");
   } catch (err) {
     console.warn(`[${OPTMAP_TAB}] 드롭다운 설정 실패(무시): ${err instanceof Error ? err.message : err}`);
   }
   try {
-    // 수식 칸을 다시 심기 전에 수식 영역을 비운다.
-    // 열 구성이 바뀌면 옛 위치의 ARRAYFORMULA 가 남아 새 수식과 겹쳐 #REF 를 낸다.
+    // 수식을 다시 심기 전에 수식 영역을 비운다 (열 구성이 바뀌면 옛 위치 배열수식이 겹쳐 #REF).
     await clearRange(c, `${OPTMAP_TAB}!${colA1(OPTMAP_COL.appliedCost)}2:${colA1(OPTMAP_COL.source)}20000`);
     for (const [cell, formula] of Object.entries(OPTMAP_ARRAY_FORMULAS)) {
       await writeRange(c, `${OPTMAP_TAB}!${cell}`, [[formula]]);
@@ -145,20 +146,65 @@ export async function ensureOptionMapTab(c: SheetCreds): Promise<void> {
   } catch (err) {
     console.warn(`[${OPTMAP_TAB}] 검수 수식 설정 실패(무시): ${err instanceof Error ? err.message : err}`);
   }
+  try {
+    await applyOptMapVisuals(c);
+  } catch (err) {
+    console.warn(`[${OPTMAP_TAB}] 시각 정리 실패(무시): ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/** 한눈에 들어오게 — 헤더 고정, 대표 줄 강조, 열 너비. */
+export async function applyOptMapVisuals(c: SheetCreds): Promise<void> {
+  await setFrozenRows(c, OPTMAP_TAB, 1);
+  await setColumnWidths(c, OPTMAP_TAB, [
+    { name: OPTMAP_COL.store, px: 90 },
+    { name: OPTMAP_COL.originNo, px: 105 },
+    { name: OPTMAP_COL.channelNo, px: 105 },
+    { name: OPTMAP_COL.optionCode, px: 110 },
+    { name: OPTMAP_COL.productName, px: 260 },
+    { name: OPTMAP_COL.optionName, px: 300 },
+    { name: OPTMAP_COL.type, px: 70 },
+    { name: OPTMAP_COL.memo, px: 110 },
+    { name: OPTMAP_COL.itemPick, px: 190 },
+    { name: OPTMAP_COL.appliedCost, px: 90 },
+    { name: OPTMAP_COL.unitCost, px: 85 },
+    { name: OPTMAP_COL.alias, px: 140 },
+    { name: OPTMAP_COL.source, px: 85 },
+    { name: OPTMAP_COL.bottles, px: 55 },
+    { name: OPTMAP_COL.autoText, px: 200 },
+    { name: OPTMAP_COL.autoCost, px: 85 },
+    { name: OPTMAP_COL.autoSource, px: 85 },
+  ].map((x) => ({ index: colOf(x.name), px: x.px })));
+
+  const codeCol = colA1(OPTMAP_COL.optionCode);
+  // 대표 줄(옵션관리번호가 빈 줄) = 상품 단위 구분선. 옅은 회색 + 굵게.
+  await applyRowFormatRule(
+    c, OPTMAP_TAB,
+    `=$${codeCol}2=""`,
+    OPTMAP_HEADERS.length,
+    { backgroundColor: { red: 0.93, green: 0.94, blue: 0.96 }, textFormat: { bold: true } },
+  );
+  // 손봐야 할 줄 = 노란색
+  await applyRowFormatRule(
+    c, OPTMAP_TAB,
+    `=$${colA1(OPTMAP_COL.source)}2="설정 필요"`,
+    OPTMAP_HEADERS.length,
+    { backgroundColor: { red: 1, green: 0.95, blue: 0.7 } },
+  );
 }
 
 export interface AuditCtx {
   store: string;
   channelProductNo: string;
   optionManageCode: string;
-  label: string;
+  productName: string;
+  optionName: string;
   pickedItem: string;
 }
 
 /**
- * 검수 열 중 «스크립트가 채우는» 부분 갱신 — 병수, 자동해석·해석원가·출처.
- * 개당원가·별칭·옵션원가는 ARRAYFORMULA 라 건드리지 않는다 (쓰면 수식이 날아간다).
- * 열 위치는 전부 헤더 이름으로 계산하므로 열이 밀려도 안전하다.
+ * 스크립트가 채우는 검수 4칸(병수·자동해석·자동원가·자동출처) 갱신.
+ * 수식 칸은 절대 건드리지 않는다 (쓰면 배열 수식이 날아간다).
  */
 export async function refreshOptMapAudit(
   c: SheetCreds,
@@ -166,19 +212,17 @@ export async function refreshOptMapAudit(
     bottles: number; autoText: string; autoCost: number | ""; source: string;
   },
 ): Promise<{ rows: number; flagged: number }> {
-  const lastInput = colA1(OPTMAP_COL.itemPick);
-  const rows = await readRange(c, `${OPTMAP_TAB}!A2:${lastInput}20000`);
+  const rows = await readRange(c, `${OPTMAP_TAB}!A2:${colA1(OPTMAP_COL.itemPick)}20000`);
   if (rows.length === 0) return { rows: 0, flagged: 0 };
 
   const iStore = colOf(OPTMAP_COL.store);
   const iCh = colOf(OPTMAP_COL.channelNo);
   const iCode = colOf(OPTMAP_COL.optionCode);
-  const iLabel = colOf(OPTMAP_COL.label);
+  const iProd = colOf(OPTMAP_COL.productName);
+  const iOpt = colOf(OPTMAP_COL.optionName);
   const iPick = colOf(OPTMAP_COL.itemPick);
 
-  // 스크립트가 쓰는 4칸(병수·자동해석·자동원가·자동출처)은 붙어 있어 한 번에 기록한다.
-  // 수식 칸(적용원가·개당원가·별칭·출처)은 절대 건드리지 않는다 — 쓰면 배열 수식이 날아간다.
-  const scriptCols: (string | number)[][] = [];
+  const out: (string | number)[][] = [];
   let flagged = 0;
   for (const r of rows) {
     const picked = String(r[iPick] ?? "").trim();
@@ -186,18 +230,18 @@ export async function refreshOptMapAudit(
       store: String(r[iStore] ?? "").trim(),
       channelProductNo: String(r[iCh] ?? "").trim(),
       optionManageCode: String(r[iCode] ?? "").trim(),
-      label: String(r[iLabel] ?? "").trim(),
+      productName: String(r[iProd] ?? "").trim(),
+      optionName: String(r[iOpt] ?? "").trim(),
       pickedItem: picked,
     });
-    scriptCols.push([bottles, autoText, autoCost, source]);
-    // 드롭다운을 고른 줄은 사장님이 이미 정리한 줄이므로 노란 표시 대상이 아니다
+    out.push([bottles, autoText, autoCost, source]);
+    // 드롭다운을 고른 줄은 사장님이 이미 정리한 줄 — 노란 표시 대상 아님
     if (!picked && source === "설정 필요") flagged += 1;
   }
-  const last = rows.length + 1;
   await writeRange(
     c,
-    `${OPTMAP_TAB}!${colA1(OPTMAP_COL.bottles)}2:${colA1(OPTMAP_COL.autoSource)}${last}`,
-    scriptCols,
+    `${OPTMAP_TAB}!${colA1(OPTMAP_COL.bottles)}2:${colA1(OPTMAP_COL.autoSource)}${rows.length + 1}`,
+    out,
   );
   return { rows: rows.length, flagged };
 }
@@ -208,22 +252,13 @@ export interface OptMapEntry {
   originProductNo: string;
   channelProductNo: string;
   optionManageCode: string; // "" = 상품 대표 줄
-  label: string;
+  productName: string;
+  optionName: string;
 }
 
-/**
- * 「⭐옵션매핑」에서 제외하는 스토어.
- * 여기명품은 같은 상품도 사입가가 건건이 달라(도매 시세) 품목사전 단가 방식이 맞지 않는다.
- * 원가는 「여기명품 사입관리」 시트의 실매입가(AD↔AB)로 이미 정확히 들어오므로,
- * 옵션매핑에 줄을 만들면 수천 줄 잡음만 쌓이고 검수 화면이 무의미해진다.
- */
-export const OPTMAP_EXCLUDED_STORES = new Set(["여기명품"]);
-
-/** 시트에 이미 있는 키 집합 + 원본상품번호가 빈 줄 위치를 함께 돌려준다. */
 interface ExistingState {
   keys: Set<string>;
   channels: Set<string>;
-  rowCount: number;
 }
 
 const keyOf = (chNo: string, optCode: string) => (optCode ? `${chNo}|${optCode}` : chNo);
@@ -240,16 +275,12 @@ async function readExisting(c: SheetCreds): Promise<ExistingState> {
     keys.add(keyOf(chNo, String(r[iCode] ?? "").trim()));
     channels.add(chNo);
   }
-  return { keys, channels, rowCount: rows.length };
+  return { keys, channels };
 }
 
 /**
  * 없는 줄만 append. 기존 줄은 읽기만 하고 절대 건드리지 않는다.
- *
- * 그룹 유지: 새 상품은 「대표 줄 → 그 상품 옵션 줄들」 순서로 이어 붙인다.
- * 기존 줄 순서는 재정렬하지 않는다(사장님이 보던 위치가 흔들리지 않게).
- *
- * @returns 새로 추가된 상품(채널상품번호) 목록과 추가된 줄 수
+ * 새 상품은 「대표 줄 → 옵션 줄들」 순서로 이어 붙인다(기존 줄 순서는 재정렬하지 않음).
  */
 export async function mergeOptionMapEntries(
   c: SheetCreds,
@@ -258,12 +289,11 @@ export async function mergeOptionMapEntries(
   await ensureOptionMapTab(c);
   const existing = await readExisting(c);
 
-  // 채널상품번호별로 묶어서 대표 줄이 먼저 나오게 정렬
   const byChannel = new Map<string, OptMapEntry[]>();
   for (const e of entries) {
     const chNo = e.channelProductNo.trim();
     if (!chNo) continue;
-    if (OPTMAP_EXCLUDED_STORES.has(e.store)) continue; // 여기명품 등은 사입관리로 원가가 오므로 제외
+    if (OPTMAP_EXCLUDED_STORES.has(e.store)) continue;
     const list = byChannel.get(chNo) ?? [];
     list.push(e);
     byChannel.set(chNo, list);
@@ -274,18 +304,11 @@ export async function mergeOptionMapEntries(
 
   for (const [chNo, list] of byChannel) {
     const isNewProduct = !existing.channels.has(chNo);
-    // 대표 줄(옵션관리번호 "")이 후보에 없으면 만들어 준다 — 사장님이 숫자 하나만 넣을 자리
     const hasProductLevel = list.some((e) => !e.optionManageCode);
     const ordered: OptMapEntry[] = [];
     if (!hasProductLevel) {
       const seed = list[0];
-      ordered.push({
-        store: seed.store,
-        originProductNo: seed.originProductNo,
-        channelProductNo: chNo,
-        optionManageCode: "",
-        label: seed.label,
-      });
+      ordered.push({ ...seed, optionManageCode: "", optionName: "" });
     }
     ordered.push(...list.filter((e) => !e.optionManageCode), ...list.filter((e) => e.optionManageCode));
 
@@ -293,20 +316,20 @@ export async function mergeOptionMapEntries(
     for (const e of ordered) {
       const k = keyOf(chNo, e.optionManageCode);
       if (existing.keys.has(k)) continue;
-      existing.keys.add(k); // 같은 실행 안에서의 중복 방지
-      // 「품목(선택)」까지만 쓴다. 그 뒤(개당원가·별칭·옵션원가)는 비워둬야
-      // ARRAYFORMULA 가 그 줄까지 자동으로 채운다. 빈 문자열이라도 쓰면 배열 수식이 깨진다.
+      existing.keys.add(k);
+      // 「품목(선택)」까지만 쓴다. 그 뒤는 비워둬야 ARRAYFORMULA 가 그 줄까지 자동으로 채운다.
       const row = new Array(colOf(OPTMAP_COL.itemPick) + 1).fill("");
       row[colOf(OPTMAP_COL.store)] = e.store;
       row[colOf(OPTMAP_COL.originNo)] = e.originProductNo;
       row[colOf(OPTMAP_COL.channelNo)] = chNo;
       row[colOf(OPTMAP_COL.optionCode)] = e.optionManageCode;
-      row[colOf(OPTMAP_COL.label)] = e.label;
+      row[colOf(OPTMAP_COL.productName)] = e.productName.slice(0, 60);
+      row[colOf(OPTMAP_COL.optionName)] = e.optionManageCode ? e.optionName : PRODUCT_ROW_MARK;
       toAppend.push(row);
       addedForThis += 1;
     }
     if (isNewProduct && addedForThis > 0) {
-      newProducts.push({ channelProductNo: chNo, label: list[0].label });
+      newProducts.push({ channelProductNo: chNo, label: list[0].productName });
     }
   }
 
