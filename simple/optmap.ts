@@ -10,7 +10,7 @@
  */
 
 import {
-  ensureTab, readRange, appendRows, writeRange, setHeaderNotes, setOneOfRangeValidation,
+  ensureTab, readRange, appendRows, writeRange, clearRange, setHeaderNotes, setOneOfRangeValidation,
   type SheetCreds,
 } from "./sheets";
 
@@ -38,13 +38,16 @@ export const OPTMAP_COL = {
   type: "유형(메인/추가)",
   memo: "메모",
   itemPick: "품목(선택)",
-  bottles: "병수",
+  // ── 실시간 수식 (드롭다운을 고치면 즉시 반영) ──
+  appliedCost: "적용원가",
   unitCost: "개당원가",
   alias: "별칭",
-  optionCost: "옵션원가",
-  autoText: "자동해석",
-  autoCost: "해석원가",
   source: "출처",
+  // ── 스크립트가 아침 보고 때 채우는 값 ──
+  bottles: "병수",
+  autoText: "자동해석",
+  autoCost: "자동원가",
+  autoSource: "자동출처",
 } as const;
 
 export const OPTMAP_HEADERS: string[] = [
@@ -58,13 +61,15 @@ export const OPTMAP_HEADERS: string[] = [
   OPTMAP_COL.type,        // H
   OPTMAP_COL.memo,        // I  ★사장님
   OPTMAP_COL.itemPick,    // J  ★사장님(드롭다운)
-  OPTMAP_COL.bottles,     // K  스크립트
+  // K~N 은 수식(실시간), O~R 은 스크립트(아침 보고 때). 각각 붙여두면 갱신이 단순해진다.
+  OPTMAP_COL.appliedCost, // K  수식 — 실제 적용되는 원가
   OPTMAP_COL.unitCost,    // L  수식
   OPTMAP_COL.alias,       // M  수식
-  OPTMAP_COL.optionCost,  // N  수식
-  OPTMAP_COL.autoText,    // O  스크립트
-  OPTMAP_COL.autoCost,    // P  스크립트
-  OPTMAP_COL.source,      // Q  스크립트
+  OPTMAP_COL.source,      // N  수식
+  OPTMAP_COL.bottles,     // O  스크립트
+  OPTMAP_COL.autoText,    // P  스크립트
+  OPTMAP_COL.autoCost,    // Q  스크립트
+  OPTMAP_COL.autoSource,  // R  스크립트
 ];
 
 /** 헤더 이름 → 0-based 인덱스. 열이 밀려도 이 함수만 통하면 안전하다. */
@@ -83,10 +88,15 @@ export const colA1 = (name: string): string => String.fromCharCode(65 + colOf(na
  * 새 줄에도 자동 적용되며, 품목사전 원가를 고치면 **즉시** 다시 계산된다.
  */
 export const OPTMAP_ARRAY_FORMULAS: Record<string, string> = {
-  // L=개당원가, M=별칭 은 J(품목 선택) 을 품목사전에서 조회. N=옵션원가 = 개당원가 × K(병수).
+  // L 개당원가 / M 별칭 — J(품목 선택)를 품목사전에서 조회
   L2: `=ARRAYFORMULA(IF($J$2:$J="","",IFERROR(VLOOKUP($J$2:$J,${"품목사전"}!$A:$B,2,FALSE),"품목사전에 없음")))`,
   M2: `=ARRAYFORMULA(IF($J$2:$J="","",IFERROR(VLOOKUP($J$2:$J,${"품목사전"}!$A:$C,3,FALSE),"")))`,
-  N2: `=ARRAYFORMULA(IF(($J$2:$J="")+(NOT(ISNUMBER($L$2:$L))),"",$L$2:$L*IF($K$2:$K="",1,$K$2:$K)))`,
+  // K 적용원가 — **드롭다운을 고르는 즉시** 바뀌어야 하는 핵심 칸.
+  //   드롭다운 있음 → 개당원가 × 병수. 단 품목명에 "+" 가 있으면 그 자체가 조합이라 ×1 (이중 곱 방지)
+  //   드롭다운 없음 → 스크립트가 채운 자동원가(Q) 를 그대로 보여준다
+  K2: `=ARRAYFORMULA(IF($J$2:$J="",$Q$2:$Q,IF(ISNUMBER($L$2:$L),$L$2:$L*IF(REGEXMATCH($J$2:$J&"","\\+"),1,IF($O$2:$O="",1,$O$2:$O)),"")))`,
+  // N 출처 — 드롭다운이 있으면 즉시 「드롭다운」, 없으면 스크립트 판정값(R)
+  N2: `=ARRAYFORMULA(IF($J$2:$J="",$R$2:$R,"드롭다운"))`,
 };
 
 /** 헤더 1행에 달릴 설명 노트 (사장님용). OPTMAP_HEADERS 와 순서가 1:1. */
@@ -101,13 +111,14 @@ export const OPTMAP_NOTES = [
   "메인 / 추가 중 하나. 비워둬도 됩니다.",
   "★사장님 메모★ 자유롭게 적으세요. 계산에 쓰이지 않습니다.",
   "★사장님 선택★ 이 옵션이 실제로 어떤 품목인지 목록에서 고르세요.\n고르면 오른쪽에 개당원가·별칭·옵션원가가 바로 뜹니다.\n※ 여러 품목이 섞인 옵션(피쿠알2+블렌딩1)은 「구성해석」 탭에서 지정하세요.",
-  "옵션 이름에서 자동으로 읽은 병(개) 수. 비어 있으면 1개로 봅니다.",
-  "왼쪽에서 고른 품목의 개당원가 (품목사전에서 자동). 품목사전을 고치면 즉시 바뀝니다.",
-  "그 품목의 별칭 (품목사전에서 자동). 매핑이 맞는지 눈으로 확인하는 용도입니다.",
-  "= 개당원가 × 병수. 이 옵션 1건의 원가입니다.",
-  "드롭다운을 안 고른 줄에 대해 시스템이 스스로 읽은 구성입니다.\n예: 피쿠알×2+블렌딩×1",
-  "위 「자동해석」대로 계산한 원가입니다.",
-  "실제로 무엇을 근거로 계산했는지: 드롭다운 / 수동구성 / 자동 / 설정 필요",
+  "🟢 실시간 — ★이 칸이 실제 적용되는 원가입니다★\n왼쪽에서 품목을 고르면 즉시 바뀝니다 (= 개당원가 × 병수).\n고른 품목 이름에 「+」가 있으면(조합) 그 자체가 옵션 전체라 병수를 곱하지 않습니다.\n품목을 안 골랐으면 시스템이 자동으로 읽은 원가가 표시됩니다.",
+  "🟢 실시간: 고른 품목의 개당원가 (품목사전에서 자동).\n품목사전 원가를 고치면 즉시 바뀝니다.",
+  "🟢 실시간: 그 품목의 별칭 (품목사전에서 자동).\n매핑이 맞는지 눈으로 확인하는 용도입니다.",
+  "🟢 실시간: 무엇을 근거로 계산했는지.\n드롭다운 = 사장님이 고른 값 / 그 외는 시스템 자동 판정",
+  "🕗 아침 보고 때 갱신: 옵션 이름에서 읽은 병(개) 수. 비어 있으면 1개로 봅니다.",
+  "🕗 아침 보고 때 갱신: 시스템이 스스로 읽은 구성. 예: 피쿠알×2+블렌딩×1",
+  "🕗 아침 보고 때 갱신: 위 「자동해석」대로 계산한 원가 (참고용).\n드롭다운을 고른 줄은 왼쪽 「적용원가」가 우선합니다.",
+  "🕗 아침 보고 때 갱신: 드롭다운이 없을 때의 자동 판정 출처 (참고용).",
 ];
 
 /** 탭 보장 + 헤더 + 노트 + 드롭다운 + 검수 수식. 부가 설정 실패는 삼킨다(본 계산과 무관). */
@@ -125,6 +136,9 @@ export async function ensureOptionMapTab(c: SheetCreds): Promise<void> {
     console.warn(`[${OPTMAP_TAB}] 드롭다운 설정 실패(무시): ${err instanceof Error ? err.message : err}`);
   }
   try {
+    // 수식 칸을 다시 심기 전에 수식 영역을 비운다.
+    // 열 구성이 바뀌면 옛 위치의 ARRAYFORMULA 가 남아 새 수식과 겹쳐 #REF 를 낸다.
+    await clearRange(c, `${OPTMAP_TAB}!${colA1(OPTMAP_COL.appliedCost)}2:${colA1(OPTMAP_COL.source)}20000`);
     for (const [cell, formula] of Object.entries(OPTMAP_ARRAY_FORMULAS)) {
       await writeRange(c, `${OPTMAP_TAB}!${cell}`, [[formula]]);
     }
@@ -162,28 +176,28 @@ export async function refreshOptMapAudit(
   const iLabel = colOf(OPTMAP_COL.label);
   const iPick = colOf(OPTMAP_COL.itemPick);
 
-  const bottlesCol: (string | number)[][] = [];
-  const autoCols: (string | number)[][] = [];
+  // 스크립트가 쓰는 4칸(병수·자동해석·자동원가·자동출처)은 붙어 있어 한 번에 기록한다.
+  // 수식 칸(적용원가·개당원가·별칭·출처)은 절대 건드리지 않는다 — 쓰면 배열 수식이 날아간다.
+  const scriptCols: (string | number)[][] = [];
   let flagged = 0;
   for (const r of rows) {
+    const picked = String(r[iPick] ?? "").trim();
     const { bottles, autoText, autoCost, source } = resolve({
       store: String(r[iStore] ?? "").trim(),
       channelProductNo: String(r[iCh] ?? "").trim(),
       optionManageCode: String(r[iCode] ?? "").trim(),
       label: String(r[iLabel] ?? "").trim(),
-      pickedItem: String(r[iPick] ?? "").trim(),
+      pickedItem: picked,
     });
-    bottlesCol.push([bottles]);
-    autoCols.push([autoText, autoCost, source]);
-    if (source === "설정 필요") flagged += 1;
+    scriptCols.push([bottles, autoText, autoCost, source]);
+    // 드롭다운을 고른 줄은 사장님이 이미 정리한 줄이므로 노란 표시 대상이 아니다
+    if (!picked && source === "설정 필요") flagged += 1;
   }
   const last = rows.length + 1;
-  const bCol = colA1(OPTMAP_COL.bottles);
-  await writeRange(c, `${OPTMAP_TAB}!${bCol}2:${bCol}${last}`, bottlesCol);
   await writeRange(
     c,
-    `${OPTMAP_TAB}!${colA1(OPTMAP_COL.autoText)}2:${colA1(OPTMAP_COL.source)}${last}`,
-    autoCols,
+    `${OPTMAP_TAB}!${colA1(OPTMAP_COL.bottles)}2:${colA1(OPTMAP_COL.autoSource)}${last}`,
+    scriptCols,
   );
   return { rows: rows.length, flagged };
 }

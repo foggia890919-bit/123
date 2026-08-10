@@ -240,6 +240,20 @@ export async function writeRange(
   });
 }
 
+/** 지정 범위의 값을 지운다 (서식·유효성은 유지). 배열 수식 잔재 정리용. */
+export async function clearRange(c: SheetCreds, rangeA1: string): Promise<void> {
+  await withRetry("clearRange", async () => {
+    const token = await getToken(c);
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${c.sheetId}/values/${encodeURIComponent(rangeA1)}:clear`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (!res.ok) throw new Error(`clearRange ${res.status}: ${await res.text()}`);
+  });
+}
+
 export async function ensureTab(c: SheetCreds, name: string, headers: string[]): Promise<void> {
   const token = await getToken(c);
   const exists = await withRetry("ensureTab:meta", async () => {

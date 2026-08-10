@@ -1174,8 +1174,11 @@ async function processDay(
           //    과소 계산됐다(정답 15,600). 복합 옵션은 드롭다운 한 칸으로 표현할 수 없다.
           const optionPick = optionRule?.itemPick ?? "";
           const productPick = productLevelRule?.itemPick ?? "";
+          // 사장님이 고른 품목명 자체가 조합이면("스타킹(종아리형)+스타킹(종아리형)")
+          // 그 한 줄이 이미 옵션 전체(2개)를 뜻한다. 여기에 병수를 또 곱하면 이중 계산이다.
+          // 조합 이름이면 수량 1, 단품 이름이면 옵션의 병수를 곱한다.
           const pickParts = (name: string) =>
-            [{ item: name, qty: extractBottles(optText || po.productName) }];
+            [{ item: name, qty: name.includes("+") ? 1 : extractBottles(optText || po.productName) }];
 
           const parts = rule?.manual
             ?? (optionPick ? pickParts(optionPick) : null)
@@ -1433,7 +1436,8 @@ async function processDay(
             if (!st) return { bottles, autoText: "", autoCost: "", source: "미판매" };
             // 표시값은 언제나 «병수까지 곱한 최종 원가» — 사장님이 암산하지 않도록.
             if (picked) {
-              const parts = [{ item: picked, qty: bottles }];
+              // 조합 품목명은 그 자체가 옵션 전체 → 병수를 곱하지 않는다 (이중 계산 방지)
+              const parts = [{ item: picked, qty: picked.includes("+") ? 1 : bottles }];
               const { cost, missing } = costOfComposition(parts, items);
               return {
                 bottles,
@@ -1453,7 +1457,9 @@ async function processDay(
             };
           });
           // 「출처」(P열)가 설정 필요면 그 줄 노란색
-          await applyHighlightRule(sheetCreds, OPTMAP_TAB, 15, OPTMAP_HEADERS.length, "설정 필요");
+          await applyHighlightRule(
+            sheetCreds, OPTMAP_TAB, colOf(OPTMAP_COL.source), OPTMAP_HEADERS.length, "설정 필요",
+          );
           console.log(`✅ 「${OPTMAP_TAB}」 검수열 ${audit.rows}줄 갱신 (설정 필요 ${audit.flagged}줄)`);
         } catch (err) {
           console.warn("옵션매핑 검수열 갱신 실패(무시):", err instanceof Error ? err.message : String(err));
