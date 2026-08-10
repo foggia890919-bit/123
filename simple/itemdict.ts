@@ -271,6 +271,21 @@ const GENERIC_KEYS = new Set([
   "모델명", "상품명", "타입", "종류", "구성", "용량", "맛", "추가",
 ]);
 
+/**
+ * 품목 «이름» 이 될 수 없는 마케팅 수식어. 상품명 첫 낱말을 후보로 뽑을 때 걸러낸다.
+ *
+ * ⚠️ 이걸 안 걸렀다가 사고가 났다. 상품명 "유기농 올리브앤토마토 샷…" 의 첫 낱말인
+ *    「유기농」이 품목으로 자동 등록됐고(원가 공란), 그 순간 "최고급 **유기농** 올리브오일:
+ *    아르베키나 / …: 3병" 같은 옵션이 «아르베키나 + 유기농» 2품목으로 해석돼
+ *    「여러 품목인데 총 수량만 있음」 = 해석 불가가 되면서 4,000행 가까이가 한꺼번에
+ *    원가 미확정으로 떨어졌다. 수식어는 거의 모든 상품명에 들어가므로 파급이 크다.
+ */
+const GENERIC_WORDS = new Set([
+  "유기농", "무농약", "친환경", "최고급", "고급", "프리미엄", "특가", "할인", "행사",
+  "정품", "국내산", "수입산", "신상", "인기", "베스트", "한정", "무료배송", "당일발송",
+  "엑스트라버진", "냉압착", "대용량", "선물세트", "선물", "세트",
+]);
+
 /** 텍스트에 이미 아는 품목이 하나라도 등장하는가. */
 export function hasKnownItem(productName: string, optionText: string, items: Item[]): boolean {
   const text = `${productName} ${optionText}`;
@@ -295,11 +310,13 @@ export function guessItemName(productName: string, optionText: string, items?: I
     }
   }
   // 2순위: 상품명 첫 낱말 (브랜드·제품명이 앞에 오는 네이버 관행)
+  //        단 마케팅 수식어(유기농·최고급…)는 건너뛴다 — 품목이 아니라 꾸밈말이고,
+  //        품목으로 등록되면 거의 모든 옵션에 걸려 해석을 통째로 망가뜨린다.
   const token = String(productName ?? "")
     .replace(/^\[[^\]]*\]\s*/, "") // "[당일발송] " 같은 머리표 제거
     .split(/[\s,(]/)
     .map((t) => t.trim())
-    .find((t) => t.length >= 2 && t.length <= 12 && /[가-힣]/.test(t));
+    .find((t) => t.length >= 2 && t.length <= 12 && /[가-힣]/.test(t) && !GENERIC_WORDS.has(t));
   return token || null;
 }
 

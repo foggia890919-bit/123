@@ -46,10 +46,10 @@ import {
   type OptMapEntry,
 } from "./optmap";
 import { updateProductSummary, type MissingCostProduct } from "./productsummary";
-import { updateVerifyTab, verifySummaryLine } from "./verify";
+import { updateVerifyTab, verifySummaryLine, resolveCost } from "./verify";
 import { loadSettings, DEFAULT_LOGISTICS_PER_SHIPMENT } from "./settings";
 import {
-  loadItems, loadCompRules, parseComposition, costOfComposition, compKey,
+  loadItems, loadCompRules, costOfComposition, compKey,
   syncCompTab, COMP_TAB, NEEDS_COMP,
   resolveLabelComposition, formatCompositionUi, bottlesOfLabel,
   guessItemName, addPlaceholderItems,
@@ -1104,54 +1104,20 @@ async function processDay(
         let compMissing = false;
         let compParts: { item: string; qty: number }[] | null = null;
         if (store.name !== YEOGI_STORE && items.length > 0) {
-          const rule = compRules.get(compKey(channelProductNo, po.productOption ?? ""));
-          const optText = po.productOption ?? "";
-          // 우선순위:
-          //   1) 「구성해석」 수동 — 복합 구성까지 표현 가능. 사장님이 직접 정한 값이라 최우선
-          //   2) **그 옵션 줄** 드롭다운 — 그 옵션을 콕 집어 지정한 것이므로 자동해석보다 우선
-          //   3) 자동 해석
-          //   4) **상품 대표 줄** 드롭다운 — 자동해석이 실패했을 때만 쓰는 최후 수단
-          //
-          // ⚠️ 대표 줄 드롭다운을 2)처럼 쓰면 안 된다. 대표 줄은 «그 상품의 기본 품목» 일 뿐
-          //    어떤 옵션이 팔렸는지 모른다. 실제로 12422196847 의 대표 줄 드롭다운(피쿠알)이
-          //    「피쿠알2병+블렌딩1병」 복합 옵션에까지 적용돼 피쿠알×2 = 10,400 으로
-          //    과소 계산됐다(정답 15,600). 복합 옵션은 드롭다운 한 칸으로 표현할 수 없다.
-          const optionPick = optionRule?.itemPick ?? "";
-          // ⚠️ 대표 줄 드롭다운은 **옵션 줄에 상속하지 않는다.**
-          // 대표 줄 선택은 "옵션 없이 팔린 본품 판매행"에만 쓴다.
-          // 상속을 허용했더니 대표 줄의 「피쿠알」(개당 5,200)이 「3병」 옵션에까지 literal 로
-          // 적용돼 원가가 1/3 로 깎이고 이익률이 45~72% 로 부풀었다(2건 연속 사고).
-          const productPick = optionManageCode ? "" : (productLevelRule?.itemPick ?? "");
-          // 드롭다운 수량 규칙 — 두 사고를 모두 막는 유일한 조합:
-          //   · 품목명에 「+」가 있으면(조합) 그 자체가 옵션 전체 → ×1
-          //     (안 그러면 「무릎형+무릎형」 19,420 이 1+1 병수 2 를 곱해 38,840 이 된다)
-          //   · 단품이면 옵션의 **명시 병수**(3병·6병)만큼 곱한다
-          //     (안 그러면 「3병」 옵션에 피쿠알 5,200 만 잡혀 원가가 1/3 로 깎인다)
-          // 병수는 bottlesOfLabel 을 쓴다 — 「N병/N개」 같은 명시 표기만 세고
-          // 「1+1」·「A+B」는 세지 않으므로 조합과 겹쳐 이중 곱이 날 일이 없다.
-          const pickParts = (name: string) => [{
-            item: name,
-            qty: name.includes("+") ? 1 : bottlesOfLabel(optText || po.productName),
-          }];
-
-          // 우선순위: 구성해석 수동 → 그 줄에 직접 선택된 드롭다운(literal) → 자동해석 → 설정 필요.
-          // 자동해석까지 실패하면 대표 줄로 폴백하지 않는다 — 그 폴백이 2+1 사고와 3병 사고의
-          // 공통 원인이었다. 모르면 「설정 필요」로 남기는 편이 안전하다.
-          const auto = parseComposition(po.productName, optText, items);
-          // 드롭다운은 품목 «하나» 만 담을 수 있다. 옵션이 여러 품목으로 구성돼 있으면
-          // (예: 피쿠알2병+블렌딩1병) 드롭다운으로는 표현이 안 되므로 자동해석이 맞다.
-          // 이걸 안 걸러서 「피쿠알」 드롭다운이 2+1 특가에 적용돼 10,400(정답 15,600)이 됐다.
-          const autoIsComposite = !!auto && new Set(auto.map((p) => p.item)).size >= 2;
-          const usablePick = autoIsComposite ? "" : (optionPick || productPick);
-
-          const parts = rule?.manual
-            ?? (usablePick ? pickParts(usablePick) : null)
-            ?? auto;
-
-          if (parts) {
-            compParts = parts;
-            const { cost: cc, missing } = costOfComposition(parts, items);
-            if (!missing) compCost = cc;
+          // 원가 결정 규칙은 verify.ts 의 resolveCost 한 곳에만 둔다.
+          //   우선순위: 「구성해석」 수동 > 그 줄 드롭다운 > 자동해석
+          //   대표 줄 드롭다운은 «옵션 문구조차 없는 행» 에만 (상속 금지)
+          // ⚠️ 예전에는 run.ts·backfill.ts·검산이 각자 이 로직을 복사해 갖고 있었고,
+          //    backfill 쪽만 드롭다운을 안 봐서 백필 한 번에 56행이 「설정 필요」로
+          //    날아갈 뻔했다. 규칙을 바꿀 일이 생기면 resolveCost 만 고칠 것.
+          const res = resolveCost(
+            po.productName, po.productOption ?? "",
+            channelProductNo, optionManageCode,
+            items, compRules, productRules,
+          );
+          if (res.parts) {
+            compParts = res.parts;
+            if (res.unitCost != null) compCost = res.unitCost;
             else compMissing = true;
           }
         }

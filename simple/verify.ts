@@ -216,13 +216,22 @@ export interface Resolved {
   autoIsComposite: boolean;
   /** 적용된 구성의 총 개수 (병수 합). 0 = 미해석 */
   totalUnits: number;
+  /** 적용된 구성 그 자체 (출고 병수 계산용). null = 미해석 */
+  parts: CompPart[] | null;
 }
 
 /**
- * run.ts 의 원가 결정 로직을 **그대로** 재현한다.
- * (여기가 어긋나면 검산 자체가 거짓말이 되므로 규칙을 바꿀 땐 양쪽을 같이 고칠 것)
+ * ★원가 결정 규칙의 «단 하나의» 구현★ — run.ts(매일 수집)·backfill.ts(RECOST)·검산 탭이
+ * 모두 이 함수를 부른다. 예전에 세 곳이 각자 구현을 갖고 있다가 드롭다운 처리가 어긋나
+ * 백필 한 번에 56행이 통째로 「설정 필요」가 될 뻔했다. 규칙은 여기서만 바꾼다.
+ *
  *   우선순위: 「구성해석」 수동 > 그 줄 드롭다운(조합=×1, 단품=×명시병수) > 자동해석
- *   대표 줄 드롭다운은 «옵션 없이 팔린 줄»에만 쓴다 (상속 금지).
+ *
+ * 대표 줄(옵션관리번호가 빈 줄) 드롭다운은 **옵션 문구조차 없는 행에만** 쓴다.
+ * (2026-08-11 사장님 확정) 옵션 문구가 있으면 그 문구의 자동해석이 우선이다 —
+ * 대표 줄 선택은 «그 상품의 기본 품목»일 뿐 어떤 옵션이 팔렸는지 모르기 때문이다.
+ * 실제로 「올레샷! 레몬즙 특가!」로 팔린 레몬즙 추가상품 200여 행이 본품(올리브오일)의
+ * 대표 줄 드롭다운(피쿠알)을 물려받아 3,400원이 아니라 5,200원으로 잡히고 있었다.
  */
 export function resolveCost(
   productName: string,
@@ -231,11 +240,13 @@ export function resolveCost(
   optionCode: string,
   items: Item[],
   compRules: Map<string, CompRule>,
-  optMap: Map<string, OptMapLite>,
+  optMap: Map<string, { itemPick: string }>,
 ): Resolved {
   const manual = compRules.get(compKey(channelNo, optText))?.manual ?? null;
   const optionPick = optMap.get(`${channelNo}|${optionCode}`)?.itemPick ?? "";
-  const productPick = optionCode ? "" : (optMap.get(channelNo)?.itemPick ?? "");
+  const productPick = (optionCode || optText.trim())
+    ? ""
+    : (optMap.get(channelNo)?.itemPick ?? "");
   const auto = parseComposition(productName, optText, items);
   const autoIsComposite = !!auto && new Set(auto.map((p) => p.item)).size >= 2;
   const rawPick = optionPick || productPick;
@@ -264,6 +275,7 @@ export function resolveCost(
   return {
     text, source, unitCost, pickCost, autoCost, autoIsComposite,
     totalUnits: parts ? parts.reduce((s, p) => s + p.qty, 0) : 0,
+    parts,
   };
 }
 
@@ -408,7 +420,7 @@ export async function updateVerifyTab(
     const resolved: Resolved = isYeogi
       ? {
         text: "사입관리(여기명품)", source: "사입관리", unitCost: null,
-        pickCost: null, autoCost: null, autoIsComposite: false, totalUnits: 0,
+        pickCost: null, autoCost: null, autoIsComposite: false, totalUnits: 0, parts: null,
       }
       : resolveCost(productName, optionName, channelNo, optionCode, items, compRules, optMap);
 
@@ -464,12 +476,18 @@ export async function updateVerifyTab(
 
     // ③ 배송비 이상 — 같은 옵션인데 어떤 주문은 배송비 있고 어떤 주문은 0
     //    주문의 대표 줄에만 표시한다 (한 주문에 여러 줄이 있어도 경보는 한 번).
+    //
+    //    ⚠️ «소수의 예외»만 잡는다. 배송비가 절반씩 갈리는 건 프로모션(무료배송) 세팅을
+    //    바꾼 것이지 사고가 아니다(사장님 확인). 전 기간으로 돌렸을 때 이 구분이 없어서
+    //    2,990건이 뜨고 진짜 볼 줄이 묻혔다 — 소수파 비중이 20% 이상이면 정책 변경으로 본다.
     const feeKey = feeKeyOfOrder.get(orderId);
     const feeBucket = feeKey ? feeByOption.get(feeKey) : undefined;
     if (feeBucket && isMain && feeBucket.zero.size > 0 && feeBucket.paid.size > 0) {
+      const total = feeBucket.zero.size + feeBucket.paid.size;
+      const minority = Math.min(feeBucket.zero.size, feeBucket.paid.size);
       const orderPaid = (o?.feeSum ?? 0) > 0;
       const minorityIsZero = feeBucket.zero.size <= feeBucket.paid.size;
-      if (orderPaid !== minorityIsZero) {
+      if (minority / total < 0.2 && orderPaid !== minorityIsZero) {
         addFlag(
           w, FLAG.delivery,
           `같은 옵션 주문 ${feeBucket.paid.size}건은 배송비 있고 ${feeBucket.zero.size}건은 0 — 이 주문 ${won(o?.feeSum ?? 0)}`,
