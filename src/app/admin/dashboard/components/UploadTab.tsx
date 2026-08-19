@@ -174,6 +174,62 @@ export default function UploadTab() {
     finally { setCmpnLoading(false); }
   }
 
+  // 동일제조소 묶음정보(식약처 DrbBundle) 동기화
+  const [bundleLoading, setBundleLoading] = useState(false);
+  const [bundleProbing, setBundleProbing] = useState(false);
+  const [bundleStatus, setBundleStatus] = useState<{ count?: number; lastSync?: string | null } | null>(null);
+  const [bundleResult, setBundleResult] = useState<{
+    success?: boolean; probe?: boolean; synced?: number; totalCount?: number; totalPages?: number;
+    sampleKeys?: string[]; mappingStats?: { groupKey: number; manufacturer: number; itemName: number; unmappedGroup: number };
+    pageErrors?: { page: number; error: string }[]; error?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    fetch("/api/medications/sync-bundle")
+      .then((r) => r.json())
+      .then((d) => setBundleStatus({ count: d.count, lastSync: d.lastSync }))
+      .catch(() => null);
+  }, []);
+
+  async function handleBundleProbe() {
+    setBundleProbing(true); setBundleResult(null);
+    try {
+      const res = await fetch("/api/medications/sync-bundle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "test" }),
+      });
+      const data = await res.json();
+      setBundleResult({ ...data, probe: true });
+    } catch { setBundleResult({ error: "API 응답 확인 중 오류가 발생했어요." }); }
+    finally { setBundleProbing(false); }
+  }
+
+  async function handleBundleSync() {
+    setBundleLoading(true); setBundleResult(null);
+    try {
+      let page = 1;
+      let totalSynced = 0;
+      let last: { error?: string; done?: boolean; nextPage?: number | null; totalCount?: number; totalPages?: number; synced?: number; sampleKeys?: string[]; mappingStats?: { groupKey: number; manufacturer: number; itemName: number; unmappedGroup: number }; pageErrors?: { page: number; error: string }[] } = {};
+      // 배치 연속 호출 (서버 300초 제한 대응)
+      for (let i = 0; i < 100; i++) {
+        const res = await fetch("/api/medications/sync-bundle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ startPage: page, batchSize: 20 }),
+        });
+        last = await res.json();
+        if (!res.ok || last.error) { setBundleResult({ error: last.error || `HTTP ${res.status}` }); return; }
+        totalSynced += last.synced ?? 0;
+        setBundleResult({ success: true, synced: totalSynced, totalCount: last.totalCount, totalPages: last.totalPages, mappingStats: last.mappingStats, sampleKeys: last.sampleKeys, pageErrors: last.pageErrors });
+        if (last.done || last.nextPage == null) break;
+        page = last.nextPage;
+      }
+      fetch("/api/medications/sync-bundle").then((r) => r.json()).then((d) => setBundleStatus({ count: d.count, lastSync: d.lastSync })).catch(() => null);
+    } catch (e) { setBundleResult({ error: `동기화 중 오류: ${e instanceof Error ? e.message : String(e)}` }); }
+    finally { setBundleLoading(false); }
+  }
+
 
   const [dedupStats, setDedupStats] = useState<{ totalDupeGroups?: number; totalExtraRows?: number; samples?: { productName: string; companyName: string; count: number }[] } | null>(null);
   const [dedupLoading, setDedupLoading] = useState(false);
@@ -696,6 +752,66 @@ export default function UploadTab() {
                       </span>
                     )}
                   </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+        {/* ③-3: 동일제조소 묶음정보 동기화 */}
+        <div className="border-t border-gray-100 pt-3 space-y-2 mt-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-violet-700">③-3 동일제조소 묶음정보 (식약처 제네릭 묶음)</span>
+            {bundleStatus?.count != null && (
+              <span className="text-[10px] text-gray-400">
+                적재 {bundleStatus.count.toLocaleString()}건{bundleStatus.lastSync ? ` · 동기화 ${new Date(bundleStatus.lastSync).toLocaleDateString("ko-KR")}` : ""}
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-gray-500 leading-relaxed">
+            의약품안전나라 <strong>제네릭의약품 묶음정보</strong>(같은 제조소에서 생산되는 동일 주성분 품목 묶음)를 받아와
+            제품 검색의 <strong>동일제조소</strong> 버튼에서 조회할 수 있게 합니다. 매주 일요일 자동 동기화되며, 최초 1회는 수동 실행이 필요해요.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onClick={handleBundleProbe}
+              disabled={bundleProbing || bundleLoading}
+              className="text-xs border-violet-200 text-violet-700 hover:bg-violet-50"
+            >
+              {bundleProbing ? "확인 중..." : "① API 응답 구조 확인 (probe)"}
+            </Button>
+            <Button
+              onClick={handleBundleSync}
+              disabled={bundleLoading || bundleProbing}
+              className="bg-violet-600 hover:bg-violet-700 text-xs"
+            >
+              {bundleLoading ? "동기화 중..." : "② 전체 동기화 실행"}
+            </Button>
+          </div>
+          {bundleResult && (
+            <div className={`text-xs rounded p-3 border space-y-1 ${
+              bundleResult.error ? "bg-red-50 text-red-700 border-red-200" : "bg-green-50 text-green-700 border-green-200"
+            }`}>
+              {bundleResult.error ? (
+                <div><AlertCircle className="w-3.5 h-3.5 inline mr-1" />{bundleResult.error}</div>
+              ) : (
+                <>
+                  <div>
+                    <CheckCircle className="w-3.5 h-3.5 inline mr-1" />
+                    {bundleResult.probe ? "테스트 1페이지 확인 완료" : <>적재 <strong>{bundleResult.synced?.toLocaleString()}</strong>건</>}
+                    {bundleResult.totalCount != null && <> · 전체 {bundleResult.totalCount.toLocaleString()}건 ({bundleResult.totalPages}페이지)</>}
+                  </div>
+                  {bundleResult.mappingStats && (
+                    <div className="font-mono text-[10px]">
+                      매핑: 그룹키 {bundleResult.mappingStats.groupKey} · 제조소 {bundleResult.mappingStats.manufacturer} · 품목명 {bundleResult.mappingStats.itemName} · 그룹미상 {bundleResult.mappingStats.unmappedGroup}
+                    </div>
+                  )}
+                  {bundleResult.sampleKeys && bundleResult.sampleKeys.length > 0 && (
+                    <div className="font-mono text-[10px]">응답 필드: {bundleResult.sampleKeys.join(", ")}</div>
+                  )}
+                  {(bundleResult.pageErrors?.length ?? 0) > 0 && (
+                    <div className="text-amber-600">페이지 오류 {bundleResult.pageErrors!.length}건</div>
+                  )}
                 </>
               )}
             </div>

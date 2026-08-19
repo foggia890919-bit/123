@@ -6,6 +6,7 @@ import type { IcdResult } from "@/app/api/medications/icd-analysis/route";
 import { formatPrice } from "@/lib/utils";
 import type { MedicationItem } from "@/types";
 import SameIngredientModal from "./SameIngredientModal";
+import SameFactoryModal from "./SameFactoryModal";
 import { getStock, subscribeStock, fetchStock, type StockEntry } from "@/lib/stock-cache";
 import { sumStockNullSafe } from "@/lib/stock-utils";
 
@@ -333,6 +334,7 @@ function PaymentTypeBadge({ value }: { value: string | null | undefined }) {
 
 export default function MedicationTable({ medications, loading, userId, showCategoryA, showIngredientName, showCategoryB, showRate, showBioStatus, showPrice, showOriginalDrug, showInsuranceCode, showNotes, showStock }: Props) {
   const [ingredientModal, setIngredientModal] = useState<{ name: string; categoryB?: string | null; productName?: string } | null>(null);
+  const [factoryModal, setFactoryModal] = useState<{ productName: string } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -550,6 +552,11 @@ export default function MedicationTable({ medications, loading, userId, showCate
                               className="text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 active:bg-blue-200 border border-blue-200 px-2.5 py-1 rounded-full whitespace-nowrap transition-colors">
                               동일성분
                             </button>
+                            <button type="button"
+                              onClick={() => setFactoryModal({ productName: med.productName })}
+                              className="text-xs font-medium text-violet-700 bg-violet-50 hover:bg-violet-100 active:bg-violet-200 border border-violet-200 px-2.5 py-1 rounded-full whitespace-nowrap transition-colors">
+                              동일제조소
+                            </button>
                             {med.insuranceCode && (
                               <StockButton code={med.insuranceCode} productName={med.productName} />
                             )}
@@ -742,6 +749,14 @@ export default function MedicationTable({ medications, loading, userId, showCate
           onProposalAdded={(proposalId, added) => setProposals((prev) => prev.map((p) => p.id === proposalId ? { ...p, _count: { items: p._count.items + added } } : p))}
           onClose={() => setIngredientModal(null)}
           initialCols={{ categoryB: false, bioStatus: true, originalDrug: true, insuranceCode: true, notes: false }}
+        />
+      )}
+
+      {factoryModal && (
+        <SameFactoryModal
+          productName={factoryModal.productName}
+          userId={userId}
+          onClose={() => setFactoryModal(null)}
         />
       )}
 
