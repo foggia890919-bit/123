@@ -92,15 +92,19 @@ interface MappedRow {
 }
 
 function mapRow(item: BundleRow): MappedRow {
-  const manufacturerName = pickField(item, ["MAKE_MTRAL_NM", "MNF_NM", "MANUF_NM"], [/MAKE|MNF|MANUF|FCTR|FACTORY|제조/i]);
+  const manufacturerName = pickField(item, ["MAKE_MTRAL_NM", "MNF_NM", "MANUF_NM", "MAKING_PLC", "MNF_PLC_NM"], [/MAKE|MAKING|MNF|MANUF|FCTR|FACTORY|PLC|MAKER|제조/i]);
   const itemName = pickField(item, ["ITEM_NAME", "PRDUCT_NM"], [/ITEM.*NAME|PRDT.*NAME|PRDUCT|품목명|제품명/i]);
   const entpName = pickField(item, ["ENTP_NAME", "ENTP_NM"], [/ENTP|업체/i]);
   const ingredientName = pickField(item, ["MAIN_INGR", "INGR_NAME", "MAIN_ITEM_INGR"], [/INGR|MAIN.*(ITEM|INGR)|성분/i]);
   const itemSeq = pickField(item, ["ITEM_SEQ"], [/ITEM_SEQ|품목기준/i]);
   const rawJson = JSON.stringify(item);
 
-  // 묶음 그룹키: BNDL/GRP 계열 키 우선(번호/코드형 키 선호) → 실패 시 제조소+성분 조합 → 그것도 없으면 UNKNOWN 격리
+  // 묶음 그룹키: BNDL/GRP 계열 키 우선(번호/코드형 키 선호) → 대표품목코드 계열(묶음의약품정보서비스는
+  // 대표품목 기준으로 묶임) → 실패 시 제조소+성분 조합 → 그것도 없으면 UNKNOWN 격리
   let groupKey = pickField(item, ["BNDL_NO", "BNDL_SEQ", "GRP_NO", "BUNDLE_NO"], [/BNDL|BUNDLE|GROUP|GRP|묶음/i], /(NO|SEQ|CD|ID)$/i);
+  if (!groupKey) {
+    groupKey = pickField(item, [], [/RPRSNT|REPRESENT|대표/i], /(NO|SEQ|CD|ID)$/i);
+  }
   if (!groupKey) {
     if (manufacturerName && ingredientName) groupKey = `${manufacturerName}|${ingredientName}`;
     else groupKey = "UNKNOWN:" + createHash("sha1").update(rawJson).digest("hex").slice(0, 12);
