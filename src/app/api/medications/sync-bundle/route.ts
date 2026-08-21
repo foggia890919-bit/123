@@ -18,6 +18,29 @@ const GEN_PENDING_KEY = "bundleSyncPendingGen";
 const GEN_CURRENT_KEY = "bundleCurrentGen";
 const LAST_SYNC_KEY = "lastBundleSync";
 
+// 403(SERVICE_KEY_IS_NOT_REGISTERED) 진단용: 서버가 실제로 쓰는 키의 앞뒤 일부만 노출 (admin 전용 응답)
+function keyHint(): string {
+  if (!API_KEY) return "(PUBLIC_DATA_API_KEY 비어있음)";
+  return `${API_KEY.slice(0, 6)}…${API_KEY.slice(-4)} (${API_KEY.length}자)`;
+}
+
+// 같은 키로 기존 허가정보 API가 살아있는지 1건 호출 — 키 자체 문제 vs 묶음 서비스 미등록 구분
+async function probePermitApi(): Promise<string> {
+  try {
+    const url = new URL("https://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnInq07");
+    url.searchParams.set("serviceKey", API_KEY);
+    url.searchParams.set("pageNo", "1");
+    url.searchParams.set("numOfRows", "1");
+    url.searchParams.set("type", "json");
+    const res = await fetch(url.toString(), { cache: "no-store" });
+    const text = await res.text();
+    if (!res.ok) return `실패 (${res.status}): ${text.slice(0, 120)}`;
+    return "정상";
+  } catch (e) {
+    return `실패: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
 interface BundleRow { [key: string]: unknown }
 
 async function fetchPage(pageNo: number): Promise<{ items: BundleRow[]; totalCount: number }> {
@@ -296,12 +319,16 @@ export async function POST(req: NextRequest) {
       pageErrors: pageErrors.length > 0 ? pageErrors : undefined,
     });
   } catch (err) {
+    // 묶음 API 실패 시 같은 키로 허가정보 API를 1건 찔러 키 문제/서비스 미등록을 구분해준다
+    const permitApi = await probePermitApi();
     return NextResponse.json({
       error: err instanceof Error ? err.message : String(err),
       startPage,
       endPage,
       synced,
       sampleKeys,
+      serverKey: keyHint(),
+      permitApi: `허가정보 API(기존 ③번): ${permitApi}`,
       pageErrors: pageErrors.length > 0 ? pageErrors : undefined,
     }, { status: 500 });
   }

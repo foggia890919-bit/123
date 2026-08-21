@@ -182,6 +182,7 @@ export default function UploadTab() {
     success?: boolean; probe?: boolean; synced?: number; totalCount?: number; totalPages?: number;
     sampleKeys?: string[]; mappingStats?: { groupKey: number; manufacturer: number; itemName: number; unmappedGroup: number };
     pageErrors?: { page: number; error: string }[]; error?: string;
+    serverKey?: string; permitApi?: string;
   } | null>(null);
 
   useEffect(() => {
@@ -219,7 +220,11 @@ export default function UploadTab() {
           body: JSON.stringify({ startPage: page, batchSize: 20 }),
         });
         last = await res.json();
-        if (!res.ok || last.error) { setBundleResult({ error: last.error || `HTTP ${res.status}` }); return; }
+        if (!res.ok || last.error) {
+          const l = last as { error?: string; serverKey?: string; permitApi?: string };
+          setBundleResult({ error: l.error || `HTTP ${res.status}`, serverKey: l.serverKey, permitApi: l.permitApi });
+          return;
+        }
         totalSynced += last.synced ?? 0;
         setBundleResult({ success: true, synced: totalSynced, totalCount: last.totalCount, totalPages: last.totalPages, mappingStats: last.mappingStats, sampleKeys: last.sampleKeys, pageErrors: last.pageErrors });
         if (last.done || last.nextPage == null) break;
@@ -793,7 +798,15 @@ export default function UploadTab() {
               bundleResult.error ? "bg-red-50 text-red-700 border-red-200" : "bg-green-50 text-green-700 border-green-200"
             }`}>
               {bundleResult.error ? (
-                <div><AlertCircle className="w-3.5 h-3.5 inline mr-1" />{bundleResult.error}</div>
+                <>
+                  <div><AlertCircle className="w-3.5 h-3.5 inline mr-1" />{bundleResult.error}</div>
+                  {bundleResult.serverKey && (
+                    <div className="font-mono text-[10px]">서버에 등록된 키: {bundleResult.serverKey}</div>
+                  )}
+                  {bundleResult.permitApi && (
+                    <div className="font-mono text-[10px]">{bundleResult.permitApi}</div>
+                  )}
+                </>
               ) : (
                 <>
                   <div>
