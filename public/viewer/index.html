@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>내 문서 뷰어</title>
+  <meta name="description" content="광고 없는 오프라인 문서 뷰어 — HWP·HWPX·PDF·워드·엑셀·파워포인트" />
+  <meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#14171c" media="(prefers-color-scheme: dark)" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="문서뷰어" />
+  <link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+  <header class="app-header">
+    <button id="back-btn" type="button" class="icon-btn" aria-label="뒤로">←</button>
+    <div class="header-title">
+      <span id="viewer-title" class="viewer-title">내 문서 뷰어</span>
+      <span id="viewer-format" class="viewer-format"></span>
+    </div>
+    <span id="page-info" class="page-info"></span>
+    <div class="zoom-controls">
+      <button id="zoom-out" type="button" class="icon-btn" aria-label="축소">−</button>
+      <button id="zoom-label" type="button" class="zoom-label" title="원래 크기">100%</button>
+      <button id="zoom-in" type="button" class="icon-btn" aria-label="확대">＋</button>
+    </div>
+    <button id="theme-toggle" type="button" class="icon-btn" aria-label="테마 전환">◐</button>
+  </header>
+
+  <main>
+    <!-- 홈 화면 -->
+    <section id="home-view">
+      <div id="drop-zone" class="drop-zone" role="button" tabindex="0">
+        <p class="drop-title">문서 열기</p>
+        <p class="drop-sub">HWP · HWPX · PDF · 워드 · 엑셀 · 파워포인트 · 텍스트 · 이미지</p>
+        <button id="open-btn" type="button" class="primary-btn">파일 선택</button>
+        <p class="drop-hint">
+          홈 화면에 설치하면 다른 앱에서 "공유"로 바로 열 수 있어요.<br />
+          문서는 휴대폰 밖으로 나가지 않습니다 · 광고 없음
+        </p>
+      </div>
+
+      <section id="recent-section" hidden>
+        <div class="recent-header">
+          <h2>최근 문서</h2>
+          <button id="clear-recents" type="button" class="text-btn">전체 삭제</button>
+        </div>
+        <ul id="recent-list" class="recent-list"></ul>
+      </section>
+    </section>
+
+    <!-- 뷰어 화면 -->
+    <section id="viewer-view" hidden>
+      <div id="error-panel" class="error-panel" hidden>
+        <p class="error-icon">⚠️</p>
+        <p id="error-message"></p>
+        <button id="error-back" type="button" class="primary-btn">돌아가기</button>
+      </div>
+      <div id="viewer-content" class="viewer-content"></div>
+    </section>
+  </main>
+
+  <input id="file-input" type="file" hidden />
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
