@@ -125,4 +125,4 @@ CREATE INDEX IF NOT EXISTS "UserClient_isRateTarget_idx"        ON "UserClient"(
 
 - 2026-05-26 12:00 | qa-crosscheck | medications/search stock:null frontend propagation audit | CONDITIONAL_PASS (1 MAJOR: live-scraper overload in search/page.tsx:261-272)
 
-- 2026-05-26 12:00 | qa-crosscheck | medications/search COALESCE removal + stock aggregation code | PASS
+- 2026-05-26 12:00 | qa-crosscheck | medications/search COALESCE removal + stock aggregation code | PASS- 2026-08-23 14:15 | qa-crosscheck | 뷰어 PWA(/viewer) 벤더링+PWA 플랜 교차검증 | FAIL
