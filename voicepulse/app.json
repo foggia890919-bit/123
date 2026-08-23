@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "VoicePulse",
+    "slug": "voicepulse",
+    "version": "1.0.0",
+    "scheme": "voicepulse",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "platforms": ["ios", "android"],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.voicepulse.app",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "회의 및 메모 녹음을 위해 마이크 접근 권한이 필요합니다."
+      }
+    },
+    "android": {
+      "package": "com.voicepulse.app",
+      "permissions": ["android.permission.RECORD_AUDIO"]
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-av",
+        {
+          "microphonePermission": "회의 및 메모 녹음을 위해 마이크 접근 권한이 필요합니다."
+        }
+      ]
+    ]
+  }
+}
