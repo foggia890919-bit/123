@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // 뷰어 PWA에 벤더링된 서드파티 압축 번들 — lint 대상 아님.
+    "public/viewer/lib/**",
   ]),
 ]);
 
